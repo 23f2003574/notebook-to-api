@@ -9395,7 +9395,8 @@ def set_notebook_description_batch(data: dict):
 def list_notebook_versions(
     filename: str, limit: int = None, offset: int = 0, format: str = "json",
     saved_after: str = None, saved_before: str = None, checksums: bool = False,
-    notes: bool = False, note_search: str = None, regex: bool = False,
+    notes: bool = False, note_search: str = None, content_search: str = None,
+    regex: bool = False,
 ):
     """List a previously uploaded notebook's snapshotted previous
     versions, newest first.
@@ -9508,20 +9509,50 @@ def list_notebook_versions(
     plain "note_search" response still omits each entry's own "note"
     field unless "notes" is also given, exactly as before this existed.
 
-    "regex" (optional, default false) treats "note_search" as a
-    case-insensitive Python regular expression instead of a plain
-    substring -- the identical "regex" GET /api/notebooks' own "search"/
-    "description_search" and GET /api/notebooks/search-content's own
-    "search" already support, just applied here to a version's own note.
-    Useful for the same kind of pattern a plain substring can't express
-    (e.g. every note matching "^hotfix" to find a specific category of
-    snapshot, or "v[0-9]+" to find ones that mention a version number).
-    A "note_search" that isn't a valid pattern under "regex" is rejected
-    with 400, naming the underlying re.error, before a single version is
-    even read. Leaving "regex" false (the default) behaves exactly as
-    before this -- a plain substring match, byte for byte identical to
-    the previous implementation. Ignored (has no effect) when
-    "note_search" itself isn't given.
+    "content_search" (optional) narrows "versions" to only snapshots
+    whose own *code* -- not the note attached to it, see "note_search"
+    above -- contains this text, case-insensitively. Every code cell of
+    the version's own snapshotted .ipynb file is checked, via the same
+    load_notebook/extract_code_cells (backend/parser/notebook_parser.py)
+    GET /api/notebooks/search-content already uses to scan a notebook's
+    *current* content -- applied here to a past snapshot's content
+    instead, the identical "current content only, never a past
+    snapshot's own" gap that endpoint's own docstring leaves open for
+    exactly this case. Before this, telling whether -- and since when --
+    a notebook's version history had ever contained a particular line of
+    code (e.g. "which snapshot was the last one still calling this
+    deprecated function before it was removed", answerable today only by
+    GET /api/notebooks/search-content on *current* content) meant
+    downloading every one of a notebook's own snapshots individually
+    (GET .../versions/{version_id}) and grepping each by hand. A
+    snapshot whose own .ipynb content fails to parse at all is silently
+    excluded from "versions" rather than failing the whole request, the
+    same "one bad entry doesn't sink a bulk listing" precedent GET
+    /api/notebooks/search-content's own docstring already establishes.
+    Applied before "limit"/"offset" page the result, so "total_count"
+    reflects only the matching versions; composes with "saved_after"/
+    "saved_before"/"note_search" as an AND. Does not itself imply
+    "notes" or add any field to a matching entry -- a "content_search"
+    response's own "versions" entries look exactly like a plain request's
+    would, just narrowed down to the ones whose code actually matched.
+
+    "regex" (optional, default false) treats "note_search" *and*
+    "content_search" as a case-insensitive Python regular expression
+    instead of a plain substring -- the identical "regex" GET
+    /api/notebooks' own "search"/"description_search" already shares
+    across two different text fields at once, just applied here to a
+    version's own note and its own code instead. Useful for the same
+    kind of pattern a plain substring can't express (e.g. every note
+    matching "^hotfix" to find a specific category of snapshot, or
+    "content_search" matching "return \\d+" to find a call signature
+    that changed shape, rather than one specific unchanged literal). A
+    "note_search"/"content_search" that isn't a valid
+    pattern under "regex" is rejected with 400, naming the underlying
+    re.error, before a single version is even read. Leaving "regex"
+    false (the default) behaves exactly as before this -- a plain
+    substring match, byte for byte identical to the previous
+    implementation. Ignored (has no effect) when neither "note_search"
+    nor "content_search" is given.
     """
 
     if format not in ("json", "csv"):
@@ -9621,6 +9652,45 @@ def list_notebook_versions(
                 entry for entry in versions
                 if note_search_lower in all_notes.get(entry["version_id"], "").lower()
             ]
+
+    if content_search:
+
+        if regex:
+
+            content_search_pattern = _compile_search_regex(
+                content_search, "content_search"
+            )
+            content_search_lower = None
+
+        else:
+
+            content_search_pattern = None
+            content_search_lower = content_search.lower()
+
+        def _version_content_matches(version_id):
+
+            try:
+                version_notebook = load_notebook(str(versions_dir / version_id))
+
+            except MALFORMED_NOTEBOOK_ERRORS:
+                return False
+
+            for cell in extract_code_cells(version_notebook):
+
+                if content_search_pattern is not None:
+
+                    if content_search_pattern.search(cell):
+                        return True
+
+                elif content_search_lower in cell.lower():
+                    return True
+
+            return False
+
+        versions = [
+            entry for entry in versions
+            if _version_content_matches(entry["version_id"])
+        ]
 
     total_count = len(versions)
 

@@ -5818,7 +5818,9 @@ def _dispatch_core_command(args):
                 params["notes"] = "true"
             if args.note_search:
                 params["note_search"] = args.note_search
-            if args.note_search_regex:
+            if args.content_search:
+                params["content_search"] = args.content_search
+            if args.note_search_regex or args.content_search_regex:
                 params["regex"] = True
 
             try:
@@ -12919,6 +12921,35 @@ def main():
             "/api/notebooks/{filename}/versions's own ?regex=true -- "
             "e.g. --note-search '^hotfix' to find a specific category "
             "of snapshot. Ignored without --note-search."
+        )
+    )
+    versions_list_parser.add_argument(
+        "--content-search",
+        default=None,
+        dest="content_search",
+        help=(
+            "Only list versions whose own snapshotted code contains "
+            "this text, case-insensitively, via GET "
+            "/api/notebooks/{filename}/versions's own \"content_search\" "
+            "query param -- the same code-content search `search-content` "
+            "already offers for a notebook's *current* content, applied "
+            "here to each of its past snapshots instead. E.g. to find "
+            "which snapshot was the last one still calling a since-"
+            "removed function, without downloading and grepping every "
+            "`versions get` by hand."
+        )
+    )
+    versions_list_parser.add_argument(
+        "--content-search-regex",
+        action="store_true",
+        dest="content_search_regex",
+        help=(
+            "Treat --content-search as a case-insensitive Python "
+            "regular expression instead of a plain substring, via GET "
+            "/api/notebooks/{filename}/versions's own ?regex=true -- "
+            "the same shared \"regex\" toggle --note-search-regex uses, "
+            "just for --content-search instead. Ignored without "
+            "--content-search."
         )
     )
     versions_list_parser.add_argument(
