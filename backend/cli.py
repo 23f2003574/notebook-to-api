@@ -357,7 +357,7 @@ _CORE_COMMANDS = frozenset({
     "compile", "inspect", "validate", "export-openapi", "export-sdk",
     "export-curl", "export-postman", "serve", "watch", "deploy", "diff", "upload", "import-notebooks", "import-url", "import-url-many",
     "list", "info", "info-batch",
-    "search-functions", "search-content", "find-duplicates", "resolve-duplicates", "storage",
+    "search-functions", "search-content", "search-version-content", "find-duplicates", "resolve-duplicates", "storage",
     "download", "export-notebooks", "generated", "delete", "delete-batch", "rename", "copy",
     "copy-batch", "copy-many", "rename-many", "tags", "prune-versions", "prune-temp-files", "description", "source-url", "deploy-history",
     "clear-deploy-history", "compile-history", "clear-compile-history",
@@ -3027,6 +3027,67 @@ def _dispatch_core_command(args):
                         print(f"  [{cell_match['cell_index']}] {cell_match['snippet']}")
 
                 print(f"\n{_matched_notebooks_summary(data, args, len(matches))}")
+    elif args.command == "search-version-content":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        params = {"search": args.search, "offset": args.offset}
+        if args.tag:
+            params["tag"] = args.tag
+        if args.regex:
+            params["regex"] = True
+        if args.limit is not None:
+            params["limit"] = args.limit
+        if args.format == "csv":
+            params["format"] = "csv"
+
+        try:
+            response = httpx.get(
+                f"{dashboard_url}/api/notebooks/versions/search-content",
+                params=params,
+                timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        if args.format == "csv":
+            print(response.text, end="")
+            return
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+
+            matches = data.get("matches", [])
+
+            if not matches:
+                print(f"No notebook version has a code cell matching '{args.search}'.")
+            else:
+                for match in matches:
+                    print(f"{match['filename']}  (version '{match['version_id']}', saved {match['saved_at']}):")
+                    for cell_match in match["matches"]:
+                        print(f"  [{cell_match['cell_index']}] {cell_match['snippet']}")
+
+                match_count = data.get("match_count", len(matches))
+                if args.limit is not None and (args.offset + len(matches) < match_count):
+                    print(
+                        f"\nShowing {len(matches)} of {match_count} matching "
+                        f"version(s) (offset {args.offset})."
+                    )
+                else:
+                    print(f"\n{match_count} matching version(s) found.")
     elif args.command == "find-duplicates":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -10146,6 +10207,96 @@ def main():
             "[{\"cell_index\", \"snippet\"}, ...]}, ...], "
             "\"notebook_count\", \"limit\", \"offset\"}) instead of a "
             "human-readable summary, for scripting/automation."
+        )
+    )
+
+    # search-version-content command (find a matching code cell across
+    # every snapshotted *version* of every uploaded notebook, via GET
+    # /api/notebooks/versions/search-content -- distinct from
+    # `search-content` above, which only ever scans each notebook's own
+    # *current* content)
+    search_version_content_parser = subparsers.add_parser(
+        "search-version-content",
+        help=(
+            "Find a matching code cell across every snapshotted version "
+            "of every notebook already on a running dashboard instance, "
+            "via its GET /api/notebooks/versions/search-content."
+        )
+    )
+    search_version_content_parser.add_argument(
+        "search",
+        help=(
+            "Case-insensitive substring to match against every "
+            "uploaded notebook's own snapshotted versions' code cell "
+            "source (not their current content -- see `search-content` "
+            "for that)."
+        )
+    )
+    search_version_content_parser.add_argument(
+        "--tag",
+        default=None,
+        help=(
+            "Only scan versions of notebooks currently carrying this "
+            "exact tag, mirroring GET /api/notebooks/versions/search-"
+            "content's own ?tag= -- scopes which notebooks are "
+            "scanned, since a version snapshot carries no tag of its "
+            "own."
+        )
+    )
+    search_version_content_parser.add_argument(
+        "--regex",
+        action="store_true",
+        help=(
+            "Treat `search` as a case-insensitive Python regular "
+            "expression instead of a plain substring, via GET "
+            "/api/notebooks/versions/search-content's own ?regex=true."
+        )
+    )
+    search_version_content_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help=(
+            "Cap how many matching versions are returned, via GET "
+            "/api/notebooks/versions/search-content's own ?limit=."
+        )
+    )
+    search_version_content_parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help=(
+            "Skip this many matching versions before --limit is "
+            "applied, via GET /api/notebooks/versions/search-content's "
+            "own ?offset=."
+        )
+    )
+    search_version_content_parser.add_argument(
+        "--format",
+        choices=["json", "csv"],
+        default="json",
+        help=(
+            "Response format to request via GET /api/notebooks/"
+            "versions/search-content's own ?format= query param. "
+            "\"csv\" prints the dashboard's own CSV response straight "
+            "to stdout (redirect it to a file) -- one row per matching "
+            "code cell, with its own \"version_id\"/\"saved_at\" "
+            "identifying which snapshot it came from; --json is ignored "
+            "under --format csv, since the response isn't JSON at all."
+        )
+    )
+    _add_dashboard_url_and_timeout_arguments(search_version_content_parser)
+    search_version_content_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help=(
+            "Emit the dashboard's own JSON response ({\"status\", "
+            "\"search\", \"matches\": [{\"filename\", \"version_id\", "
+            "\"saved_at\", \"matches\": [{\"cell_index\", \"snippet\"}, "
+            "...]}, ...], \"match_count\", \"limit\", \"offset\"}) "
+            "instead of a human-readable summary, for scripting/"
+            "automation."
         )
     )
 
