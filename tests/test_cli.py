@@ -6390,6 +6390,140 @@ def test_search_content_command_reports_a_clean_error_when_the_dashboard_is_unre
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_search_version_content_command_is_registered():
+
+    proc = _run_cli(["--help"], cwd=Path.cwd())
+
+    assert proc.returncode == 0
+    assert "search-version-content" in proc.stdout
+
+
+def test_search_version_content_command_prints_matching_versions(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success",
+        "search": "read_csv",
+        "matches": [
+            {
+                "filename": "a.ipynb",
+                "version_id": "v1.ipynb",
+                "saved_at": "2024-01-01T00:00:00+00:00",
+                "matches": [{"cell_index": 0, "snippet": "df = pd.read_csv('x.csv')"}],
+            },
+        ],
+        "match_count": 1,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["search-version-content", "read_csv", "--dashboard-url", dashboard_url],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "a.ipynb  (version 'v1.ipynb', saved 2024-01-01T00:00:00+00:00):" in proc.stdout
+    assert "[0] df = pd.read_csv('x.csv')" in proc.stdout
+    assert "1 matching version(s) found." in proc.stdout
+    assert handler.requests == [
+        "/api/notebooks/versions/search-content?search=read_csv&offset=0"
+    ]
+
+
+def test_search_version_content_command_sends_tag_and_regex_query_params(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {"status": "success", "search": "read_csv", "matches": [], "match_count": 0}
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        [
+            "search-version-content", "read_csv", "--tag", "prod", "--regex",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/notebooks/versions/search-content?search=read_csv&offset=0&tag=prod&regex=true"
+    ]
+
+
+def test_search_version_content_command_reports_no_matches(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {"status": "success", "search": "nope", "matches": [], "match_count": 0}
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        ["search-version-content", "nope", "--dashboard-url", dashboard_url],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No notebook version has a code cell matching 'nope'." in proc.stdout
+
+
+def test_search_version_content_command_passes_limit_and_offset_through(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {"status": "success", "search": "x", "matches": [], "match_count": 5}
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        [
+            "search-version-content", "x", "--limit", "2", "--offset", "1",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/notebooks/versions/search-content?search=x&offset=1&limit=2"
+    ]
+
+
+def test_search_version_content_command_format_csv_prints_the_dashboards_raw_csv_response(
+    fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    csv_body = (
+        "filename,version_id,saved_at,cell_index,snippet\r\n"
+        "a.ipynb,v1.ipynb,2024-01-01T00:00:00+00:00,0,x\r\n"
+    )
+    handler.responses = [_raw_response(200, csv_body.encode("utf-8"), "text/csv")]
+
+    proc = _run_cli(
+        [
+            "search-version-content", "x", "--format", "csv",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout == csv_body.replace("\r\n", "\n")
+    assert handler.requests == [
+        "/api/notebooks/versions/search-content?search=x&offset=0&format=csv"
+    ]
+
+
+def test_search_version_content_command_reports_a_clean_error_when_the_dashboard_is_unreachable():
+
+    proc = _run_cli(
+        [
+            "search-version-content", "read_csv",
+            "--dashboard-url", "http://127.0.0.1:1", "--timeout", "5",
+        ],
+        cwd=Path.cwd(),
+    )
+
+    _assert_clean_cli_error(proc, "Is it running?")
+
+
 def test_find_duplicates_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())
