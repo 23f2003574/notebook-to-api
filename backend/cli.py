@@ -4088,6 +4088,8 @@ def _dispatch_core_command(args):
             body["description"] = args.description
         if args.dry_run:
             body["dry_run"] = True
+        if args.expected_sha256:
+            body["expected_sha256"] = args.expected_sha256
 
         try:
             response = httpx.post(
@@ -11268,6 +11270,21 @@ def main():
             "would fail, e.g. a same-name collision without --overwrite), "
             "via POST /api/notebooks/{filename}/copy-batch's own "
             "\"dry_run\" body field, without copying anything."
+        )
+    )
+    copy_batch_parser.add_argument(
+        "--expected-sha256",
+        default=None,
+        dest="expected_sha256",
+        metavar="SHA256",
+        help=(
+            "Reject the whole batch unless `filename`'s own current "
+            "content still matches this hash, via POST "
+            "/api/notebooks/{filename}/copy-batch's own \"expected_sha256\" "
+            "body field -- the same single shared-source guard `copy "
+            "--expected-sha256` already provides for one destination, "
+            "checked once here since every destination shares the one "
+            "same source."
         )
     )
     copy_batch_parser.add_argument(
