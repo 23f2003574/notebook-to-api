@@ -10642,6 +10642,105 @@ def test_set_notebook_tags_rejects_more_than_the_max_distinct_tags():
     assert resp.status_code == 400
 
 
+def test_set_notebook_tags_with_matching_expected_sha256_succeeds():
+
+    content = _notebook_bytes("def f() -> int:\n    return 1\n")
+    filename = "tags_expected_sha256_match.ipynb"
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(content), "application/json")},
+    )
+
+    resp = client.put(
+        f"/api/notebooks/{filename}/tags",
+        json={"tags": ["production"], "expected_sha256": hashlib.sha256(content).hexdigest()},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["tags"] == ["production"]
+
+
+def test_set_notebook_tags_with_mismatched_expected_sha256_is_rejected_and_writes_nothing():
+
+    filename = "tags_expected_sha256_mismatch.ipynb"
+    _upload_sample_notebook(filename)
+
+    resp = client.put(
+        f"/api/notebooks/{filename}/tags",
+        json={"tags": ["production"], "expected_sha256": "0" * 64},
+    )
+
+    assert resp.status_code == 400
+    assert "expected_sha256" in resp.json()["detail"]
+    assert client.get(f"/api/notebooks/{filename}/tags").json()["tags"] == []
+
+
+def test_set_notebook_tags_rejects_a_non_string_expected_sha256():
+
+    filename = "tags_expected_sha256_bad_type.ipynb"
+    _upload_sample_notebook(filename)
+
+    resp = client.put(
+        f"/api/notebooks/{filename}/tags",
+        json={"tags": ["production"], "expected_sha256": 12345},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_set_notebook_tags_batch_entry_with_mismatched_expected_sha256_fails_only_that_entry():
+
+    content_a = _notebook_bytes("def a() -> int:\n    return 1\n")
+    filename_a = "tags_batch_expected_sha256_mismatch_a.ipynb"
+    filename_b = "tags_batch_expected_sha256_mismatch_b.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={"file": (filename_a, io.BytesIO(content_a), "application/json")},
+    )
+    _upload_sample_notebook(filename_b)
+
+    resp = client.post(
+        "/api/notebooks/tags-batch",
+        json={"entries": [
+            {"filename": filename_a, "tags": ["a"], "expected_sha256": "0" * 64},
+            {"filename": filename_b, "tags": ["b"]},
+        ]},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["succeeded_count"] == 1
+    assert body["failed_count"] == 1
+    assert body["results"][0]["status"] == "error"
+    assert body["results"][1]["status"] == "success"
+    assert client.get(f"/api/notebooks/{filename_a}/tags").json()["tags"] == []
+    assert client.get(f"/api/notebooks/{filename_b}/tags").json()["tags"] == ["b"]
+
+
+def test_set_notebook_tags_batch_entry_with_matching_expected_sha256_succeeds():
+
+    content_a = _notebook_bytes("def a() -> int:\n    return 1\n")
+    filename_a = "tags_batch_expected_sha256_match_a.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={"file": (filename_a, io.BytesIO(content_a), "application/json")},
+    )
+
+    resp = client.post(
+        "/api/notebooks/tags-batch",
+        json={"entries": [{
+            "filename": filename_a,
+            "tags": ["a"],
+            "expected_sha256": hashlib.sha256(content_a).hexdigest(),
+        }]},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["results"][0]["status"] == "success"
+
+
 def test_set_notebook_tags_batch_sets_each_notebooks_own_distinct_tags():
 
     _upload_sample_notebook("tags_batch_a.ipynb")

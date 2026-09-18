@@ -9179,6 +9179,21 @@ def set_notebook_tags(filename: str, data: dict):
     whatever tags the notebook already had, and there was previously no
     way to check what a call would validate/normalize "tags" down to
     without actually overwriting the notebook's existing set first.
+
+    "expected_sha256" (optional), see _verify_expected_notebook_sha256
+    above, rejects the request with 400 -- replacing nothing -- unless
+    `filename`'s own current content still matches, checked before
+    "tags" is even validated. The same concurrent-overwrite guard POST
+    /api/compile, /api/inspect, /api/validate, and POST
+    /api/notebooks/{filename}/copy already give a caller acting on a
+    notebook purely by name -- this is a full replace acting on
+    `filename` by name alone exactly like those do, so a caller who
+    decided on a new "tags" value based on a notebook's own current
+    content (e.g. tagging it "large" past some size threshold) had no
+    way to guard against a concurrent overwrite (POST /api/upload
+    ?overwrite=true, a restore, ...) landing in between and having its
+    tags silently applied to content other than what was actually
+    checked.
     """
 
     file_path = resolve_upload_path(filename)
@@ -9189,6 +9204,17 @@ def set_notebook_tags(filename: str, data: dict):
             status_code=404,
             detail="Notebook file not found"
         )
+
+    expected_sha256 = data.get("expected_sha256")
+
+    if expected_sha256 is not None and not isinstance(expected_sha256, str):
+
+        raise HTTPException(
+            status_code=400,
+            detail="expected_sha256 must be a string"
+        )
+
+    _verify_expected_notebook_sha256(file_path, expected_sha256)
 
     tags = _validate_and_normalize_tags(data.get("tags", []))
 
@@ -9256,6 +9282,14 @@ def set_notebook_tags_batch(data: dict):
     existing value (there, a destination's previous tags/description/
     version history on "overwrite": true; here, every entry's own
     previous tag set unconditionally) if a caller gets an entry wrong.
+
+    Each entry's own optional "expected_sha256" is the identical
+    concurrent-overwrite guard PUT .../tags' own singular counterpart
+    just gained -- checked against that entry's own "filename", since
+    each entry here names its own independent notebook. A mismatch fails
+    only that one entry's own "error" result, with the identical 400
+    detail a standalone PUT .../tags call would have raised, rather than
+    aborting the rest of the batch.
     """
 
     entries = data.get("entries")
@@ -9298,6 +9332,17 @@ def set_notebook_tags_batch(data: dict):
                     status_code=404,
                     detail="Notebook file not found"
                 )
+
+            entry_expected_sha256 = entry.get("expected_sha256")
+
+            if entry_expected_sha256 is not None and not isinstance(entry_expected_sha256, str):
+
+                raise HTTPException(
+                    status_code=400,
+                    detail="expected_sha256 must be a string"
+                )
+
+            _verify_expected_notebook_sha256(file_path, entry_expected_sha256)
 
             tags = _validate_and_normalize_tags(entry.get("tags", []))
 
