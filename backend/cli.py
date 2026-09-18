@@ -4465,6 +4465,8 @@ def _dispatch_core_command(args):
             set_tags_body = {"tags": args.tag}
             if args.dry_run:
                 set_tags_body["dry_run"] = True
+            if args.expected_sha256:
+                set_tags_body["expected_sha256"] = args.expected_sha256
 
             try:
                 response = httpx.put(
@@ -11648,6 +11650,20 @@ def main():
             "own existing tags -- the same preview `tags set-batch` "
             "already offers for replacing several notebooks' tags at "
             "once."
+        )
+    )
+    tags_set_parser.add_argument(
+        "--expected-sha256",
+        default=None,
+        dest="expected_sha256",
+        metavar="SHA256",
+        help=(
+            "Reject the replace with an error unless `filename`'s own "
+            "current content still matches this hash, via PUT "
+            "/api/notebooks/{filename}/tags's own \"expected_sha256\" "
+            "body field -- the same guard `copy --expected-sha256` "
+            "already provides, applied here to a tag replace instead of "
+            "a copy."
         )
     )
     tags_set_parser.add_argument(
