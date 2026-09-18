@@ -6679,6 +6679,10 @@ def _dispatch_core_command(args):
                 age_clause += f" saved on/after {args.saved_after}"
             if args.saved_before:
                 age_clause += f" saved on/before {args.saved_before}"
+            if args.note_search:
+                age_clause += f" whose note matches '{args.note_search}'"
+            if args.content_search:
+                age_clause += f" whose code matches '{args.content_search}'"
 
             if not args.dry_run and not args.yes:
                 # DELETE /api/notebooks/{filename}/versions
@@ -6701,6 +6705,12 @@ def _dispatch_core_command(args):
                 params["saved_after"] = args.saved_after
             if args.saved_before:
                 params["saved_before"] = args.saved_before
+            if args.note_search:
+                params["note_search"] = args.note_search
+            if args.content_search:
+                params["content_search"] = args.content_search
+            if args.clear_search_regex:
+                params["regex"] = True
 
             try:
                 response = httpx.delete(
@@ -13749,6 +13759,50 @@ def main():
             "Only discard versions saved on or before this ISO 8601 "
             "datetime, via DELETE /api/notebooks/{filename}/versions's "
             "own ?saved_before=."
+        )
+    )
+    versions_clear_parser.add_argument(
+        "--note-search",
+        default=None,
+        dest="note_search",
+        help=(
+            "Only discard versions whose own note contains this text, "
+            "case-insensitively, via DELETE "
+            "/api/notebooks/{filename}/versions's own ?note_search= -- "
+            "the same note filter `versions list --note-search` already "
+            "provides for *listing* versions, applied here to purge "
+            "e.g. every version noted \"contains a leaked key, do not "
+            "restore\" instead of only ever finding them by hand first. "
+            "Composes with --older-than-days/--saved-after/--saved-"
+            "before/--content-search as an AND."
+        )
+    )
+    versions_clear_parser.add_argument(
+        "--content-search",
+        default=None,
+        dest="content_search",
+        help=(
+            "Only discard versions whose own snapshotted code contains "
+            "this text, case-insensitively, via DELETE "
+            "/api/notebooks/{filename}/versions's own ?content_search= "
+            "-- the same code-content filter `versions list --content-"
+            "search` already provides for *listing* versions, applied "
+            "here to purge every snapshot that still references e.g. a "
+            "since-revoked credential. Composes with --older-than-days/"
+            "--saved-after/--saved-before/--note-search as an AND."
+        )
+    )
+    versions_clear_parser.add_argument(
+        "--search-regex",
+        action="store_true",
+        dest="clear_search_regex",
+        help=(
+            "Treat --note-search and --content-search as case-"
+            "insensitive Python regular expressions instead of plain "
+            "substrings, via DELETE /api/notebooks/{filename}/versions's "
+            "own ?regex=true -- the same shared \"regex\" toggle "
+            "`versions list` already uses across its own identical pair. "
+            "Ignored without --note-search or --content-search."
         )
     )
     versions_clear_parser.add_argument(

@@ -10237,6 +10237,7 @@ async def import_notebook_versions(
 def clear_notebook_versions(
     filename: str, dry_run: bool = False, older_than_days: int = None,
     saved_after: str = None, saved_before: str = None,
+    note_search: str = None, content_search: str = None, regex: bool = False,
 ):
     """Permanently discard every one of a notebook's snapshotted previous
     versions at once, without touching the notebook's own current content,
@@ -10313,6 +10314,37 @@ def clear_notebook_versions(
     version_id by hand via `versions delete-batch`. A "saved_after"
     later than "saved_before" is rejected with 400, the same way it
     already is for GET .../versions' own identical pair.
+
+    "note_search"/"content_search" (each optional) narrow the clear the
+    identical way GET .../versions' own identically-named pair narrows
+    *listing* down to matching versions -- here, discarding only the
+    versions that match instead of merely reporting them. Composes with
+    "older_than_days"/"saved_after"/"saved_before" as an AND, the same as
+    every other filter here already does among themselves. Before this,
+    purging a run of snapshots by what they actually contain -- e.g.
+    every version whose note reads "contains a leaked key, do not
+    restore" or whose code still references a since-revoked credential
+    -- meant first GETting .../versions with "note_search"/
+    "content_search" of its own to find the matching version_ids, then
+    discarding each one individually via `versions delete-batch`, two
+    round trips (and a race between them) for what this now does in one.
+    "note_search" reads the same version-notes sidecar file GET
+    .../versions' own identical field already does; "content_search"
+    parses each candidate version's own .ipynb content the same way,
+    via load_notebook/extract_code_cells -- a version that fails to
+    parse is treated as not matching (kept, not deleted), the same "one
+    bad entry doesn't sink a bulk listing" precedent GET
+    /api/notebooks/search-content already establishes elsewhere in this
+    file, applied here to erring on the side of *not* discarding
+    something this can't actually inspect. "regex" (optional, default
+    false) treats "note_search"/"content_search" as a case-insensitive
+    Python regular expression instead of a plain substring, the
+    identical shared toggle GET .../versions' own "regex" already is
+    for the same two fields; an invalid pattern is rejected with 400
+    before a single version is even read, let alone deleted. Ignored
+    (has no effect) when neither "note_search" nor "content_search" is
+    given -- a plain `clear` (or one scoped only by "older_than_days"/
+    "saved_after"/"saved_before") behaves exactly as before this.
     """
 
     if older_than_days is not None and older_than_days <= 0:
@@ -10343,11 +10375,31 @@ def clear_notebook_versions(
             detail="Notebook file not found"
         )
 
+    if regex:
+
+        note_search_pattern = (
+            _compile_search_regex(note_search, "note_search") if note_search else None
+        )
+        content_search_pattern = (
+            _compile_search_regex(content_search, "content_search")
+            if content_search else None
+        )
+        note_search_lower = content_search_lower = None
+
+    else:
+
+        note_search_pattern = content_search_pattern = None
+        note_search_lower = note_search.lower() if note_search else None
+        content_search_lower = content_search.lower() if content_search else None
+
     versions_dir = _notebook_versions_dir(file_path.name)
 
     with _version_lock_for(file_path.name):
 
-        if older_than_days is None and saved_after_dt is None and saved_before_dt is None:
+        if (
+            older_than_days is None and saved_after_dt is None
+            and saved_before_dt is None and not note_search and not content_search
+        ):
 
             deleted_version_ids = sorted(
                 entry.name for entry in versions_dir.iterdir()
@@ -10363,6 +10415,13 @@ def clear_notebook_versions(
             cutoff = (
                 datetime.now(timezone.utc) - timedelta(days=older_than_days)
                 if older_than_days is not None else None
+            )
+
+            # Read once, shared by every candidate's own "note_search" check
+            # below -- the identical "one sidecar read, not N" reasoning GET
+            # .../versions' own "note_search" already follows.
+            all_notes = (
+                _read_all_version_notes(file_path.name) if note_search else None
             )
 
             deleted_version_ids = []
@@ -10386,6 +10445,42 @@ def clear_notebook_versions(
 
                     if saved_before_dt is not None and saved_at > saved_before_dt:
                         continue
+
+                    if note_search:
+
+                        note_text = all_notes.get(version_file.name, "")
+
+                        if note_search_pattern is not None:
+                            if not note_search_pattern.search(note_text):
+                                continue
+                        elif note_search_lower not in note_text.lower():
+                            continue
+
+                    if content_search:
+
+                        try:
+                            version_notebook = load_notebook(str(version_file))
+
+                        except MALFORMED_NOTEBOOK_ERRORS:
+                            # Can't tell whether this one matches -- erring
+                            # on the side of keeping it, not discarding
+                            # something this couldn't actually inspect.
+                            continue
+
+                        content_matched = False
+
+                        for cell in extract_code_cells(version_notebook):
+
+                            if content_search_pattern is not None:
+                                if content_search_pattern.search(cell):
+                                    content_matched = True
+                                    break
+                            elif content_search_lower in cell.lower():
+                                content_matched = True
+                                break
+
+                        if not content_matched:
+                            continue
 
                     if not dry_run:
                         version_file.unlink()
