@@ -6665,11 +6665,69 @@ def _resolve_diff_side_path(filename: str, version_id: str = None) -> Path:
     return version_path
 
 
+def _filter_notebook_diff_by_name(diff, only_names, exclude_names):
+    """Restrict a diff_notebook_functions (backend/inspector.py) result
+    -- already merged with classify_notebook_diff's own "compatible" --
+    to only the named functions, via at most one of `only_names`/
+    `exclude_names` (each a set of names, or falsy for "no filtering"),
+    shared by GET /api/notebooks/diff and GET /api/notebooks/{filename}/
+    versions/{version_id}/diff below so their "only"/"exclude" can't
+    drift apart from each other.
+
+    Reuses _filter_functions_by_name (backend/compiler.py) unchanged --
+    the exact validation ("only and exclude can't both be given",
+    naming an unrecognized function) POST /api/inspect's own "only"/
+    "exclude" already applies -- against the union of every function
+    name either side of the diff actually defines, not just one side:
+    a function POST /api/inspect would reject as unknown to `only`/
+    `exclude` on either notebook alone is still a perfectly valid thing
+    to ask a *diff* to restrict to, since it may only ever appear in
+    "removed" (defined by the old side, gone from the new one) or
+    "added" (the reverse) -- checking it against just one side's own
+    functions would wrongly 400 exactly the cases "removed"/"added"
+    exist to report.
+
+    Raises HTTPException(400) (never a raw ValueError) the same way
+    every other caller of _filter_functions_by_name in this file already
+    does, naming the exact unrecognized function(s) or the "only and
+    exclude can't both be given" conflict.
+    """
+    if not only_names and not exclude_names:
+        return diff
+
+    known_names = (
+        {f["name"] for f in diff["added"]}
+        | {f["name"] for f in diff["removed"]}
+        | {c["name"] for c in diff["changed"]}
+        | set(diff["unchanged"])
+    )
+
+    try:
+
+        kept_names = {
+            func["name"]
+            for func in _filter_functions_by_name(
+                [{"name": name} for name in known_names], only_names, exclude_names
+            )
+        }
+
+    except ValueError as e:
+
+        raise HTTPException(status_code=400, detail=str(e))
+
+    diff["added"] = [f for f in diff["added"] if f["name"] in kept_names]
+    diff["removed"] = [f for f in diff["removed"] if f["name"] in kept_names]
+    diff["changed"] = [c for c in diff["changed"] if c["name"] in kept_names]
+    diff["unchanged"] = [name for name in diff["unchanged"] if name in kept_names]
+
+    return diff
+
+
 @router.get("/notebooks/diff")
 def diff_notebooks(
     old: str = None, new: str = None,
     old_version: str = None, new_version: str = None,
-    content: bool = False,
+    content: bool = False, only: str = None, exclude: str = None,
 ):
     """Compare the top-level functions two already-uploaded notebooks
     would each compile into endpoints -- entirely server-side, without
@@ -6731,7 +6789,37 @@ def diff_notebooks(
     caller of the compiled API, via classify_notebook_diff (backend/
     inspector.py). See that function's own docstring for exactly what
     counts as breaking.
+
+    "only"/"exclude" (each an optional comma-separated list of function
+    names) restrict "added"/"removed"/"changed"/"unchanged" (and
+    "breaking_changes") to whichever functions actually appear in either
+    side of the diff, via _filter_notebook_diff_by_name above -- the same
+    only/exclude restriction POST /api/inspect and GET .../versions/
+    {version_id}/inspect already apply to a single notebook's own report,
+    just applied here to a two-sided diff instead. Before this, comparing
+    two notebooks that share plenty of unrelated functions -- but where a
+    caller (e.g. a CI check) only actually cares whether a couple of
+    specific ones changed shape -- meant fetching the entire diff and
+    filtering "added"/"removed"/"changed"/"unchanged" down client-side by
+    hand. Unlike that inspect pair's own only/exclude (checked against
+    one notebook's own functions), a name is accepted here as long as it
+    appears on *either* side -- a function only "old" defines (reported
+    under "removed") or only "new" does (under "added") is still a valid
+    thing to filter to. An unrecognized name, or both given together, is
+    rejected with 400, before either side is even resolved.
     """
+
+    only_names = {name.strip() for name in only.split(",") if name.strip()} if only else None
+    exclude_names = (
+        {name.strip() for name in exclude.split(",") if name.strip()} if exclude else None
+    )
+
+    if only_names and exclude_names:
+
+        raise HTTPException(
+            status_code=400,
+            detail="only and exclude can't both be given -- choose one."
+        )
 
     if not old or not new:
 
@@ -6760,6 +6848,7 @@ def diff_notebooks(
             )
 
     diff = diff_notebook_functions(str(old_path), str(new_path))
+    diff = _filter_notebook_diff_by_name(diff, only_names, exclude_names)
     diff.update(classify_notebook_diff(diff))
 
     response = {
@@ -11163,6 +11252,7 @@ def inspect_notebook_version(
 @router.get("/notebooks/{filename}/versions/{version_id}/diff")
 def diff_notebook_version(
     filename: str, version_id: str, against: str = None, content: bool = False,
+    only: str = None, exclude: str = None,
 ):
     """Compare the top-level functions a snapshotted version of `filename`
     would compile into endpoints against either another snapshotted
@@ -11208,7 +11298,32 @@ def diff_notebook_version(
     Also always includes "compatible" and "breaking_changes", the same
     classify_notebook_diff (backend/inspector.py) verdict GET
     /api/notebooks/diff's own identical fields already provide.
+
+    "only"/"exclude" (each an optional comma-separated list of function
+    names) restrict "added"/"removed"/"changed"/"unchanged" (and
+    "breaking_changes") to whichever functions actually appear on either
+    side, via _filter_notebook_diff_by_name above -- the exact same
+    restriction GET /api/notebooks/diff's own identically-named pair just
+    gained, applied here to a version-pinned comparison instead of two
+    independently-uploaded notebooks. A name is accepted as long as it
+    appears in "added", "removed", "changed", or "unchanged" -- not just
+    the version_id side's own functions -- since a function only the
+    current live content defines (reported under "added") is still a
+    valid thing to filter to. An unrecognized name, or both given
+    together, is rejected with 400, before either side is even resolved.
     """
+
+    only_names = {name.strip() for name in only.split(",") if name.strip()} if only else None
+    exclude_names = (
+        {name.strip() for name in exclude.split(",") if name.strip()} if exclude else None
+    )
+
+    if only_names and exclude_names:
+
+        raise HTTPException(
+            status_code=400,
+            detail="only and exclude can't both be given -- choose one."
+        )
 
     file_path = resolve_upload_path(filename)
 
@@ -11267,6 +11382,7 @@ def diff_notebook_version(
             )
 
     diff = diff_notebook_functions(str(old_path), str(new_path))
+    diff = _filter_notebook_diff_by_name(diff, only_names, exclude_names)
     diff.update(classify_notebook_diff(diff))
 
     response = {
