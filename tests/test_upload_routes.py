@@ -5884,6 +5884,65 @@ def test_find_duplicate_notebooks_tag_with_only_one_matching_member_yields_no_gr
     assert body["duplicate_groups"] == []
 
 
+def test_find_duplicate_notebooks_scopes_to_tags_any():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content_a = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    for filename in ("dup_tags_any_a.ipynb", "dup_tags_any_b.ipynb", "dup_tags_any_c.ipynb"):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content_a), "application/json")},
+        )
+
+    client.put("/api/notebooks/dup_tags_any_a.ipynb/tags", json={"tags": ["staging"]})
+    client.put("/api/notebooks/dup_tags_any_b.ipynb/tags", json={"tags": ["production"]})
+
+    body = client.get(
+        "/api/notebooks/duplicates", params={"tags": "staging,production"}
+    ).json()
+
+    assert body["group_count"] == 1
+    assert body["duplicate_groups"][0]["filenames"] == [
+        "dup_tags_any_a.ipynb", "dup_tags_any_b.ipynb",
+    ]
+
+
+def test_find_duplicate_notebooks_scopes_to_tags_all():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content_a = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    for filename in ("dup_tags_all_a.ipynb", "dup_tags_all_b.ipynb"):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content_a), "application/json")},
+        )
+
+    client.put(
+        "/api/notebooks/dup_tags_all_a.ipynb/tags",
+        json={"tags": ["production", "v2"]},
+    )
+    client.put("/api/notebooks/dup_tags_all_b.ipynb/tags", json={"tags": ["production"]})
+
+    body = client.get(
+        "/api/notebooks/duplicates",
+        params={"tags": "production,v2", "tags_match": "all"},
+    ).json()
+
+    assert body["group_count"] == 0
+    assert body["duplicate_groups"] == []
+
+
+def test_find_duplicate_notebooks_rejects_an_invalid_tags_match():
+
+    resp = client.get("/api/notebooks/duplicates", params={"tags": "a,b", "tags_match": "bogus"})
+
+    assert resp.status_code == 400
+
+
 def test_find_duplicate_notebooks_filters_by_modified_after_and_before():
 
     client.delete("/api/notebooks?confirm=true")
