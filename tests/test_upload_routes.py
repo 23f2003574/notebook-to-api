@@ -19727,6 +19727,103 @@ def test_prune_all_notebook_versions_deletes_only_versions_older_than_cutoff():
     assert [v["version_id"] for v in remaining] == [recent_version_id]
 
 
+def test_prune_all_notebook_versions_filters_by_content_search():
+
+    filename = "prune_versions_content_search.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    version_id = versions[0]["version_id"]
+    _backdate_notebook_version(filename, version_id, days_ago=40)
+
+    resp = client.delete(
+        "/api/notebooks/versions",
+        params={"older_than_days": 30, "content_search": "def f("},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_deleted_count"] == 1
+    assert body["results"] == [{
+        "filename": filename,
+        "deleted_version_ids": [version_id],
+        "deleted_count": 1,
+    }]
+
+
+def test_prune_all_notebook_versions_content_search_leaves_non_matching_versions():
+
+    filename = "prune_versions_content_search_no_match.ipynb"
+    version_id = _upload_and_create_one_version(filename)
+    _backdate_notebook_version(filename, version_id, days_ago=40)
+
+    resp = client.delete(
+        "/api/notebooks/versions",
+        params={"older_than_days": 30, "content_search": "this_never_appears_anywhere"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["total_deleted_count"] == 0
+
+    remaining = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert [v["version_id"] for v in remaining] == [version_id]
+
+
+def test_prune_all_notebook_versions_filters_by_note_search():
+
+    filename = "prune_versions_note_search.ipynb"
+    version_id = _upload_and_create_one_version(filename)
+    _backdate_notebook_version(filename, version_id, days_ago=40)
+
+    client.put(
+        f"/api/notebooks/{filename}/versions/{version_id}/note",
+        json={"note": "leaked key, do not restore"},
+    )
+
+    resp = client.delete(
+        "/api/notebooks/versions",
+        params={"older_than_days": 30, "note_search": "leaked key"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["total_deleted_count"] == 1
+    assert resp.json()["results"] == [{
+        "filename": filename,
+        "deleted_version_ids": [version_id],
+        "deleted_count": 1,
+    }]
+
+
+def test_prune_all_notebook_versions_content_search_regex_rejects_an_invalid_pattern():
+
+    resp = client.delete(
+        "/api/notebooks/versions",
+        params={"older_than_days": 30, "content_search": "[", "regex": "true"},
+    )
+
+    assert resp.status_code == 400
+
+
 def test_prune_all_notebook_versions_spans_multiple_notebooks():
 
     for filename in ("prune_versions_multi_a.ipynb", "prune_versions_multi_b.ipynb"):

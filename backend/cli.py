@@ -3884,6 +3884,12 @@ def _dispatch_core_command(args):
             params["saved_after"] = args.saved_after
         if args.saved_before:
             params["saved_before"] = args.saved_before
+        if args.note_search:
+            params["note_search"] = args.note_search
+        if args.content_search:
+            params["content_search"] = args.content_search
+        if args.prune_search_regex:
+            params["regex"] = True
         if args.dry_run:
             params["dry_run"] = True
 
@@ -11147,6 +11153,46 @@ def main():
             "Only prune versions saved on or before this ISO 8601 "
             "datetime, via DELETE /api/notebooks/versions's own "
             "?saved_before=."
+        )
+    )
+    prune_versions_parser.add_argument(
+        "--note-search",
+        default=None,
+        dest="note_search",
+        help=(
+            "Only prune versions whose own note contains this text, "
+            "case-insensitively, via DELETE /api/notebooks/versions's "
+            "own ?note_search= -- the same note filter `versions clear "
+            "--note-search` already provides for a single notebook, "
+            "applied here across the whole catalog at once. Composes "
+            "with --older-than-days/--tag/--sha256/--saved-after/"
+            "--saved-before/--content-search as an AND."
+        )
+    )
+    prune_versions_parser.add_argument(
+        "--content-search",
+        default=None,
+        dest="content_search",
+        help=(
+            "Only prune versions whose own snapshotted code contains "
+            "this text, case-insensitively, via DELETE "
+            "/api/notebooks/versions's own ?content_search= -- the same "
+            "code-content filter `versions clear --content-search` "
+            "already provides for a single notebook. Composes with "
+            "--older-than-days/--tag/--sha256/--saved-after/--saved-"
+            "before/--note-search as an AND."
+        )
+    )
+    prune_versions_parser.add_argument(
+        "--search-regex",
+        action="store_true",
+        dest="prune_search_regex",
+        help=(
+            "Treat --note-search and --content-search as case-"
+            "insensitive Python regular expressions instead of plain "
+            "substrings, via DELETE /api/notebooks/versions's own "
+            "?regex=true. Ignored without --note-search or "
+            "--content-search."
         )
     )
     prune_versions_parser.add_argument(
