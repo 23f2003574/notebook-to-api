@@ -30520,6 +30520,150 @@ def test_list_notebook_versions_note_search_regex_rejects_an_invalid_pattern():
     assert resp.status_code == 400
 
 
+def test_list_notebook_versions_content_search_filters_by_code_content():
+
+    filename = "version_content_search.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def h() -> int:\n    return 3\n")),
+                "application/json",
+            )
+        },
+    )
+
+    versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    # Newest first: versions[0] snapshotted "def g", versions[1] snapshotted "def f".
+    matching_id = versions[1]["version_id"]
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions",
+        params={"content_search": "def f("},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [v["version_id"] for v in body["versions"]] == [matching_id]
+    assert body["total_count"] == 1
+
+
+def test_list_notebook_versions_content_search_matches_nothing_for_unrelated_code():
+
+    filename = "version_content_search_no_match.ipynb"
+    _upload_and_create_one_version(filename)
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions",
+        params={"content_search": "this_never_appears_anywhere"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["versions"] == []
+
+
+def test_list_notebook_versions_content_search_does_not_add_a_field():
+
+    filename = "version_content_search_no_field.ipynb"
+    _upload_and_create_one_version(filename)
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions",
+        params={"content_search": "return 1"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["versions"]) == 1
+    assert set(body["versions"][0].keys()) == {"version_id", "size_bytes", "saved_at"}
+
+
+def test_list_notebook_versions_content_search_composes_with_note_search_as_and():
+
+    filename = "version_content_and_note_search.ipynb"
+    version_id = _upload_and_create_one_version(filename)
+
+    client.put(
+        f"/api/notebooks/{filename}/versions/{version_id}/note",
+        json={"note": "hotfix"},
+    )
+
+    matching = client.get(
+        f"/api/notebooks/{filename}/versions",
+        params={"content_search": "return 1", "note_search": "hotfix"},
+    )
+    assert [v["version_id"] for v in matching.json()["versions"]] == [version_id]
+
+    non_matching = client.get(
+        f"/api/notebooks/{filename}/versions",
+        params={"content_search": "return 1", "note_search": "unrelated"},
+    )
+    assert non_matching.json()["versions"] == []
+
+
+def test_list_notebook_versions_content_search_regex_matches_a_pattern():
+
+    filename = "version_content_search_regex.ipynb"
+    version_id = _upload_and_create_one_version(filename)
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions",
+        params={"content_search": r"return \d+", "regex": "true"},
+    )
+
+    assert resp.status_code == 200
+    assert [v["version_id"] for v in resp.json()["versions"]] == [version_id]
+
+
+def test_list_notebook_versions_content_search_regex_false_treats_pattern_as_literal():
+
+    filename = "version_content_search_regex_off.ipynb"
+    _upload_and_create_one_version(filename)
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions",
+        params={"content_search": r"return \d+"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["versions"] == []
+
+
+def test_list_notebook_versions_content_search_regex_rejects_an_invalid_pattern():
+
+    filename = "version_content_search_bad_regex.ipynb"
+    _upload_and_create_one_version(filename)
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions",
+        params={"content_search": "[", "regex": "true"},
+    )
+
+    assert resp.status_code == 400
+
+
 def test_delete_notebook_version_also_discards_its_note():
 
     filename = "version_note_delete_cleanup.ipynb"
