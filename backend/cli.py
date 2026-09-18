@@ -997,6 +997,58 @@ def _parse_version_copy_pair(value):
     return {"version_id": version_id, "new_filename": new_filename}
 
 
+def _load_batch_entries_json(path):
+    """Read `path` (or stdin, for "-") as a JSON array of entry objects,
+    for `versions copy-batch --entries-json`/`versions restore-batch
+    --entries-json` below -- an alternative to the positional
+    "value:value" pairs _parse_version_copy_pair/_parse_notebook_version_pair
+    above parse, for whichever per-entry field either pair's own fixed
+    two-value shape can't express at all (e.g. an "expected_sha256",
+    "tags", "description", or per-entry "overwrite" -- every one of
+    which POST /api/notebooks/{filename}/versions/copy-batch's and POST
+    /api/notebooks/versions/restore-batch's own "entries" already accept,
+    but no positional pair syntax could ever grow a third/fourth field
+    into without breaking the existing two-value one already in
+    scripts). Before this, setting any of those per entry from the CLI
+    meant one single-entry `versions copy`/`versions restore` call per
+    entry instead of one batch call for all of them -- exactly the round
+    trip these batch commands exist to collapse into one.
+
+    Passed straight through as the request body's own "entries" list,
+    completely unvalidated beyond "is this a JSON array of objects" --
+    the dashboard's own POST .../copy-batch/POST .../restore-batch
+    already validates every per-entry field itself (a 404 for an unknown
+    filename/version_id, a 400 for a bad "tags"/"expected_sha256", ...),
+    so duplicating that validation here would only ever risk drifting
+    out of sync with it.
+
+    Raises a plain RuntimeError (not a bare traceback) for an unreadable
+    file, invalid JSON, or a value that isn't a list of objects -- the
+    same "fail with a clean message" contract every other CLI input
+    error in this file already follows.
+    """
+    try:
+
+        raw = sys.stdin.read() if path == "-" else Path(path).read_text()
+
+    except OSError as e:
+        raise RuntimeError(f"Could not read --entries-json '{path}': {e}")
+
+    try:
+
+        entries = json.loads(raw)
+
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"--entries-json '{path}' is not valid JSON: {e}")
+
+    if not isinstance(entries, list) or not all(isinstance(e, dict) for e in entries):
+        raise RuntimeError(
+            f"--entries-json '{path}' must contain a JSON array of objects"
+        )
+
+    return entries
+
+
 def _matched_notebooks_summary(data, args, shown_count):
     """Format the trailing "N notebook(s) matched" summary line shared by
     `search-functions` and `search-content` below, accounting for
@@ -6359,9 +6411,30 @@ def _dispatch_core_command(args):
 
         elif args.versions_command == "copy-batch":
 
-            entries = [
-                {**entry, "overwrite": args.overwrite} for entry in args.entry
-            ]
+            if args.entries_json and args.entry:
+                raise RuntimeError(
+                    "--entries-json cannot be combined with positional "
+                    "\"version_id:new_filename\" entries."
+                )
+
+            if args.entries_json:
+
+                entries = [
+                    {"overwrite": args.overwrite, **entry}
+                    for entry in _load_batch_entries_json(args.entries_json)
+                ]
+
+            elif args.entry:
+
+                entries = [
+                    {**entry, "overwrite": args.overwrite} for entry in args.entry
+                ]
+
+            else:
+                raise RuntimeError(
+                    "Provide at least one \"version_id:new_filename\" "
+                    "entry, or --entries-json."
+                )
 
             body = {"entries": entries}
             if args.dry_run:
@@ -6449,7 +6522,23 @@ def _dispatch_core_command(args):
 
         elif args.versions_command == "restore-batch":
 
-            body = {"entries": args.entry}
+            if args.entries_json and args.entry:
+                raise RuntimeError(
+                    "--entries-json cannot be combined with positional "
+                    "\"filename:version_id\" entries."
+                )
+
+            if args.entries_json:
+                entries = _load_batch_entries_json(args.entries_json)
+            elif args.entry:
+                entries = args.entry
+            else:
+                raise RuntimeError(
+                    "Provide at least one \"filename:version_id\" entry, "
+                    "or --entries-json."
+                )
+
+            body = {"entries": entries}
             if args.dry_run:
                 body["dry_run"] = True
 
@@ -13763,11 +13852,33 @@ def main():
         "filename", help="Filename of the notebook, as reported by `list`."
     )
     versions_copy_batch_parser.add_argument(
-        "entry", nargs="+", type=_parse_version_copy_pair,
+        "entry", nargs="*", type=_parse_version_copy_pair,
         help=(
             "One or more \"version_id:new_filename\" pairs, as reported "
             "by `versions list`, e.g. "
-            "20240101T000000000000_abcd1234.ipynb:a.ipynb."
+            "20240101T000000000000_abcd1234.ipynb:a.ipynb. Mutually "
+            "exclusive with --entries-json."
+        )
+    )
+    versions_copy_batch_parser.add_argument(
+        "--entries-json",
+        default=None,
+        dest="entries_json",
+        metavar="PATH",
+        help=(
+            "Read the batch's own \"entries\" from PATH (or \"-\" for "
+            "stdin) as a raw JSON array of {\"version_id\", "
+            "\"new_filename\", ...} objects instead of positional "
+            "\"version_id:new_filename\" pairs -- the only way to set a "
+            "per-entry \"expected_sha256\"/\"tags\"/\"description\"/"
+            "\"overwrite\" from this command, since no positional pair "
+            "syntax could grow a third field without breaking the "
+            "existing two-value one. Passed straight through to POST "
+            "/api/notebooks/{filename}/versions/copy-batch's own "
+            "\"entries\" field unvalidated -- the dashboard itself "
+            "validates each one. Mutually exclusive with positional "
+            "\"entry\" pairs; --overwrite still applies uniformly on "
+            "top of these unless an entry sets its own."
         )
     )
     _add_dashboard_url_and_timeout_arguments(versions_copy_batch_parser)
@@ -13870,11 +13981,31 @@ def main():
         )
     )
     versions_restore_batch_parser.add_argument(
-        "entry", nargs="+", type=_parse_notebook_version_pair,
+        "entry", nargs="*", type=_parse_notebook_version_pair,
         help=(
             "One or more \"filename:version_id\" pairs, as reported by "
             "`list`/`versions list`, e.g. "
-            "a.ipynb:20240101T000000000000_abcd1234.ipynb."
+            "a.ipynb:20240101T000000000000_abcd1234.ipynb. Mutually "
+            "exclusive with --entries-json."
+        )
+    )
+    versions_restore_batch_parser.add_argument(
+        "--entries-json",
+        default=None,
+        dest="entries_json",
+        metavar="PATH",
+        help=(
+            "Read the batch's own \"entries\" from PATH (or \"-\" for "
+            "stdin) as a raw JSON array of {\"filename\", "
+            "\"version_id\", ...} objects instead of positional "
+            "\"filename:version_id\" pairs -- the only way to set a "
+            "per-entry \"expected_sha256\" from this command, since no "
+            "positional pair syntax could grow a third field without "
+            "breaking the existing two-value one. Passed straight "
+            "through to POST /api/notebooks/versions/restore-batch's own "
+            "\"entries\" field unvalidated -- the dashboard itself "
+            "validates each one. Mutually exclusive with positional "
+            "\"entry\" pairs."
         )
     )
     versions_restore_batch_parser.add_argument(

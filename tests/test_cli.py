@@ -18286,6 +18286,96 @@ def test_versions_copy_batch_command_rejects_a_malformed_entry(tmp_path):
     assert "version_id:new_filename" in proc.stderr
 
 
+def test_versions_copy_batch_command_entries_json_sends_the_given_entries_verbatim(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "dry_run": False, "filename": "nb.ipynb",
+            "results": [
+                {"version_id": "v1.ipynb", "new_filename": "a.ipynb", "status": "success"},
+            ],
+            "succeeded_count": 1, "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    entries_path = workdir / "entries.json"
+    entries_path.write_text(json.dumps([
+        {
+            "version_id": "v1.ipynb", "new_filename": "a.ipynb",
+            "overwrite": True, "expected_sha256": "0" * 64,
+        },
+    ]))
+
+    proc = _run_cli(
+        [
+            "versions", "copy-batch", "nb.ipynb",
+            "--entries-json", str(entries_path),
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {
+        "entries": [
+            {
+                "version_id": "v1.ipynb", "new_filename": "a.ipynb",
+                "overwrite": True, "expected_sha256": "0" * 64,
+            },
+        ]
+    }
+
+
+def test_versions_copy_batch_command_rejects_entries_json_combined_with_positional_entries(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    entries_path = workdir / "entries.json"
+    entries_path.write_text("[]")
+
+    proc = _run_cli(
+        [
+            "versions", "copy-batch", "nb.ipynb", "v1.ipynb:a.ipynb",
+            "--entries-json", str(entries_path),
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "cannot be combined")
+
+
+def test_versions_copy_batch_command_rejects_no_entries_at_all(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["versions", "copy-batch", "nb.ipynb"], cwd=workdir)
+
+    _assert_clean_cli_error(proc, "Provide at least one")
+
+
+def test_versions_copy_batch_command_entries_json_rejects_invalid_json(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    entries_path = workdir / "entries.json"
+    entries_path.write_text("not json")
+
+    proc = _run_cli(
+        ["versions", "copy-batch", "nb.ipynb", "--entries-json", str(entries_path)],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "not valid JSON")
+
+
 def test_versions_copy_batch_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
     tmp_path,
 ):
@@ -18956,6 +19046,107 @@ def test_versions_restore_batch_command_rejects_a_malformed_entry(tmp_path):
 
     assert proc.returncode != 0
     assert "filename:version_id" in proc.stderr
+
+
+def test_versions_restore_batch_command_entries_json_sends_the_given_entries_verbatim(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {
+                    "filename": "a.ipynb", "version_id": "v1.ipynb",
+                    "status": "success", "restored_version_id": "v1.ipynb",
+                    "was_currently_compiled": False,
+                },
+            ],
+            "succeeded_count": 1, "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    entries_path = workdir / "entries.json"
+    entries_path.write_text(json.dumps([
+        {"filename": "a.ipynb", "version_id": "v1.ipynb", "expected_sha256": "0" * 64},
+    ]))
+
+    proc = _run_cli(
+        [
+            "versions", "restore-batch",
+            "--entries-json", str(entries_path),
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {
+        "entries": [
+            {"filename": "a.ipynb", "version_id": "v1.ipynb", "expected_sha256": "0" * 64},
+        ]
+    }
+
+
+def test_versions_restore_batch_command_rejects_entries_json_combined_with_positional_entries(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    entries_path = workdir / "entries.json"
+    entries_path.write_text("[]")
+
+    proc = _run_cli(
+        [
+            "versions", "restore-batch", "a.ipynb:v1.ipynb",
+            "--entries-json", str(entries_path),
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "cannot be combined")
+
+
+def test_versions_restore_batch_command_rejects_no_entries_at_all(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["versions", "restore-batch"], cwd=workdir)
+
+    _assert_clean_cli_error(proc, "Provide at least one")
+
+
+def test_versions_restore_batch_command_entries_json_rejects_a_non_list_value(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    entries_path = workdir / "entries.json"
+    entries_path.write_text(json.dumps({"not": "a list"}))
+
+    proc = _run_cli(
+        ["versions", "restore-batch", "--entries-json", str(entries_path)],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "must contain a JSON array")
+
+
+def test_versions_restore_batch_command_entries_json_rejects_a_missing_file(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["versions", "restore-batch", "--entries-json", str(workdir / "missing.json")],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "Could not read")
 
 
 def test_versions_restore_batch_command_reports_a_clean_error_when_the_dashboard_is_unreachable(
