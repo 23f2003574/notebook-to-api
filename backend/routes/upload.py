@@ -6655,6 +6655,235 @@ def search_notebook_content(
     }
 
 
+@router.get("/notebooks/versions/search-content")
+def search_notebook_version_content(
+    search: str = None, regex: bool = False, tag: str = None,
+    limit: int = None, offset: int = 0, format: str = "json",
+):
+    """Find every snapshotted *version* of every uploaded notebook with a
+    code cell whose raw source contains `search` (case-insensitive),
+    across the whole catalog's entire version history at once.
+
+    GET /api/notebooks/search-content already answers this for every
+    notebook's own *current* content, and GET /api/notebooks/{filename}/
+    versions' own "content_search" (added earlier) answers it for one
+    notebook's own version history -- but there was no way to ask "did
+    *any* uploaded notebook's history ever contain this line of code,
+    even if it's since been removed or overwritten" without first
+    knowing which filename to even check: answering "did we ever commit
+    something that looked like an API key to any notebook, even a
+    version nobody's looked at since" meant fetching GET /api/notebooks
+    to enumerate every filename, then GET .../versions?content_search=
+    once per notebook by hand -- an N+1 round trip this closes into one.
+
+    Reuses the identical load_notebook/extract_code_cells GET
+    /api/notebooks/search-content already uses to scan a cell's raw
+    source, and the identical {"cell_index", "snippet"} per-match shape
+    -- just against every one of a notebook's own snapshotted versions
+    (see GET .../versions above) instead of its current content, and
+    across every notebook in the catalog instead of one. Each matching
+    version is its own "matches" entry -- {"filename", "version_id",
+    "saved_at", "matches": [{"cell_index", "snippet"}, ...]} -- newest
+    version first within a given notebook, notebooks in the same
+    alphabetical order GET /api/notebooks/search-content's own catalog
+    scan already iterates in. A notebook with no version history at all
+    contributes nothing, the same as one with no matching cell.
+
+    A version whose own .ipynb content fails to parse is silently
+    skipped rather than failing the whole request, the same "one bad
+    entry doesn't sink a bulk listing" precedent GET
+    /api/notebooks/search-content's own docstring already establishes
+    for a malformed notebook.
+
+    "tag" (optional) scopes the scan to only notebooks currently
+    carrying that exact tag, the identical GET /api/notebooks?tag= exact
+    match GET /api/notebooks/search-content's own "tag" already reuses --
+    scoped to which *notebooks* are scanned, not which versions, since a
+    version snapshot carries no tag of its own (see GET /api/notebooks/
+    {filename}/versions' own docstring on "note_search"/"content_search"
+    for why a version has no metadata beyond its own note).
+
+    "regex" (optional, default false) treats `search` as a
+    case-insensitive Python regular expression instead of a plain
+    substring, the identical "regex" GET /api/notebooks/search-content's
+    own field already offers, via the same _compile_search_regex (with
+    its own MAX_SEARCH_REGEX_LENGTH/nested-unbounded-repetition guards).
+    An invalid pattern is rejected with 400, naming the underlying
+    re.error, before a single version is even read.
+
+    "limit"/"offset" page the returned "matches" (one entry per matching
+    version) the identical way GET /api/notebooks/search-content's own
+    "limit"/"offset" already page its own per-notebook "matches" --
+    applied after every notebook/version has already been scanned (still
+    needed in full to compute "match_count" correctly). A negative
+    "offset", or a non-positive "limit", is rejected with 400 the same
+    way that endpoint's own identical pair already is.
+
+    "format" (optional, default "json") returns "csv" instead, the same
+    "csv"/"json" choice GET /api/notebooks/search-content's own "format"
+    already offers -- flattened to one row per matching *cell* exactly
+    like that endpoint's own CSV already is, just with an extra
+    "version_id"/"saved_at" pair of columns identifying which snapshot
+    each row's own match came from. Column order is "filename,
+    version_id,saved_at,cell_index,snippet".
+    """
+
+    if format not in ("json", "csv"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="format must be 'json' or 'csv'"
+        )
+
+    if not search:
+
+        raise HTTPException(
+            status_code=400,
+            detail="search is required"
+        )
+
+    if offset < 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="offset must be a non-negative integer"
+        )
+
+    if limit is not None and limit <= 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="limit must be a positive integer"
+        )
+
+    if regex:
+
+        pattern = _compile_search_regex(search)
+
+    else:
+
+        pattern = None
+        search_lower = search.lower()
+
+    upload_root = Path(UPLOAD_DIR)
+
+    matches = []
+
+    for entry in sorted(upload_root.iterdir()):
+
+        if not (entry.is_file() and entry.suffix == ".ipynb"):
+            continue
+
+        if tag and tag not in _read_notebook_tags(entry.name):
+            continue
+
+        versions_dir = _notebook_versions_dir(entry.name)
+
+        if not versions_dir.is_dir():
+            continue
+
+        for version_file in sorted(versions_dir.iterdir(), reverse=True):
+
+            if not version_file.is_file():
+                continue
+
+            try:
+
+                version_notebook = load_notebook(str(version_file))
+
+            except MALFORMED_NOTEBOOK_ERRORS:
+                continue
+
+            code_cells = extract_code_cells(version_notebook)
+
+            cell_matches = []
+
+            for cell_index, cell in enumerate(code_cells):
+
+                if pattern is not None:
+
+                    if not pattern.search(cell):
+                        continue
+
+                    snippet = next(
+                        (
+                            line.strip() for line in cell.splitlines()
+                            if pattern.search(line)
+                        ),
+                        "",
+                    )
+
+                else:
+
+                    if search_lower not in cell.lower():
+                        continue
+
+                    snippet = next(
+                        (
+                            line.strip() for line in cell.splitlines()
+                            if search_lower in line.lower()
+                        ),
+                        "",
+                    )
+
+                cell_matches.append({
+                    "cell_index": cell_index,
+                    "snippet": snippet,
+                })
+
+            if cell_matches:
+
+                saved_at = datetime.fromtimestamp(
+                    version_file.stat().st_mtime, tz=timezone.utc
+                ).isoformat()
+
+                matches.append({
+                    "filename": entry.name,
+                    "version_id": version_file.name,
+                    "saved_at": saved_at,
+                    "matches": cell_matches,
+                })
+
+    match_count = len(matches)
+
+    paginated_matches = (
+        matches[offset:offset + limit] if limit is not None else matches[offset:]
+    )
+
+    if format == "csv":
+
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(["filename", "version_id", "saved_at", "cell_index", "snippet"])
+
+        for match in paginated_matches:
+
+            for cell_match in match["matches"]:
+
+                writer.writerow([
+                    match["filename"], match["version_id"], match["saved_at"],
+                    cell_match["cell_index"], cell_match["snippet"],
+                ])
+
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": 'attachment; filename="versions_search_content.csv"',
+            },
+        )
+
+    return {
+        "status": "success",
+        "search": search,
+        "regex": regex,
+        "matches": paginated_matches,
+        "match_count": match_count,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
 def _resolve_diff_side_path(filename: str, version_id: str = None) -> Path:
     """Resolve one side of a GET /api/notebooks/diff comparison: `filename`'s
     own current content, or, with `version_id` given, one of its

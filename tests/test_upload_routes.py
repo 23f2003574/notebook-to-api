@@ -7125,6 +7125,209 @@ def test_search_notebook_content_regex_rejects_a_catastrophically_backtracking_p
     assert "nested" in resp.json()["detail"].lower()
 
 
+def test_search_notebook_version_content_finds_a_matching_old_snapshot():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    filename = "versions_search_content_match.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes(
+                    "import pandas as pd\n\n"
+                    "def load() -> str:\n    df = pd.read_csv('data.csv')\n    return 'done'\n"
+                )),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def load() -> str:\n    return 'done'\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.get(
+        "/api/notebooks/versions/search-content", params={"search": "read_csv"}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "success"
+    assert body["match_count"] == 1
+    match = body["matches"][0]
+    assert match["filename"] == filename
+    assert match["version_id"] == version_id
+    assert match["matches"][0]["cell_index"] == 0
+    assert "read_csv" in match["matches"][0]["snippet"]
+
+    # The notebook's own *current* content no longer mentions it -- only
+    # its version history does.
+    current_search = client.get(
+        "/api/notebooks/search-content", params={"search": "read_csv"}
+    ).json()
+    assert current_search["notebook_count"] == 0
+
+
+def test_search_notebook_version_content_finds_nothing_for_an_unrelated_search():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    filename = "versions_search_content_no_match.ipynb"
+    _upload_and_create_one_version(filename)
+
+    resp = client.get(
+        "/api/notebooks/versions/search-content",
+        params={"search": "this_never_appears_anywhere"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["matches"] == []
+    assert resp.json()["match_count"] == 0
+
+
+def test_search_notebook_version_content_requires_search():
+
+    resp = client.get("/api/notebooks/versions/search-content")
+
+    assert resp.status_code == 400
+
+
+def test_search_notebook_version_content_scopes_by_tag():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    filename_a = "versions_search_content_tag_a.ipynb"
+    filename_b = "versions_search_content_tag_b.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename_a,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename_a,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    client.put(f"/api/notebooks/{filename_a}/tags", json={"tags": ["keepme"]})
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename_b,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename_b,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.get(
+        "/api/notebooks/versions/search-content",
+        params={"search": "def f(", "tag": "keepme"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [m["filename"] for m in body["matches"]] == [filename_a]
+
+
+def test_search_notebook_version_content_regex_matches_a_pattern():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    filename = "versions_search_content_regex.ipynb"
+    _upload_and_create_one_version(filename)
+
+    resp = client.get(
+        "/api/notebooks/versions/search-content",
+        params={"search": r"return \d+", "regex": "true"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["match_count"] == 1
+
+
+def test_search_notebook_version_content_regex_rejects_an_invalid_pattern():
+
+    resp = client.get(
+        "/api/notebooks/versions/search-content",
+        params={"search": "[", "regex": "true"},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_search_notebook_version_content_csv_format_returns_a_csv_response():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    filename = "versions_search_content_csv.ipynb"
+    _upload_and_create_one_version(filename)
+
+    resp = client.get(
+        "/api/notebooks/versions/search-content",
+        params={"search": "return 1", "format": "csv"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+    lines = resp.text.strip().splitlines()
+    assert lines[0] == "filename,version_id,saved_at,cell_index,snippet"
+    assert lines[1].startswith(filename)
+
+
+def test_search_notebook_version_content_limit_and_offset_page_the_matches():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    for i in range(3):
+        _upload_and_create_one_version(f"versions_search_content_paged_{i}.ipynb")
+
+    resp = client.get(
+        "/api/notebooks/versions/search-content",
+        params={"search": "return 1", "limit": 1, "offset": 1},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["match_count"] == 3
+    assert len(body["matches"]) == 1
+
+
 def test_diff_notebooks_reports_added_removed_changed_and_unchanged():
 
     old_content = _notebook_bytes(
