@@ -13205,6 +13205,83 @@ def test_list_notebooks_filters_by_tag():
     assert [nb["filename"] for nb in notebooks] == ["tags_filter_a.ipynb"]
 
 
+def test_list_notebooks_filters_by_tags_any_matches_at_least_one():
+
+    _upload_sample_notebook("tags_multi_any_a.ipynb")
+    _upload_sample_notebook("tags_multi_any_b.ipynb")
+    _upload_sample_notebook("tags_multi_any_c.ipynb")
+
+    client.put("/api/notebooks/tags_multi_any_a.ipynb/tags", json={"tags": ["staging"]})
+    client.put("/api/notebooks/tags_multi_any_b.ipynb/tags", json={"tags": ["production"]})
+    client.put("/api/notebooks/tags_multi_any_c.ipynb/tags", json={"tags": ["scratch"]})
+
+    notebooks = client.get(
+        "/api/notebooks?search=tags_multi_any_&tags=staging,production"
+    ).json()["notebooks"]
+
+    assert sorted(nb["filename"] for nb in notebooks) == [
+        "tags_multi_any_a.ipynb", "tags_multi_any_b.ipynb",
+    ]
+
+
+def test_list_notebooks_filters_by_tags_all_requires_every_tag():
+
+    _upload_sample_notebook("tags_multi_all_a.ipynb")
+    _upload_sample_notebook("tags_multi_all_b.ipynb")
+
+    client.put(
+        "/api/notebooks/tags_multi_all_a.ipynb/tags",
+        json={"tags": ["production", "v2"]},
+    )
+    client.put("/api/notebooks/tags_multi_all_b.ipynb/tags", json={"tags": ["production"]})
+
+    notebooks = client.get(
+        "/api/notebooks?search=tags_multi_all_&tags=production,v2&tags_match=all"
+    ).json()["notebooks"]
+
+    assert [nb["filename"] for nb in notebooks] == ["tags_multi_all_a.ipynb"]
+
+
+def test_list_notebooks_tags_composes_with_tag_as_and():
+
+    _upload_sample_notebook("tags_multi_and_tag_a.ipynb")
+    _upload_sample_notebook("tags_multi_and_tag_b.ipynb")
+
+    client.put(
+        "/api/notebooks/tags_multi_and_tag_a.ipynb/tags",
+        json={"tags": ["production", "v2"]},
+    )
+    client.put(
+        "/api/notebooks/tags_multi_and_tag_b.ipynb/tags",
+        json={"tags": ["staging", "v2"]},
+    )
+
+    notebooks = client.get(
+        "/api/notebooks?search=tags_multi_and_tag_&tag=production&tags=v2,staging"
+    ).json()["notebooks"]
+
+    assert [nb["filename"] for nb in notebooks] == ["tags_multi_and_tag_a.ipynb"]
+
+
+def test_list_notebooks_tags_drops_empty_entries():
+
+    _upload_sample_notebook("tags_multi_empty_entry.ipynb")
+    client.put("/api/notebooks/tags_multi_empty_entry.ipynb/tags", json={"tags": ["keepme"]})
+
+    notebooks = client.get(
+        "/api/notebooks?search=tags_multi_empty_entry&tags=keepme,,"
+    ).json()["notebooks"]
+
+    assert [nb["filename"] for nb in notebooks] == ["tags_multi_empty_entry.ipynb"]
+
+
+def test_list_notebooks_rejects_an_invalid_tags_match():
+
+    resp = client.get("/api/notebooks?tags=a,b&tags_match=bogus")
+
+    assert resp.status_code == 400
+
+
 def test_list_notebooks_filters_by_description_search():
 
     _upload_sample_notebook("desc_search_a.ipynb")

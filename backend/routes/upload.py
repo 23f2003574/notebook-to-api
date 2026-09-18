@@ -5046,6 +5046,8 @@ def list_notebooks(
     limit: int = None,
     offset: int = 0,
     tag: str = None,
+    tags: str = None,
+    tags_match: str = "any",
     description_search: str = None,
     regex: bool = False,
     sha256: str = None,
@@ -5140,6 +5142,22 @@ def list_notebooks(
     filters the list down to notebooks carrying that exact tag, applied
     (like "search") before "sort"/"limit"/"offset", so it composes with
     every other filter/pagination parameter this endpoint already has.
+
+    "tags" (optional, a comma-separated list) filters by *several* tags
+    at once, something "tag" alone can't express: before this, a caller
+    wanting "every notebook tagged both 'production' and 'v2'", or
+    "every notebook tagged either 'staging' or 'production'", had to
+    fetch the whole catalog (or one "tag"-filtered page per tag) and
+    intersect/union the results client-side itself. "tags_match"
+    (optional, "any" (default) or "all") picks which: "any" keeps a
+    notebook carrying at least one of "tags"' own tags (an OR), "all"
+    keeps one only if it carries every single one of them (an AND). An
+    unrecognized "tags_match" is rejected with 400, before a single
+    notebook is even read. Composes with "tag" as an AND when both are
+    given (a notebook must satisfy both independently) -- "tag" itself is
+    otherwise unchanged, still exact-match-one-tag, and a plain request
+    with neither "tags" nor "tags_match" given behaves exactly as before
+    this. Empty entries in "tags" (e.g. a trailing comma) are dropped.
 
     Each entry's "description" field is the freeform text PUT
     /api/notebooks/{filename}/description has recorded for it (see
@@ -5279,6 +5297,17 @@ def list_notebooks(
             detail=f"order must be one of {sorted(_NOTEBOOK_SORT_ORDERS)}"
         )
 
+    if tags_match not in ("any", "all"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="tags_match must be 'any' or 'all'"
+        )
+
+    tags_filter = (
+        {t.strip() for t in tags.split(",") if t.strip()} if tags else None
+    )
+
     if offset < 0:
 
         raise HTTPException(
@@ -5355,6 +5384,16 @@ def list_notebooks(
 
         if tag and tag not in notebook_tags:
             continue
+
+        if tags_filter is not None:
+
+            notebook_tags_set = set(notebook_tags)
+
+            if tags_match == "all":
+                if not tags_filter.issubset(notebook_tags_set):
+                    continue
+            elif not tags_filter & notebook_tags_set:
+                continue
 
         if description_search_pattern is not None:
             if not description_search_pattern.search(

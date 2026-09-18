@@ -2718,6 +2718,10 @@ def _dispatch_core_command(args):
             params["search"] = args.search
         if args.tag:
             params["tag"] = args.tag
+        if args.tags:
+            params["tags"] = args.tags
+        if args.tags_match != "any":
+            params["tags_match"] = args.tags_match
         if args.description_search:
             params["description_search"] = args.description_search
         if args.regex:
@@ -9639,6 +9643,30 @@ def main():
         "--tag",
         default=None,
         help="Only list notebooks carrying this exact tag, mirroring GET /api/notebooks' own ?tag=."
+    )
+    list_parser.add_argument(
+        "--tags",
+        default=None,
+        help=(
+            "Comma-separated tags to filter by several at once, mirroring "
+            "GET /api/notebooks' own ?tags= -- something --tag alone can't "
+            "express (e.g. every notebook tagged both 'production' and "
+            "'v2', or tagged either 'staging' or 'production'). See "
+            "--tags-match for which. Composes with --tag as an AND when "
+            "both are given."
+        )
+    )
+    list_parser.add_argument(
+        "--tags-match",
+        choices=["any", "all"],
+        default="any",
+        dest="tags_match",
+        help=(
+            "Whether --tags means a notebook must carry at least one of "
+            "them ('any', the default -- an OR) or every single one of "
+            "them ('all' -- an AND), mirroring GET /api/notebooks' own "
+            "?tags_match=. Ignored without --tags."
+        )
     )
     list_parser.add_argument(
         "--description-search",
