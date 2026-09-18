@@ -6519,6 +6519,10 @@ def _dispatch_core_command(args):
                 compare_params["against"] = args.against
             if args.content:
                 compare_params["content"] = "true"
+            if args.only:
+                compare_params["only"] = args.only
+            if args.exclude:
+                compare_params["exclude"] = args.exclude
 
             try:
                 response = httpx.get(
@@ -6999,6 +7003,10 @@ def _dispatch_core_command(args):
             params["new_version"] = args.new_version
         if args.content:
             params["content"] = "true"
+        if args.only:
+            params["only"] = args.only
+        if args.exclude:
+            params["exclude"] = args.exclude
 
         try:
             response = httpx.get(
@@ -13960,6 +13968,7 @@ def main():
             "command already prints."
         )
     )
+    _add_function_selection_arguments(versions_compare_parser)
     _add_dashboard_url_and_timeout_arguments(versions_compare_parser)
     versions_compare_parser.add_argument(
         "--json",
@@ -14253,6 +14262,7 @@ def main():
             "own body, not just whether its signature did."
         )
     )
+    _add_function_selection_arguments(diff_notebooks_parser)
     _add_dashboard_url_and_timeout_arguments(diff_notebooks_parser)
     diff_notebooks_parser.add_argument(
         "--json",

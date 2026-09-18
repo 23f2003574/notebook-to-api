@@ -15536,6 +15536,255 @@ def test_diff_notebook_version_against_current_live_content():
     assert "required_parameter_added" in breaking_types
 
 
+def test_diff_notebook_version_only_restricts_to_named_functions():
+
+    filename = "versions_diff_only.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes(
+                    "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+                    "def remove_me() -> int:\n    return 0\n\n"
+                    "def unchanged_fn() -> int:\n    return 1\n"
+                )),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes(
+                    "def add(a: int, b: int, c: int) -> int:\n    return a + b + c\n\n"
+                    "def add_me() -> int:\n    return 2\n\n"
+                    "def unchanged_fn() -> int:\n    return 1\n"
+                )),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions/{version_id}/diff",
+        params={"only": "add"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["added"] == []
+    assert body["removed"] == []
+    assert [c["name"] for c in body["changed"]] == ["add"]
+    assert body["unchanged"] == []
+    # "add"'s own change is still breaking on its own -- but "remove_me"'s
+    # own removal, filtered out by "only", must not appear.
+    breaking_types = {c["type"] for c in body["breaking_changes"]}
+    assert breaking_types == {"required_parameter_added"}
+
+
+def test_diff_notebook_version_only_accepts_a_removed_only_name():
+
+    filename = "versions_diff_only_removed.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def remove_me() -> int:\n    return 0\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def add_me() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions/{version_id}/diff",
+        params={"only": "remove_me"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [f["name"] for f in body["removed"]] == ["remove_me"]
+    assert body["added"] == []
+
+
+def test_diff_notebook_version_exclude_drops_named_functions():
+
+    filename = "versions_diff_exclude.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes(
+                    "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+                    "def remove_me() -> int:\n    return 0\n\n"
+                    "def unchanged_fn() -> int:\n    return 1\n"
+                )),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes(
+                    "def add(a: int, b: int, c: int) -> int:\n    return a + b + c\n\n"
+                    "def add_me() -> int:\n    return 2\n\n"
+                    "def unchanged_fn() -> int:\n    return 1\n"
+                )),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions/{version_id}/diff",
+        params={"exclude": "add"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [f["name"] for f in body["added"]] == ["add_me"]
+    assert [f["name"] for f in body["removed"]] == ["remove_me"]
+    assert body["changed"] == []
+    assert body["unchanged"] == ["unchanged_fn"]
+    breaking_types = {c["type"] for c in body["breaking_changes"]}
+    assert breaking_types == {"removed_endpoint"}
+
+
+def test_diff_notebook_version_rejects_only_and_exclude_together():
+
+    filename = "versions_diff_only_and_exclude.ipynb"
+    version_id = _upload_and_create_one_version(filename)
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions/{version_id}/diff",
+        params={"only": "f", "exclude": "g"},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_diff_notebook_version_only_rejects_an_unknown_function_name():
+
+    filename = "versions_diff_only_unknown.ipynb"
+    version_id = _upload_and_create_one_version(filename)
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions/{version_id}/diff",
+        params={"only": "this_function_does_not_exist"},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_diff_notebooks_only_restricts_to_named_functions():
+
+    old_filename = "diff_notebooks_only_old.ipynb"
+    new_filename = "diff_notebooks_only_new.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                old_filename,
+                io.BytesIO(_notebook_bytes(
+                    "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+                    "def remove_me() -> int:\n    return 0\n"
+                )),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                new_filename,
+                io.BytesIO(_notebook_bytes(
+                    "def add(a: int, b: int, c: int) -> int:\n    return a + b + c\n\n"
+                    "def add_me() -> int:\n    return 1\n"
+                )),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.get(
+        "/api/notebooks/diff",
+        params={"old": old_filename, "new": new_filename, "only": "add"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["added"] == []
+    assert body["removed"] == []
+    assert [c["name"] for c in body["changed"]] == ["add"]
+
+
+def test_diff_notebooks_rejects_only_and_exclude_together():
+
+    old_filename = "diff_notebooks_conflict_old.ipynb"
+    new_filename = "diff_notebooks_conflict_new.ipynb"
+    _upload_sample_notebook(old_filename)
+    _upload_sample_notebook(new_filename)
+
+    resp = client.get(
+        "/api/notebooks/diff",
+        params={"old": old_filename, "new": new_filename, "only": "f", "exclude": "g"},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_diff_notebooks_only_rejects_an_unknown_function_name():
+
+    old_filename = "diff_notebooks_unknown_old.ipynb"
+    new_filename = "diff_notebooks_unknown_new.ipynb"
+    _upload_sample_notebook(old_filename)
+    _upload_sample_notebook(new_filename)
+
+    resp = client.get(
+        "/api/notebooks/diff",
+        params={
+            "old": old_filename, "new": new_filename,
+            "only": "this_function_does_not_exist",
+        },
+    )
+
+    assert resp.status_code == 400
+
+
 def test_diff_notebook_version_reports_compatible_when_nothing_would_break_callers():
 
     filename = "versions_diff_compatible.ipynb"
