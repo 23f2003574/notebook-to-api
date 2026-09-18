@@ -18297,6 +18297,250 @@ def test_clear_notebook_versions_rejects_saved_after_later_than_saved_before():
     assert resp.status_code == 400
 
 
+def test_clear_notebook_versions_content_search_deletes_only_matching_versions():
+
+    filename = "versions_clear_content_search.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def h() -> int:\n    return 3\n")),
+                "application/json",
+            )
+        },
+    )
+
+    versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    # Newest first: versions[0] snapshotted "def g", versions[1] snapshotted "def f".
+    matching_id = versions[1]["version_id"]
+    kept_id = versions[0]["version_id"]
+
+    resp = client.delete(
+        f"/api/notebooks/{filename}/versions",
+        params={"content_search": "def f("},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["deleted_version_ids"] == [matching_id]
+    assert body["deleted_count"] == 1
+
+    remaining = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert [v["version_id"] for v in remaining] == [kept_id]
+
+
+def test_clear_notebook_versions_content_search_dry_run_does_not_delete():
+
+    filename = "versions_clear_content_search_dry_run.ipynb"
+    _upload_and_create_one_version(filename)
+
+    resp = client.delete(
+        f"/api/notebooks/{filename}/versions",
+        params={"content_search": "return 1", "dry_run": "true"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["dry_run"] is True
+    assert body["deleted_count"] == 1
+
+    remaining = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert len(remaining) == 1
+
+
+def test_clear_notebook_versions_note_search_deletes_only_matching_versions():
+
+    filename = "versions_clear_note_search.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def h() -> int:\n    return 3\n")),
+                "application/json",
+            )
+        },
+    )
+
+    versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    matching_id, other_id = versions[0]["version_id"], versions[1]["version_id"]
+
+    client.put(
+        f"/api/notebooks/{filename}/versions/{matching_id}/note",
+        json={"note": "leaked key, do not restore"},
+    )
+    client.put(
+        f"/api/notebooks/{filename}/versions/{other_id}/note",
+        json={"note": "unrelated"},
+    )
+
+    resp = client.delete(
+        f"/api/notebooks/{filename}/versions",
+        params={"note_search": "leaked key"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["deleted_version_ids"] == [matching_id]
+
+    remaining = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert [v["version_id"] for v in remaining] == [other_id]
+
+
+def test_clear_notebook_versions_note_search_composes_with_content_search_as_and():
+
+    filename = "versions_clear_note_and_content_search.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    versions = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    version_id = versions[0]["version_id"]
+
+    client.put(
+        f"/api/notebooks/{filename}/versions/{version_id}/note",
+        json={"note": "hotfix"},
+    )
+
+    # "note_search" matches, but "content_search" doesn't -- neither alone
+    # is enough, since the two compose as an AND.
+    resp = client.delete(
+        f"/api/notebooks/{filename}/versions",
+        params={"note_search": "hotfix", "content_search": "this_never_appears"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["deleted_count"] == 0
+
+    remaining = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert len(remaining) == 1
+
+
+def test_clear_notebook_versions_content_search_regex_matches_a_pattern():
+
+    filename = "versions_clear_content_search_regex.ipynb"
+    version_id = _upload_and_create_one_version(filename)
+
+    resp = client.delete(
+        f"/api/notebooks/{filename}/versions",
+        params={"content_search": r"return \d+", "regex": "true"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["deleted_version_ids"] == [version_id]
+
+
+def test_clear_notebook_versions_content_search_regex_false_treats_pattern_as_literal():
+
+    filename = "versions_clear_content_search_regex_off.ipynb"
+    _upload_and_create_one_version(filename)
+
+    resp = client.delete(
+        f"/api/notebooks/{filename}/versions",
+        params={"content_search": r"return \d+"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["deleted_count"] == 0
+
+
+def test_clear_notebook_versions_content_search_regex_rejects_an_invalid_pattern():
+
+    filename = "versions_clear_content_search_bad_regex.ipynb"
+    _upload_and_create_one_version(filename)
+
+    resp = client.delete(
+        f"/api/notebooks/{filename}/versions",
+        params={"content_search": "[", "regex": "true"},
+    )
+
+    assert resp.status_code == 400
+
+    # Rejected before anything was deleted.
+    remaining = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert len(remaining) == 1
+
+
+def test_clear_notebook_versions_content_search_skips_a_malformed_version():
+
+    filename = "versions_clear_content_search_malformed.ipynb"
+    version_id = _upload_and_create_one_version(filename)
+
+    version_path = Path(UPLOAD_DIR) / ".versions" / filename / version_id
+    version_path.write_bytes(b"not a valid notebook")
+
+    resp = client.delete(
+        f"/api/notebooks/{filename}/versions",
+        params={"content_search": "anything"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["deleted_count"] == 0
+
+    remaining = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    assert [v["version_id"] for v in remaining] == [version_id]
+
+
 def test_notebook_versions_are_pruned_beyond_the_configured_maximum():
 
     filename = "versions_pruned.ipynb"

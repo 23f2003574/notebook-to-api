@@ -18947,6 +18947,77 @@ def test_versions_clear_command_sends_saved_after_and_before_query_params(
     ]
 
 
+def test_versions_clear_command_sends_note_and_content_search_query_params(
+    tmp_path, fake_dashboard
+):
+    """Mirrors test_versions_clear_command_sends_saved_after_and_before_query_params:
+    DELETE /api/notebooks/{filename}/versions's own "note_search"/
+    "content_search"/"regex" filters had no --note-search/--content-
+    search/--search-regex flag of their own here at all, even though
+    `versions list --note-search`/`--content-search` already thread the
+    identically-named filters through for listing.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "older_than_days": None,
+            "deleted_version_ids": ["v1.ipynb"],
+            "deleted_count": 1,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "clear", "nb.ipynb",
+            "--note-search", "leaked key",
+            "--content-search", "return \\d+",
+            "--search-regex",
+            "--dashboard-url", dashboard_url, "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/notebooks/nb.ipynb/versions?"
+        "note_search=leaked+key&content_search=return+%5Cd%2B&regex=true"
+    ]
+
+
+def test_versions_clear_command_omits_note_and_content_search_by_default(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "older_than_days": None,
+            "deleted_version_ids": [],
+            "deleted_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "clear", "nb.ipynb",
+            "--dashboard-url", dashboard_url, "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks/nb.ipynb/versions"]
+
+
 def test_versions_clear_command_omits_older_than_days_by_default(
     tmp_path, fake_dashboard
 ):
