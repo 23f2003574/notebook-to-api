@@ -5049,6 +5049,7 @@ def list_notebooks(
     tags: str = None,
     tags_match: str = "any",
     description_search: str = None,
+    source_url_search: str = None,
     regex: bool = False,
     sha256: str = None,
     modified_after: str = None,
@@ -5178,26 +5179,41 @@ def list_notebooks(
     "description_search", the same way an untagged notebook already never
     matches "tag".
 
-    "regex" (optional, default false) treats both "search" and
-    "description_search" as case-insensitive Python regular expressions
-    instead of plain substrings -- the identical "regex" GET
+    "source_url_search" filters to notebooks whose own "source_url" (the
+    URL POST /api/notebooks/import-url originally fetched them from, see
+    GET .../source-url above, "" for one uploaded directly or imported
+    before this field existed) contains this text, case-insensitively --
+    the identical gap "description_search" just closed for a notebook's
+    description, applied here to where it was actually imported *from*
+    instead of freeform text a caller wrote about it. Before this,
+    answering "which of my notebooks came from this particular repo/host"
+    (e.g. auditing every notebook imported from an internal GitHub org
+    before rotating a token that URL's own host required) meant fetching
+    the entire catalog and checking each entry's own "source_url" by
+    hand. A notebook with no "source_url" at all never matches a
+    non-empty "source_url_search", the same way an untagged notebook
+    already never matches "tag".
+
+    "regex" (optional, default false) treats "search", "description_search",
+    and "source_url_search" alike as case-insensitive Python regular
+    expressions instead of plain substrings -- the identical "regex" GET
     /api/functions' own "search" (a function name) and GET
     /api/notebooks/search-content's own "search" (a code cell's raw
-    source) already support, just applied here to a filename and a
-    description at once, since this endpoint has two independent text
-    filters where those each have only one. Useful for the same kind of
+    source) already support, just applied here across three independent
+    text filters at once instead of one. Useful for the same kind of
     pattern a plain substring can't express (e.g. every filename matching
-    "^report_2024" to find a specific quarter's uploads, or every
+    "^report_2024" to find a specific quarter's uploads, every
     description matching "v[0-9]+" to find ones that mention a version
-    number) rather than one specific, already-known substring. Applies
-    uniformly to whichever of "search"/"description_search" is actually
-    given -- there's no way to make one a regex and the other a plain
-    substring in the same call. A "search" or "description_search" that
-    isn't a valid pattern under "regex" is rejected with 400, naming the
-    underlying re.error and which of the two fields it came from, before
-    a single notebook is even read. Leaving "regex" false (the default)
-    behaves exactly as before this -- a plain substring match for either
-    field, byte for byte identical to the previous implementation.
+    number, or every "source_url" matching "^https://github\\.com/myorg/"
+    to scope to one organization's own repos). Applies uniformly to
+    whichever of "search"/"description_search"/"source_url_search" is
+    actually given -- there's no way to make one a regex and another a
+    plain substring in the same call. One that isn't a valid pattern
+    under "regex" is rejected with 400, naming the underlying re.error
+    and which field it came from, before a single notebook is even read.
+    Leaving "regex" false (the default) behaves exactly as before this --
+    a plain substring match for every field, byte for byte identical to
+    the previous implementation.
 
     "sha256" filters to the notebook(s) whose exact content currently
     hashes to this value -- the same digest GET /api/notebooks/duplicates
@@ -5324,11 +5340,13 @@ def list_notebooks(
 
     search_pattern = None
     description_search_pattern = None
+    source_url_search_pattern = None
 
     if regex:
 
         for field_name, field_value in (
             ("search", search), ("description_search", description_search),
+            ("source_url_search", source_url_search),
         ):
 
             if not field_value:
@@ -5338,8 +5356,10 @@ def list_notebooks(
 
             if field_name == "search":
                 search_pattern = pattern
-            else:
+            elif field_name == "description_search":
                 description_search_pattern = pattern
+            else:
+                source_url_search_pattern = pattern
 
     modified_after_dt = _parse_iso_datetime_query_param(modified_after, "modified_after")
     modified_before_dt = _parse_iso_datetime_query_param(modified_before, "modified_before")
@@ -5405,6 +5425,16 @@ def list_notebooks(
             not in _read_notebook_description(entry.name).lower()
         ):
             continue
+
+        if source_url_search:
+
+            notebook_source_url = _read_notebook_source_url(entry.name) or ""
+
+            if source_url_search_pattern is not None:
+                if not source_url_search_pattern.search(notebook_source_url):
+                    continue
+            elif source_url_search.lower() not in notebook_source_url.lower():
+                continue
 
         entry_stat = entry.stat()
 
