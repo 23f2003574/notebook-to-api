@@ -7657,6 +7657,7 @@ def delete_all_notebooks(
 def prune_all_notebook_versions(
     older_than_days: int = None, tag: str = None, sha256: str = None,
     saved_after: str = None, saved_before: str = None,
+    note_search: str = None, content_search: str = None, regex: bool = False,
     dry_run: bool = False,
 ):
     """Permanently discard every notebook's snapshotted versions older
@@ -7741,6 +7742,31 @@ def prune_all_notebook_versions(
     "saved_before" is rejected with 400, the same way it already is for
     GET .../versions' own identical pair.
 
+    "note_search"/"content_search" (each optional) further narrow the
+    prune to only versions whose own note or code matches, the identical
+    pair DELETE /api/notebooks/{filename}/versions' own "clear" already
+    offers for pruning a *single* notebook's own history by content --
+    applied here across the whole catalog at once instead. An operator
+    wanting to reclaim space from every notebook's own version older
+    than "older_than_days" that also mentions a specific stale
+    experiment, or one already noted "safe to discard" (rather than
+    every old version regardless of what it actually contains), had no
+    way to ask for that catalog-wide -- only a `clear` per notebook,
+    after first working out which notebooks even had a matching version
+    at all. Composes with "older_than_days"/"tag"/"sha256"/"saved_after"/
+    "saved_before" as an AND, the same as every filter here already does
+    among themselves; "note_search" reads that notebook's own
+    version-notes sidecar once per notebook (never per version), and
+    "content_search" parses each still-candidate version's own .ipynb
+    content via load_notebook/extract_code_cells, the same way `clear`
+    already does -- a version that fails to parse is treated as not
+    matching (kept, not deleted), erring on the side of never discarding
+    something this can't actually inspect. "regex" (optional, default
+    false) treats both as case-insensitive Python regular expressions,
+    the same shared toggle `clear`'s own identical pair already uses; an
+    invalid pattern is rejected with 400 before a single notebook is
+    even scanned.
+
     "dry_run" (optional, default false) reports the exact same "results"
     a real prune would -- which notebooks are affected, each one's own
     "deleted_version_ids"/"deleted_count" -- without deleting a single
@@ -7775,6 +7801,23 @@ def prune_all_notebook_versions(
             detail="saved_after must not be later than saved_before"
         )
 
+    if regex:
+
+        note_search_pattern = (
+            _compile_search_regex(note_search, "note_search") if note_search else None
+        )
+        content_search_pattern = (
+            _compile_search_regex(content_search, "content_search")
+            if content_search else None
+        )
+        note_search_lower = content_search_lower = None
+
+    else:
+
+        note_search_pattern = content_search_pattern = None
+        note_search_lower = note_search.lower() if note_search else None
+        content_search_lower = content_search.lower() if content_search else None
+
     cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
 
     upload_root = Path(UPLOAD_DIR)
@@ -7798,6 +7841,10 @@ def prune_all_notebook_versions(
         if not versions_dir.is_dir():
             continue
 
+        all_notes = (
+            _read_all_version_notes(entry.name) if note_search else None
+        )
+
         with _version_lock_for(entry.name):
 
             deleted_version_ids = []
@@ -7819,6 +7866,39 @@ def prune_all_notebook_versions(
 
                 if saved_before_dt is not None and saved_at > saved_before_dt:
                     continue
+
+                if note_search:
+
+                    note_text = all_notes.get(version_file.name, "")
+
+                    if note_search_pattern is not None:
+                        if not note_search_pattern.search(note_text):
+                            continue
+                    elif note_search_lower not in note_text.lower():
+                        continue
+
+                if content_search:
+
+                    try:
+                        version_notebook = load_notebook(str(version_file))
+
+                    except MALFORMED_NOTEBOOK_ERRORS:
+                        continue
+
+                    content_matched = False
+
+                    for cell in extract_code_cells(version_notebook):
+
+                        if content_search_pattern is not None:
+                            if content_search_pattern.search(cell):
+                                content_matched = True
+                                break
+                        elif content_search_lower in cell.lower():
+                            content_matched = True
+                            break
+
+                    if not content_matched:
+                        continue
 
                 if not dry_run:
                     version_file.unlink()
