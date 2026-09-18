@@ -3101,6 +3101,10 @@ def _dispatch_core_command(args):
 
         if args.tag:
             params["tag"] = args.tag
+        if args.tags:
+            params["tags"] = args.tags
+        if args.tags_match != "any":
+            params["tags_match"] = args.tags_match
         if args.sha256:
             params["sha256"] = args.sha256
         if args.modified_after:
@@ -10332,6 +10336,29 @@ def main():
             "e.g. to find duplicates among only your \"production\" "
             "notebooks, without an untagged or differently-tagged "
             "byte-identical notebook pulling it into the same group."
+        )
+    )
+    find_duplicates_parser.add_argument(
+        "--tags",
+        default=None,
+        help=(
+            "Only scan notebooks carrying several tags at once for "
+            "duplicates, via GET /api/notebooks/duplicates' own ?tags= "
+            "-- something --tag alone can't express. See --tags-match "
+            "for whether that means any or all of them. Composes with "
+            "--tag as an AND."
+        )
+    )
+    find_duplicates_parser.add_argument(
+        "--tags-match",
+        choices=["any", "all"],
+        default="any",
+        dest="tags_match",
+        help=(
+            "Whether --tags means a notebook must carry at least one of "
+            "them ('any', the default) or every single one of them "
+            "('all'), mirroring GET /api/notebooks/duplicates' own "
+            "?tags_match=. Ignored without --tags."
         )
     )
     find_duplicates_parser.add_argument(

@@ -5836,7 +5836,7 @@ def export_notebooks(
 
 @router.get("/notebooks/duplicates")
 def find_duplicate_notebooks(
-    tag: str = None, sha256: str = None,
+    tag: str = None, tags: str = None, tags_match: str = "any", sha256: str = None,
     modified_after: str = None, modified_before: str = None,
     limit: int = None, offset: int = 0,
     format: str = "json",
@@ -5886,6 +5886,20 @@ def find_duplicate_notebooks(
     matching notebook simply isn't reported, the same "fewer than two
     members isn't a duplicate group" rule this endpoint already applies
     with no "tag" given.
+
+    "tags" (optional, a comma-separated list) plus "tags_match"
+    ("any" (default) or "all") scopes the scan by *several* tags at
+    once, the identical "tags"/"tags_match" GET /api/notebooks just
+    gained for its own catalog listing -- something "tag" alone can't
+    express. Before this, "which of my 'production'-and-'v2'-tagged
+    notebooks are byte-identical duplicates of each other" (an AND), or
+    the 'staging'-or-'production' equivalent (an OR), meant fetching
+    every duplicate group across the whole catalog first and filtering
+    "filenames" back down by hand -- the identical "can't be done
+    correctly after grouping" problem "tag" alone already avoids by
+    excluding an out-of-scope notebook before it's ever hashed, just for
+    several tags instead of one. Composes with "tag" as an AND when both
+    are given, exactly like GET /api/notebooks' own identical pair.
 
     "sha256" (optional) narrows the report to at most the one group
     matching that exact digest -- the same one GET /api/notebooks?sha256=
@@ -5962,6 +5976,17 @@ def find_duplicate_notebooks(
             detail="format must be 'json' or 'csv'"
         )
 
+    if tags_match not in ("any", "all"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="tags_match must be 'any' or 'all'"
+        )
+
+    tags_filter = (
+        {t.strip() for t in tags.split(",") if t.strip()} if tags else None
+    )
+
     modified_after_dt = _parse_iso_datetime_query_param(modified_after, "modified_after")
     modified_before_dt = _parse_iso_datetime_query_param(modified_before, "modified_before")
 
@@ -5985,6 +6010,16 @@ def find_duplicate_notebooks(
 
         if tag and tag not in _read_notebook_tags(entry.name):
             continue
+
+        if tags_filter is not None:
+
+            notebook_tags_set = set(_read_notebook_tags(entry.name))
+
+            if tags_match == "all":
+                if not tags_filter.issubset(notebook_tags_set):
+                    continue
+            elif not tags_filter & notebook_tags_set:
+                continue
 
         if modified_after_dt is not None or modified_before_dt is not None:
 
