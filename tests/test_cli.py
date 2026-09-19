@@ -6581,6 +6581,26 @@ def test_find_duplicates_command_prints_duplicate_groups(fake_dashboard):
     assert handler.requests == ["/api/notebooks/duplicates"]
 
 
+def test_find_duplicates_command_sends_sort_and_order_query_params(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {"status": "success", "duplicate_groups": [], "group_count": 0}
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        [
+            "find-duplicates", "--sort", "reclaimable", "--order", "desc",
+            "--limit", "10", "--dashboard-url", dashboard_url,
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/notebooks/duplicates?sort=reclaimable&order=desc&limit=10"
+    ]
+
+
 def test_find_duplicates_command_reports_no_duplicates(fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

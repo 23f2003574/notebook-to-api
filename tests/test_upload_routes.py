@@ -5601,6 +5601,76 @@ def test_find_duplicate_notebooks_groups_byte_identical_uploads():
     assert len(group["sha256"]) == 64
 
 
+def _seed_duplicate_groups_of_different_sizes():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    small = _notebook_bytes("def a() -> int:\n    return 1\n")
+    big = _notebook_bytes("def b() -> int:\n    return 2\n" + "# pad\n" * 200)
+
+    # "small" has 3 copies, "big" has 2: more copies, but each is smaller.
+    for filename, content in (
+        ("dup_sort_small_1.ipynb", small), ("dup_sort_small_2.ipynb", small),
+        ("dup_sort_small_3.ipynb", small),
+        ("dup_sort_big_1.ipynb", big), ("dup_sort_big_2.ipynb", big),
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    return len(small), len(big)
+
+
+def test_find_duplicate_notebooks_reports_reclaimable_bytes_per_group_and_in_total():
+
+    small_size, big_size = _seed_duplicate_groups_of_different_sizes()
+
+    body = client.get("/api/notebooks/duplicates").json()
+
+    by_size = {g["size_bytes"]: g for g in body["duplicate_groups"]}
+    assert by_size[small_size]["reclaimable_bytes"] == small_size * 2
+    assert by_size[big_size]["reclaimable_bytes"] == big_size
+    assert body["total_reclaimable_bytes"] == small_size * 2 + big_size
+
+
+def test_find_duplicate_notebooks_sort_by_copies_and_size():
+
+    small_size, big_size = _seed_duplicate_groups_of_different_sizes()
+
+    by_copies = client.get(
+        "/api/notebooks/duplicates", params={"sort": "copies", "order": "desc"}
+    ).json()["duplicate_groups"]
+    by_size = client.get(
+        "/api/notebooks/duplicates", params={"sort": "size", "order": "desc"}
+    ).json()["duplicate_groups"]
+
+    assert [len(g["filenames"]) for g in by_copies] == [3, 2]
+    assert [g["size_bytes"] for g in by_size] == [big_size, small_size]
+
+
+def test_find_duplicate_notebooks_sort_by_reclaimable_asc_and_paging_and_totals():
+
+    small_size, big_size = _seed_duplicate_groups_of_different_sizes()
+
+    expected = sorted([small_size * 2, big_size])
+
+    body = client.get(
+        "/api/notebooks/duplicates",
+        params={"sort": "reclaimable", "limit": 1},
+    ).json()
+
+    assert [g["reclaimable_bytes"] for g in body["duplicate_groups"]] == expected[:1]
+    assert body["group_count"] == 2
+    assert body["total_reclaimable_bytes"] == small_size * 2 + big_size
+
+
+def test_find_duplicate_notebooks_rejects_an_invalid_sort_or_order():
+
+    assert client.get("/api/notebooks/duplicates", params={"sort": "bogus"}).status_code == 400
+    assert client.get("/api/notebooks/duplicates", params={"order": "bogus"}).status_code == 400
+
+
 def test_find_duplicate_notebooks_csv_format_returns_one_row_per_filename():
 
     client.delete("/api/notebooks?confirm=true")
@@ -5698,6 +5768,7 @@ def test_find_duplicate_notebooks_reports_no_groups_when_nothing_duplicated():
         "status": "success",
         "duplicate_groups": [],
         "group_count": 0,
+        "total_reclaimable_bytes": 0,
         "duplicate_notebook_count": 0,
         "limit": None,
         "offset": 0,
