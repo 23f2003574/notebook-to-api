@@ -19523,6 +19523,32 @@ def test_versions_clear_command_older_than_days_passes_the_param_through_and_pro
     assert handler.requests == ["/api/notebooks/nb.ipynb/versions?older_than_days=30"]
 
 
+def test_versions_clear_command_sends_keep_latest_query_param(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "filename": "nb.ipynb",
+            "older_than_days": None, "keep_latest": 5,
+            "deleted_version_ids": ["v1.ipynb"], "deleted_count": 1,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "clear", "nb.ipynb", "--keep-latest", "5",
+            "--dashboard-url", dashboard_url, "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks/nb.ipynb/versions?keep_latest=5"]
+
+
 def test_versions_clear_command_sends_saved_after_and_before_query_params(
     tmp_path, fake_dashboard
 ):
