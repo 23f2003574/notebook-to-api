@@ -3708,6 +3708,11 @@ def _dispatch_core_command(args):
         if args.sha256 and not args.all:
             raise RuntimeError("--sha256 only applies together with --all.")
 
+        if (args.modified_after or args.modified_before) and not args.all:
+            raise RuntimeError(
+                "--modified-after/--modified-before only apply together with --all."
+            )
+
         if args.expected_sha256 and args.all:
             raise RuntimeError("--expected-sha256 does not apply together with --all.")
 
@@ -3726,6 +3731,10 @@ def _dispatch_core_command(args):
                     target_parts.append(f"tagged '{args.tag}'")
                 if args.sha256:
                     target_parts.append(f"with sha256 '{args.sha256}'")
+                if args.modified_after:
+                    target_parts.append(f"modified on or after {args.modified_after}")
+                if args.modified_before:
+                    target_parts.append(f"modified on or before {args.modified_before}")
                 target = (
                     f"every notebook {' and '.join(target_parts)}" if target_parts
                     else "ALL uploaded notebooks"
@@ -3744,6 +3753,10 @@ def _dispatch_core_command(args):
                 params["tag"] = args.tag
             if args.sha256:
                 params["sha256"] = args.sha256
+            if args.modified_after:
+                params["modified_after"] = args.modified_after
+            if args.modified_before:
+                params["modified_before"] = args.modified_before
 
             try:
                 response = httpx.delete(
@@ -11086,6 +11099,32 @@ def main():
             "reported by `find-duplicates`) regardless of which "
             "filename(s) it currently sits under. Composes with --tag: "
             "with both given, a notebook must match both to be deleted. "
+            "Ignored (and rejected) without --all."
+        )
+    )
+    delete_parser.add_argument(
+        "--modified-after",
+        default=None,
+        dest="modified_after",
+        metavar="ISO_DATETIME",
+        help=(
+            "With --all, only delete notebooks modified on or after this "
+            "ISO 8601 datetime, via DELETE /api/notebooks's own "
+            "?modified_after= query param. Composes with --tag/--sha256 "
+            "as an AND. Ignored (and rejected) without --all."
+        )
+    )
+    delete_parser.add_argument(
+        "--modified-before",
+        default=None,
+        dest="modified_before",
+        metavar="ISO_DATETIME",
+        help=(
+            "With --all, only delete notebooks modified on or before this "
+            "ISO 8601 datetime, via DELETE /api/notebooks's own "
+            "?modified_before= query param -- e.g. --modified-before "
+            "2026-01-01 for an age-based cleanup of everything not "
+            "touched since. Composes with --tag/--sha256 as an AND. "
             "Ignored (and rejected) without --all."
         )
     )

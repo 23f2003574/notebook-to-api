@@ -8833,6 +8833,56 @@ def test_delete_command_all_flag_with_sha256_prompts_with_the_hash_named(
     assert handler.requests == []
 
 
+def test_delete_command_all_flag_sends_modified_after_and_before_query_params(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "deleted_count": 0,
+            "deleted_filenames": [],
+            "currently_compiled_notebook_deleted": False,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "delete", "--all", "--modified-after", "2026-01-01",
+            "--modified-before", "2026-06-01",
+            "--dashboard-url", dashboard_url, "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/notebooks?confirm=true&modified_after=2026-01-01&modified_before=2026-06-01"
+    ]
+
+
+def test_delete_command_rejects_modified_before_without_all(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "delete", "nb.ipynb", "--modified-before", "2026-01-01",
+            "--dashboard-url", "http://127.0.0.1:1", "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(
+        proc, "--modified-after/--modified-before only apply together with --all."
+    )
+
+
 def test_delete_command_rejects_sha256_without_all(tmp_path):
 
     workdir = tmp_path / "workdir"

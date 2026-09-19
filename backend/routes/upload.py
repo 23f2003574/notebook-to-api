@@ -7533,6 +7533,7 @@ def notebook_storage_usage(
 @router.delete("/notebooks")
 def delete_all_notebooks(
     confirm: bool = False, tag: str = None, sha256: str = None, dry_run: bool = False,
+    modified_after: str = None, modified_before: str = None,
 ):
     """Remove every uploaded notebook in UPLOAD_DIR at once.
 
@@ -7619,6 +7620,23 @@ def delete_all_notebooks(
     gives a non-matching entry. Omitted, no notebook is excluded by
     content on this basis, exactly as before "sha256" existed here.
 
+    "modified_after"/"modified_before" (optional, ISO 8601 datetimes, see
+    _parse_iso_datetime_query_param) scope the sweep by each notebook's
+    own last-modified time, the identical date-range pair GET
+    /api/notebooks, GET /api/notebooks/duplicates and GET
+    /api/notebooks/export already accept. Before this, "delete every
+    notebook I haven't touched since <date>" (the age-based cleanup
+    every other retention-style endpoint here already offers, e.g.
+    DELETE .../versions' "older_than_days") meant a separate GET
+    /api/notebooks?modified_before= to discover the filenames first,
+    then feeding that list into POST /api/notebooks/delete-batch by
+    hand. Applied before a notebook is even considered for deletion, the
+    identical "never touched at all" guarantee "tag"/"sha256" already
+    give a non-matching entry; composes with both as an AND. A "modified_after"
+    later than "modified_before" is rejected with 400 before anything is
+    scanned, so a swapped pair can never silently delete nothing (or
+    everything) by accident.
+
     "dry_run" (optional, default false) reports the exact same
     "deleted_filenames"/"currently_compiled_notebook_deleted" a real call
     would, without removing a single file -- the identical preview POST
@@ -7643,6 +7661,18 @@ def delete_all_notebooks(
             )
         )
 
+    modified_after_dt = _parse_iso_datetime_query_param(modified_after, "modified_after")
+    modified_before_dt = _parse_iso_datetime_query_param(modified_before, "modified_before")
+
+    if (
+        modified_after_dt is not None and modified_before_dt is not None
+        and modified_after_dt > modified_before_dt
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="modified_after must not be later than modified_before"
+        )
+
     upload_root = Path(UPLOAD_DIR)
 
     compiled_path, _, _, _ = _currently_compiled_notebook_metadata()
@@ -7660,6 +7690,18 @@ def delete_all_notebooks(
 
         if sha256 and hash_notebook_file(entry) != sha256:
             continue
+
+        if modified_after_dt is not None or modified_before_dt is not None:
+
+            entry_modified_at = datetime.fromtimestamp(
+                entry.stat().st_mtime, tz=timezone.utc
+            )
+
+            if modified_after_dt is not None and entry_modified_at < modified_after_dt:
+                continue
+
+            if modified_before_dt is not None and entry_modified_at > modified_before_dt:
+                continue
 
         if compiled_path is not None and entry.resolve() == compiled_path:
             currently_compiled_notebook_deleted = True
