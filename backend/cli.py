@@ -3969,6 +3969,8 @@ def _dispatch_core_command(args):
                 return
 
         params = {"older_than_days": args.older_than_days}
+        if args.keep_latest is not None:
+            params["keep_latest"] = args.keep_latest
         if args.tag:
             params["tag"] = args.tag
         if args.sha256:
@@ -11429,6 +11431,20 @@ def main():
         required=True,
         dest="older_than_days",
         help="Discard any version snapshot saved more than this many days ago."
+    )
+    prune_versions_parser.add_argument(
+        "--keep-latest",
+        type=int,
+        default=None,
+        dest="keep_latest",
+        metavar="N",
+        help=(
+            "Never discard a notebook's own N newest versions, however "
+            "old, via DELETE /api/notebooks/versions's own ?keep_latest= "
+            "query param -- so a rarely-edited notebook whose every "
+            "snapshot is older than --older-than-days still keeps its "
+            "last N to restore from."
+        )
     )
     prune_versions_parser.add_argument(
         "--tag",

@@ -9238,6 +9238,33 @@ def test_delete_batch_command_reports_a_clean_error_when_the_dashboard_is_unreac
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_prune_versions_command_sends_keep_latest_query_param(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "dry_run": False, "older_than_days": 30,
+            "results": [], "notebook_count_affected": 0, "total_deleted_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "prune-versions", "--older-than-days", "30", "--keep-latest", "3",
+            "--yes", "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    query = urllib.parse.parse_qs(handler.requests[0].split("?", 1)[1])
+    assert query["keep_latest"] == ["3"]
+    assert query["older_than_days"] == ["30"]
+
+
 def test_prune_versions_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())
