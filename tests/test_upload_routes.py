@@ -20669,6 +20669,92 @@ def test_prune_all_notebook_versions_leaves_current_content_and_tags_untouched()
     assert client.get(f"/api/notebooks/{filename}/tags").json()["tags"] == ["production"]
 
 
+def _seed_notebook_with_aged_versions(filename, count=4):
+
+    _upload_sample_notebook(filename)
+
+    for i in range(count):
+        client.post(
+            "/api/upload?overwrite=true",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes(f"def g{i}() -> int:\n    return {i}\n")),
+                    "application/json",
+                )
+            },
+        )
+
+    from backend.routes import upload as upload_module
+
+    for version_file in upload_module._notebook_versions_dir(filename).iterdir():
+        stat = version_file.stat()
+        os.utime(version_file, (stat.st_atime, stat.st_mtime - 60 * 86400))
+
+    return [
+        v["version_id"] for v in client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    ]
+
+
+def test_prune_all_notebook_versions_keep_latest_protects_the_newest_versions():
+
+    filename = "prune_keep_latest.ipynb"
+    newest_first = _seed_notebook_with_aged_versions(filename)
+
+    body = client.delete(
+        "/api/notebooks/versions", params={"older_than_days": 30, "keep_latest": 2}
+    ).json()
+
+    assert body["keep_latest"] == 2
+    result = next(r for r in body["results"] if r["filename"] == filename)
+    assert sorted(result["deleted_version_ids"]) == sorted(newest_first[2:])
+
+    remaining = [
+        v["version_id"] for v in client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    ]
+    assert remaining == newest_first[:2]
+
+
+def test_prune_all_notebook_versions_keep_latest_larger_than_history_deletes_nothing():
+
+    filename = "prune_keep_latest_big.ipynb"
+    newest_first = _seed_notebook_with_aged_versions(filename, count=2)
+
+    body = client.delete(
+        "/api/notebooks/versions",
+        params={"older_than_days": 30, "keep_latest": 10},
+    ).json()
+
+    assert all(r["filename"] != filename for r in body["results"])
+    remaining = client.get(f"/api/notebooks/{filename}/versions").json()["total_count"]
+    assert remaining == len(newest_first)
+
+
+def test_prune_all_notebook_versions_keep_latest_applies_to_dry_run_without_deleting():
+
+    filename = "prune_keep_latest_dry.ipynb"
+    newest_first = _seed_notebook_with_aged_versions(filename)
+
+    body = client.delete(
+        "/api/notebooks/versions",
+        params={"older_than_days": 30, "keep_latest": 1, "dry_run": "true"},
+    ).json()
+
+    result = next(r for r in body["results"] if r["filename"] == filename)
+    assert result["deleted_count"] == len(newest_first) - 1
+    assert client.get(f"/api/notebooks/{filename}/versions").json()["total_count"] == len(newest_first)
+
+
+def test_prune_all_notebook_versions_rejects_a_non_positive_keep_latest():
+
+    for value in (0, -1):
+        resp = client.delete(
+            "/api/notebooks/versions", params={"older_than_days": 30, "keep_latest": value}
+        )
+        assert resp.status_code == 400
+        assert "keep_latest" in resp.json()["detail"]
+
+
 def test_prune_all_notebook_versions_requires_a_positive_older_than_days():
 
     resp = client.delete("/api/notebooks/versions")

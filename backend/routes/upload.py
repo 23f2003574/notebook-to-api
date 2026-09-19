@@ -8063,7 +8063,7 @@ def prune_all_notebook_versions(
     older_than_days: int = None, tag: str = None, sha256: str = None,
     saved_after: str = None, saved_before: str = None,
     note_search: str = None, content_search: str = None, regex: bool = False,
-    dry_run: bool = False,
+    dry_run: bool = False, keep_latest: int = None,
 ):
     """Permanently discard every notebook's snapshotted versions older
     than "older_than_days" days, across the whole catalog at once,
@@ -8185,7 +8185,28 @@ def prune_all_notebook_versions(
     short of a separate GET .../versions per notebook and working out
     each entry's own age by hand. The top-level response's own "dry_run"
     field echoes back whether this call actually deleted anything.
+
+    "keep_latest" (optional, a positive integer) protects each notebook's
+    own N newest versions (the same newest-first order GET
+    .../versions lists) from this prune no matter how old they are or
+    what else matches. Before this, an age-based prune was blunt for
+    exactly the notebooks that most need care: one that hasn't changed
+    in months has *only* old versions, so "older_than_days=30" discarded
+    its entire history, leaving nothing to restore -- while a busy
+    notebook lost only its stale tail. Ranked over the notebook's whole
+    history (never just the versions the other filters would otherwise
+    select), so "keep_latest=3" always leaves at least the 3 newest
+    snapshots on disk; "dry_run" reflects it, and a non-positive value
+    is rejected with 400 before anything is scanned. Omitted, nothing is
+    protected, exactly as before. The response echoes it back.
     """
+
+    if keep_latest is not None and keep_latest <= 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="keep_latest must be a positive integer"
+        )
 
     if older_than_days is None or older_than_days <= 0:
 
@@ -8254,9 +8275,26 @@ def prune_all_notebook_versions(
 
             deleted_version_ids = []
 
+            # Newest-first by name, the same order GET .../versions
+            # lists a notebook's history in, computed over the whole
+            # history so "keep_latest" never depends on what the other
+            # filters would select.
+            protected_version_names = (
+                {
+                    candidate.name for candidate in sorted(
+                        (v for v in versions_dir.iterdir() if v.is_file()),
+                        reverse=True,
+                    )[:keep_latest]
+                }
+                if keep_latest is not None else set()
+            )
+
             for version_file in versions_dir.iterdir():
 
                 if not version_file.is_file():
+                    continue
+
+                if version_file.name in protected_version_names:
                     continue
 
                 saved_at = datetime.fromtimestamp(
@@ -8325,6 +8363,7 @@ def prune_all_notebook_versions(
         "status": "success",
         "dry_run": dry_run,
         "older_than_days": older_than_days,
+        "keep_latest": keep_latest,
         "results": results,
         "notebook_count_affected": len(results),
         "total_deleted_count": total_deleted_count,
