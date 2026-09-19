@@ -32226,3 +32226,69 @@ def test_get_config_reports_max_version_note_length():
 
     assert resp.status_code == 200
     assert resp.json()["max_version_note_length"] == _MAX_VERSION_NOTE_LENGTH
+
+
+def _upload_tagged_notebook_for_storage(filename, tags):
+
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(_notebook_bytes("x = 1\n")), "application/json")},
+    )
+    client.put(f"/api/notebooks/{filename}/tags", json={"tags": tags})
+
+
+def test_notebook_storage_scopes_to_tags_any():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    _upload_tagged_notebook_for_storage("stor_tags_any_a.ipynb", ["production"])
+    _upload_tagged_notebook_for_storage("stor_tags_any_b.ipynb", ["staging"])
+    _upload_tagged_notebook_for_storage("stor_tags_any_c.ipynb", ["other"])
+
+    body = client.get(
+        "/api/notebooks/storage", params={"tags": "production,staging"}
+    ).json()
+
+    assert body["notebook_count"] == 2
+    assert {n["filename"] for n in body["notebooks"]} == {
+        "stor_tags_any_a.ipynb", "stor_tags_any_b.ipynb",
+    }
+
+
+def test_notebook_storage_scopes_to_tags_all_and_totals_follow_it():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    _upload_tagged_notebook_for_storage("stor_tags_all_a.ipynb", ["production", "v2"])
+    _upload_tagged_notebook_for_storage("stor_tags_all_b.ipynb", ["production"])
+
+    body = client.get(
+        "/api/notebooks/storage",
+        params={"tags": "production,v2", "tags_match": "all"},
+    ).json()
+
+    assert [n["filename"] for n in body["notebooks"]] == ["stor_tags_all_a.ipynb"]
+    assert body["notebook_count"] == 1
+    assert body["total_bytes"] == body["notebooks"][0]["total_bytes"]
+
+
+def test_notebook_storage_tags_compose_with_tag_as_an_and():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    _upload_tagged_notebook_for_storage("stor_tags_and_a.ipynb", ["production", "v2"])
+    _upload_tagged_notebook_for_storage("stor_tags_and_b.ipynb", ["staging", "v2"])
+
+    body = client.get(
+        "/api/notebooks/storage", params={"tag": "production", "tags": "v2"}
+    ).json()
+
+    assert [n["filename"] for n in body["notebooks"]] == ["stor_tags_and_a.ipynb"]
+
+
+def test_notebook_storage_rejects_an_invalid_tags_match():
+
+    resp = client.get("/api/notebooks/storage", params={"tags": "a,b", "tags_match": "bogus"})
+
+    assert resp.status_code == 400
+    assert "tags_match" in resp.json()["detail"]
