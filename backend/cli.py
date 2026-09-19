@@ -2778,6 +2778,12 @@ def _dispatch_core_command(args):
             params["description_search"] = args.description_search
         if args.source_url_search:
             params["source_url_search"] = args.source_url_search
+        if args.untagged:
+            params["untagged"] = "true"
+        if args.undescribed:
+            params["undescribed"] = "true"
+        if args.no_source_url:
+            params["no_source_url"] = "true"
         if args.regex:
             params["regex"] = "true"
         if args.sha256:
@@ -9875,6 +9881,32 @@ def main():
         help=(
             "Case-insensitive description substring filter, mirroring "
             "GET /api/notebooks' own ?description_search=."
+        )
+    )
+    list_parser.add_argument(
+        "--untagged",
+        action="store_true",
+        help=(
+            "Only list notebooks that carry no tags at all, via GET "
+            "/api/notebooks' own ?untagged=true -- to find what still "
+            "needs curating."
+        )
+    )
+    list_parser.add_argument(
+        "--undescribed",
+        action="store_true",
+        help=(
+            "Only list notebooks with no description, via GET "
+            "/api/notebooks' own ?undescribed=true."
+        )
+    )
+    list_parser.add_argument(
+        "--no-source-url",
+        action="store_true",
+        dest="no_source_url",
+        help=(
+            "Only list notebooks with no recorded source URL, via GET "
+            "/api/notebooks' own ?no_source_url=true."
         )
     )
     list_parser.add_argument(

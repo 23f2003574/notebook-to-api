@@ -4797,6 +4797,28 @@ def test_import_notebooks_command_reports_a_clean_error_when_the_dashboard_is_un
     _assert_clean_cli_error(proc, "Is it running?")
 
 
+def test_list_command_sends_curation_state_filters(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "notebooks": [], "total_count": 0})
+    ]
+
+    proc = _run_cli(
+        [
+            "list", "--untagged", "--undescribed", "--no-source-url",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    query = urllib.parse.parse_qs(handler.requests[0].split("?", 1)[1])
+    assert query["untagged"] == ["true"]
+    assert query["undescribed"] == ["true"]
+    assert query["no_source_url"] == ["true"]
+
+
 def test_list_command_is_registered():
 
     proc = _run_cli(["--help"], cwd=Path.cwd())
