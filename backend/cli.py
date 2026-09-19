@@ -3263,6 +3263,8 @@ def _dispatch_core_command(args):
             resolve_body["tag"] = args.tag
         if args.sha256:
             resolve_body["sha256"] = args.sha256
+        if args.keep_strategy != "first":
+            resolve_body["keep_strategy"] = args.keep_strategy
         if args.dry_run:
             resolve_body["dry_run"] = True
 
@@ -10643,6 +10645,20 @@ def main():
             "group (its own \"sha256\", as reported by `find-duplicates`), "
             "instead of the alphabetically-first filename in that group. "
             "Repeat --keep once per group to override."
+        )
+    )
+    resolve_duplicates_parser.add_argument(
+        "--keep-strategy",
+        choices=["first", "last", "newest", "oldest"],
+        default="first",
+        dest="keep_strategy",
+        help=(
+            "Which copy to keep in every group without a --keep "
+            "override, via POST /api/notebooks/duplicates/resolve's own "
+            "\"keep_strategy\" body field: the alphabetically 'first' "
+            "(the default) or 'last' filename, or the 'newest'/'oldest' "
+            "by modification time. An explicit --keep for a group still "
+            "wins."
         )
     )
     resolve_duplicates_parser.add_argument(

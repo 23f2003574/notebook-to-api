@@ -6240,6 +6240,33 @@ def find_duplicate_notebooks(
     }
 
 
+_DUPLICATE_KEEP_STRATEGIES = frozenset({"first", "last", "newest", "oldest"})
+
+
+def _pick_duplicate_keep_filename(filenames, strategy):
+    """Which of a duplicate group's own `filenames` (already sorted
+    alphabetically) POST /api/notebooks/duplicates/resolve keeps under
+    `strategy`. Ties on modification time keep the alphabetically-first
+    tied filename, so the pick is deterministic.
+    """
+
+    if strategy == "first":
+        return filenames[0]
+
+    if strategy == "last":
+        return filenames[-1]
+
+    mtimes = {
+        filename: (Path(UPLOAD_DIR) / filename).stat().st_mtime_ns
+        for filename in filenames
+    }
+
+    pick = max if strategy == "newest" else min
+    target = pick(mtimes.values())
+
+    return next(filename for filename in filenames if mtimes[filename] == target)
+
+
 @router.post("/notebooks/duplicates/resolve")
 def resolve_duplicate_notebooks(data: dict = None):
     """Delete every byte-identical duplicate of each already-uploaded
@@ -6353,6 +6380,22 @@ def resolve_duplicate_notebooks(data: dict = None):
     nothing but its own {"sha256", "status": "error"} entry to
     "results" -- had no cap here at all, unlike literally every other
     batch endpoint this dashboard exposes.
+
+    "keep_strategy" (optional, default "first") picks which copy is kept
+    in every group *without* a "keep" override, instead of always the
+    alphabetically-first filename -- an arbitrary choice for a caller who
+    actually wants "keep the most recently modified copy" (the one still
+    being worked on) or "keep the oldest" (the original), which
+    previously needed a GET /api/notebooks/duplicates plus a GET
+    /api/notebooks per group to compare modification times by hand, then
+    a "keep" entry per group. "first" is the previous alphabetical
+    behavior, "last" the alphabetically-last filename, "newest" the copy
+    with the latest modification time, and "oldest" the earliest; ties
+    on modification time fall back to the alphabetically-first of the
+    tied filenames, so the choice is always deterministic. An explicit
+    "keep" entry for a group still wins over "keep_strategy". An
+    unrecognized value is rejected with 400 before a notebook is read
+    or deleted.
     """
 
     data = data or {}
@@ -6371,6 +6414,14 @@ def resolve_duplicate_notebooks(data: dict = None):
         raise HTTPException(
             status_code=400,
             detail="sha256 must be a string"
+        )
+
+    keep_strategy = data.get("keep_strategy", "first")
+
+    if keep_strategy not in _DUPLICATE_KEEP_STRATEGIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"keep_strategy must be one of {sorted(_DUPLICATE_KEEP_STRATEGIES)}"
         )
 
     keep_overrides = data.get("keep") or {}
@@ -6421,7 +6472,10 @@ def resolve_duplicate_notebooks(data: dict = None):
 
     for sha256, filenames in duplicate_groups:
 
-        keep_filename = keep_overrides.get(sha256, filenames[0])
+        keep_filename = (
+            keep_overrides[sha256] if sha256 in keep_overrides
+            else _pick_duplicate_keep_filename(filenames, keep_strategy)
+        )
 
         if keep_filename not in filenames:
 

@@ -6146,6 +6146,94 @@ def test_find_duplicate_notebooks_sha256_matching_a_single_notebook_yields_no_gr
     assert body["duplicate_groups"] == []
 
 
+def _seed_resolve_group_with_ages(ages_by_filename):
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    for filename, age_seconds in ages_by_filename.items():
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+        path = Path(UPLOAD_DIR) / filename
+        stat = path.stat()
+        os.utime(path, (stat.st_atime, stat.st_mtime - age_seconds))
+
+
+def test_resolve_duplicate_notebooks_keep_strategy_newest_keeps_the_latest_modified():
+
+    _seed_resolve_group_with_ages({
+        "ks_a_oldest.ipynb": 3000, "ks_b_middle.ipynb": 2000, "ks_z_newest.ipynb": 1000,
+    })
+
+    body = client.post(
+        "/api/notebooks/duplicates/resolve", json={"keep_strategy": "newest"}
+    ).json()
+
+    assert body["results"][0]["kept_filename"] == "ks_z_newest.ipynb"
+    remaining = {n["filename"] for n in client.get("/api/notebooks").json()["notebooks"]}
+    assert remaining == {"ks_z_newest.ipynb"}
+
+
+def test_resolve_duplicate_notebooks_keep_strategy_oldest_keeps_the_earliest_modified():
+
+    _seed_resolve_group_with_ages({
+        "ks_a_new.ipynb": 1000, "ks_z_old.ipynb": 3000,
+    })
+
+    body = client.post(
+        "/api/notebooks/duplicates/resolve",
+        json={"keep_strategy": "oldest", "dry_run": True},
+    ).json()
+
+    assert body["results"][0]["kept_filename"] == "ks_z_old.ipynb"
+
+
+def test_resolve_duplicate_notebooks_keep_strategy_last_keeps_alphabetically_last():
+
+    _seed_resolve_group_with_ages({"ks_a.ipynb": 0, "ks_m.ipynb": 0, "ks_z.ipynb": 0})
+
+    body = client.post(
+        "/api/notebooks/duplicates/resolve",
+        json={"keep_strategy": "last", "dry_run": True},
+    ).json()
+
+    assert body["results"][0]["kept_filename"] == "ks_z.ipynb"
+
+
+def test_resolve_duplicate_notebooks_explicit_keep_wins_over_keep_strategy():
+
+    _seed_resolve_group_with_ages({"ks_keep_a.ipynb": 3000, "ks_keep_b.ipynb": 1000})
+
+    sha256 = client.get("/api/notebooks/duplicates").json()["duplicate_groups"][0]["sha256"]
+
+    body = client.post(
+        "/api/notebooks/duplicates/resolve",
+        json={
+            "keep_strategy": "newest", "dry_run": True,
+            "keep": {sha256: "ks_keep_a.ipynb"},
+        },
+    ).json()
+
+    assert body["results"][0]["kept_filename"] == "ks_keep_a.ipynb"
+
+
+def test_resolve_duplicate_notebooks_rejects_an_unknown_keep_strategy_without_deleting():
+
+    _seed_resolve_group_with_ages({"ks_bad_a.ipynb": 0, "ks_bad_b.ipynb": 0})
+
+    resp = client.post(
+        "/api/notebooks/duplicates/resolve", json={"keep_strategy": "bogus"}
+    )
+
+    assert resp.status_code == 400
+    assert "keep_strategy" in resp.json()["detail"]
+    assert (Path(UPLOAD_DIR) / "ks_bad_a.ipynb").exists()
+    assert (Path(UPLOAD_DIR) / "ks_bad_b.ipynb").exists()
+
+
 def test_resolve_duplicate_notebooks_keeps_alphabetically_first_by_default():
 
     client.delete("/api/notebooks?confirm=true")
