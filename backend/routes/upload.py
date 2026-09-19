@@ -6724,6 +6724,7 @@ def search_notebook_content(
 def search_notebook_version_content(
     search: str = None, regex: bool = False, tag: str = None,
     limit: int = None, offset: int = 0, format: str = "json",
+    saved_after: str = None, saved_before: str = None,
 ):
     """Find every snapshotted *version* of every uploaded notebook with a
     code cell whose raw source contains `search` (case-insensitive),
@@ -6767,6 +6768,20 @@ def search_notebook_version_content(
     version snapshot carries no tag of its own (see GET /api/notebooks/
     {filename}/versions' own docstring on "note_search"/"content_search"
     for why a version has no metadata beyond its own note).
+
+    "saved_after"/"saved_before" (each an optional ISO 8601 datetime, see
+    _parse_iso_datetime_query_param) narrow the scan to only versions
+    snapshotted inside that window, the identical pair GET
+    /api/notebooks/{filename}/versions and DELETE .../versions already
+    accept for a single notebook's own history. Before this, "did a
+    version saved during last week's incident window contain this line
+    of code" could only be answered by searching the catalog's entire
+    version history and filtering each match's own "saved_at" by hand
+    -- after every out-of-window version had already been read and
+    parsed. Applied before a version's own .ipynb is ever loaded, so an
+    out-of-window version costs nothing beyond its own stat; a
+    "saved_after" later than "saved_before" is rejected with 400 before
+    a single version is read, the same way those endpoints reject it.
 
     "regex" (optional, default false) treats `search` as a
     case-insensitive Python regular expression instead of a plain
@@ -6830,6 +6845,18 @@ def search_notebook_version_content(
         pattern = None
         search_lower = search.lower()
 
+    saved_after_dt = _parse_iso_datetime_query_param(saved_after, "saved_after")
+    saved_before_dt = _parse_iso_datetime_query_param(saved_before, "saved_before")
+
+    if (
+        saved_after_dt is not None and saved_before_dt is not None
+        and saved_after_dt > saved_before_dt
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="saved_after must not be later than saved_before"
+        )
+
     upload_root = Path(UPLOAD_DIR)
 
     matches = []
@@ -6851,6 +6878,18 @@ def search_notebook_version_content(
 
             if not version_file.is_file():
                 continue
+
+            if saved_after_dt is not None or saved_before_dt is not None:
+
+                version_saved_at = datetime.fromtimestamp(
+                    version_file.stat().st_mtime, tz=timezone.utc
+                )
+
+                if saved_after_dt is not None and version_saved_at < saved_after_dt:
+                    continue
+
+                if saved_before_dt is not None and version_saved_at > saved_before_dt:
+                    continue
 
             try:
 
