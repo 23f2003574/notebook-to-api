@@ -9001,6 +9001,51 @@ def test_delete_command_rejects_modified_before_without_all(tmp_path):
     )
 
 
+def test_delete_command_all_flag_sends_tags_and_tags_match_query_params(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "deleted_count": 0, "deleted_filenames": [],
+            "currently_compiled_notebook_deleted": False,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "delete", "--all", "--tags", "scratch,v1", "--tags-match", "all",
+            "--dashboard-url", dashboard_url, "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/notebooks?confirm=true&tags=scratch%2Cv1&tags_match=all"
+    ]
+
+
+def test_delete_command_rejects_tags_without_all(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "delete", "nb.ipynb", "--tags", "a,b",
+            "--dashboard-url", "http://127.0.0.1:1", "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "--tags/--tags-match only apply together with --all.")
+
+
 def test_delete_command_rejects_sha256_without_all(tmp_path):
 
     workdir = tmp_path / "workdir"
