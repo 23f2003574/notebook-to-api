@@ -10796,6 +10796,31 @@ def test_tags_list_command_prints_the_tag_catalog(tmp_path, fake_dashboard):
     assert handler.requests == ["/api/tags"]
 
 
+def test_tags_list_command_sends_search_sort_order_and_paging_query_params(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_json_response(200, {"status": "success", "tags": [], "tag_count": 0})]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "tags", "list", "--search", "prod", "--sort", "count",
+            "--order", "desc", "--limit", "5", "--offset", "2",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/tags?search=prod&sort=count&order=desc&limit=5&offset=2"
+    ]
+
+
 def test_tags_list_command_reports_no_tags(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
