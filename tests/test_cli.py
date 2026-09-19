@@ -16548,6 +16548,30 @@ def test_versions_list_command_prints_the_notebooks_versions(tmp_path, fake_dash
     assert handler.requests == ["/api/notebooks/nb.ipynb/versions?offset=0"]
 
 
+def test_versions_list_command_sends_sort_and_order_query_params(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "filename": "nb.ipynb", "versions": []})
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "list", "nb.ipynb", "--sort", "size", "--order", "asc",
+            "--limit", "5", "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/notebooks/nb.ipynb/versions?offset=0&sort=size&order=asc&limit=5"
+    ]
+
+
 def test_versions_list_command_checksums_flag_sends_the_query_param_and_prints_sha256(
     tmp_path, fake_dashboard
 ):

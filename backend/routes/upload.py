@@ -10397,7 +10397,7 @@ def list_notebook_versions(
     filename: str, limit: int = None, offset: int = 0, format: str = "json",
     saved_after: str = None, saved_before: str = None, checksums: bool = False,
     notes: bool = False, note_search: str = None, content_search: str = None,
-    regex: bool = False,
+    regex: bool = False, sort: str = "saved", order: str = "desc",
 ):
     """List a previously uploaded notebook's snapshotted previous
     versions, newest first.
@@ -10554,6 +10554,19 @@ def list_notebook_versions(
     substring match, byte for byte identical to the previous
     implementation. Ignored (has no effect) when neither "note_search"
     nor "content_search" is given.
+
+    "sort" ("saved", the default, or "size") plus "order" ("desc", the
+    default, or "asc") reorder "versions" before "limit"/"offset" page
+    them: "saved"/"desc" is the previous, fixed newest-first order,
+    "saved"/"asc" oldest-first (so "limit=5&order=asc" is "the 5 oldest
+    snapshots" -- what an operator pruning history wants, and what a
+    newest-first-only listing could only answer by fetching everything
+    and reading from the far end), and "size" ranks snapshots by their
+    own "size_bytes" ("sort=size&limit=1" is the biggest one). Ties under
+    "size" keep newest-first order in either direction, so paging stays
+    deterministic. Applied after every filter above, so "total_count"
+    and "note_search"/"content_search" are unaffected. An unrecognized
+    "sort"/"order" is rejected with 400 before the history is read.
     """
 
     if format not in ("json", "csv"):
@@ -10570,6 +10583,20 @@ def list_notebook_versions(
         raise HTTPException(
             status_code=404,
             detail="Notebook file not found"
+        )
+
+    if sort not in ("saved", "size"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="sort must be 'saved' or 'size'"
+        )
+
+    if order not in _NOTEBOOK_SORT_ORDERS:
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"order must be one of {sorted(_NOTEBOOK_SORT_ORDERS)}"
         )
 
     if offset < 0:
@@ -10692,6 +10719,14 @@ def list_notebook_versions(
             entry for entry in versions
             if _version_content_matches(entry["version_id"])
         ]
+
+    # "versions" is already newest-first here, so "saved"/"desc" needs no
+    # work and "size" is a stable sort over that order (ties stay newest-
+    # first for either direction, since reverse=True preserves stability).
+    if sort == "size":
+        versions.sort(key=lambda entry: entry["size_bytes"], reverse=(order == "desc"))
+    elif order == "asc":
+        versions.reverse()
 
     total_count = len(versions)
 
