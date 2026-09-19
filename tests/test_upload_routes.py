@@ -14805,6 +14805,68 @@ def test_list_notebook_versions_offset_skips_the_newest_first_entries():
     assert body["offset"] == 1
 
 
+def _seed_versions_of_different_sizes(filename):
+
+    _upload_sample_notebook(filename)
+
+    # Each overwrite snapshots the *previous* content, so these produce
+    # three versions with strictly increasing sizes (oldest is smallest).
+    for padding in (1, 50, 200):
+        client.post(
+            "/api/upload?overwrite=true",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes(
+                        "def f() -> int:\n    return 1\n" + "# pad\n" * padding
+                    )),
+                    "application/json",
+                )
+            },
+        )
+
+
+def test_list_notebook_versions_order_asc_reverses_the_newest_first_default():
+
+    filename = "versions_sort_order_asc.ipynb"
+    _seed_versions_of_different_sizes(filename)
+
+    default = client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    ascending = client.get(
+        f"/api/notebooks/{filename}/versions", params={"order": "asc"}
+    ).json()["versions"]
+
+    assert [v["version_id"] for v in ascending] == [v["version_id"] for v in reversed(default)]
+
+
+def test_list_notebook_versions_sort_by_size_ranks_snapshots_and_pages_after_sorting():
+
+    filename = "versions_sort_by_size.ipynb"
+    _seed_versions_of_different_sizes(filename)
+
+    biggest_first = client.get(
+        f"/api/notebooks/{filename}/versions", params={"sort": "size"}
+    ).json()["versions"]
+    smallest_one = client.get(
+        f"/api/notebooks/{filename}/versions",
+        params={"sort": "size", "order": "asc", "limit": 1},
+    ).json()
+
+    sizes = [v["size_bytes"] for v in biggest_first]
+    assert sizes == sorted(sizes, reverse=True)
+    assert [v["size_bytes"] for v in smallest_one["versions"]] == [min(sizes)]
+    assert smallest_one["total_count"] == len(sizes)
+
+
+def test_list_notebook_versions_rejects_an_invalid_sort_or_order():
+
+    _upload_sample_notebook("versions_sort_bad.ipynb")
+
+    for params in ({"sort": "bogus"}, {"order": "bogus"}):
+        resp = client.get("/api/notebooks/versions_sort_bad.ipynb/versions", params=params)
+        assert resp.status_code == 400
+
+
 def test_list_notebook_versions_rejects_a_negative_offset():
 
     _upload_sample_notebook("versions_list_bad_offset.ipynb")

@@ -5990,6 +5990,10 @@ def _dispatch_core_command(args):
         if args.versions_command == "list":
 
             params = {"offset": args.offset}
+            if args.sort != "saved":
+                params["sort"] = args.sort
+            if args.order != "desc":
+                params["order"] = args.order
             if args.limit is not None:
                 params["limit"] = args.limit
             if args.format == "csv":
@@ -13490,6 +13494,26 @@ def main():
     )
     versions_list_parser.add_argument(
         "filename", help="Filename of the notebook, as reported by `list`."
+    )
+    versions_list_parser.add_argument(
+        "--sort",
+        choices=["saved", "size"],
+        default="saved",
+        help=(
+            "Order versions by when they were saved ('saved', the "
+            "default) or by their size ('size'), via GET /api/notebooks/"
+            "{filename}/versions' own ?sort= query param."
+        )
+    )
+    versions_list_parser.add_argument(
+        "--order",
+        choices=["asc", "desc"],
+        default="desc",
+        help=(
+            "Sort direction for --sort, via ?order= -- 'desc' (the "
+            "default) is newest/biggest first; e.g. --order asc --limit "
+            "5 for the five oldest snapshots."
+        )
     )
     versions_list_parser.add_argument(
         "--limit",
