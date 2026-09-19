@@ -32292,3 +32292,101 @@ def test_notebook_storage_rejects_an_invalid_tags_match():
 
     assert resp.status_code == 400
     assert "tags_match" in resp.json()["detail"]
+
+
+def _upload_notebook_aged_for_bulk_delete(filename, age_seconds):
+
+    _upload_sample_notebook(filename)
+
+    path = Path(UPLOAD_DIR) / filename
+    stat = path.stat()
+    os.utime(path, (stat.st_atime, stat.st_mtime - age_seconds))
+
+
+def test_delete_all_notebooks_scoped_by_modified_before_deletes_only_older_notebooks():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    _upload_notebook_aged_for_bulk_delete("bulk_age_old.ipynb", 10 * 86400)
+    _upload_notebook_aged_for_bulk_delete("bulk_age_new.ipynb", 0)
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
+
+    resp = client.delete(
+        "/api/notebooks", params={"confirm": "true", "modified_before": cutoff}
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["deleted_filenames"] == ["bulk_age_old.ipynb"]
+    assert not (Path(UPLOAD_DIR) / "bulk_age_old.ipynb").exists()
+    assert (Path(UPLOAD_DIR) / "bulk_age_new.ipynb").exists()
+
+    client.delete("/api/notebooks?confirm=true")
+
+
+def test_delete_all_notebooks_scoped_by_modified_after_deletes_only_newer_notebooks():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    _upload_notebook_aged_for_bulk_delete("bulk_age_after_old.ipynb", 10 * 86400)
+    _upload_notebook_aged_for_bulk_delete("bulk_age_after_new.ipynb", 0)
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
+
+    resp = client.delete(
+        "/api/notebooks",
+        params={"dry_run": "true", "modified_after": cutoff},
+    )
+
+    assert resp.json()["deleted_filenames"] == ["bulk_age_after_new.ipynb"]
+
+    client.delete("/api/notebooks?confirm=true")
+
+
+def test_delete_all_notebooks_modified_filter_composes_with_tag_as_an_and():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    _upload_notebook_aged_for_bulk_delete("bulk_age_tag_a.ipynb", 10 * 86400)
+    _upload_notebook_aged_for_bulk_delete("bulk_age_tag_b.ipynb", 10 * 86400)
+    client.put("/api/notebooks/bulk_age_tag_a.ipynb/tags", json={"tags": ["stale"]})
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
+
+    resp = client.delete(
+        "/api/notebooks",
+        params={"dry_run": "true", "tag": "stale", "modified_before": cutoff},
+    )
+
+    assert resp.json()["deleted_filenames"] == ["bulk_age_tag_a.ipynb"]
+
+    client.delete("/api/notebooks?confirm=true")
+
+
+def test_delete_all_notebooks_rejects_modified_after_later_than_modified_before():
+
+    _upload_sample_notebook("bulk_age_swapped.ipynb")
+
+    resp = client.delete(
+        "/api/notebooks",
+        params={
+            "confirm": "true",
+            "modified_after": "2026-06-01T00:00:00+00:00",
+            "modified_before": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "modified_after" in resp.json()["detail"]
+    assert (Path(UPLOAD_DIR) / "bulk_age_swapped.ipynb").exists()
+
+    client.delete("/api/notebooks?confirm=true")
+
+
+def test_delete_all_notebooks_rejects_an_invalid_modified_before():
+
+    resp = client.delete(
+        "/api/notebooks", params={"dry_run": "true", "modified_before": "not-a-date"}
+    )
+
+    assert resp.status_code == 400
