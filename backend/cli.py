@@ -5284,6 +5284,8 @@ def _dispatch_core_command(args):
             params["modified_after"] = args.modified_after
         if args.modified_before:
             params["modified_before"] = args.modified_before
+        if args.status:
+            params["status"] = args.status
         if args.limit is not None:
             params["limit"] = args.limit
         if args.format == "csv":
@@ -12665,6 +12667,18 @@ def main():
         )
     )
     _add_dashboard_url_and_timeout_arguments(validate_all_parser)
+    validate_all_parser.add_argument(
+        "--status",
+        default=None,
+        metavar="STATUS[,STATUS...]",
+        help=(
+            "Only report notebooks whose verdict is one of these "
+            "(comma-separated 'pass', 'warn', 'fail'), via GET "
+            "/api/validate-all's own ?status= query param -- e.g. "
+            "--status fail to list only the broken ones. The "
+            "pass/warn/fail totals still cover every scanned notebook."
+        )
+    )
     validate_all_parser.add_argument(
         "--strict",
         action="store_true",

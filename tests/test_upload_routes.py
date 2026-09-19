@@ -22823,6 +22823,74 @@ def test_validate_all_csv_format_composes_with_tag_and_strict():
     assert rows[1].startswith("validate_all_csv_tagged.ipynb,fail,")
 
 
+def _seed_validate_all_pass_warn_fail():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    for filename, source in (
+        ("va_status_pass.ipynb", "def add(a: int, b: int) -> int:\n    return a + b\n"),
+        (
+            "va_status_warn.ipynb",
+            "def unsupported(a, **kwargs):\n    return a\n\n"
+            "def sub(a: int, b: int) -> int:\n    return a - b\n",
+        ),
+        ("va_status_fail.ipynb", "def health_check() -> dict:\n    return {}\n"),
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(_notebook_bytes(source)), "application/json")},
+        )
+
+
+def test_validate_all_status_filter_keeps_only_matching_verdicts_but_not_the_totals():
+
+    _seed_validate_all_pass_warn_fail()
+
+    body = client.get("/api/validate-all", params={"status": "fail"}).json()
+
+    assert [r["filename"] for r in body["results"]] == ["va_status_fail.ipynb"]
+    assert body["result_count"] == 1
+    assert (body["pass_count"], body["warn_count"], body["fail_count"]) == (1, 1, 1)
+
+
+def test_validate_all_status_filter_accepts_several_statuses():
+
+    _seed_validate_all_pass_warn_fail()
+
+    body = client.get("/api/validate-all", params={"status": "warn, fail"}).json()
+
+    assert {r["filename"] for r in body["results"]} == {
+        "va_status_warn.ipynb", "va_status_fail.ipynb",
+    }
+
+
+def test_validate_all_status_filter_applies_before_pagination_and_to_csv():
+
+    _seed_validate_all_pass_warn_fail()
+
+    body = client.get(
+        "/api/validate-all", params={"status": "warn,fail", "limit": 1, "offset": 1}
+    ).json()
+
+    assert body["result_count"] == 2
+    assert [r["filename"] for r in body["results"]] == ["va_status_warn.ipynb"]
+
+    csv_text = client.get(
+        "/api/validate-all", params={"status": "pass", "format": "csv"}
+    ).text
+
+    assert "va_status_pass.ipynb" in csv_text
+    assert "va_status_fail.ipynb" not in csv_text
+
+
+def test_validate_all_rejects_an_unknown_status():
+
+    resp = client.get("/api/validate-all", params={"status": "pass,bogus"})
+
+    assert resp.status_code == 400
+    assert "bogus" in resp.json()["detail"]
+
+
 def test_validate_all_rejects_an_unknown_format():
 
     resp = client.get("/api/validate-all", params={"format": "xml"})

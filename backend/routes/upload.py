@@ -13452,7 +13452,7 @@ def validate_all_notebooks(
     strict: bool = False, tag: str = None, sha256: str = None,
     modified_after: str = None, modified_before: str = None,
     limit: int = None, offset: int = 0,
-    format: str = "json", checksums: bool = False,
+    format: str = "json", checksums: bool = False, status: str = None,
 ):
     """Run the identical pass/warn/fail check POST /api/validate already
     performs for one notebook, across every notebook already uploaded to
@@ -13565,6 +13565,21 @@ def validate_all_notebooks(
     into GET /api/notebooks/duplicates?sha256=) without a separate GET
     /api/notebooks?checksums=true round trip per result. CSV export
     gains a matching "sha256" column only when "checksums" is given.
+
+    "status" (optional, a comma-separated subset of "pass", "warn",
+    "fail") keeps only results with one of those verdicts -- e.g.
+    "status=fail" for "which notebooks are actually broken", instead of
+    a CI job fetching (and paging through) every passing notebook too
+    just to find the few that aren't. Applied after each notebook has
+    been validated but before "limit"/"offset" page the results, so
+    paging walks only the matching set and "result_count" is the number
+    of matching results. "pass_count"/"warn_count"/"fail_count"
+    deliberately stay whole-scan totals (still narrowed by
+    "tag"/"sha256"/"modified_*", never by "status"), the same "totals
+    describe the whole scanned set, never just one page/filter of it"
+    reasoning GET /api/notebooks/storage's own running totals follow --
+    so a caller filtering to "fail" can still see how many passed. An
+    unrecognized value is rejected with 400 before a notebook is read.
     """
 
     if format not in ("json", "csv"):
@@ -13573,6 +13588,24 @@ def validate_all_notebooks(
             status_code=400,
             detail="format must be 'json' or 'csv'"
         )
+
+    status_filter = None
+
+    if status:
+
+        status_filter = {v.strip() for v in status.split(",") if v.strip()}
+
+        unknown_statuses = status_filter - {"pass", "warn", "fail"}
+
+        if unknown_statuses:
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "status must be a comma-separated list of 'pass', "
+                    f"'warn', or 'fail', not {sorted(unknown_statuses)}"
+                )
+            )
 
     if offset < 0:
 
@@ -13716,6 +13749,9 @@ def validate_all_notebooks(
         if checksums:
             result["sha256"] = entry_sha256
         results.append(result)
+
+    if status_filter is not None:
+        results = [r for r in results if r["status"] in status_filter]
 
     result_count = len(results)
 
