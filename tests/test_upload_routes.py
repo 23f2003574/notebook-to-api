@@ -13860,6 +13860,68 @@ def test_list_notebooks_filters_by_description_search():
     assert [nb["filename"] for nb in notebooks] == ["desc_search_a.ipynb"]
 
 
+def _seed_curation_state_notebooks():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    for name in ("cur_full.ipynb", "cur_bare.ipynb", "cur_tag_only.ipynb", "cur_blank_desc.ipynb"):
+        _upload_sample_notebook(name)
+
+    client.put("/api/notebooks/cur_full.ipynb/tags", json={"tags": ["prod"]})
+    client.put("/api/notebooks/cur_full.ipynb/description", json={"description": "Churn model"})
+    client.put(
+        "/api/notebooks/cur_full.ipynb/source-url",
+        json={"source_url": "https://github.com/myorg/repo/blob/main/nb.ipynb"},
+    )
+    client.put("/api/notebooks/cur_tag_only.ipynb/tags", json={"tags": ["prod"]})
+    client.put("/api/notebooks/cur_blank_desc.ipynb/description", json={"description": "   "})
+
+
+def _list_filenames(**params):
+
+    return [
+        nb["filename"] for nb in client.get("/api/notebooks", params=params).json()["notebooks"]
+    ]
+
+
+def test_list_notebooks_untagged_keeps_only_notebooks_without_tags():
+
+    _seed_curation_state_notebooks()
+
+    assert _list_filenames(untagged="true") == ["cur_bare.ipynb", "cur_blank_desc.ipynb"]
+
+
+def test_list_notebooks_undescribed_keeps_only_notebooks_without_a_description():
+
+    _seed_curation_state_notebooks()
+
+    assert _list_filenames(undescribed="true") == [
+        "cur_bare.ipynb", "cur_blank_desc.ipynb", "cur_tag_only.ipynb",
+    ]
+
+
+def test_list_notebooks_no_source_url_keeps_only_notebooks_without_one():
+
+    _seed_curation_state_notebooks()
+
+    assert "cur_full.ipynb" not in _list_filenames(no_source_url="true")
+    assert len(_list_filenames(no_source_url="true")) == 3
+
+
+def test_list_notebooks_curation_filters_compose_as_an_and_with_each_other_and_tag():
+
+    _seed_curation_state_notebooks()
+
+    assert _list_filenames(tag="prod", undescribed="true") == ["cur_tag_only.ipynb"]
+    assert _list_filenames(untagged="true", undescribed="true", no_source_url="true") == [
+        "cur_bare.ipynb", "cur_blank_desc.ipynb",
+    ]
+    assert _list_filenames(untagged="true", tag="prod") == []
+
+    total = client.get("/api/notebooks", params={"untagged": "true"}).json()["total_count"]
+    assert total == 2
+
+
 def test_list_notebooks_filters_by_source_url_search():
 
     _upload_sample_notebook("source_url_search_a.ipynb")

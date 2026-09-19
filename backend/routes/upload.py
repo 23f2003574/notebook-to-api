@@ -5132,6 +5132,9 @@ def list_notebooks(
     modified_before: str = None,
     format: str = "json",
     checksums: bool = False,
+    untagged: bool = False,
+    undescribed: bool = False,
+    no_source_url: bool = False,
 ):
     """List previously uploaded notebooks.
 
@@ -5366,6 +5369,19 @@ def list_notebooks(
     gains a matching "sha256" column only when "checksums" is given, so a
     plain `format=csv` request's own column set is unchanged from before
     this existed.
+
+    "untagged", "undescribed" and "no_source_url" (each optional, default
+    false) keep only notebooks that carry no tags, have no description,
+    or have no recorded source URL respectively -- the catalog-hygiene
+    question "which of my notebooks still need curating" that "tag"/
+    "description_search"/"source_url_search" can only ever answer for
+    something that *is* set (a search for "" matches everything, and no
+    exact tag stands for "none"), so finding what was never labelled
+    meant fetching the whole catalog and checking each entry's own
+    "tags"/"description"/"source_url" by hand. Each composes with every
+    other filter as an AND (so "untagged" plus "tag" is naturally
+    empty), and "description" counts as missing when it is empty or
+    whitespace only, the same way _read_notebook_description reports it.
     """
 
     if format not in ("json", "csv"):
@@ -5478,6 +5494,9 @@ def list_notebooks(
 
         notebook_tags = _read_notebook_tags(entry.name)
 
+        if untagged and notebook_tags:
+            continue
+
         if tag and tag not in notebook_tags:
             continue
 
@@ -5500,6 +5519,12 @@ def list_notebooks(
             description_search.lower()
             not in _read_notebook_description(entry.name).lower()
         ):
+            continue
+
+        if undescribed and _read_notebook_description(entry.name).strip():
+            continue
+
+        if no_source_url and _read_notebook_source_url(entry.name):
             continue
 
         if source_url_search:
