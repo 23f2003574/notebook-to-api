@@ -3167,6 +3167,10 @@ def _dispatch_core_command(args):
             params["modified_after"] = args.modified_after
         if args.modified_before:
             params["modified_before"] = args.modified_before
+        if args.sort != "sha256":
+            params["sort"] = args.sort
+        if args.order != "asc":
+            params["order"] = args.order
         if args.limit is not None:
             params["limit"] = args.limit
         if args.offset:
@@ -10511,6 +10515,28 @@ def main():
             "them ('any', the default) or every single one of them "
             "('all'), mirroring GET /api/notebooks/duplicates' own "
             "?tags_match=. Ignored without --tags."
+        )
+    )
+    find_duplicates_parser.add_argument(
+        "--sort",
+        choices=["sha256", "size", "copies", "reclaimable"],
+        default="sha256",
+        help=(
+            "Order duplicate groups by content hash ('sha256', the "
+            "default), per-copy size ('size'), number of copies "
+            "('copies'), or bytes freed by keeping one copy "
+            "('reclaimable'), via GET /api/notebooks/duplicates' own "
+            "?sort= query param."
+        )
+    )
+    find_duplicates_parser.add_argument(
+        "--order",
+        choices=["asc", "desc"],
+        default="asc",
+        help=(
+            "Sort direction for --sort, via ?order= -- e.g. --sort "
+            "reclaimable --order desc --limit 10 for the ten duplicate "
+            "groups wasting the most space."
         )
     )
     find_duplicates_parser.add_argument(

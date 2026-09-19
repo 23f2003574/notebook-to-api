@@ -3209,6 +3209,7 @@ def _currently_compiled_notebook_is_stale():
 
 _NOTEBOOK_SORT_KEYS = frozenset({"name", "size", "modified"})
 _NOTEBOOK_SORT_ORDERS = frozenset({"asc", "desc"})
+_DUPLICATE_GROUP_SORT_KEYS = frozenset({"sha256", "size", "copies", "reclaimable"})
 
 # Shared by GET /api/functions and GET /api/notebooks/search-content below --
 # both return one entry per matching *notebook*, never per-notebook size, so
@@ -5914,7 +5915,7 @@ def find_duplicate_notebooks(
     tag: str = None, tags: str = None, tags_match: str = "any", sha256: str = None,
     modified_after: str = None, modified_before: str = None,
     limit: int = None, offset: int = 0,
-    format: str = "json",
+    format: str = "json", sort: str = "sha256", order: str = "asc",
 ):
     """Group every uploaded notebook by its raw content, reporting only
     the groups with more than one filename -- byte-identical uploads
@@ -6042,6 +6043,24 @@ def find_duplicate_notebooks(
     CSV already applies to its own per-notebook list of matches -- a
     caller wanting one row per group can still reconstruct that by
     grouping the CSV's own "sha256" column back together.
+
+    "sort" ("sha256", the default and previous fixed order, "size" --
+    each group's own per-copy bytes, "copies" -- how many filenames the
+    group has, or "reclaimable" -- the bytes deleting every copy but one
+    would free) plus "order" ("asc" default, or "desc") reorder
+    "duplicate_groups" before "limit"/"offset" page it, so
+    "sort=reclaimable&order=desc&limit=10" is "the 10 duplicate groups
+    wasting the most disk space", which a hash-ordered list (an
+    arbitrary order for a human) had no way to answer short of
+    fetching every group and ranking it client-side. Ties always fall
+    back to "sha256" order, in either direction, so paging stays stable.
+    Each group now also carries "reclaimable_bytes" (its "size_bytes"
+    times its extra copies), and the response a catalog-wide
+    "total_reclaimable_bytes" over every matching group -- never just
+    the current page -- i.e. what POST .../duplicates/resolve on the
+    same scope would free. The CSV keeps its existing columns. An
+    unrecognized "sort"/"order" is rejected with 400 before a notebook
+    is read.
     """
 
     if format not in ("json", "csv"):
@@ -6056,6 +6075,20 @@ def find_duplicate_notebooks(
         raise HTTPException(
             status_code=400,
             detail="tags_match must be 'any' or 'all'"
+        )
+
+    if sort not in _DUPLICATE_GROUP_SORT_KEYS:
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"sort must be one of {sorted(_DUPLICATE_GROUP_SORT_KEYS)}"
+        )
+
+    if order not in _NOTEBOOK_SORT_ORDERS:
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"order must be one of {sorted(_NOTEBOOK_SORT_ORDERS)}"
         )
 
     tags_filter = (
@@ -6126,7 +6159,27 @@ def find_duplicate_notebooks(
             "sha256": digest,
             "filenames": sorted(entry.name for entry in entries),
             "size_bytes": entries[0].stat().st_size,
+            "reclaimable_bytes": entries[0].stat().st_size * (len(entries) - 1),
         })
+
+    # Summed over every matching group, before "sort"/"limit"/"offset" --
+    # the same "totals describe the whole matching set, never just one
+    # page of it" reasoning "group_count" already follows.
+    total_reclaimable_bytes = sum(
+        group["reclaimable_bytes"] for group in duplicate_groups
+    )
+
+    if sort != "sha256":
+        # Stable sort over the already-sha256-ordered list, so ties keep
+        # that order in either direction.
+        sort_key = {
+            "size": lambda group: group["size_bytes"],
+            "copies": lambda group: len(group["filenames"]),
+            "reclaimable": lambda group: group["reclaimable_bytes"],
+        }[sort]
+        duplicate_groups.sort(key=sort_key, reverse=(order == "desc"))
+    elif order == "desc":
+        duplicate_groups.reverse()
 
     group_count = len(duplicate_groups)
     duplicate_notebook_count = sum(
@@ -6180,6 +6233,7 @@ def find_duplicate_notebooks(
         "status": "success",
         "duplicate_groups": duplicate_groups,
         "group_count": group_count,
+        "total_reclaimable_bytes": total_reclaimable_bytes,
         "duplicate_notebook_count": duplicate_notebook_count,
         "limit": limit,
         "offset": offset,
