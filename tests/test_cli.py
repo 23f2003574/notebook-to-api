@@ -6951,6 +6951,30 @@ def test_resolve_duplicates_command_sends_keep_overrides(tmp_path, fake_dashboar
     }
 
 
+def test_resolve_duplicates_command_sends_keep_strategy_body_field(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "results": [], "succeeded_count": 0, "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "resolve-duplicates", "--yes", "--keep-strategy", "newest",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {"keep": {}, "keep_strategy": "newest"}
+
+
 def test_resolve_duplicates_command_sends_tag_body_field(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
