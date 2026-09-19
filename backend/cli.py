@@ -3093,6 +3093,10 @@ def _dispatch_core_command(args):
             params["tag"] = args.tag
         if args.regex:
             params["regex"] = True
+        if args.saved_after:
+            params["saved_after"] = args.saved_after
+        if args.saved_before:
+            params["saved_before"] = args.saved_before
         if args.limit is not None:
             params["limit"] = args.limit
         if args.format == "csv":
@@ -10380,6 +10384,30 @@ def main():
             "Treat `search` as a case-insensitive Python regular "
             "expression instead of a plain substring, via GET "
             "/api/notebooks/versions/search-content's own ?regex=true."
+        )
+    )
+    search_version_content_parser.add_argument(
+        "--saved-after",
+        default=None,
+        dest="saved_after",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only search versions snapshotted on or after this ISO 8601 "
+            "datetime, via GET /api/notebooks/versions/search-content's "
+            "own ?saved_after= query param -- the same window `versions "
+            "list`/`versions clear` already support per notebook."
+        )
+    )
+    search_version_content_parser.add_argument(
+        "--saved-before",
+        default=None,
+        dest="saved_before",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only search versions snapshotted on or before this ISO 8601 "
+            "datetime, via GET /api/notebooks/versions/search-content's "
+            "own ?saved_before= query param. Composes with --saved-after "
+            "as a window."
         )
     )
     search_version_content_parser.add_argument(

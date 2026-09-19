@@ -6450,6 +6450,28 @@ def test_search_version_content_command_sends_tag_and_regex_query_params(fake_da
     ]
 
 
+def test_search_version_content_command_sends_saved_window_query_params(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {"status": "success", "search": "read_csv", "matches": [], "match_count": 0}
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        [
+            "search-version-content", "read_csv",
+            "--saved-after", "2026-01-01", "--saved-before", "2026-02-01",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/notebooks/versions/search-content?search=read_csv&offset=0"
+        "&saved_after=2026-01-01&saved_before=2026-02-01"
+    ]
+
+
 def test_search_version_content_command_reports_no_matches(fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

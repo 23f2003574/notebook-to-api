@@ -7240,6 +7240,80 @@ def test_search_notebook_version_content_finds_a_matching_old_snapshot():
     assert current_search["notebook_count"] == 0
 
 
+def _upload_two_versions_with_read_csv(filename):
+
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(_notebook_bytes(
+            "def load() -> str:\n    df = pd.read_csv('a.csv')\n    return 'done'\n"
+        )), "application/json")},
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={"file": (filename, io.BytesIO(_notebook_bytes(
+            "def load() -> str:\n    return 'done'\n"
+        )), "application/json")},
+    )
+
+
+def test_search_notebook_version_content_saved_window_excludes_out_of_window_versions():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    filename = "versions_search_window.ipynb"
+    _upload_two_versions_with_read_csv(filename)
+
+    from backend.routes import upload as upload_module
+
+    versions_dir = upload_module._notebook_versions_dir(filename)
+
+    for version_file in versions_dir.iterdir():
+        if version_file.is_file():
+            stat = version_file.stat()
+            os.utime(version_file, (stat.st_atime, stat.st_mtime - 10 * 86400))
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
+
+    after = client.get(
+        "/api/notebooks/versions/search-content",
+        params={"search": "read_csv", "saved_after": cutoff},
+    ).json()
+    before = client.get(
+        "/api/notebooks/versions/search-content",
+        params={"search": "read_csv", "saved_before": cutoff},
+    ).json()
+
+    assert after["match_count"] == 0
+    assert before["match_count"] == 1
+
+    client.delete("/api/notebooks?confirm=true")
+
+
+def test_search_notebook_version_content_rejects_saved_after_later_than_saved_before():
+
+    resp = client.get(
+        "/api/notebooks/versions/search-content",
+        params={
+            "search": "x",
+            "saved_after": "2026-06-01T00:00:00+00:00",
+            "saved_before": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "saved_after" in resp.json()["detail"]
+
+
+def test_search_notebook_version_content_rejects_an_invalid_saved_before():
+
+    resp = client.get(
+        "/api/notebooks/versions/search-content",
+        params={"search": "x", "saved_before": "not-a-date"},
+    )
+
+    assert resp.status_code == 400
+
+
 def test_search_notebook_version_content_finds_nothing_for_an_unrelated_search():
 
     client.delete("/api/notebooks?confirm=true")
