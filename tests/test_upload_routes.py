@@ -12329,6 +12329,68 @@ def test_list_tags_csv_format_returns_a_csv_response():
     assert "csvtag,2" in rows
 
 
+def _seed_tags_for_listing():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    for name, tags in (
+        ("tags_q_a.ipynb", ["production", "prod-eu", "bug"]),
+        ("tags_q_b.ipynb", ["production", "bug"]),
+        ("tags_q_c.ipynb", ["production"]),
+    ):
+        _upload_sample_notebook(name)
+        client.put(f"/api/notebooks/{name}/tags", json={"tags": tags})
+
+
+def test_list_tags_search_filters_case_insensitively_without_changing_counts():
+
+    _seed_tags_for_listing()
+
+    body = client.get("/api/tags", params={"search": "PROD"}).json()
+
+    assert [t["tag"] for t in body["tags"]] == ["prod-eu", "production"]
+    assert {t["tag"]: t["notebook_count"] for t in body["tags"]}["production"] == 3
+    assert body["tag_count"] == 2
+
+
+def test_list_tags_sort_by_count_descending_breaks_ties_alphabetically():
+
+    _seed_tags_for_listing()
+
+    body = client.get("/api/tags", params={"sort": "count", "order": "desc"}).json()
+
+    assert [t["tag"] for t in body["tags"]] == ["production", "bug", "prod-eu"]
+
+
+def test_list_tags_name_order_desc_reverses_alphabetical():
+
+    _seed_tags_for_listing()
+
+    body = client.get("/api/tags", params={"order": "desc"}).json()
+
+    assert [t["tag"] for t in body["tags"]] == ["production", "prod-eu", "bug"]
+
+
+def test_list_tags_limit_and_offset_page_but_tag_count_stays_whole():
+
+    _seed_tags_for_listing()
+
+    body = client.get(
+        "/api/tags", params={"sort": "count", "order": "desc", "limit": 1, "offset": 1}
+    ).json()
+
+    assert [t["tag"] for t in body["tags"]] == ["bug"]
+    assert body["tag_count"] == 3
+
+
+def test_list_tags_rejects_invalid_sort_order_limit_and_offset():
+
+    assert client.get("/api/tags", params={"sort": "bogus"}).status_code == 400
+    assert client.get("/api/tags", params={"order": "bogus"}).status_code == 400
+    assert client.get("/api/tags", params={"limit": 0}).status_code == 400
+    assert client.get("/api/tags", params={"offset": -1}).status_code == 400
+
+
 def test_list_tags_rejects_an_unknown_format():
 
     resp = client.get("/api/tags", params={"format": "xml"})

@@ -3897,7 +3897,10 @@ def set_notebook_source_url_batch(data: dict):
 
 
 @router.get("/tags")
-def list_tags(format: str = "json"):
+def list_tags(
+    format: str = "json", search: str = None, sort: str = "name",
+    order: str = "asc", limit: int = None, offset: int = 0,
+):
     """The distinct tags currently in use across every uploaded notebook,
     each with how many notebooks currently carry it, sorted alphabetically.
 
@@ -3928,6 +3931,31 @@ def list_tags(format: str = "json"):
     "tag,notebook_count", every field each "tags" entry already carries.
     An unrecognized "format" is rejected with 400 before a single
     notebook is even read.
+
+    "search" (optional) keeps only tags containing that text, case-
+    insensitively -- e.g. for a tag-filter dropdown's own type-ahead, or
+    "which of my 40 tags are about 'prod'", instead of fetching the whole
+    catalog and filtering it client-side. Each kept tag's
+    "notebook_count" is unaffected: it is still how many notebooks carry
+    that tag, never narrowed by "search".
+
+    "sort" ("name", the default alphabetical order, or "count" -- how
+    many notebooks carry each tag) plus "order" ("asc" default, or
+    "desc") reorder "tags" the same way GET /api/notebooks/storage's own
+    "sort"/"order" do; "sort=count&order=desc" is "my most-used tags
+    first", which the previously fixed alphabetical order had no way to
+    ask for. Ties under "count" fall back to alphabetical order, in
+    either direction, so the result is always deterministic.
+
+    "limit"/"offset" page the returned "tags" after "search" and "sort"
+    are applied, the identical way GET /api/notebooks' own pair does
+    (a negative "offset" or a non-positive "limit" is rejected with
+    400). "tag_count" is how many tags matched "search" before paging,
+    the same "the total describes the whole matching set, never just one
+    page of it" reasoning GET /api/notebooks' own "total_count" follows.
+    "tag_count" is JSON-only; the CSV response keeps its existing
+    "tag,notebook_count" columns and simply reflects the same
+    filtered/sorted/paged rows.
     """
 
     if format not in ("json", "csv"):
@@ -3935,6 +3963,34 @@ def list_tags(format: str = "json"):
         raise HTTPException(
             status_code=400,
             detail="format must be 'json' or 'csv'"
+        )
+
+    if sort not in ("name", "count"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="sort must be one of ['count', 'name']"
+        )
+
+    if order not in _NOTEBOOK_SORT_ORDERS:
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"order must be one of {sorted(_NOTEBOOK_SORT_ORDERS)}"
+        )
+
+    if offset < 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="offset must be a non-negative integer"
+        )
+
+    if limit is not None and limit <= 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="limit must be a positive integer"
         )
 
     upload_root = Path(UPLOAD_DIR)
@@ -3949,10 +4005,28 @@ def list_tags(format: str = "json"):
         for tag in _read_notebook_tags(entry.name):
             counts[tag] = counts.get(tag, 0) + 1
 
+    search_lower = search.lower() if search else None
+
     tags = [
         {"tag": tag, "notebook_count": count}
         for tag, count in sorted(counts.items())
+        if search_lower is None or search_lower in tag.lower()
     ]
+
+    if sort == "count":
+        # Stable sort over the already-alphabetical list, so ties keep
+        # alphabetical order for "asc"; "desc" reverses only the count
+        # comparison, not the tie-break.
+        tags.sort(
+            key=lambda entry: entry["notebook_count"],
+            reverse=(order == "desc"),
+        )
+    elif order == "desc":
+        tags.reverse()
+
+    tag_count = len(tags)
+
+    tags = tags[offset:offset + limit] if limit is not None else tags[offset:]
 
     if format == "csv":
 
@@ -3975,6 +4049,7 @@ def list_tags(format: str = "json"):
     return {
         "status": "success",
         "tags": tags,
+        "tag_count": tag_count,
     }
 
 

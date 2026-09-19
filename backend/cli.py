@@ -4373,6 +4373,16 @@ def _dispatch_core_command(args):
         elif args.tags_command == "list":
 
             params = {"format": "csv"} if args.format == "csv" else {}
+            if args.search:
+                params["search"] = args.search
+            if args.sort != "name":
+                params["sort"] = args.sort
+            if args.order != "asc":
+                params["order"] = args.order
+            if args.limit is not None:
+                params["limit"] = args.limit
+            if args.offset:
+                params["offset"] = args.offset
 
             try:
                 response = httpx.get(
@@ -11872,6 +11882,46 @@ def main():
         )
     )
     _add_dashboard_url_and_timeout_arguments(tags_list_parser)
+    tags_list_parser.add_argument(
+        "--search",
+        default=None,
+        help=(
+            "Only list tags containing this text (case-insensitive), via "
+            "GET /api/tags' own ?search= query param."
+        )
+    )
+    tags_list_parser.add_argument(
+        "--sort",
+        choices=["name", "count"],
+        default="name",
+        help=(
+            "Order tags alphabetically ('name', the default) or by how "
+            "many notebooks carry each ('count'), via GET /api/tags' own "
+            "?sort= query param."
+        )
+    )
+    tags_list_parser.add_argument(
+        "--order",
+        choices=["asc", "desc"],
+        default="asc",
+        help=(
+            "Sort direction for --sort, via GET /api/tags' own ?order= "
+            "query param -- e.g. --sort count --order desc for the "
+            "most-used tags first."
+        )
+    )
+    tags_list_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Cap how many tags are returned, via GET /api/tags' own ?limit=."
+    )
+    tags_list_parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help="Skip this many tags before --limit applies, via GET /api/tags' own ?offset=."
+    )
     tags_list_parser.add_argument(
         "--format",
         choices=["json", "csv"],
