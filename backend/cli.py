@@ -3318,6 +3318,10 @@ def _dispatch_core_command(args):
         params = {"offset": args.offset, "sort": args.sort, "order": args.order}
         if args.tag:
             params["tag"] = args.tag
+        if args.tags:
+            params["tags"] = args.tags
+        if args.tags_match != "any":
+            params["tags_match"] = args.tags_match
         if args.limit is not None:
             params["limit"] = args.limit
         if args.format == "csv":
@@ -10641,6 +10645,29 @@ def main():
             "this exact tag, via GET /api/notebooks/storage's own "
             "?tag= query param -- both the per-notebook list and every "
             "running total are scoped to it."
+        )
+    )
+    storage_parser.add_argument(
+        "--tags",
+        default=None,
+        help=(
+            "Only report disk usage for notebooks carrying several tags "
+            "at once, via GET /api/notebooks/storage's own ?tags= -- "
+            "something --tag alone can't express. See --tags-match for "
+            "whether that means any or all of them. Composes with --tag "
+            "as an AND."
+        )
+    )
+    storage_parser.add_argument(
+        "--tags-match",
+        choices=["any", "all"],
+        default="any",
+        dest="tags_match",
+        help=(
+            "Whether --tags means a notebook must carry at least one of "
+            "them ('any', the default) or every single one of them "
+            "('all'), mirroring GET /api/notebooks/storage's own "
+            "?tags_match=. Ignored without --tags."
         )
     )
     storage_parser.add_argument(

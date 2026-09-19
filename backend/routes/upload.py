@@ -7213,7 +7213,8 @@ _STORAGE_SORT_KEYS = frozenset(
 
 @router.get("/notebooks/storage")
 def notebook_storage_usage(
-    tag: str = None, limit: int = None, offset: int = 0, format: str = "json",
+    tag: str = None, tags: str = None, tags_match: str = "any",
+    limit: int = None, offset: int = 0, format: str = "json",
     sort: str = "total_bytes", order: str = "desc",
 ):
     """How much disk space UPLOAD_DIR is actually using, broken down per
@@ -7261,6 +7262,15 @@ def notebook_storage_usage(
     narrowed after the fact. Applied before a notebook's own bytes (or
     its version directory) are ever read, so an out-of-tag notebook
     contributes nothing to "notebooks" or any running total at all.
+
+    "tags" (optional, a comma-separated list) plus "tags_match" ("any",
+    the default -- an OR, or "all" -- an AND) scope the same way "tag"
+    does but across several tags at once, the identical pair GET
+    /api/notebooks and GET /api/notebooks/duplicates already accept --
+    "tag" alone can only ever match one exact tag, and running totals
+    computed over the whole catalog can't be narrowed to "production
+    AND v2" after the fact. Composes with "tag" as an AND; an
+    unrecognized "tags_match" is rejected with 400.
 
     "limit"/"offset" page the returned "notebooks" list the identical way
     GET /api/notebooks' own "limit"/"offset" already page the notebook
@@ -7357,6 +7367,17 @@ def notebook_storage_usage(
             detail="format must be 'json' or 'csv'"
         )
 
+    if tags_match not in ("any", "all"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="tags_match must be 'any' or 'all'"
+        )
+
+    tags_filter = (
+        {t.strip() for t in tags.split(",") if t.strip()} if tags else None
+    )
+
     if sort not in _STORAGE_SORT_KEYS:
 
         raise HTTPException(
@@ -7399,6 +7420,16 @@ def notebook_storage_usage(
 
         if tag and tag not in _read_notebook_tags(entry.name):
             continue
+
+        if tags_filter is not None:
+
+            notebook_tags_set = set(_read_notebook_tags(entry.name))
+
+            if tags_match == "all":
+                if not tags_filter.issubset(notebook_tags_set):
+                    continue
+            elif not tags_filter & notebook_tags_set:
+                continue
 
         notebook_bytes = entry.stat().st_size
 

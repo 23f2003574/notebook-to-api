@@ -7249,6 +7249,30 @@ def test_storage_command_sends_tag_query_param(fake_dashboard):
     assert handler.requests == ["/api/notebooks/storage?offset=0&sort=total_bytes&order=desc&tag=prod"]
 
 
+def test_storage_command_sends_tags_and_tags_match_query_params(fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    body = {
+        "status": "success", "notebooks": [], "notebook_count": 0,
+        "total_notebook_bytes": 0, "total_version_bytes": 0,
+        "total_version_count": 0, "total_bytes": 0,
+    }
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        [
+            "storage", "--tags", "prod,v2", "--tags-match", "all",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/notebooks/storage?offset=0&sort=total_bytes&order=desc&tags=prod%2Cv2&tags_match=all"
+    ]
+
+
 def test_storage_command_format_csv_prints_the_dashboards_raw_csv_response(
     fake_dashboard
 ):
