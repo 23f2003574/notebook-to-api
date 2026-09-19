@@ -3269,6 +3269,14 @@ def _dispatch_core_command(args):
             resolve_body["tag"] = args.tag
         if args.sha256:
             resolve_body["sha256"] = args.sha256
+        if args.tags:
+            resolve_body["tags"] = args.tags
+        if args.tags_match != "any":
+            resolve_body["tags_match"] = args.tags_match
+        if args.modified_after:
+            resolve_body["modified_after"] = args.modified_after
+        if args.modified_before:
+            resolve_body["modified_before"] = args.modified_before
         if args.keep_strategy != "first":
             resolve_body["keep_strategy"] = args.keep_strategy
         if args.dry_run:
@@ -10677,6 +10685,47 @@ def main():
             "group (its own \"sha256\", as reported by `find-duplicates`), "
             "instead of the alphabetically-first filename in that group. "
             "Repeat --keep once per group to override."
+        )
+    )
+    resolve_duplicates_parser.add_argument(
+        "--tags",
+        default=None,
+        help=(
+            "Only resolve duplicates among notebooks carrying several "
+            "tags at once (comma-separated), via the \"tags\" body field "
+            "-- the same scoping `find-duplicates --tags` applies to its "
+            "report. See --tags-match. Composes with --tag as an AND."
+        )
+    )
+    resolve_duplicates_parser.add_argument(
+        "--tags-match",
+        choices=["any", "all"],
+        default="any",
+        dest="tags_match",
+        help=(
+            "Whether --tags means any ('any', the default) or every "
+            "('all') listed tag. Ignored without --tags."
+        )
+    )
+    resolve_duplicates_parser.add_argument(
+        "--modified-after",
+        default=None,
+        dest="modified_after",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only resolve duplicates among notebooks modified on or "
+            "after this ISO 8601 datetime, the same window `find-"
+            "duplicates --modified-after` scopes its report to."
+        )
+    )
+    resolve_duplicates_parser.add_argument(
+        "--modified-before",
+        default=None,
+        dest="modified_before",
+        metavar="ISO_DATETIME",
+        help=(
+            "Only resolve duplicates among notebooks modified on or "
+            "before this ISO 8601 datetime."
         )
     )
     resolve_duplicates_parser.add_argument(
