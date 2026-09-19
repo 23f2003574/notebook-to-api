@@ -33129,6 +33129,79 @@ def test_delete_all_notebooks_modified_filter_composes_with_tag_as_an_and():
     client.delete("/api/notebooks?confirm=true")
 
 
+def _seed_bulk_delete_tag_notebooks():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    for name, tags in (
+        ("bulk_tags_a.ipynb", ["scratch", "v1"]),
+        ("bulk_tags_b.ipynb", ["scratch"]),
+        ("bulk_tags_c.ipynb", ["keep"]),
+    ):
+        _upload_sample_notebook(name)
+        client.put(f"/api/notebooks/{name}/tags", json={"tags": tags})
+
+
+def test_delete_all_notebooks_tags_all_deletes_only_notebooks_carrying_every_tag():
+
+    _seed_bulk_delete_tag_notebooks()
+
+    body = client.delete(
+        "/api/notebooks",
+        params={"confirm": "true", "tags": "scratch,v1", "tags_match": "all"},
+    ).json()
+
+    assert body["deleted_filenames"] == ["bulk_tags_a.ipynb"]
+    assert not (Path(UPLOAD_DIR) / "bulk_tags_a.ipynb").exists()
+    assert (Path(UPLOAD_DIR) / "bulk_tags_b.ipynb").exists()
+
+    client.delete("/api/notebooks?confirm=true")
+
+
+def test_delete_all_notebooks_tags_defaults_to_any_and_dry_run_does_not_delete():
+
+    _seed_bulk_delete_tag_notebooks()
+
+    body = client.delete(
+        "/api/notebooks", params={"dry_run": "true", "tags": "v1, keep"}
+    ).json()
+
+    assert body["deleted_filenames"] == ["bulk_tags_a.ipynb", "bulk_tags_c.ipynb"]
+    assert (Path(UPLOAD_DIR) / "bulk_tags_a.ipynb").exists()
+
+    client.delete("/api/notebooks?confirm=true")
+
+
+def test_delete_all_notebooks_tags_composes_with_tag_as_an_and():
+
+    _seed_bulk_delete_tag_notebooks()
+
+    body = client.delete(
+        "/api/notebooks",
+        params={"dry_run": "true", "tag": "scratch", "tags": "v1"},
+    ).json()
+
+    assert body["deleted_filenames"] == ["bulk_tags_a.ipynb"]
+
+    client.delete("/api/notebooks?confirm=true")
+
+
+def test_delete_all_notebooks_rejects_an_invalid_tags_match_without_deleting():
+
+    _seed_bulk_delete_tag_notebooks()
+
+    resp = client.delete(
+        "/api/notebooks",
+        params={"confirm": "true", "tags": "scratch", "tags_match": "bogus"},
+    )
+
+    assert resp.status_code == 400
+    assert "tags_match" in resp.json()["detail"]
+    assert (Path(UPLOAD_DIR) / "bulk_tags_a.ipynb").exists()
+
+    client.delete("/api/notebooks?confirm=true")
+
+
 def test_delete_all_notebooks_rejects_modified_after_later_than_modified_before():
 
     _upload_sample_notebook("bulk_age_swapped.ipynb")

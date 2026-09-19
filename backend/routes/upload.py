@@ -7866,6 +7866,7 @@ def notebook_storage_usage(
 def delete_all_notebooks(
     confirm: bool = False, tag: str = None, sha256: str = None, dry_run: bool = False,
     modified_after: str = None, modified_before: str = None,
+    tags: str = None, tags_match: str = "any",
 ):
     """Remove every uploaded notebook in UPLOAD_DIR at once.
 
@@ -7969,6 +7970,20 @@ def delete_all_notebooks(
     scanned, so a swapped pair can never silently delete nothing (or
     everything) by accident.
 
+    "tags" (optional, a comma-separated list) plus "tags_match" ("any",
+    the default -- an OR, or "all" -- an AND) scope the sweep the way
+    "tag" does but across several tags at once, the identical pair GET
+    /api/notebooks, GET /api/notebooks/duplicates and GET
+    /api/notebooks/storage already accept. Before this, "delete every
+    notebook tagged both 'scratch' and 'v1'" (or the 'scratch'-or-'tmp'
+    equivalent) could not be expressed here at all -- only one exact
+    "tag" -- so an operator had to GET /api/notebooks?tags=... first and
+    feed the filenames into POST /api/notebooks/delete-batch by hand.
+    Applied before a notebook is considered for deletion, composing with
+    "tag"/"sha256"/"modified_*" as an AND; an unrecognized "tags_match"
+    is rejected with 400 before anything is scanned or deleted, and a
+    request omitting both behaves exactly as before.
+
     "dry_run" (optional, default false) reports the exact same
     "deleted_filenames"/"currently_compiled_notebook_deleted" a real call
     would, without removing a single file -- the identical preview POST
@@ -7992,6 +8007,17 @@ def delete_all_notebooks(
                 "what would be deleted without deleting anything."
             )
         )
+
+    if tags_match not in ("any", "all"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="tags_match must be 'any' or 'all'"
+        )
+
+    tags_filter = (
+        {t.strip() for t in tags.split(",") if t.strip()} if tags else None
+    )
 
     modified_after_dt = _parse_iso_datetime_query_param(modified_after, "modified_after")
     modified_before_dt = _parse_iso_datetime_query_param(modified_before, "modified_before")
@@ -8019,6 +8045,16 @@ def delete_all_notebooks(
 
         if tag and tag not in _read_notebook_tags(entry.name):
             continue
+
+        if tags_filter is not None:
+
+            notebook_tags_set = set(_read_notebook_tags(entry.name))
+
+            if tags_match == "all":
+                if not tags_filter.issubset(notebook_tags_set):
+                    continue
+            elif not tags_filter & notebook_tags_set:
+                continue
 
         if sha256 and hash_notebook_file(entry) != sha256:
             continue

@@ -3732,6 +3732,9 @@ def _dispatch_core_command(args):
         if args.sha256 and not args.all:
             raise RuntimeError("--sha256 only applies together with --all.")
 
+        if (args.tags or args.tags_match != "any") and not args.all:
+            raise RuntimeError("--tags/--tags-match only apply together with --all.")
+
         if (args.modified_after or args.modified_before) and not args.all:
             raise RuntimeError(
                 "--modified-after/--modified-before only apply together with --all."
@@ -3753,6 +3756,10 @@ def _dispatch_core_command(args):
                 target_parts = []
                 if args.tag:
                     target_parts.append(f"tagged '{args.tag}'")
+                if args.tags:
+                    target_parts.append(
+                        f"tagged {'all' if args.tags_match == 'all' else 'any'} of '{args.tags}'"
+                    )
                 if args.sha256:
                     target_parts.append(f"with sha256 '{args.sha256}'")
                 if args.modified_after:
@@ -3777,6 +3784,10 @@ def _dispatch_core_command(args):
                 params["tag"] = args.tag
             if args.sha256:
                 params["sha256"] = args.sha256
+            if args.tags:
+                params["tags"] = args.tags
+            if args.tags_match != "any":
+                params["tags_match"] = args.tags_match
             if args.modified_after:
                 params["modified_after"] = args.modified_after
             if args.modified_before:
@@ -11273,6 +11284,28 @@ def main():
             "filename(s) it currently sits under. Composes with --tag: "
             "with both given, a notebook must match both to be deleted. "
             "Ignored (and rejected) without --all."
+        )
+    )
+    delete_parser.add_argument(
+        "--tags",
+        default=None,
+        help=(
+            "With --all, only delete notebooks carrying several tags at "
+            "once (comma-separated), via DELETE /api/notebooks's own "
+            "?tags= query param -- something --tag alone can't express. "
+            "See --tags-match. Composes with --tag as an AND. Ignored "
+            "(and rejected) without --all."
+        )
+    )
+    delete_parser.add_argument(
+        "--tags-match",
+        choices=["any", "all"],
+        default="any",
+        dest="tags_match",
+        help=(
+            "Whether --tags means a notebook must carry at least one of "
+            "them ('any', the default) or every one ('all'). Ignored "
+            "without --tags."
         )
     )
     delete_parser.add_argument(
