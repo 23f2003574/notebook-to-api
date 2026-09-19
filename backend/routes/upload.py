@@ -11313,6 +11313,7 @@ def clear_notebook_versions(
     filename: str, dry_run: bool = False, older_than_days: int = None,
     saved_after: str = None, saved_before: str = None,
     note_search: str = None, content_search: str = None, regex: bool = False,
+    keep_latest: int = None,
 ):
     """Permanently discard every one of a notebook's snapshotted previous
     versions at once, without touching the notebook's own current content,
@@ -11420,7 +11421,30 @@ def clear_notebook_versions(
     (has no effect) when neither "note_search" nor "content_search" is
     given -- a plain `clear` (or one scoped only by "older_than_days"/
     "saved_after"/"saved_before") behaves exactly as before this.
+
+    "keep_latest" (optional, a positive integer) discards everything
+    *except* the notebook's own N newest versions -- the standard "trim
+    this history to its last N snapshots" retention operation, which
+    this endpoint could not express at all: with no filter it cleared
+    every version, and "older_than_days" only ever measures age, so
+    "keep the last 5" meant a GET .../versions to find the 6th-newest
+    snapshot's age (or one DELETE per version_id) and hoping no
+    "saved_at" ties made an age cutoff land in the wrong place. The N
+    newest (the same newest-first order GET .../versions lists) are
+    protected from every other filter here too, ranked over the whole
+    history, and given alone it deletes every older version -- so it
+    also works as the same safety net DELETE /api/notebooks/versions'
+    own "keep_latest" is. "dry_run" reflects it, and a non-positive value
+    is rejected with 400 before anything is touched. The response echoes
+    it back.
     """
+
+    if keep_latest is not None and keep_latest <= 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="keep_latest must be a positive integer"
+        )
 
     if older_than_days is not None and older_than_days <= 0:
 
@@ -11474,6 +11498,7 @@ def clear_notebook_versions(
         if (
             older_than_days is None and saved_after_dt is None
             and saved_before_dt is None and not note_search and not content_search
+            and keep_latest is None
         ):
 
             deleted_version_ids = sorted(
@@ -11501,11 +11526,26 @@ def clear_notebook_versions(
 
             deleted_version_ids = []
 
+            # Newest-first by name over the whole history, the same order
+            # GET .../versions lists it in.
+            protected_version_names = (
+                {
+                    candidate.name for candidate in sorted(
+                        (v for v in versions_dir.iterdir() if v.is_file()),
+                        reverse=True,
+                    )[:keep_latest]
+                }
+                if keep_latest is not None and versions_dir.is_dir() else set()
+            )
+
             if versions_dir.is_dir():
 
                 for version_file in versions_dir.iterdir():
 
                     if not version_file.is_file():
+                        continue
+
+                    if version_file.name in protected_version_names:
                         continue
 
                     saved_at = datetime.fromtimestamp(
@@ -11570,6 +11610,7 @@ def clear_notebook_versions(
         "dry_run": dry_run,
         "filename": filename,
         "older_than_days": older_than_days,
+        "keep_latest": keep_latest,
         "deleted_version_ids": deleted_version_ids,
         "deleted_count": len(deleted_version_ids),
     }

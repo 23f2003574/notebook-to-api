@@ -19455,6 +19455,111 @@ def test_clear_notebook_versions_removes_every_snapshot():
     assert get_resp.content == current_content
 
 
+def _seed_notebook_with_versions_for_clear(filename, count=4):
+
+    _upload_sample_notebook(filename)
+
+    for i in range(count):
+        client.post(
+            "/api/upload?overwrite=true",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes(f"def g{i}() -> int:\n    return {i}\n")),
+                    "application/json",
+                )
+            },
+        )
+
+    return [
+        v["version_id"] for v in client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    ]
+
+
+def test_clear_notebook_versions_keep_latest_trims_history_to_the_newest_n():
+
+    filename = "versions_clear_keep_latest.ipynb"
+    newest_first = _seed_notebook_with_versions_for_clear(filename)
+
+    body = client.delete(
+        f"/api/notebooks/{filename}/versions", params={"keep_latest": 2}
+    ).json()
+
+    assert body["keep_latest"] == 2
+    assert sorted(body["deleted_version_ids"]) == sorted(newest_first[2:])
+    assert body["deleted_count"] == len(newest_first) - 2
+
+    remaining = [
+        v["version_id"] for v in client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    ]
+    assert remaining == newest_first[:2]
+
+
+def test_clear_notebook_versions_keep_latest_larger_than_history_deletes_nothing():
+
+    filename = "versions_clear_keep_latest_big.ipynb"
+    newest_first = _seed_notebook_with_versions_for_clear(filename, count=2)
+
+    body = client.delete(
+        f"/api/notebooks/{filename}/versions", params={"keep_latest": 10}
+    ).json()
+
+    assert body["deleted_version_ids"] == []
+    assert client.get(f"/api/notebooks/{filename}/versions").json()["total_count"] == len(newest_first)
+
+
+def test_clear_notebook_versions_keep_latest_dry_run_does_not_delete():
+
+    filename = "versions_clear_keep_latest_dry.ipynb"
+    newest_first = _seed_notebook_with_versions_for_clear(filename)
+
+    body = client.delete(
+        f"/api/notebooks/{filename}/versions",
+        params={"keep_latest": 1, "dry_run": "true"},
+    ).json()
+
+    assert body["deleted_count"] == len(newest_first) - 1
+    assert client.get(f"/api/notebooks/{filename}/versions").json()["total_count"] == len(newest_first)
+
+
+def test_clear_notebook_versions_keep_latest_protects_even_when_other_filters_match_everything():
+
+    filename = "versions_clear_keep_latest_filter.ipynb"
+    newest_first = _seed_notebook_with_versions_for_clear(filename, count=3)
+
+    from backend.routes import upload as upload_module
+
+    for version_file in upload_module._notebook_versions_dir(filename).iterdir():
+        stat = version_file.stat()
+        os.utime(version_file, (stat.st_atime, stat.st_mtime - 60 * 86400))
+
+    body = client.delete(
+        f"/api/notebooks/{filename}/versions",
+        params={"keep_latest": 1, "older_than_days": 30},
+    ).json()
+
+    assert sorted(body["deleted_version_ids"]) == sorted(newest_first[1:])
+    remaining = [
+        v["version_id"] for v in client.get(f"/api/notebooks/{filename}/versions").json()["versions"]
+    ]
+    assert remaining == newest_first[:1]
+
+
+def test_clear_notebook_versions_rejects_a_non_positive_keep_latest():
+
+    filename = "versions_clear_keep_latest_bad.ipynb"
+    newest_first = _seed_notebook_with_versions_for_clear(filename, count=1)
+
+    for value in (0, -1):
+        resp = client.delete(
+            f"/api/notebooks/{filename}/versions", params={"keep_latest": value}
+        )
+        assert resp.status_code == 400
+        assert "keep_latest" in resp.json()["detail"]
+
+    assert client.get(f"/api/notebooks/{filename}/versions").json()["total_count"] == len(newest_first)
+
+
 def test_clear_notebook_versions_dry_run_reports_the_plan_without_deleting():
 
     filename = "versions_clear_dry_run.ipynb"
@@ -19542,6 +19647,7 @@ def test_clear_notebook_versions_is_a_no_op_success_for_a_notebook_with_no_histo
         "dry_run": False,
         "filename": "versions_clear_none.ipynb",
         "older_than_days": None,
+        "keep_latest": None,
         "deleted_version_ids": [],
         "deleted_count": 0,
     }

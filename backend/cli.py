@@ -6916,6 +6916,8 @@ def _dispatch_core_command(args):
                 age_clause += f" whose note matches '{args.note_search}'"
             if args.content_search:
                 age_clause += f" whose code matches '{args.content_search}'"
+            if args.keep_latest is not None:
+                age_clause += f" except the {args.keep_latest} newest"
 
             if not args.dry_run and not args.yes:
                 # DELETE /api/notebooks/{filename}/versions
@@ -6934,6 +6936,8 @@ def _dispatch_core_command(args):
             params = {"dry_run": True} if args.dry_run else {}
             if args.older_than_days:
                 params["older_than_days"] = args.older_than_days
+            if args.keep_latest is not None:
+                params["keep_latest"] = args.keep_latest
             if args.saved_after:
                 params["saved_after"] = args.saved_after
             if args.saved_before:
@@ -14475,6 +14479,20 @@ def main():
     )
     versions_clear_parser.add_argument(
         "filename", help="Filename of the notebook, as reported by `list`."
+    )
+    versions_clear_parser.add_argument(
+        "--keep-latest",
+        type=int,
+        default=None,
+        dest="keep_latest",
+        metavar="N",
+        help=(
+            "Discard everything except this notebook's N newest "
+            "versions, via DELETE /api/notebooks/{filename}/versions' own "
+            "?keep_latest= query param -- e.g. --keep-latest 5 to trim "
+            "its history to the last five snapshots. The N newest are "
+            "also protected from every other filter here."
+        )
     )
     versions_clear_parser.add_argument(
         "--older-than-days",
