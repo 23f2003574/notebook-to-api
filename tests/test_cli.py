@@ -6997,6 +6997,36 @@ def test_resolve_duplicates_command_sends_keep_strategy_body_field(tmp_path, fak
     assert json.loads(handler.bodies[0]) == {"keep": {}, "keep_strategy": "newest"}
 
 
+def test_resolve_duplicates_command_sends_tags_and_modified_window_body_fields(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "results": [], "succeeded_count": 0, "failed_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "resolve-duplicates", "--yes", "--tags", "prod,v2", "--tags-match", "all",
+            "--modified-after", "2026-01-01", "--modified-before", "2026-02-01",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {
+        "keep": {}, "tags": "prod,v2", "tags_match": "all",
+        "modified_after": "2026-01-01", "modified_before": "2026-02-01",
+    }
+
+
 def test_resolve_duplicates_command_sends_tag_body_field(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

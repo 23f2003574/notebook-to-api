@@ -6619,6 +6619,93 @@ def test_resolve_duplicate_notebooks_scopes_to_a_tag():
     assert remaining == {"resolve_tag_prod_a.ipynb", "resolve_tag_scratch.ipynb"}
 
 
+def _seed_resolve_scope_group():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    for filename in ("rs_a.ipynb", "rs_b.ipynb", "rs_c.ipynb"):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    client.put("/api/notebooks/rs_a.ipynb/tags", json={"tags": ["production", "v2"]})
+    client.put("/api/notebooks/rs_b.ipynb/tags", json={"tags": ["production", "v2"]})
+    client.put("/api/notebooks/rs_c.ipynb/tags", json={"tags": ["production"]})
+
+
+def _remaining_notebook_filenames():
+
+    return {n["filename"] for n in client.get("/api/notebooks").json()["notebooks"]}
+
+
+def test_resolve_duplicate_notebooks_tags_all_scopes_to_notebooks_carrying_every_tag():
+
+    _seed_resolve_scope_group()
+
+    body = client.post(
+        "/api/notebooks/duplicates/resolve",
+        json={"tags": "production,v2", "tags_match": "all"},
+    ).json()
+
+    assert body["succeeded_count"] == 1
+    assert _remaining_notebook_filenames() == {"rs_a.ipynb", "rs_c.ipynb"}
+
+
+def test_resolve_duplicate_notebooks_tags_accepts_a_list_and_defaults_to_any():
+
+    _seed_resolve_scope_group()
+
+    body = client.post(
+        "/api/notebooks/duplicates/resolve", json={"tags": ["v2", "production"]}
+    ).json()
+
+    assert body["succeeded_count"] == 1
+    assert _remaining_notebook_filenames() == {"rs_a.ipynb"}
+
+
+def test_resolve_duplicate_notebooks_modified_window_scopes_the_group():
+
+    _seed_resolve_scope_group()
+
+    path = Path(UPLOAD_DIR) / "rs_c.ipynb"
+    stat = path.stat()
+    os.utime(path, (stat.st_atime, stat.st_mtime - 10 * 86400))
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
+
+    body = client.post(
+        "/api/notebooks/duplicates/resolve",
+        json={"modified_after": cutoff, "dry_run": True},
+    ).json()
+
+    assert body["results"][0]["kept_filename"] == "rs_a.ipynb"
+    assert [e["filename"] for e in body["results"][0]["deleted_filenames"]] == ["rs_b.ipynb"]
+
+
+def test_resolve_duplicate_notebooks_rejects_invalid_scope_fields_without_deleting():
+
+    _seed_resolve_scope_group()
+
+    for bad_body in (
+        {"tags": 5},
+        {"tags": "a", "tags_match": "bogus"},
+        {"modified_before": 5},
+        {"modified_before": "not-a-date"},
+        {
+            "modified_after": "2026-06-01T00:00:00+00:00",
+            "modified_before": "2026-01-01T00:00:00+00:00",
+        },
+    ):
+        assert client.post(
+            "/api/notebooks/duplicates/resolve", json=bad_body
+        ).status_code == 400
+
+    assert _remaining_notebook_filenames() == {"rs_a.ipynb", "rs_b.ipynb", "rs_c.ipynb"}
+
+
 def test_resolve_duplicate_notebooks_rejects_a_non_string_tag():
 
     resp = client.post("/api/notebooks/duplicates/resolve", json={"tag": 123})

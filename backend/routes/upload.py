@@ -6393,6 +6393,23 @@ def resolve_duplicate_notebooks(data: dict = None):
     duplicate) simply resolves nothing, the same "no match is a valid
     outcome" reasoning "tag" already follows here.
 
+    "tags" (a comma-separated string, or a list of strings) plus
+    "tags_match" ("any" default, or "all"), and "modified_after"/
+    "modified_before" (ISO 8601 datetimes), scope resolution with the
+    identical semantics GET /api/notebooks/duplicates' own query params
+    of the same names already use to scope its report. Before this,
+    only "tag" and "sha256" had a body-field counterpart, so an operator
+    who previewed "which production-AND-v2 notebooks are duplicates" or
+    "which duplicates were touched last week" via GET
+    /api/notebooks/duplicates could not resolve that same scope -- only
+    a single "tag", or the whole catalog -- and a "tag"-scoped resolve
+    never matched what a "tags"/date-scoped report had just shown. Each
+    is applied before a notebook is hashed, composing with "tag"/
+    "sha256" as an AND; an unrecognized "tags_match", a non-string
+    datetime, an unparseable datetime, or a "modified_after" later than
+    "modified_before" is rejected with 400 before anything is scanned or
+    deleted.
+
     "keep" is also bounded by the identical MAX_BATCH_UPLOAD_FILES cap
     _validate_batch_entry_count already enforces for every other list/
     object-taking batch endpoint in this file -- see that function's own
@@ -6441,6 +6458,52 @@ def resolve_duplicate_notebooks(data: dict = None):
             detail="sha256 must be a string"
         )
 
+    tags_value = data.get("tags")
+
+    if tags_value is None:
+        tags_filter = None
+    elif isinstance(tags_value, str):
+        tags_filter = {t.strip() for t in tags_value.split(",") if t.strip()}
+    elif isinstance(tags_value, list) and all(isinstance(t, str) for t in tags_value):
+        tags_filter = {t.strip() for t in tags_value if t.strip()}
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="tags must be a comma-separated string or a list of strings"
+        )
+
+    tags_match = data.get("tags_match", "any")
+
+    if tags_match not in ("any", "all"):
+        raise HTTPException(
+            status_code=400,
+            detail="tags_match must be 'any' or 'all'"
+        )
+
+    for date_field in ("modified_after", "modified_before"):
+
+        if data.get(date_field) is not None and not isinstance(data[date_field], str):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{date_field} must be a string"
+            )
+
+    modified_after_dt = _parse_iso_datetime_query_param(
+        data.get("modified_after"), "modified_after"
+    )
+    modified_before_dt = _parse_iso_datetime_query_param(
+        data.get("modified_before"), "modified_before"
+    )
+
+    if (
+        modified_after_dt is not None and modified_before_dt is not None
+        and modified_after_dt > modified_before_dt
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="modified_after must not be later than modified_before"
+        )
+
     keep_strategy = data.get("keep_strategy", "first")
 
     if keep_strategy not in _DUPLICATE_KEEP_STRATEGIES:
@@ -6475,6 +6538,28 @@ def resolve_duplicate_notebooks(data: dict = None):
 
         if tag and tag not in _read_notebook_tags(entry.name):
             continue
+
+        if tags_filter is not None:
+
+            notebook_tags_set = set(_read_notebook_tags(entry.name))
+
+            if tags_match == "all":
+                if not tags_filter.issubset(notebook_tags_set):
+                    continue
+            elif not tags_filter & notebook_tags_set:
+                continue
+
+        if modified_after_dt is not None or modified_before_dt is not None:
+
+            entry_modified_at = datetime.fromtimestamp(
+                entry.stat().st_mtime, tz=timezone.utc
+            )
+
+            if modified_after_dt is not None and entry_modified_at < modified_after_dt:
+                continue
+
+            if modified_before_dt is not None and entry_modified_at > modified_before_dt:
+                continue
 
         digest = hash_notebook_file(entry)
 
