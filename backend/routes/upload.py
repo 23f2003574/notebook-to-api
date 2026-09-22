@@ -6759,6 +6759,7 @@ def resolve_duplicate_notebooks(data: dict = None):
 @router.get("/notebooks/search-content")
 def search_notebook_content(
     search: str = None, tag: str = None, sha256: str = None,
+    tags: str = None, tags_match: str = "any",
     modified_after: str = None, modified_before: str = None, regex: bool = False,
     sort: str = "name", order: str = "asc",
     limit: int = None, offset: int = 0, format: str = "json",
@@ -6801,6 +6802,14 @@ def search_notebook_content(
     wanting "which of my *production* notebooks still call this
     deprecated function" previously had to scan every uploaded notebook's
     own code and filter the response down client-side afterward.
+
+    "tags" (optional, a comma-separated list) plus "tags_match" ("any",
+    the default -- an OR, or "all" -- an AND) scope the scan the way
+    "tag" does but across several tags at once, the identical pair GET
+    /api/notebooks, GET /api/functions and every other catalog-wide
+    endpoint here already accept. Composes with "tag"/"sha256"/
+    "modified_*" as an AND; an unrecognized "tags_match" is rejected with
+    400 before a single notebook is even read.
 
     "sha256" (optional) scopes the scan the identical way GET
     /api/functions' own "sha256" does, and composes with "tag" as an AND
@@ -6947,6 +6956,17 @@ def search_notebook_content(
             detail="modified_after must not be later than modified_before"
         )
 
+    if tags_match not in ("any", "all"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="tags_match must be 'any' or 'all'"
+        )
+
+    tags_filter = (
+        {t.strip() for t in tags.split(",") if t.strip()} if tags else None
+    )
+
     if regex:
 
         pattern = _compile_search_regex(search)
@@ -6967,6 +6987,16 @@ def search_notebook_content(
 
         if tag and tag not in _read_notebook_tags(entry.name):
             continue
+
+        if tags_filter is not None:
+
+            notebook_tags_set = set(_read_notebook_tags(entry.name))
+
+            if tags_match == "all":
+                if not tags_filter.issubset(notebook_tags_set):
+                    continue
+            elif not tags_filter & notebook_tags_set:
+                continue
 
         entry_sha256 = hash_notebook_file(entry) if (sha256 or checksums) else None
 
