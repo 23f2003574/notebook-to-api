@@ -4453,6 +4453,67 @@ def test_sync_endpoint_documents_401_429_and_500_in_its_openapi_schema(monkeypat
     assert "'add' raised" in responses["500"]["description"]
 
 
+def test_sync_endpoint_500_description_folds_in_docstring_raises_section(monkeypatch):
+    """Confirmed missing before this feature: a notebook author's own
+    "Raises:"-section documentation of which exceptions a function can
+    raise (and why) -- extract_functions_from_code's own
+    "raises_descriptions", from _parse_docstring_raises_descriptions
+    (backend/parser/ast_parser.py) -- was never surfaced anywhere in the
+    served schema; every sync endpoint's own 500 response description
+    stayed the one fixed, generic sentence regardless.
+    """
+
+    functions = [{
+        "name": "divide",
+        "args": [],
+        "return_type": "float",
+        "raises_descriptions": {
+            "ZeroDivisionError": "If b is zero.",
+            "ValueError": "If either argument is not finite.",
+        },
+    }]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    schema = namespace["app"].openapi()
+    description = (
+        schema["paths"]["/divide"]["post"]["responses"]["500"]["description"]
+    )
+
+    assert "'divide' raised" in description
+    assert "Documented failure modes:" in description
+    assert "ZeroDivisionError: If b is zero." in description
+    assert "ValueError: If either argument is not finite." in description
+
+
+def test_sync_endpoint_500_description_omits_failure_modes_when_undocumented(
+    monkeypatch,
+):
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    schema = namespace["app"].openapi()
+    description = (
+        schema["paths"]["/add"]["post"]["responses"]["500"]["description"]
+    )
+
+    assert description == (
+        "'add' raised an exception, or returned a value that isn't "
+        "JSON-serializable."
+    )
+    assert "Documented failure modes" not in description
+
+
 def test_background_endpoint_documents_400_401_429_and_503_in_its_openapi_schema(
     monkeypatch,
 ):

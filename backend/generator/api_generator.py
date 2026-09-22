@@ -3766,6 +3766,28 @@ def generate_fastapi_code(
             # hand-assembled via string concatenation, the same
             # quote-escaping-proof technique the background branch above
             # now uses too.
+            #
+            # Folds in the notebook author's own Google-style "Raises:"
+            # section (extract_functions_from_code's own
+            # "raises_descriptions", from _parse_docstring_raises_
+            # descriptions, backend/parser/ast_parser.py) whenever
+            # present, the identical "prefer the author's own words"
+            # precedent response_description above already establishes
+            # for "Returns:" -- before this, a docstring's own "Raises:
+            # ValueError: If x is negative." was completely discarded,
+            # and every endpoint's own 500 description stayed this exact
+            # generic sentence no matter how thoroughly the author had
+            # documented which exceptions are actually expected and why.
+            raises_descriptions = func.get("raises_descriptions") or {}
+            error_500_description = (
+                f"'{func_name}' raised an exception, or returned "
+                "a value that isn't JSON-serializable."
+            )
+            if raises_descriptions:
+                error_500_description += " Documented failure modes: " + "; ".join(
+                    f"{exc_name}: {exc_description}"
+                    for exc_name, exc_description in raises_descriptions.items()
+                )
             sync_responses = {
                 200: {
                     "description": response_description,
@@ -3774,10 +3796,7 @@ def generate_fastapi_code(
                     },
                 },
                 500: {
-                    "description": (
-                        f"'{func_name}' raised an exception, or returned "
-                        "a value that isn't JSON-serializable."
-                    ),
+                    "description": error_500_description,
                     "content": {
                         "application/json": {
                             "example": {

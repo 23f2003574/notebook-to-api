@@ -9,6 +9,7 @@ from backend.parser.ast_parser import (
     literal_values,
     _parse_docstring_arg_descriptions,
     _parse_docstring_return_description,
+    _parse_docstring_raises_descriptions,
 )
 
 
@@ -147,6 +148,157 @@ def add(a: int, b: int) -> int:
     assert funcs[0]["args"][0]["description"] is None
     assert funcs[0]["args"][1]["description"] is None
     assert funcs[0]["return_description"] is None
+
+
+def test_function_extraction_attaches_docstring_raises_descriptions():
+    """Confirmed missing before this feature: a notebook author's own
+    documentation of which exceptions a function can raise (and why),
+    sitting right there in the docstring's own "Raises:" section, was
+    completely discarded -- generate_fastapi_code (api_generator.py)
+    always described the endpoint's own 500 response with one fixed,
+    generic sentence no matter how thoroughly the author had actually
+    documented its real failure modes.
+    """
+
+    code = '''
+def divide(a: float, b: float) -> float:
+    """Divide two numbers.
+
+    Raises:
+        ZeroDivisionError: If b is zero.
+        ValueError: If either argument is not finite.
+    """
+    return a / b
+'''
+
+    funcs = extract_functions_from_code(code)
+
+    assert funcs[0]["raises_descriptions"] == {
+        "ZeroDivisionError": "If b is zero.",
+        "ValueError": "If either argument is not finite.",
+    }
+
+
+def test_function_extraction_raises_descriptions_is_empty_when_undocumented():
+
+    code = '''
+def add(a: int, b: int) -> int:
+    """Add two numbers."""
+    return a + b
+'''
+
+    funcs = extract_functions_from_code(code)
+
+    assert funcs[0]["raises_descriptions"] == {}
+
+
+def test_parse_docstring_raises_descriptions_returns_empty_dict_for_no_docstring():
+
+    assert _parse_docstring_raises_descriptions(None) == {}
+    assert _parse_docstring_raises_descriptions("") == {}
+
+
+def test_parse_docstring_raises_descriptions_returns_empty_dict_with_no_raises_section():
+
+    docstring = "Summary.\n\nArgs:\n    x: The input.\n"
+
+    assert _parse_docstring_raises_descriptions(docstring) == {}
+
+
+def test_parse_docstring_raises_descriptions_handles_raise_singular_header():
+
+    docstring = "Summary.\n\nRaise:\n    ValueError: Bad input.\n"
+
+    assert _parse_docstring_raises_descriptions(docstring) == {
+        "ValueError": "Bad input."
+    }
+
+
+def test_parse_docstring_raises_descriptions_parses_multiple_entries_in_order():
+
+    docstring = (
+        "Summary.\n\n"
+        "Raises:\n"
+        "    ZeroDivisionError: If b is zero.\n"
+        "    ValueError: If either argument is not finite.\n"
+    )
+
+    result = _parse_docstring_raises_descriptions(docstring)
+
+    assert result == {
+        "ZeroDivisionError": "If b is zero.",
+        "ValueError": "If either argument is not finite.",
+    }
+    assert list(result.keys()) == ["ZeroDivisionError", "ValueError"]
+
+
+def test_parse_docstring_raises_descriptions_joins_wrapped_continuation_lines():
+
+    docstring = (
+        "Summary.\n\n"
+        "Raises:\n"
+        "    ValueError: A long description that a human\n"
+        "        wrapped onto a second line.\n"
+    )
+
+    assert _parse_docstring_raises_descriptions(docstring) == {
+        "ValueError": "A long description that a human wrapped onto a second line."
+    }
+
+
+def test_parse_docstring_raises_descriptions_accepts_dotted_exception_names():
+
+    docstring = (
+        "Summary.\n\n"
+        "Raises:\n"
+        "    requests.exceptions.Timeout: If the upstream call hangs.\n"
+    )
+
+    assert _parse_docstring_raises_descriptions(docstring) == {
+        "requests.exceptions.Timeout": "If the upstream call hangs."
+    }
+
+
+def test_parse_docstring_raises_descriptions_stops_at_the_next_section():
+
+    docstring = (
+        "Summary.\n\n"
+        "Raises:\n"
+        "    ValueError: If x is negative.\n\n"
+        "Returns:\n"
+        "    The output.\n"
+    )
+
+    assert _parse_docstring_raises_descriptions(docstring) == {
+        "ValueError": "If x is negative."
+    }
+
+
+def test_parse_docstring_raises_descriptions_duplicate_name_keeps_last_entry():
+
+    docstring = (
+        "Summary.\n\n"
+        "Raises:\n"
+        "    ValueError: First condition.\n"
+        "    ValueError: Second condition.\n"
+    )
+
+    assert _parse_docstring_raises_descriptions(docstring) == {
+        "ValueError": "Second condition."
+    }
+
+
+def test_parse_docstring_raises_descriptions_ignores_numpy_style():
+
+    docstring = (
+        "Summary.\n\n"
+        "Raises\n"
+        "------\n"
+        "ValueError\n"
+        "    If x is negative.\n"
+    )
+
+    assert _parse_docstring_raises_descriptions(docstring) == {}
 
 
 def test_parse_docstring_return_description_returns_none_for_no_docstring():
