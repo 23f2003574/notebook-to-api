@@ -2789,6 +2789,93 @@ def test_diff_command_fail_on_breaking_exits_zero_when_compatible(tmp_path):
     assert "No breaking changes to the compiled API's contract." in proc.stdout
 
 
+def test_diff_command_fail_on_deprecation_exits_nonzero_for_a_new_deprecation(
+    tmp_path,
+):
+    """Confirmed missing before this feature: classify_notebook_diff's
+    own "newly_deprecated" (added alongside this same commit) had no CLI
+    flag reading it at all -- a CI job wanting to flag "this PR newly
+    deprecates an endpoint" had no way to fail on that signal
+    specifically, only --fail-on-breaking, which correctly never fires
+    for a deprecation-only change.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    old_path = workdir / "old.ipynb"
+    new_path = workdir / "new.ipynb"
+    _write_notebook_with_function(
+        old_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    _write_notebook_with_function(
+        new_path,
+        "# notebook-to-api: deprecated: use add_v2 instead\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    proc = _run_cli(
+        ["diff", str(old_path), str(new_path), "--fail-on-deprecation"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 1
+    assert "newly deprecated endpoint(s)" in proc.stdout
+    assert "POST /add: use add_v2 instead" in proc.stdout
+
+
+def test_diff_command_fail_on_deprecation_exits_zero_with_no_new_deprecation(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    old_path = workdir / "old.ipynb"
+    new_path = workdir / "new.ipynb"
+    _write_notebook_with_function(
+        old_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    _write_notebook_with_function(
+        new_path, "def add(a: int, b: int, c: int = 0) -> int:\n    return a + b + c\n"
+    )
+
+    proc = _run_cli(
+        ["diff", str(old_path), str(new_path), "--fail-on-deprecation"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_diff_command_fail_on_deprecation_does_not_fire_on_a_breaking_change_alone(
+    tmp_path,
+):
+    """--fail-on-deprecation and --fail-on-breaking are independent --
+    a breaking change with no deprecation involved must not trip
+    --fail-on-deprecation.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    old_path = workdir / "old.ipynb"
+    new_path = workdir / "new.ipynb"
+    _write_notebook_with_function(
+        old_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    _write_notebook_with_function(
+        new_path, "def add(a: int, b: int, c: int) -> int:\n    return a + b + c\n"
+    )
+
+    proc = _run_cli(
+        ["diff", str(old_path), str(new_path), "--fail-on-deprecation"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
 def test_diff_command_reports_a_clean_error_for_a_missing_notebook(tmp_path):
 
     workdir = tmp_path / "workdir"
