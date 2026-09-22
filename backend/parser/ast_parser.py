@@ -189,6 +189,101 @@ def _parse_docstring_return_description(docstring):
     return text or None
 
 
+# Matches a Google-style docstring section header introducing the
+# function's own documented exceptions -- see
+# _parse_docstring_raises_descriptions below for what this is for.
+_RAISES_SECTION_HEADER_PATTERN = re.compile(r"^(Raises|Raise):$")
+
+# Matches one entry's own "ExceptionType: description" opening line
+# within a Raises:-style section, e.g. "ValueError: If x is negative."
+# Unlike _ARG_ENTRY_PATTERN, the name half is allowed to contain dots
+# (e.g. "requests.exceptions.Timeout"), since an exception is commonly
+# documented by its fully-qualified name rather than a bare identifier.
+_RAISES_ENTRY_PATTERN = re.compile(r"^([A-Za-z_][\w.]*)\s*:\s*(.*)$")
+
+
+def _parse_docstring_raises_descriptions(docstring):
+    """{exception_name: description} for every exception documented in
+    `docstring`'s own Google-style "Raises:"/"Raise:" section, in the
+    order each was written, or {} if `docstring` is empty or has no such
+    section.
+
+    The mirror image of _parse_docstring_arg_descriptions above, applied
+    to the one Google-style docstring section neither that function nor
+    _parse_docstring_return_description already covers: before this, a
+    notebook author's own documentation of *what can go wrong* -- e.g.
+    "Raises:\\n    ValueError: If x is negative." -- was completely
+    discarded. Every notebook function's own exception is already caught
+    generically by generate_fastapi_code's own try/except around the
+    call to notebook_module.{func_name}(...) and reported as a 500 with
+    a fixed, generic OpenAPI response description ("raised an exception,
+    or returned a value that isn't JSON-serializable") no matter how
+    thoroughly the author had actually documented which exceptions are
+    expected and why -- discarding real, author-written failure-mode
+    documentation exactly the way response_description used to for
+    "Returns:" before _parse_docstring_return_description existed.
+
+    Parsed the same way _parse_docstring_arg_descriptions parses its own
+    "name: description" entries -- one exception name per entry, with a
+    description that can wrap onto further, deeper-indented lines joined
+    back into one sentence with single spaces -- since both sections
+    share the identical Google-style "name: description, optionally
+    wrapped" shape. Kept as a plain dict (not a list) so a duplicate
+    exception name -- e.g. the same ValueError documented twice for two
+    different failure conditions -- keeps only its later entry, mirroring
+    _parse_docstring_arg_descriptions' own "last one wins" behavior for a
+    duplicate parameter name.
+    """
+    if not docstring:
+        return {}
+
+    lines = docstring.splitlines()
+    descriptions = {}
+
+    in_section = False
+    section_indent = None
+    current_name = None
+    current_parts = []
+
+    def flush():
+        if current_name is not None:
+            text = " ".join(part for part in current_parts if part).strip()
+            if text:
+                descriptions[current_name] = text
+
+    for line in lines:
+        stripped = line.strip()
+
+        if not in_section:
+            if _RAISES_SECTION_HEADER_PATTERN.match(stripped):
+                in_section = True
+                section_indent = None
+            continue
+
+        if not stripped:
+            continue
+
+        indent = len(line) - len(line.lstrip())
+
+        if section_indent is None:
+            section_indent = indent
+        elif indent < section_indent:
+            break
+
+        match = _RAISES_ENTRY_PATTERN.match(stripped)
+
+        if indent == section_indent and match:
+            flush()
+            current_name = match.group(1)
+            current_parts = [match.group(2)]
+        elif current_name is not None:
+            current_parts.append(stripped)
+
+    flush()
+
+    return descriptions
+
+
 def deduplicate_functions_by_name(functions):
     """Collapse repeated function definitions, keeping the last one.
 
@@ -420,6 +515,19 @@ def extract_functions_from_code(code):
             # other docstring-derived field here already follows.
             return_description = _parse_docstring_return_description(docstring)
 
+            # Attaches the function's own Google-style "Raises:" section
+            # (see _parse_docstring_raises_descriptions above), if the
+            # docstring documents one -- generate_fastapi_code
+            # (api_generator.py) folds this into the endpoint's own
+            # generic 500 response description whenever present, the
+            # identical "prefer the author's own words" precedent
+            # return_description already establishes above. {} (not
+            # None) for a docstring with no such section, since this is
+            # consumed as a mapping to iterate, not a single optional
+            # string -- an empty dict is already falsy for a caller
+            # checking "did the author document anything here".
+            raises_descriptions = _parse_docstring_raises_descriptions(docstring)
+
             function_info = {
                 "name": node.name,
                 "args": args,
@@ -427,6 +535,7 @@ def extract_functions_from_code(code):
                 "is_async": isinstance(node, ast.AsyncFunctionDef),
                 "docstring": docstring,
                 "return_description": return_description,
+                "raises_descriptions": raises_descriptions,
                 "example_payload": generate_example_payload(args),
                 "example_response": generate_example_response(
                     return_type
