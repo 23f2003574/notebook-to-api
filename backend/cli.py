@@ -3646,6 +3646,9 @@ def _dispatch_core_command(args):
                 "Pass either a filename or --modified-after/--modified-before, not both."
             )
 
+        if args.filename and args.tags:
+            raise RuntimeError("Pass either a filename or --tags, not both.")
+
         params = {}
         if args.filename:
             params["filenames"] = ",".join(args.filename)
@@ -3653,6 +3656,10 @@ def _dispatch_core_command(args):
             params["tag"] = args.tag
         if args.sha256:
             params["sha256"] = args.sha256
+        if args.tags:
+            params["tags"] = args.tags
+        if args.tags_match != "any":
+            params["tags_match"] = args.tags_match
         if args.modified_after:
             params["modified_after"] = args.modified_after
         if args.modified_before:
@@ -11158,6 +11165,29 @@ def main():
             "`resolve-duplicates` discards all but one. Composes with "
             "--tag as an AND; can't be combined with an explicit "
             "filename."
+        )
+    )
+    export_notebooks_parser.add_argument(
+        "--tags",
+        default=None,
+        help=(
+            "Export every notebook carrying several tags at once "
+            "(comma-separated), via GET /api/notebooks/export's own "
+            "?tags= query param -- something --tag alone can't express. "
+            "See --tags-match. Composes with --tag/--sha256/"
+            "--modified-after/--modified-before as an AND; can't be "
+            "combined with an explicit filename."
+        )
+    )
+    export_notebooks_parser.add_argument(
+        "--tags-match",
+        choices=["any", "all"],
+        default="any",
+        dest="tags_match",
+        help=(
+            "Whether --tags means a notebook must carry at least one of "
+            "them ('any', the default) or every one ('all'). Ignored "
+            "without --tags."
         )
     )
     export_notebooks_parser.add_argument(

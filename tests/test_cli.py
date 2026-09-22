@@ -8235,6 +8235,66 @@ def test_export_notebooks_command_sends_sha256_query_param(tmp_path, fake_dashbo
     assert handler.requests == [f"/api/notebooks/export?sha256={'a' * 64}"]
 
 
+def test_export_notebooks_command_sends_tags_and_tags_match_query_params(
+    tmp_path, fake_dashboard
+):
+    """Mirrors test_export_notebooks_command_sends_tag_query_param: GET
+    /api/notebooks/export's own "tags"/"tags_match" multi-tag filter
+    (matching `delete --all`'s own identical pair) had no CLI flags of
+    its own here at all.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x05\x06" + b"\x00" * 18
+    handler.responses = [_raw_response(200, zip_bytes, content_type="application/zip")]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "export-notebooks", "--tags", "scratch,v1", "--tags-match", "all",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/notebooks/export?tags=scratch%2Cv1&tags_match=all"
+    ]
+
+
+def test_export_notebooks_command_omits_tags_match_query_param_by_default(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    zip_bytes = b"PK\x05\x06" + b"\x00" * 18
+    handler.responses = [_raw_response(200, zip_bytes, content_type="application/zip")]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["export-notebooks", "--tags", "scratch", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks/export?tags=scratch"]
+
+
+def test_export_notebooks_command_rejects_filename_and_tags_together(tmp_path):
+
+    proc = _run_cli(
+        ["export-notebooks", "nb.ipynb", "--tags", "scratch"],
+        cwd=tmp_path,
+    )
+
+    _assert_clean_cli_error(proc, "Pass either a filename or --tags")
+
+
 def test_export_notebooks_command_sends_modified_after_and_before_query_params(
     tmp_path, fake_dashboard
 ):
