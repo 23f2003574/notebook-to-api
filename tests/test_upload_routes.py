@@ -23966,14 +23966,14 @@ def test_validate_all_csv_format_returns_a_csv_response():
     rows = resp.text.strip().split("\r\n")
     assert rows[0] == (
         "filename,status,reserved_name_conflicts,skipped_functions,"
-        "duplicate_functions,requirements_conflict,detail"
+        "duplicate_functions,requirements_conflict,deprecated_functions,detail"
     )
 
     by_filename = {row.split(",", 1)[0]: row for row in rows[1:]}
 
-    assert by_filename["validate_all_csv_pass.ipynb"] == "validate_all_csv_pass.ipynb,pass,,,,,"
+    assert by_filename["validate_all_csv_pass.ipynb"] == "validate_all_csv_pass.ipynb,pass,,,,,,"
     assert by_filename["validate_all_csv_fail.ipynb"] == (
-        "validate_all_csv_fail.ipynb,fail,health_check,,,,"
+        "validate_all_csv_fail.ipynb,fail,health_check,,,,,"
     )
     assert "unsupported: " in by_filename["validate_all_csv_warn.ipynb"]
     assert by_filename["validate_all_csv_warn.ipynb"].startswith(
@@ -24083,6 +24083,78 @@ def test_validate_all_rejects_an_unknown_format():
 
     assert resp.status_code == 400
     assert "format" in resp.json()["detail"]
+
+
+def test_validate_all_reports_deprecated_functions_per_notebook():
+    """Confirmed missing before this feature: inspect_notebook_data
+    already computes "deprecated_functions" per notebook (read here for
+    free, since this endpoint already calls it per notebook for
+    "reserved_name_conflicts"/"skipped_functions"/"duplicate_functions"),
+    but neither each result nor the response's own top-level totals ever
+    surfaced it -- a CI job (or operator) already running this
+    catalog-wide scan had no way to also learn "which of my notebooks
+    currently expose a deprecated endpoint" without a separate POST
+    /api/inspect per notebook.
+    """
+
+    client.delete("/api/notebooks?confirm=true")
+
+    clean_content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    deprecated_content = _notebook_bytes(
+        "# notebook-to-api: deprecated: use add_v2 instead\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    for filename, content in (
+        ("validate_all_deprecated_a.ipynb", deprecated_content),
+        ("validate_all_deprecated_b.ipynb", clean_content),
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    resp = client.get("/api/validate-all")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["deprecated_notebook_count"] == 1
+
+    by_filename = {r["filename"]: r for r in body["results"]}
+    assert by_filename["validate_all_deprecated_a.ipynb"]["deprecated_functions"] == {
+        "add": "use add_v2 instead"
+    }
+    assert by_filename["validate_all_deprecated_b.ipynb"]["deprecated_functions"] == {}
+
+
+def test_validate_all_deprecated_notebook_count_ignores_status_filter():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    deprecated_content = _notebook_bytes(
+        "# notebook-to-api: deprecated\n"
+        "def health_check() -> dict:\n    return {}\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "validate_all_deprecated_fail.ipynb",
+                io.BytesIO(deprecated_content),
+                "application/json",
+            )
+        },
+    )
+
+    resp = client.get("/api/validate-all", params={"status": "pass"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["results"] == []
+    assert body["deprecated_notebook_count"] == 1
 
 
 def test_validate_all_filters_by_tag():
@@ -24640,6 +24712,7 @@ def test_validate_all_reports_zero_when_nothing_uploaded():
         "pass_count": 0,
         "warn_count": 0,
         "fail_count": 0,
+        "deprecated_notebook_count": 0,
     }
 
 

@@ -5419,6 +5419,12 @@ def _dispatch_core_command(args):
                     for skipped in result.get("skipped_functions", []):
                         print(f"    skipped: {skipped['name']}: {skipped['reason']}")
 
+                    for name, reason in result.get("deprecated_functions", {}).items():
+                        print(
+                            f"    deprecated: {name}"
+                            + (f": {reason}" if reason else "")
+                        )
+
                 result_count = data.get("result_count", len(results))
 
                 # "results" can be a strict subset of "result_count" once
@@ -5439,6 +5445,12 @@ def _dispatch_core_command(args):
                     f"{data.get('warn_count', 0)} warned, "
                     f"{data.get('fail_count', 0)} failed"
                 )
+
+                if data.get("deprecated_notebook_count", 0) > 0:
+                    print(
+                        f"{data['deprecated_notebook_count']} notebook(s) "
+                        "expose at least one deprecated function"
+                    )
 
         if data.get("fail_count", 0) > 0:
             sys.exit(2)

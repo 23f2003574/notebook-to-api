@@ -14848,6 +14848,82 @@ def test_validate_all_command_prints_a_requirements_conflict(tmp_path, fake_dash
     assert "requirements conflict: Conflicting" in proc.stdout
 
 
+def test_validate_all_command_prints_deprecated_functions_and_summary_count(
+    tmp_path, fake_dashboard
+):
+    """Confirmed missing before this feature: the dashboard's own
+    "deprecated_functions"/"deprecated_notebook_count" fields (added
+    alongside this same commit) had nothing on the CLI side reading
+    them.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {
+                    "filename": "old.ipynb", "status": "pass",
+                    "reserved_name_conflicts": [], "skipped_functions": [],
+                    "duplicate_functions": [], "requirements_conflict": None,
+                    "deprecated_functions": {"add": "use add_v2 instead"},
+                    "detail": None,
+                },
+            ],
+            "pass_count": 1,
+            "warn_count": 0,
+            "fail_count": 0,
+            "deprecated_notebook_count": 1,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["validate-all", "--dashboard-url", dashboard_url], cwd=workdir
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "deprecated: add: use add_v2 instead" in proc.stdout
+    assert "1 notebook(s) expose at least one deprecated function" in proc.stdout
+
+
+def test_validate_all_command_omits_deprecated_summary_when_zero(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {
+                    "filename": "add.ipynb", "status": "pass",
+                    "reserved_name_conflicts": [], "skipped_functions": [],
+                    "duplicate_functions": [], "requirements_conflict": None,
+                    "deprecated_functions": {},
+                    "detail": None,
+                },
+            ],
+            "pass_count": 1,
+            "warn_count": 0,
+            "fail_count": 0,
+            "deprecated_notebook_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["validate-all", "--dashboard-url", dashboard_url], cwd=workdir
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "deprecated function" not in proc.stdout
+
+
 def test_validate_all_command_reports_no_notebooks(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
