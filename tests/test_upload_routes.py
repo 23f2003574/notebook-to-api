@@ -23844,6 +23844,153 @@ def test_validate_all_filters_by_tag():
     assert body["pass_count"] == 0
 
 
+def test_validate_all_filters_by_tags_any():
+    """Confirmed missing before this fix: GET /api/notebooks, GET
+    /api/notebooks/duplicates, GET /api/notebooks/storage, DELETE
+    /api/notebooks, GET /api/notebooks/export, DELETE
+    /api/notebooks/versions and POST /api/notebooks/duplicates/resolve
+    already accept a "tags"/"tags_match" multi-tag scope, but this
+    endpoint's only tag filter was the single exact-match "tag" -- a CI
+    job scoping validation to "every notebook tagged 'staging' or
+    'canary'" had to validate the whole catalog and filter client-side.
+    """
+
+    client.delete("/api/notebooks?confirm=true")
+
+    fail_content = _notebook_bytes(
+        "def health_check() -> dict:\n    return {}\n"
+    )
+    clean_content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    for filename, content in (
+        ("validate_all_tags_any_a.ipynb", fail_content),
+        ("validate_all_tags_any_b.ipynb", fail_content),
+        ("validate_all_tags_any_c.ipynb", clean_content),
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    client.put(
+        "/api/notebooks/validate_all_tags_any_a.ipynb/tags",
+        json={"tags": ["staging"]},
+    )
+    client.put(
+        "/api/notebooks/validate_all_tags_any_b.ipynb/tags",
+        json={"tags": ["canary"]},
+    )
+    client.put(
+        "/api/notebooks/validate_all_tags_any_c.ipynb/tags",
+        json={"tags": ["prod"]},
+    )
+
+    resp = client.get("/api/validate-all", params={"tags": "staging,canary"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert sorted(r["filename"] for r in body["results"]) == [
+        "validate_all_tags_any_a.ipynb", "validate_all_tags_any_b.ipynb",
+    ]
+    assert body["fail_count"] == 2
+
+
+def test_validate_all_filters_by_tags_all():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    for filename in (
+        "validate_all_tags_all_a.ipynb", "validate_all_tags_all_b.ipynb",
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    client.put(
+        "/api/notebooks/validate_all_tags_all_a.ipynb/tags",
+        json={"tags": ["staging", "v1"]},
+    )
+    client.put(
+        "/api/notebooks/validate_all_tags_all_b.ipynb/tags",
+        json={"tags": ["staging"]},
+    )
+
+    resp = client.get(
+        "/api/validate-all",
+        params={"tags": "staging,v1", "tags_match": "all"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [r["filename"] for r in body["results"]] == [
+        "validate_all_tags_all_a.ipynb"
+    ]
+
+
+def test_validate_all_tags_composes_with_tag():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    for filename in (
+        "validate_all_tags_compose_a.ipynb", "validate_all_tags_compose_b.ipynb",
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    client.put(
+        "/api/notebooks/validate_all_tags_compose_a.ipynb/tags",
+        json={"tags": ["staging", "prod"]},
+    )
+    client.put(
+        "/api/notebooks/validate_all_tags_compose_b.ipynb/tags",
+        json={"tags": ["staging"]},
+    )
+
+    resp = client.get(
+        "/api/validate-all", params={"tags": "staging", "tag": "prod"}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [r["filename"] for r in body["results"]] == [
+        "validate_all_tags_compose_a.ipynb"
+    ]
+
+
+def test_validate_all_rejects_unrecognized_tags_match():
+
+    resp = client.get(
+        "/api/validate-all", params={"tags": "staging", "tags_match": "bogus"}
+    )
+
+    assert resp.status_code == 400
+
+
+def test_validate_all_unknown_tags_yields_no_results():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    _upload_sample_notebook("validate_all_tags_unmatched.ipynb")
+
+    resp = client.get("/api/validate-all", params={"tags": "does-not-exist"})
+
+    assert resp.status_code == 200
+    assert resp.json()["results"] == []
+
+
 def test_validate_all_unknown_tag_yields_no_results():
 
     client.delete("/api/notebooks?confirm=true")

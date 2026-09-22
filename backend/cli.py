@@ -5329,6 +5329,10 @@ def _dispatch_core_command(args):
             params["tag"] = args.tag
         if args.sha256:
             params["sha256"] = args.sha256
+        if args.tags:
+            params["tags"] = args.tags
+        if args.tags_match != "any":
+            params["tags_match"] = args.tags_match
         if args.modified_after:
             params["modified_after"] = args.modified_after
         if args.modified_before:
@@ -12950,6 +12954,27 @@ def main():
             "different --tag values, or none at all) rather than every "
             "notebook on the dashboard. Composes with --tag as an AND, "
             "exactly like the endpoint itself."
+        )
+    )
+    validate_all_parser.add_argument(
+        "--tags",
+        default=None,
+        help=(
+            "Only validate notebooks carrying several tags at once "
+            "(comma-separated), via GET /api/validate-all's own ?tags= "
+            "query param -- something --tag alone can't express. See "
+            "--tags-match. Composes with --tag/--sha256 as an AND."
+        )
+    )
+    validate_all_parser.add_argument(
+        "--tags-match",
+        choices=["any", "all"],
+        default="any",
+        dest="tags_match",
+        help=(
+            "Whether --tags means a notebook must carry at least one of "
+            "them ('any', the default) or every one ('all'). Ignored "
+            "without --tags."
         )
     )
     validate_all_parser.add_argument(
