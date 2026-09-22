@@ -2400,6 +2400,8 @@ def _dispatch_core_command(args):
                 print("\n" + "\n".join(diff["content_diff"]))
         if args.fail_on_breaking and not diff["compatible"]:
             sys.exit(1)
+        if args.fail_on_deprecation and diff.get("newly_deprecated"):
+            sys.exit(1)
     elif args.command == "upload":
         # Imported here, not at module scope, the same deferred-import
         # convention export-openapi/export-sdk's own dynamic imports
@@ -6783,6 +6785,8 @@ def _dispatch_core_command(args):
 
             if args.fail_on_breaking and not diff["compatible"]:
                 sys.exit(1)
+            if args.fail_on_deprecation and diff.get("newly_deprecated"):
+                sys.exit(1)
 
         elif args.versions_command == "compare":
 
@@ -6835,6 +6839,8 @@ def _dispatch_core_command(args):
                     print("\n" + "\n".join(data["content_diff"]))
 
             if args.fail_on_breaking and not data.get("compatible", True):
+                sys.exit(1)
+            if args.fail_on_deprecation and data.get("newly_deprecated"):
                 sys.exit(1)
 
         elif args.versions_command == "delete":
@@ -7265,6 +7271,8 @@ def _dispatch_core_command(args):
                 print("\n" + "\n".join(diff["content_diff"]))
         if args.fail_on_breaking and not diff["compatible"]:
             sys.exit(1)
+        if args.fail_on_deprecation and diff.get("newly_deprecated"):
+            sys.exit(1)
     elif args.command == "diff-notebooks":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -7321,6 +7329,8 @@ def _dispatch_core_command(args):
                 print("\n" + "\n".join(data["content_diff"]))
 
         if args.fail_on_breaking and not data.get("compatible", True):
+            sys.exit(1)
+        if args.fail_on_deprecation and data.get("newly_deprecated"):
             sys.exit(1)
     elif args.command == "remote-curl":
         # See `upload` above for why these are imported here rather than
@@ -9500,6 +9510,21 @@ def main():
             "added, removed, or flipped) -- after printing the report. "
             "Purely additive changes (a new endpoint, a new parameter with "
             "a default) never trigger this."
+        )
+    )
+    diff_parser.add_argument(
+        "--fail-on-deprecation",
+        action="store_true",
+        dest="fail_on_deprecation",
+        help=(
+            "Exit with status 1 if classify_notebook_diff's own "
+            "\"newly_deprecated\" is non-empty -- a \"# notebook-to-api: "
+            "deprecated\" directive added to a function between the two "
+            "notebooks -- after printing the report. Independent of "
+            "--fail-on-breaking: deprecating a function is never itself a "
+            "breaking change (see that flag's own help), but a CI job may "
+            "still want to flag it separately, e.g. to require sign-off "
+            "before a PR newly deprecates an endpoint."
         )
     )
     diff_parser.add_argument(
@@ -14887,6 +14912,17 @@ def main():
             "as breaking."
         )
     )
+    versions_diff_parser.add_argument(
+        "--fail-on-deprecation",
+        action="store_true",
+        dest="fail_on_deprecation",
+        help=(
+            "Exit with status 1 if classify_notebook_diff's own "
+            "\"newly_deprecated\" is non-empty. See `diff --fail-on-"
+            "deprecation`'s own help for why this is independent of "
+            "--fail-on-breaking."
+        )
+    )
 
     # versions compare (the same version-vs-current/version-vs-version
     # comparison `versions diff` already computes, but entirely
@@ -14953,6 +14989,16 @@ def main():
             "Exit with status 1 if GET .../versions/{version_id}/diff's "
             "own \"compatible\" field is false -- see `diff --fail-on-"
             "breaking`'s own help for exactly what counts as breaking."
+        )
+    )
+    versions_compare_parser.add_argument(
+        "--fail-on-deprecation",
+        action="store_true",
+        dest="fail_on_deprecation",
+        help=(
+            "Exit with status 1 if the response's own \"newly_deprecated\" "
+            "is non-empty. See `diff --fail-on-deprecation`'s own help "
+            "for why this is independent of --fail-on-breaking."
         )
     )
 
@@ -15144,6 +15190,17 @@ def main():
         )
     )
     remote_diff_parser.add_argument(
+        "--fail-on-deprecation",
+        action="store_true",
+        dest="fail_on_deprecation",
+        help=(
+            "Exit with status 1 if classify_notebook_diff's own "
+            "\"newly_deprecated\" is non-empty. See `diff --fail-on-"
+            "deprecation`'s own help for why this is independent of "
+            "--fail-on-breaking."
+        )
+    )
+    remote_diff_parser.add_argument(
         "--content",
         action="store_true",
         help=(
@@ -15248,6 +15305,16 @@ def main():
             "Exit with status 1 if GET /api/notebooks/diff's own "
             "\"compatible\" field is false -- see `diff --fail-on-"
             "breaking`'s own help for exactly what counts as breaking."
+        )
+    )
+    diff_notebooks_parser.add_argument(
+        "--fail-on-deprecation",
+        action="store_true",
+        dest="fail_on_deprecation",
+        help=(
+            "Exit with status 1 if the response's own \"newly_deprecated\" "
+            "is non-empty. See `diff --fail-on-deprecation`'s own help "
+            "for why this is independent of --fail-on-breaking."
         )
     )
 
