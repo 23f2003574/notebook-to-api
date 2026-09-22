@@ -5347,6 +5347,160 @@ def test_export_notebooks_rejects_both_filenames_and_tag():
     assert resp.status_code == 400
 
 
+def test_export_notebooks_by_tags_any_bundles_notebooks_matching_at_least_one():
+    """Confirmed missing before this fix: GET /api/notebooks, GET
+    /api/notebooks/duplicates, GET /api/notebooks/storage, DELETE
+    /api/notebooks and POST /api/notebooks/duplicates/resolve already
+    accept a "tags"/"tags_match" multi-tag scope, but this endpoint's
+    only tag filter was the single exact-match "tag" -- exporting
+    "every notebook tagged 'scratch' or 'tmp'" meant a separate GET
+    /api/notebooks?tags=... first to discover the filenames by hand.
+    """
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    for filename in ("export_tags_any_a.ipynb", "export_tags_any_b.ipynb", "export_tags_any_c.ipynb"):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    client.put("/api/notebooks/export_tags_any_a.ipynb/tags", json={"tags": ["scratch"]})
+    client.put("/api/notebooks/export_tags_any_b.ipynb/tags", json={"tags": ["tmp"]})
+    client.put("/api/notebooks/export_tags_any_c.ipynb/tags", json={"tags": ["prod"]})
+
+    resp = client.get("/api/notebooks/export", params={"tags": "scratch,tmp"})
+
+    assert resp.status_code == 200
+
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as archive:
+        ipynb_entries = [n for n in archive.namelist() if n.endswith(".ipynb")]
+        assert sorted(ipynb_entries) == ["export_tags_any_a.ipynb", "export_tags_any_b.ipynb"]
+
+
+def test_export_notebooks_by_tags_all_requires_every_tag():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    for filename in ("export_tags_all_a.ipynb", "export_tags_all_b.ipynb"):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    client.put(
+        "/api/notebooks/export_tags_all_a.ipynb/tags",
+        json={"tags": ["scratch", "v1"]},
+    )
+    client.put("/api/notebooks/export_tags_all_b.ipynb/tags", json={"tags": ["scratch"]})
+
+    resp = client.get(
+        "/api/notebooks/export",
+        params={"tags": "scratch,v1", "tags_match": "all"},
+    )
+
+    assert resp.status_code == 200
+
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as archive:
+        ipynb_entries = [n for n in archive.namelist() if n.endswith(".ipynb")]
+        assert ipynb_entries == ["export_tags_all_a.ipynb"]
+
+
+def test_export_notebooks_tags_composes_with_tag_and_sha256():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes(
+        "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+
+    for filename in ("export_tags_compose_a.ipynb", "export_tags_compose_b.ipynb"):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    client.put(
+        "/api/notebooks/export_tags_compose_a.ipynb/tags",
+        json={"tags": ["scratch", "prod"]},
+    )
+    client.put(
+        "/api/notebooks/export_tags_compose_b.ipynb/tags",
+        json={"tags": ["scratch"]},
+    )
+
+    resp = client.get(
+        "/api/notebooks/export", params={"tags": "scratch", "tag": "prod"}
+    )
+
+    assert resp.status_code == 200
+
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as archive:
+        ipynb_entries = [n for n in archive.namelist() if n.endswith(".ipynb")]
+        assert ipynb_entries == ["export_tags_compose_a.ipynb"]
+
+
+def test_export_notebooks_by_tags_returns_404_when_nothing_matches():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    _upload_sample_notebook("export_tags_unmatched.ipynb")
+
+    resp = client.get(
+        "/api/notebooks/export", params={"tags": "does-not-exist"}
+    )
+
+    assert resp.status_code == 404
+
+
+def test_export_notebooks_rejects_unrecognized_tags_match():
+
+    resp = client.get(
+        "/api/notebooks/export",
+        params={"tags": "scratch", "tags_match": "bogus"},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_export_notebooks_rejects_both_filenames_and_tags():
+
+    _upload_sample_notebook("export_filenames_tags_conflict.ipynb")
+
+    resp = client.get(
+        "/api/notebooks/export",
+        params={
+            "filenames": "export_filenames_tags_conflict.ipynb",
+            "tags": "scratch",
+        },
+    )
+
+    assert resp.status_code == 400
+
+
+def test_export_notebooks_without_tags_behaves_as_before():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    _upload_sample_notebook("export_tags_omitted.ipynb")
+
+    resp = client.get("/api/notebooks/export")
+
+    assert resp.status_code == 200
+
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as archive:
+        ipynb_entries = [n for n in archive.namelist() if n.endswith(".ipynb")]
+        assert ipynb_entries == ["export_tags_omitted.ipynb"]
+
+
 def test_export_notebooks_filters_by_modified_after_and_before():
     """Confirmed missing before this fix: every other catalog-wide
     endpoint (search-functions, search-content, find-duplicates,

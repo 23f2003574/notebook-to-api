@@ -5639,6 +5639,7 @@ def list_notebooks(
 def export_notebooks(
     filenames: str = None, tag: str = None, sha256: str = None,
     modified_after: str = None, modified_before: str = None,
+    tags: str = None, tags_match: str = "any",
     include_versions: bool = False
 ):
     """Download a caller-chosen set of already-uploaded notebooks -- or,
@@ -5767,6 +5768,26 @@ def export_notebooks(
     Mutually exclusive with "filenames", for the identical reason
     "tag"/"sha256" already are.
 
+    "tags" (optional, a comma-separated list) plus "tags_match" ("any",
+    the default -- an OR, or "all" -- an AND) scope the export the way
+    "tag" does but across several tags at once, the identical pair GET
+    /api/notebooks, GET /api/notebooks/duplicates, GET
+    /api/notebooks/storage, DELETE /api/notebooks and POST
+    /api/notebooks/duplicates/resolve already accept. Before this,
+    backing up "every notebook tagged both 'production' and 'v2'" (an
+    AND), or the 'scratch'-or-'tmp' equivalent (an OR), could not be
+    expressed here at all -- only one exact "tag" -- so an operator had
+    to GET /api/notebooks?tags=... first and feed the resulting
+    filenames into this endpoint's own "filenames" param by hand,
+    losing the "tag"/"sha256"/"modified_*"-composing shortcut this
+    endpoint otherwise already gives every other scope. Applied before
+    a notebook is even considered for export, composing with
+    "tag"/"sha256"/"modified_*" as an AND; an unrecognized "tags_match"
+    is rejected with 400 before anything is read from disk. Also
+    mutually exclusive with "filenames", for the identical reason
+    "tag"/"sha256"/"modified_*" already are. A request omitting both
+    behaves exactly as before.
+
     The "X-Bundle-SHA256" response header is the same _bundle_sha256 GET
     /api/download's own identical header already summarizes a compiled
     bundle's own file set with (see that endpoint's own docstring),
@@ -5805,6 +5826,24 @@ def export_notebooks(
                 "be given -- choose one."
             )
         )
+
+    if filenames and tags:
+
+        raise HTTPException(
+            status_code=400,
+            detail="filenames and tags can't both be given -- choose one."
+        )
+
+    if tags_match not in ("any", "all"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="tags_match must be 'any' or 'all'"
+        )
+
+    tags_filter = (
+        {t.strip() for t in tags.split(",") if t.strip()} if tags else None
+    )
 
     modified_after_dt = _parse_iso_datetime_query_param(modified_after, "modified_after")
     modified_before_dt = _parse_iso_datetime_query_param(modified_before, "modified_before")
@@ -5851,15 +5890,28 @@ def export_notebooks(
             )
 
     elif (
-        tag or sha256
+        tag or sha256 or tags_filter is not None
         or modified_after_dt is not None or modified_before_dt is not None
     ):
+
+        def _matches_tags_filter(filename):
+
+            if tags_filter is None:
+                return True
+
+            notebook_tags_set = set(_read_notebook_tags(filename))
+
+            if tags_match == "all":
+                return tags_filter.issubset(notebook_tags_set)
+
+            return bool(tags_filter & notebook_tags_set)
 
         notebooks_to_export = [
             (entry.name, entry)
             for entry in sorted(upload_root.iterdir())
             if entry.is_file() and entry.suffix == ".ipynb"
             and (not tag or tag in _read_notebook_tags(entry.name))
+            and _matches_tags_filter(entry.name)
             and (not sha256 or hash_notebook_file(entry) == sha256)
             and (
                 modified_after_dt is None
