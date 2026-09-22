@@ -816,7 +816,11 @@ def _extract_notebook_functions(notebook_path):
     "deprecated": true in its real OpenAPI schema (see resolve_deprecation,
     generator/api_generator.py), the identical "read the real compile-time
     classification, don't re-guess it" reasoning "is_background" already
-    follows for its own directive.
+    follows for its own directive -- plus "deprecation_reason", the
+    directive's own optional free-text argument (None when not given, or
+    not deprecated at all), used by classify_notebook_diff's own
+    "newly_deprecated" to report *why* a function was newly deprecated,
+    not just that it was.
     """
     notebook = load_notebook(notebook_path)
 
@@ -836,9 +840,9 @@ def _extract_notebook_functions(notebook_path):
         func["is_background"] = _is_background_function(
             func["name"], background_overrides
         )
-        func["is_deprecated"] = resolve_deprecation(
+        func["is_deprecated"], func["deprecation_reason"] = resolve_deprecation(
             func["name"], deprecated_overrides
-        )[0]
+        )
 
     return functions
 
@@ -1063,12 +1067,24 @@ def classify_notebook_diff(diff):
     non-breaking edits (e.g. a new parameter with a default) that never
     should fail such a check.
 
-    Returns {"compatible", "breaking_changes"}, meant to be merged into
-    diff's own dict (`diff.update(classify_notebook_diff(diff))`), not
-    replace it -- "added"/"removed"/"changed"/"unchanged" remain the
-    source of truth for what changed; this only adds a verdict on top,
-    the same "extra fields alongside the existing report" approach GET
+    Returns {"compatible", "breaking_changes", "newly_deprecated",
+    "no_longer_deprecated"}, meant to be merged into diff's own dict
+    (`diff.update(classify_notebook_diff(diff))`), not replace it --
+    "added"/"removed"/"changed"/"unchanged" remain the source of truth
+    for what changed; this only adds a verdict on top, the same "extra
+    fields alongside the existing report" approach GET
     /api/notebooks/diff's own "content_diff" already takes.
+
+    "newly_deprecated"/"no_longer_deprecated" ({"name", "reason"}/{"name"}
+    entries respectively) report which "changed" functions flipped their
+    own "is_deprecated" -- see _extract_notebook_functions above -- in
+    either direction. Deliberately separate from "breaking_changes" (a
+    deprecation flip is never itself breaking, per "Deliberately NOT
+    breaking" below) and never affects "compatible": before this, a
+    caller merging this verdict into a diff (e.g. a CI job wanting to
+    flag "this PR newly deprecates 2 endpoints" without failing the
+    build) had no dedicated field for it at all, short of re-scanning
+    every "changed" entry's own "is_deprecated" by hand.
 
     A function present in "removed" is always breaking: an existing
     caller's request to that endpoint now 404s.
@@ -1150,6 +1166,8 @@ def classify_notebook_diff(diff):
         Guarded here the identical way the parameter side already is.
     """
     breaking_changes = []
+    newly_deprecated = []
+    no_longer_deprecated = []
 
     for func in diff["removed"]:
         breaking_changes.append({
@@ -1246,9 +1264,32 @@ def classify_notebook_diff(diff):
                 ),
             })
 
+        # Never itself a breaking change (see _function_signature_key's
+        # own docstring on why "is_deprecated" is compared there at all)
+        # -- collected separately here rather than into breaking_changes,
+        # the identical "visible, but not a verdict on compatibility"
+        # treatment "compatible"/"breaking_changes" already draw between
+        # "changed" and an actual break. Before this, a caller merging
+        # classify_notebook_diff's own verdict into a diff had no
+        # dedicated way to ask "did this diff newly deprecate (or
+        # un-deprecate) anything" short of re-scanning every "changed"
+        # entry's own "is_deprecated" field by hand.
+        old_is_deprecated = entry["old"].get("is_deprecated", False)
+        new_is_deprecated = entry["new"].get("is_deprecated", False)
+
+        if new_is_deprecated and not old_is_deprecated:
+            newly_deprecated.append({
+                "name": name,
+                "reason": entry["new"].get("deprecation_reason"),
+            })
+        elif old_is_deprecated and not new_is_deprecated:
+            no_longer_deprecated.append({"name": name})
+
     return {
         "compatible": not breaking_changes,
         "breaking_changes": breaking_changes,
+        "newly_deprecated": newly_deprecated,
+        "no_longer_deprecated": no_longer_deprecated,
     }
 
 
@@ -1339,6 +1380,11 @@ def print_notebook_diff(diff):
     merges those in), also prints a compatibility verdict after the
     added/removed/changed report above. A plain diff_notebook_functions
     dict (no such keys) prints exactly as before this existed.
+
+    Also prints classify_notebook_diff's own "newly_deprecated"/
+    "no_longer_deprecated", when present and non-empty, right after the
+    compatibility verdict -- informational, not part of it, since
+    deprecating (or un-deprecating) a function is never itself breaking.
     """
     if diff["added"]:
         print(f"\n+ Added {len(diff['added'])} endpoint(s):")
@@ -1368,6 +1414,20 @@ def print_notebook_diff(diff):
             )
             for change in diff["breaking_changes"]:
                 print(f"  ! {change['detail']}")
+
+    if diff.get("newly_deprecated"):
+        print(f"\n⚠ {len(diff['newly_deprecated'])} newly deprecated endpoint(s):")
+        for entry in diff["newly_deprecated"]:
+            reason = entry.get("reason")
+            print(f"  ⚠ POST /{entry['name']}" + (f": {reason}" if reason else ""))
+
+    if diff.get("no_longer_deprecated"):
+        print(
+            f"\n{len(diff['no_longer_deprecated'])} endpoint(s) no longer "
+            "deprecated:"
+        )
+        for entry in diff["no_longer_deprecated"]:
+            print(f"  POST /{entry['name']}")
 
 # The generated app's own default API key (see write_app_config /
 # verify_api_key in generator/api_generator.py: `API_KEYS` defaults to

@@ -1580,7 +1580,110 @@ def test_classify_notebook_diff_deprecated_only_change_is_not_breaking(tmp_path)
     diff = diff_notebook_functions(str(old_path), str(new_path))
     classification = classify_notebook_diff(diff)
 
-    assert classification == {"compatible": True, "breaking_changes": []}
+    assert classification == {
+        "compatible": True,
+        "breaking_changes": [],
+        "newly_deprecated": [{"name": "add", "reason": None}],
+        "no_longer_deprecated": [],
+    }
+
+
+def test_classify_notebook_diff_newly_deprecated_reports_the_reason(tmp_path):
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(old_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+    _write_notebook(
+        new_path,
+        "# notebook-to-api: deprecated: use add_v2 instead\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+    classification = classify_notebook_diff(diff)
+
+    assert classification["newly_deprecated"] == [
+        {"name": "add", "reason": "use add_v2 instead"}
+    ]
+    assert classification["no_longer_deprecated"] == []
+    assert classification["compatible"] is True
+
+
+def test_classify_notebook_diff_no_longer_deprecated_reports_the_name(tmp_path):
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(
+        old_path,
+        "# notebook-to-api: deprecated: use add_v2 instead\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+    _write_notebook(new_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+    classification = classify_notebook_diff(diff)
+
+    assert classification["newly_deprecated"] == []
+    assert classification["no_longer_deprecated"] == [{"name": "add"}]
+
+
+def test_classify_notebook_diff_reworded_reason_is_neither_newly_nor_un_deprecated(
+    tmp_path,
+):
+    """Staying deprecated with just a reworded reason is not itself a
+    signature change (see _function_signature_key's own docstring on why
+    only the bare "is_deprecated" boolean, not its own reason text, is
+    compared there) -- so this function never even appears in "changed"
+    at all, and neither list reports it.
+    """
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(
+        old_path,
+        "# notebook-to-api: deprecated: first reason\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+    _write_notebook(
+        new_path,
+        "# notebook-to-api: deprecated: second reason\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+    classification = classify_notebook_diff(diff)
+
+    assert diff["unchanged"] == ["add"]
+    assert classification["newly_deprecated"] == []
+    assert classification["no_longer_deprecated"] == []
+
+
+def test_print_notebook_diff_prints_newly_deprecated(capsys):
+
+    print_notebook_diff({
+        "added": [], "removed": [], "changed": [{"name": "add"}], "unchanged": [],
+        "compatible": True, "breaking_changes": [],
+        "newly_deprecated": [{"name": "add", "reason": "use add_v2 instead"}],
+        "no_longer_deprecated": [],
+    })
+
+    output = capsys.readouterr().out
+    assert "1 newly deprecated endpoint(s):" in output
+    assert "POST /add: use add_v2 instead" in output
+
+
+def test_print_notebook_diff_prints_no_longer_deprecated(capsys):
+
+    print_notebook_diff({
+        "added": [], "removed": [], "changed": [{"name": "add"}], "unchanged": [],
+        "compatible": True, "breaking_changes": [],
+        "newly_deprecated": [],
+        "no_longer_deprecated": [{"name": "add"}],
+    })
+
+    output = capsys.readouterr().out
+    assert "1 endpoint(s) no longer deprecated:" in output
+    assert "POST /add" in output
 
 
 def test_diff_notebook_functions_docstring_only_edit_is_not_a_change(tmp_path):
@@ -1694,7 +1797,12 @@ def test_classify_notebook_diff_added_function_is_not_breaking(tmp_path):
     diff = diff_notebook_functions(str(old_path), str(new_path))
     classification = classify_notebook_diff(diff)
 
-    assert classification == {"compatible": True, "breaking_changes": []}
+    assert classification == {
+        "compatible": True,
+        "breaking_changes": [],
+        "newly_deprecated": [],
+        "no_longer_deprecated": [],
+    }
 
 
 def test_classify_notebook_diff_new_required_parameter_is_breaking(tmp_path):
@@ -1737,7 +1845,12 @@ def test_classify_notebook_diff_new_optional_parameter_is_not_breaking(tmp_path)
     diff = diff_notebook_functions(str(old_path), str(new_path))
     classification = classify_notebook_diff(diff)
 
-    assert classification == {"compatible": True, "breaking_changes": []}
+    assert classification == {
+        "compatible": True,
+        "breaking_changes": [],
+        "newly_deprecated": [],
+        "no_longer_deprecated": [],
+    }
 
 
 def test_classify_notebook_diff_removed_parameter_is_breaking(tmp_path):
@@ -1958,7 +2071,12 @@ def test_classify_notebook_diff_gaining_a_return_type_annotation_is_not_breaking
     diff = diff_notebook_functions(str(old_path), str(new_path))
     classification = classify_notebook_diff(diff)
 
-    assert classification == {"compatible": True, "breaking_changes": []}
+    assert classification == {
+        "compatible": True,
+        "breaking_changes": [],
+        "newly_deprecated": [],
+        "no_longer_deprecated": [],
+    }
 
 
 def test_classify_notebook_diff_losing_a_return_type_annotation_is_not_breaking(
@@ -1977,7 +2095,12 @@ def test_classify_notebook_diff_losing_a_return_type_annotation_is_not_breaking(
     diff = diff_notebook_functions(str(old_path), str(new_path))
     classification = classify_notebook_diff(diff)
 
-    assert classification == {"compatible": True, "breaking_changes": []}
+    assert classification == {
+        "compatible": True,
+        "breaking_changes": [],
+        "newly_deprecated": [],
+        "no_longer_deprecated": [],
+    }
 
 
 def test_classify_notebook_diff_async_only_change_is_not_breaking(tmp_path):
@@ -1997,7 +2120,12 @@ def test_classify_notebook_diff_async_only_change_is_not_breaking(tmp_path):
     diff = diff_notebook_functions(str(old_path), str(new_path))
     classification = classify_notebook_diff(diff)
 
-    assert classification == {"compatible": True, "breaking_changes": []}
+    assert classification == {
+        "compatible": True,
+        "breaking_changes": [],
+        "newly_deprecated": [],
+        "no_longer_deprecated": [],
+    }
 
 
 def test_classify_notebook_diff_background_override_added_is_breaking(tmp_path):
@@ -2100,7 +2228,12 @@ def test_classify_notebook_diff_no_changes_is_compatible(tmp_path):
     diff = diff_notebook_functions(str(notebook_path), str(notebook_path))
     classification = classify_notebook_diff(diff)
 
-    assert classification == {"compatible": True, "breaking_changes": []}
+    assert classification == {
+        "compatible": True,
+        "breaking_changes": [],
+        "newly_deprecated": [],
+        "no_longer_deprecated": [],
+    }
 
 
 def test_diff_notebook_source_identical_notebooks_yields_no_lines(tmp_path):
