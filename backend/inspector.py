@@ -1469,6 +1469,15 @@ def generate_curl_commands(
     _filter_functions_by_name itself raises for both-given or an
     unrecognized function name.
 
+    A function marked "# notebook-to-api: deprecated" (see
+    resolve_deprecation, generator/api_generator.py) gets a "# DEPRECATED"
+    comment line (with its own reason, when given) prepended above its
+    usual "# {name}" comment -- before this, a caller previewing a
+    deprecated function's own curl command had no warning at all, unlike
+    every other surface this same directive already reaches (the real
+    compiled endpoint's own OpenAPI "deprecated": true, and a runtime
+    warning from either generated SDK client).
+
     Returns a list of ready-to-paste (or execute) multi-line command
     strings, one per function, in the same order inspect_notebook_data's
     own "functions" field returns them.
@@ -1492,6 +1501,20 @@ def generate_curl_commands(
     is_async_by_path = {
         endpoint["path"]: endpoint["is_async"] for endpoint in data["endpoints"]
     }
+    # Same "read off the already-resolved data, don't re-derive it"
+    # reasoning as "is_async_by_path" just above, applied to a "#
+    # notebook-to-api: deprecated" directive (see resolve_deprecation,
+    # generator/api_generator.py) -- before this, a deprecated function's
+    # own compiled endpoint carried "deprecated": true in its real
+    # OpenAPI schema (and every generated SDK client warned a caller at
+    # call time -- see generate_python_sdk/generate_typescript_sdk), but
+    # this "try it before you compile it" curl preview gave zero signal
+    # that an endpoint it just handed a caller a ready-to-run command for
+    # was already deprecated.
+    is_deprecated_by_path = {
+        endpoint["path"]: endpoint["deprecated"] for endpoint in data["endpoints"]
+    }
+    deprecated_functions = data["deprecated_functions"]
 
     base_url = f"http://{host}:{port}"
 
@@ -1534,6 +1557,13 @@ def generate_curl_commands(
 
         else:
             comment = f"# {name}"
+
+        if is_deprecated_by_path.get(f"/{name}"):
+
+            reason = deprecated_functions.get(name)
+            comment = (
+                f"# DEPRECATED{': ' + reason if reason else ''}\n{comment}"
+            )
 
         command = (
             f"{comment}\n"
@@ -1646,6 +1676,16 @@ def generate_postman_collection(
     retry it. Reuses the same "{name}_task_id" variable every other
     companion request here already does, with no capture step of its own.
 
+    A function marked "# notebook-to-api: deprecated" (see
+    resolve_deprecation, generator/api_generator.py) gets its own request
+    item's "name" prefixed "[DEPRECATED]" (visible directly in Postman's
+    own sidebar, unlike a description a caller has to open the request to
+    see) and a "**Deprecated.**" notice (with its own reason, when given)
+    prepended to that request's own "description" -- ahead of a
+    background function's own webhook/polling description above, never
+    replacing it. The identical gap generate_curl_commands' own matching
+    addition closes for a caller previewing a curl command instead.
+
     Returns a plain dict -- a valid Postman Collection v2.1.0 document
     once json.dump-ed -- rather than writing a file itself, the same
     "return data, let the caller decide where it goes" split
@@ -1672,6 +1712,13 @@ def generate_postman_collection(
     is_async_by_path = {
         endpoint["path"]: endpoint["is_async"] for endpoint in data["endpoints"]
     }
+    # Same "# notebook-to-api: deprecated" signal generate_curl_commands'
+    # own identical addition surfaces -- see its docstring for the full
+    # gap this closes.
+    is_deprecated_by_path = {
+        endpoint["path"]: endpoint["deprecated"] for endpoint in data["endpoints"]
+    }
+    deprecated_functions = data["deprecated_functions"]
 
     base_url = f"http://{host}:{port}"
 
@@ -1713,6 +1760,25 @@ def generate_postman_collection(
         }
 
         item = {"name": name, "request": request}
+
+        def _apply_deprecation_notice():
+            # Same "# notebook-to-api: deprecated" signal
+            # generate_curl_commands' own identical addition surfaces
+            # -- see its docstring for the full gap this closes.
+            # Called right before this function's own request is
+            # appended to `items`, after every branch above has
+            # already finished setting/overwriting request["description"]
+            # itself, so this always has the final say.
+            if not is_deprecated_by_path.get(f"/{name}"):
+                return
+            reason = deprecated_functions.get(name)
+            notice = "**Deprecated.**" + (f" {reason}" if reason else "")
+            existing = request.get("description")
+            request["description"] = (
+                f"{notice}\n\n{existing}" if existing else notice
+            )
+            item["name"] = f"[DEPRECATED] {name}"
+
 
         if is_async_by_path.get(f"/{name}"):
 
@@ -1763,6 +1829,7 @@ def generate_postman_collection(
                 },
             }]
 
+            _apply_deprecation_notice()
             items.append(item)
             items.append({
                 "name": f"{name} - Task Status",
@@ -1833,6 +1900,7 @@ def generate_postman_collection(
                 })
 
         else:
+            _apply_deprecation_notice()
             items.append(item)
 
     return {
