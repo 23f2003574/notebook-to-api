@@ -14158,6 +14158,20 @@ def validate_all_notebooks(
     reasoning GET /api/notebooks/storage's own running totals follow --
     so a caller filtering to "fail" can still see how many passed. An
     unrecognized value is rejected with 400 before a notebook is read.
+
+    Each result also carries "deprecated_functions" -- the identical
+    {name: reason_or_None} dict inspect_notebook_data's own field of the
+    same name already reports for that one notebook (read here for free,
+    since this endpoint already calls inspect_notebook_data per notebook
+    for "reserved_name_conflicts"/"skipped_functions"/
+    "duplicate_functions") -- and the response's own top-level
+    "deprecated_notebook_count" totals how many *scanned* notebooks have
+    at least one ("pass"/"warn"/"fail" alike, and never narrowed by
+    "status", the same whole-scan-total treatment "pass_count"/
+    "warn_count"/"fail_count" already get). Before this, a CI job (or an
+    operator) already running this catalog-wide scan had no way to also
+    learn "which of my notebooks currently expose a deprecated endpoint"
+    without a separate POST /api/inspect per notebook.
     """
 
     if format not in ("json", "csv"):
@@ -14228,6 +14242,7 @@ def validate_all_notebooks(
     pass_count = 0
     warn_count = 0
     fail_count = 0
+    deprecated_notebook_count = 0
 
     for entry in sorted(upload_root.iterdir()):
 
@@ -14336,6 +14351,11 @@ def validate_all_notebooks(
             status = "pass"
             pass_count += 1
 
+        deprecated_functions = inspection["deprecated_functions"]
+
+        if deprecated_functions:
+            deprecated_notebook_count += 1
+
         result = {
             "filename": entry.name,
             "status": status,
@@ -14343,6 +14363,7 @@ def validate_all_notebooks(
             "skipped_functions": skipped_functions,
             "duplicate_functions": duplicate_functions,
             "requirements_conflict": requirements_conflict,
+            "deprecated_functions": deprecated_functions,
             "detail": None,
         }
         if checksums:
@@ -14366,7 +14387,7 @@ def validate_all_notebooks(
         header = [
             "filename", "status", "reserved_name_conflicts",
             "skipped_functions", "duplicate_functions",
-            "requirements_conflict", "detail",
+            "requirements_conflict", "deprecated_functions", "detail",
         ]
         if checksums:
             header.append("sha256")
@@ -14384,6 +14405,10 @@ def validate_all_notebooks(
                 ),
                 "; ".join(entry["duplicate_functions"]),
                 entry["requirements_conflict"] or "",
+                "; ".join(
+                    f"{name}: {reason}" if reason else name
+                    for name, reason in entry["deprecated_functions"].items()
+                ),
                 entry["detail"] or "",
             ]
             if checksums:
@@ -14408,6 +14433,7 @@ def validate_all_notebooks(
         "pass_count": pass_count,
         "warn_count": warn_count,
         "fail_count": fail_count,
+        "deprecated_notebook_count": deprecated_notebook_count,
     }
 
 
