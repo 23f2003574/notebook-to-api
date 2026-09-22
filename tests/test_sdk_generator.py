@@ -677,6 +677,121 @@ def test_generate_python_sdk_client_sends_correct_request(tmp_path, monkeypatch)
     assert calls[0]["headers"] == {"X-API-Key": "notebook-to-api-dev-key"}
 
 
+def test_generate_python_sdk_warns_on_call_to_a_deprecated_endpoint(
+    tmp_path, monkeypatch
+):
+    """Confirmed missing before this feature: a "# notebook-to-api:
+    deprecated" directive already marks the compiled operation's own
+    OpenAPI "deprecated": true, but nothing in either generated SDK ever
+    read that field -- a developer using the generated Python client got
+    no signal at all that a method they're calling hits a deprecated
+    endpoint, unlike a caller reading /docs directly (Swagger UI's own
+    strikethrough) or the endpoint's own OpenAPI schema.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/old_add": {"post": {"operationId": "old_add", "deprecated": True}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+    ast.parse(source)
+    assert "import warnings" in source
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"result": 1}
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.post = lambda *a, **k: FakeResponse()
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    namespace = {}
+    exec(compile(source, str(output_path), "exec"), namespace)
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+
+    with pytest.warns(DeprecationWarning, match="old_add"):
+        client.old_add({"a": 1, "b": 2})
+
+
+def test_generate_python_sdk_does_not_warn_for_a_non_deprecated_endpoint(
+    tmp_path, monkeypatch
+):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/add": {"post": {"operationId": "add"}}},
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+    assert "import warnings" not in source
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"result": 3}
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.post = lambda *a, **k: FakeResponse()
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    namespace = {}
+    exec(compile(source, str(output_path), "exec"), namespace)
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+
+    import warnings as warnings_module
+    with warnings_module.catch_warnings():
+        warnings_module.simplefilter("error")
+        client.add({"a": 1, "b": 2})
+
+
+def test_generate_typescript_sdk_marks_a_deprecated_endpoint(tmp_path):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/old_add": {"post": {"operationId": "old_add", "deprecated": True}}},
+    )
+    output_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    assert "@deprecated" in source
+    assert 'console.warn("old_add() is deprecated.");' in source
+
+
+def test_generate_typescript_sdk_omits_deprecation_markers_when_not_deprecated(
+    tmp_path,
+):
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/add": {"post": {"operationId": "add"}}},
+    )
+    output_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(output_path))
+
+    source = output_path.read_text(encoding="utf-8")
+
+    assert "@deprecated" not in source
+    assert "console.warn" not in source
+
+
 def test_generate_python_sdk_metrics_prometheus_returns_raw_text_not_json(
     tmp_path, monkeypatch
 ):

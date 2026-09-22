@@ -982,7 +982,7 @@ def _python_method_docstring(description, static_text):
     return repr(doc)
 
 
-def _jsdoc_lines(description, static_text_lines, indent="  "):
+def _jsdoc_lines(description, static_text_lines, indent="  ", deprecated=False):
     """Build a `/** ... */` JSDoc comment block's lines, combining
     `description` (see _operation_description) with a method's own static
     explanatory text (`static_text_lines`: already-wrapped lines with no
@@ -998,6 +998,17 @@ def _jsdoc_lines(description, static_text_lines, indent="  "):
     text commonly use, since there's no syntactically "safe" encoding of
     an arbitrary string inside a JSDoc block the way repr() provides for
     a Python string literal.
+
+    `deprecated` (optional, default False) -- the compiled operation's own
+    OpenAPI "deprecated" field (generate_fastapi_code's own "# notebook-
+    to-api: deprecated" directive support) -- adds a standalone "@deprecated"
+    JSDoc tag when true. Before this, a deprecated endpoint's own
+    "**Deprecated.**" notice only ever reached this client as prose inside
+    `description` (plain text, invisible to tooling); the dedicated
+    "@deprecated" tag is what VS Code/TypeScript/ESLint's own
+    no-deprecated-api-usage-style checks actually key off of to flag a
+    call site with a strikethrough or lint warning -- text alone, no
+    matter how clearly worded, triggers none of that.
     """
     text_lines = []
 
@@ -1006,6 +1017,9 @@ def _jsdoc_lines(description, static_text_lines, indent="  "):
         text_lines.append("")
 
     text_lines.extend(static_text_lines)
+
+    if deprecated:
+        text_lines.append("@deprecated")
 
     lines = [f"{indent}/**"]
 
@@ -1124,6 +1138,18 @@ def generate_python_sdk(
     lines.append("import os")
     lines.append("import time")
     lines.append("import uuid")
+    if any(
+        (paths[path].get("post") or {}).get("deprecated")
+        for path in method_names
+    ):
+        # Only emitted when at least one endpoint is actually deprecated
+        # -- an unconditional "import warnings" alongside every other
+        # generated import above would be a needless unused-import lint
+        # warning (flake8/ruff's own F401) on every client this tool
+        # generates for a notebook with no deprecated endpoints at all,
+        # unlike hmac/uuid/time above, which every generated client
+        # actually uses regardless of what the notebook itself defines.
+        lines.append("import warnings")
     lines.append("import requests")
     # Confirmed missing before this feature: every generated method's
     # own payload parameter was typed as a bare dict, with no return
@@ -1738,6 +1764,7 @@ def generate_python_sdk(
     for path, method_name in method_names.items():
         is_background = _is_background_path(paths[path])
         description = _operation_description(paths[path])
+        is_deprecated = bool((paths[path].get("post") or {}).get("deprecated"))
         pascal_name = _pascal_case(method_name)
         request_class = f"{pascal_name}Request"
         response_class = f"{pascal_name}Response"
@@ -1811,6 +1838,29 @@ def generate_python_sdk(
         lines.append(
             f"        {_python_method_docstring(description, static_doc)}"
         )
+        if is_deprecated:
+            # The compiled operation's own OpenAPI "deprecated" field
+            # (generate_fastapi_code's own "# notebook-to-api: deprecated"
+            # directive support) -- before this, a deprecated endpoint's
+            # own "**Deprecated.**" notice only ever reached this client
+            # as prose inside `description` above, invisible to anything
+            # that doesn't actually read a docstring. warnings.warn with
+            # DeprecationWarning is the real, tooling-recognized Python
+            # signal: pytest's own -W error::DeprecationWarning, a
+            # caller's own linter, or a plain interactive session all
+            # surface this the moment the method is actually called,
+            # the same real-time signal server-side callers of the
+            # compiled endpoint already get from its own OpenAPI
+            # "deprecated": true (Swagger UI's strikethrough) -- prose
+            # alone never triggers any of that. stacklevel=2 attributes
+            # the warning to this method's own caller, not this client
+            # library's internal frame, the same convention every other
+            # DeprecationWarning in the standard library follows.
+            lines.append(
+                f"        warnings.warn(f\"'{{self.__class__.__name__}}."
+                f"{method_name}' is deprecated.\", DeprecationWarning, "
+                "stacklevel=2)"
+            )
         if is_background:
             # Generated once per call, outside the lambda below, and
             # reused unchanged by every retry _request makes of it --
@@ -2510,6 +2560,7 @@ def generate_typescript_sdk(
     for path, method_name in method_names.items():
         is_background = _is_background_path(paths[path])
         description = _operation_description(paths[path])
+        is_deprecated = bool((paths[path].get("post") or {}).get("deprecated"))
         # Confirmed missing before this feature: every generated
         # method's own payload parameter and return value were typed as
         # a bare Record<string, unknown>/any regardless of what the
@@ -2567,20 +2618,38 @@ def generate_typescript_sdk(
             ]
         else:
             static_text_lines = [f"Calls the `{path}` endpoint with JSON payload."]
-        lines.extend(_jsdoc_lines(description, static_text_lines))
+        lines.extend(
+            _jsdoc_lines(description, static_text_lines, deprecated=is_deprecated)
+        )
         if is_background:
             lines.append(
                 f"  async {method_name}(payload: {request_interface}, "
                 f"callbackUrl?: string): Promise<{response_interface}> {{"
-            )
-            lines.append(
-                f'    return this.request("{path}", payload, callbackUrl);'
             )
         else:
             lines.append(
                 f"  async {method_name}(payload: {request_interface}): "
                 f"Promise<{response_interface}> {{"
             )
+        if is_deprecated:
+            # The compiled operation's own OpenAPI "deprecated" field --
+            # the "@deprecated" JSDoc tag above is build-time/IDE-only
+            # (flags a call site in an editor, but says nothing to code
+            # that already exists and runs); console.warn here is the
+            # runtime counterpart, firing the moment a caller actually
+            # invokes a deprecated endpoint, the same real-time signal
+            # server-side callers of the compiled endpoint already get
+            # from its own OpenAPI "deprecated": true (Swagger UI's
+            # strikethrough) and Python's own generated client already
+            # gets from warnings.warn (see generate_python_sdk).
+            lines.append(
+                f'    console.warn("{method_name}() is deprecated.");'
+            )
+        if is_background:
+            lines.append(
+                f'    return this.request("{path}", payload, callbackUrl);'
+            )
+        else:
             lines.append(f'    return this.request("{path}", payload);')
         lines.append("  }")
 
@@ -2597,7 +2666,12 @@ def generate_typescript_sdk(
                 "finishes, returning its finished task record (see "
                 "waitForTask).",
             ]
-            lines.extend(_jsdoc_lines(description, and_wait_static_text_lines))
+            lines.extend(
+                _jsdoc_lines(
+                    description, and_wait_static_text_lines,
+                    deprecated=is_deprecated,
+                )
+            )
             lines.append(
                 f"  async {wait_name}(payload: {request_interface}, "
                 "callbackUrl?: string, "
