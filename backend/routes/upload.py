@@ -7136,6 +7136,7 @@ def search_notebook_content(
 @router.get("/notebooks/versions/search-content")
 def search_notebook_version_content(
     search: str = None, regex: bool = False, tag: str = None,
+    tags: str = None, tags_match: str = "any",
     limit: int = None, offset: int = 0, format: str = "json",
     saved_after: str = None, saved_before: str = None,
 ):
@@ -7181,6 +7182,14 @@ def search_notebook_version_content(
     version snapshot carries no tag of its own (see GET /api/notebooks/
     {filename}/versions' own docstring on "note_search"/"content_search"
     for why a version has no metadata beyond its own note).
+
+    "tags" (optional, a comma-separated list) plus "tags_match" ("any",
+    the default -- an OR, or "all" -- an AND) scope which notebooks are
+    scanned the way "tag" does but across several tags at once, the
+    identical pair GET /api/notebooks/search-content and every other
+    catalog-wide endpoint here already accept. Composes with "tag" as an
+    AND; an unrecognized "tags_match" is rejected with 400 before a
+    single notebook's own version history is even read.
 
     "saved_after"/"saved_before" (each an optional ISO 8601 datetime, see
     _parse_iso_datetime_query_param) narrow the scan to only versions
@@ -7270,6 +7279,17 @@ def search_notebook_version_content(
             detail="saved_after must not be later than saved_before"
         )
 
+    if tags_match not in ("any", "all"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="tags_match must be 'any' or 'all'"
+        )
+
+    tags_filter = (
+        {t.strip() for t in tags.split(",") if t.strip()} if tags else None
+    )
+
     upload_root = Path(UPLOAD_DIR)
 
     matches = []
@@ -7281,6 +7301,16 @@ def search_notebook_version_content(
 
         if tag and tag not in _read_notebook_tags(entry.name):
             continue
+
+        if tags_filter is not None:
+
+            notebook_tags_set = set(_read_notebook_tags(entry.name))
+
+            if tags_match == "all":
+                if not tags_filter.issubset(notebook_tags_set):
+                    continue
+            elif not tags_filter & notebook_tags_set:
+                continue
 
         versions_dir = _notebook_versions_dir(entry.name)
 

@@ -3105,6 +3105,10 @@ def _dispatch_core_command(args):
         params = {"search": args.search, "offset": args.offset}
         if args.tag:
             params["tag"] = args.tag
+        if args.tags:
+            params["tags"] = args.tags
+        if args.tags_match != "any":
+            params["tags_match"] = args.tags_match
         if args.regex:
             params["regex"] = True
         if args.saved_after:
@@ -10525,6 +10529,28 @@ def main():
             "content's own ?tag= -- scopes which notebooks are "
             "scanned, since a version snapshot carries no tag of its "
             "own."
+        )
+    )
+    search_version_content_parser.add_argument(
+        "--tags",
+        default=None,
+        help=(
+            "Only scan versions of notebooks carrying several tags at "
+            "once (comma-separated), mirroring GET /api/notebooks/"
+            "versions/search-content's own ?tags= -- something --tag "
+            "alone can't express. See --tags-match. Composes with --tag "
+            "as an AND."
+        )
+    )
+    search_version_content_parser.add_argument(
+        "--tags-match",
+        choices=["any", "all"],
+        default="any",
+        dest="tags_match",
+        help=(
+            "Whether --tags means a notebook must carry at least one of "
+            "them ('any', the default) or every one ('all'). Ignored "
+            "without --tags."
         )
     )
     search_version_content_parser.add_argument(

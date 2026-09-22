@@ -6544,6 +6544,29 @@ def test_search_version_content_command_sends_tag_and_regex_query_params(fake_da
     ]
 
 
+def test_search_version_content_command_sends_tags_and_tags_match_query_params(
+    fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {"status": "success", "search": "read_csv", "matches": [], "match_count": 0}
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        [
+            "search-version-content", "read_csv", "--tags", "staging,v1",
+            "--tags-match", "all", "--dashboard-url", dashboard_url,
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/notebooks/versions/search-content?search=read_csv&offset=0"
+        "&tags=staging%2Cv1&tags_match=all"
+    ]
+
+
 def test_search_version_content_command_sends_saved_window_query_params(fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
