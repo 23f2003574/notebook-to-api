@@ -6201,7 +6201,8 @@ def test_generate_python_sdk_includes_verify_webhook_signature_function(tmp_path
     assert "import hmac" in source
     assert (
         "def verify_webhook_signature(\n"
-        "    payload_body: bytes, signature_header: str, secret: str\n"
+        "    payload_body: bytes, signature_header: str, "
+        "secret: Union[str, Iterable[str]]\n"
         ") -> bool:" in source
     )
     # Module-level, not a NotebookAPIClient method -- must appear before
@@ -6383,6 +6384,61 @@ def test_verify_webhook_signature_rejects_missing_or_malformed_headers(
     assert verify_webhook_signature(b"{}", signature_header, "s3cr3t") is False
 
 
+def test_verify_webhook_signature_accepts_any_of_several_secrets(
+    tmp_path, monkeypatch
+):
+    """Confirmed missing before this feature: the compiled app's own
+    NOTEBOOK_API_WEBHOOK_SECRET (api_generator.py) is a single value, so
+    rotating it -- a scheduled rotation, or a suspected leak -- was an
+    all-or-nothing cutover for a receiver using this exact helper: any
+    webhook delivered in the gap between updating the server's own env
+    var and updating every receiver's own hardcoded secret failed to
+    verify and was silently discarded, unlike this compiled app's own
+    API_KEYS (a comma-separated tuple), which already lets a caller-
+    facing credential rotate without ever rejecting a request mid-
+    rotation. `secret` accepting an iterable closes the identical gap
+    here, on the receiving side.
+    """
+
+    import hashlib
+    import hmac
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+    generate_python_sdk(str(schema_path), str(output_path))
+    verify_webhook_signature = _load_verify_webhook_signature(output_path, monkeypatch)
+
+    body = json.dumps({"task_id": "abc123", "status": "completed"}).encode("utf-8")
+    old_secret = "old-secret"
+    new_secret = "new-secret"
+    signed_with_old = "sha256=" + hmac.new(
+        old_secret.encode("utf-8"), body, hashlib.sha256
+    ).hexdigest()
+    signed_with_new = "sha256=" + hmac.new(
+        new_secret.encode("utf-8"), body, hashlib.sha256
+    ).hexdigest()
+
+    # During rotation, a receiver trusts both -- regardless of which one
+    # the server actually happened to sign with.
+    assert verify_webhook_signature(
+        body, signed_with_old, [old_secret, new_secret]
+    ) is True
+    assert verify_webhook_signature(
+        body, signed_with_new, [old_secret, new_secret]
+    ) is True
+    # A signature matching neither configured secret is still rejected.
+    assert verify_webhook_signature(
+        body, signed_with_old, [new_secret]
+    ) is False
+    # A single plain string secret (the pre-existing call shape) keeps
+    # working exactly as before -- not a breaking change for an existing
+    # receiver that hasn't opted into rotation at all.
+    assert verify_webhook_signature(body, signed_with_old, old_secret) is True
+
+
 @pytest.mark.skipif(
     shutil.which("node") is None,
     reason="requires a Node.js runtime to execute the generated TypeScript client",
@@ -6438,4 +6494,67 @@ def test_generate_typescript_sdk_verify_webhook_signature_round_trips(tmp_path):
         "wrongSecret": False,
         "missingHeader": False,
         "malformedHeader": False,
+    }
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
+def test_generate_typescript_sdk_verify_webhook_signature_accepts_several_secrets(
+    tmp_path,
+):
+    """Mirrors test_verify_webhook_signature_accepts_any_of_several_secrets
+    for the TypeScript client -- the identical zero-downtime rotation gap,
+    closed here via `secret: string | string[]`.
+    """
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    client_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    source = client_path.read_text(encoding="utf-8")
+    assert "secret: string | string[]" in source
+
+    runner_path = tmp_path / "run_rotation.mjs"
+    runner_path.write_text(
+        f"""
+        import crypto from "node:crypto";
+        const {{ verifyWebhookSignature }} = await import({json.dumps(str(client_path))});
+
+        const oldSecret = "old-secret";
+        const newSecret = "new-secret";
+        const body = Buffer.from(JSON.stringify({{ task_id: "abc", status: "completed" }}));
+        const signedWithOld = "sha256=" + crypto.createHmac("sha256", oldSecret).update(body).digest("hex");
+        const signedWithNew = "sha256=" + crypto.createHmac("sha256", newSecret).update(body).digest("hex");
+
+        console.log(JSON.stringify({{
+          acceptsOldDuringRotation: verifyWebhookSignature(body, signedWithOld, [oldSecret, newSecret]),
+          acceptsNewDuringRotation: verifyWebhookSignature(body, signedWithNew, [oldSecret, newSecret]),
+          rejectsUnknownSecret: verifyWebhookSignature(body, signedWithOld, [newSecret]),
+          stillAcceptsASingleStringSecret: verifyWebhookSignature(body, signedWithOld, oldSecret),
+        }}));
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    output = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert output == {
+        "acceptsOldDuringRotation": True,
+        "acceptsNewDuringRotation": True,
+        "rejectsUnknownSecret": False,
+        "stillAcceptsASingleStringSecret": True,
     }
