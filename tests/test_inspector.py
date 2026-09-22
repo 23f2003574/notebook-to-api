@@ -213,9 +213,12 @@ def test_inspect_notebook_data_reports_endpoints_and_flags_background_ones(tmp_p
 
     endpoints = {e["path"]: e for e in data["endpoints"]}
 
-    assert endpoints["/add"] == {"path": "/add", "method": "POST", "is_async": False}
+    assert endpoints["/add"] == {
+        "path": "/add", "method": "POST", "is_async": False, "deprecated": False
+    }
     assert endpoints["/train_model"] == {
-        "path": "/train_model", "method": "POST", "is_async": True
+        "path": "/train_model", "method": "POST", "is_async": True,
+        "deprecated": False,
     }
 
 
@@ -405,6 +408,79 @@ def test_inspect_notebook_honors_a_background_override_directive(tmp_path, capsy
     )
     assert "[background]" not in sync_route_line
     assert "Route: POST /run_batch_inference  [background]" in output
+
+
+def test_inspect_notebook_honors_a_deprecated_directive(tmp_path, capsys):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "# notebook-to-api: deprecated: use add_v2 instead\n"
+        "def old_add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    inspect_notebook(str(notebook_path), str(tmp_path / "generated"))
+
+    output = capsys.readouterr().out
+
+    add_route_line = next(
+        line for line in output.splitlines()
+        if line.strip() == "Route: POST /add"
+    )
+    assert "[deprecated]" not in add_route_line
+    assert "Route: POST /old_add  [deprecated]" in output
+    assert "Deprecated Functions (still exposed, but marked deprecated):" in output
+    assert "- old_add: use add_v2 instead" in output
+
+
+def test_inspect_notebook_data_reports_endpoints_and_flags_deprecated_ones(tmp_path):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "# notebook-to-api: deprecated: use add_v2 instead\n"
+        "def old_add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    data = inspect_notebook_data(str(notebook_path), str(tmp_path / "generated"))
+
+    endpoints = {e["path"]: e for e in data["endpoints"]}
+
+    assert endpoints["/add"]["deprecated"] is False
+    assert endpoints["/old_add"]["deprecated"] is True
+    assert data["deprecated_functions"] == {"old_add": "use add_v2 instead"}
+
+
+def test_inspect_notebook_data_deprecated_functions_omits_a_private_one(tmp_path):
+    """A function marked private in one cell stays private even if a
+    later cell redefines it (the "cell re-run" scenario
+    test_extract_background_overrides_tolerates_the_same_directive_repeated
+    already establishes is realistic for a directive) -- here, one that
+    redefines it with "# notebook-to-api: deprecated" instead, with no
+    private marking of its own. It never becomes an endpoint at all (see
+    _drop_private_functions), so "deprecated_functions" -- which only
+    ever describes real, compiled endpoints, the same rule
+    "functions_without_docstrings" already follows -- must not claim
+    anything about it either.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(nbformat.v4.new_code_cell(
+        "# notebook-to-api: private\ndef helper():\n    return 1\n"
+    ))
+    notebook.cells.append(nbformat.v4.new_code_cell(
+        "# notebook-to-api: deprecated\ndef helper():\n    return 2\n"
+    ))
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    data = inspect_notebook_data(str(notebook_path), str(tmp_path / "generated"))
+
+    assert data["deprecated_functions"] == {}
+    assert data["private_functions"] == ["helper"]
 
 
 def test_print_compile_summary_lists_endpoints_and_flags_background_ones(

@@ -4425,6 +4425,87 @@ def test_background_overrides_with_no_entry_for_a_function_falls_back_to_the_heu
     assert "x-notebook-to-api-async" not in add_line
 
 
+def test_deprecated_directive_marks_a_sync_endpoint_deprecated_in_the_openapi_schema(
+    monkeypatch,
+):
+    """Confirmed missing before this feature: a "# notebook-to-api:
+    deprecated" directive (_extract_deprecated_functions, backend/
+    compiler.py) had no effect anywhere -- generate_fastapi_code never
+    set FastAPI's own standard "deprecated": true for any endpoint no
+    matter what a notebook author declared, so Swagger UI/Redoc (and any
+    third-party tool reading openapi.json) never showed the endpoint as
+    deprecated at all.
+    """
+
+    functions = [{
+        "name": "old_add", "args": [], "return_type": "int",
+        "docstring": "Add two numbers.",
+    }]
+
+    code = generate_fastapi_code(
+        functions,
+        deprecated_overrides={"old_add": "Use add_v2 instead."},
+    )
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    schema = namespace["app"].openapi()
+    operation = schema["paths"]["/old_add"]["post"]
+
+    assert operation["deprecated"] is True
+    assert operation["description"].startswith(
+        "**Deprecated.** Use add_v2 instead."
+    )
+    assert "Add two numbers." in operation["description"]
+
+
+def test_deprecated_directive_marks_a_background_endpoint_deprecated_too(monkeypatch):
+    """The identical directive applied to a background/task_id endpoint
+    (a function whose name matches LONG_RUNNING_KEYWORDS) -- deprecation
+    is orthogonal to sync-vs-background classification, and both branches
+    of generate_fastapi_code's own decorator construction must honor it.
+    """
+
+    functions = [{"name": "train_model", "args": [], "return_type": "str"}]
+
+    code = generate_fastapi_code(
+        functions, deprecated_overrides={"train_model": None}
+    )
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    schema = namespace["app"].openapi()
+    operation = schema["paths"]["/train_model"]["post"]
+
+    assert operation["deprecated"] is True
+    assert operation["description"].startswith("**Deprecated.**")
+
+
+def test_deprecated_overrides_with_no_entry_for_a_function_is_not_deprecated(
+    monkeypatch,
+):
+
+    functions = [{"name": "add", "args": [], "return_type": "int"}]
+
+    code = generate_fastapi_code(
+        functions, deprecated_overrides={"unrelated_function": "reason"}
+    )
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    schema = namespace["app"].openapi()
+    operation = schema["paths"]["/add"]["post"]
+
+    assert operation.get("deprecated", False) is False
+    assert "Deprecated" not in operation["description"]
+
+
 def test_sync_endpoint_documents_401_429_and_500_in_its_openapi_schema(monkeypatch):
     """Confirmed missing before this feature: a generated endpoint's own
     OpenAPI schema documented only its 200 response and FastAPI's own

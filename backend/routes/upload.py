@@ -41,6 +41,7 @@ from backend.compiler import (
     NOTEBOOK_TO_API_VERSION,
     _drop_private_functions,
     _extract_background_overrides,
+    _extract_deprecated_functions,
     _extract_excluded_imports,
     _extract_explicit_apt_packages,
     _extract_explicit_requirements,
@@ -14576,11 +14577,19 @@ def app_preview_endpoint(data: dict):
         # notebook explicitly corrected.
         background_overrides = _extract_background_overrides(code_cells)
 
+        # Same "# notebook-to-api: deprecated" directive a real compile
+        # already honors -- without this, a deprecated function's own
+        # OpenAPI "deprecated": true would show up only after actually
+        # compiling, not in this "exact app.py a real compile would
+        # produce" preview.
+        deprecated_overrides = _extract_deprecated_functions(code_cells)
+
         app_code = generate_fastapi_code(
             functions, package_name,
             source_notebook_sha256=hash_notebook_file(full_path),
             notebook_to_api_version=NOTEBOOK_TO_API_VERSION,
             background_overrides=background_overrides,
+            deprecated_overrides=deprecated_overrides,
         )
 
     except ReservedFunctionNameError as e:
@@ -15590,11 +15599,18 @@ def openapi_preview_endpoint(data: dict):
         # notebook would actually produce.
         background_overrides = _extract_background_overrides(code_cells)
 
+        # Same "# notebook-to-api: deprecated" directive a real compile
+        # already honors -- without this, this schema's own served
+        # "deprecated": true would never reflect it, contradicting what a
+        # real compile of the same notebook would actually produce.
+        deprecated_overrides = _extract_deprecated_functions(code_cells)
+
         app_code = generate_fastapi_code(
             functions, temp_package_name,
             source_notebook_sha256=hash_notebook_file(full_path),
             notebook_to_api_version=NOTEBOOK_TO_API_VERSION,
             background_overrides=background_overrides,
+            deprecated_overrides=deprecated_overrides,
         )
 
     except ReservedFunctionNameError as e:
