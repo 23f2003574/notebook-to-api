@@ -9511,6 +9511,106 @@ def test_prune_versions_command_sends_sha256_query_param(tmp_path, fake_dashboar
     ]
 
 
+def test_prune_versions_command_sends_tags_and_tags_match_query_params(
+    tmp_path, fake_dashboard
+):
+    """Mirrors test_prune_versions_command_sends_tag_query_param: DELETE
+    /api/notebooks/versions's own "tags"/"tags_match" multi-tag filter
+    (matching `delete --all`'s own identical pair) had no CLI flags of
+    its own here at all.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "older_than_days": 30, "results": [],
+            "notebook_count_affected": 0, "total_deleted_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "prune-versions", "--older-than-days", "30",
+            "--tags", "scratch,v1", "--tags-match", "all",
+            "--dashboard-url", dashboard_url, "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/notebooks/versions?older_than_days=30&tags=scratch%2Cv1&tags_match=all"
+    ]
+
+
+def test_prune_versions_command_omits_tags_match_query_param_by_default(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "older_than_days": 30, "results": [],
+            "notebook_count_affected": 0, "total_deleted_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "prune-versions", "--older-than-days", "30", "--tags", "scratch",
+            "--dashboard-url", dashboard_url, "--yes",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/notebooks/versions?older_than_days=30&tags=scratch"
+    ]
+
+
+def test_prune_versions_command_confirmation_prompt_names_tags(
+    tmp_path, fake_dashboard
+):
+    """Mirrors test_prune_versions_command_confirmation_prompt_names_sha256:
+    the prompt must name --tags too, the same way it already names
+    --tag/--sha256, so an operator confirming this irreversible prune can
+    actually see what it's scoped to before answering.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = []
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "backend.cli",
+            "prune-versions", "--older-than-days", "30",
+            "--tags", "scratch,v1", "--tags-match", "all",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=str(workdir),
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT)},
+        input="n\n",
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "tagged all of 'scratch,v1'" in proc.stdout
+    assert "Aborted." in proc.stdout
+    assert handler.requests == []
+
+
 def test_prune_versions_command_sends_saved_after_and_before_query_params(
     tmp_path, fake_dashboard
 ):

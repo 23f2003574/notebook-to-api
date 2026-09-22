@@ -8149,6 +8149,7 @@ def delete_all_notebooks(
 @router.delete("/notebooks/versions")
 def prune_all_notebook_versions(
     older_than_days: int = None, tag: str = None, sha256: str = None,
+    tags: str = None, tags_match: str = "any",
     saved_after: str = None, saved_before: str = None,
     note_search: str = None, content_search: str = None, regex: bool = False,
     dry_run: bool = False, keep_latest: int = None,
@@ -8217,6 +8218,24 @@ def prune_all_notebook_versions(
     (without touching any other notebook's own version history, however
     old) would want. Composes with "tag" as an AND, the same composition
     GET /api/notebooks already gives the same two filters together.
+
+    "tags" (optional, a comma-separated list) plus "tags_match" ("any",
+    the default -- an OR, or "all" -- an AND) scope the prune the way
+    "tag" does but across several tags at once, the identical pair GET
+    /api/notebooks, GET /api/notebooks/duplicates, GET
+    /api/notebooks/storage, DELETE /api/notebooks, GET
+    /api/notebooks/export and POST /api/notebooks/duplicates/resolve
+    already accept. Before this, reclaiming old snapshots from "every
+    notebook tagged both 'scratch' and 'v1'" (an AND), or the
+    'scratch'-or-'tmp' equivalent (an OR), could not be expressed here
+    at all -- only one exact "tag" -- so an operator had to GET
+    /api/notebooks?tags=... first and prune each matching notebook's
+    history one at a time via DELETE
+    /api/notebooks/{filename}/versions. Applied before a notebook's
+    version directory is even touched, composing with "tag"/"sha256" as
+    an AND; an unrecognized "tags_match" is rejected with 400 before a
+    single notebook is scanned, and a request omitting both behaves
+    exactly as before.
 
     "saved_after"/"saved_before" (each an optional ISO 8601 datetime,
     parsed/validated by _parse_iso_datetime_query_param exactly like GET
@@ -8303,6 +8322,17 @@ def prune_all_notebook_versions(
             detail="older_than_days is required and must be a positive integer"
         )
 
+    if tags_match not in ("any", "all"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="tags_match must be 'any' or 'all'"
+        )
+
+    tags_filter = (
+        {t.strip() for t in tags.split(",") if t.strip()} if tags else None
+    )
+
     saved_after_dt = _parse_iso_datetime_query_param(saved_after, "saved_after")
     saved_before_dt = _parse_iso_datetime_query_param(saved_before, "saved_before")
 
@@ -8346,6 +8376,16 @@ def prune_all_notebook_versions(
 
         if tag and tag not in _read_notebook_tags(entry.name):
             continue
+
+        if tags_filter is not None:
+
+            notebook_tags_set = set(_read_notebook_tags(entry.name))
+
+            if tags_match == "all":
+                if not tags_filter.issubset(notebook_tags_set):
+                    continue
+            elif not tags_filter & notebook_tags_set:
+                continue
 
         if sha256 and hash_notebook_file(entry) != sha256:
             continue

@@ -3971,6 +3971,11 @@ def _dispatch_core_command(args):
             scope_parts = []
             if args.tag:
                 scope_parts.append(f"tagged {args.tag!r}")
+            if args.tags:
+                scope_parts.append(
+                    f"tagged {'all' if args.tags_match == 'all' else 'any'} "
+                    f"of {args.tags!r}"
+                )
             if args.sha256:
                 scope_parts.append(f"with sha256 {args.sha256!r}")
             scope = (
@@ -3993,6 +3998,10 @@ def _dispatch_core_command(args):
             params["tag"] = args.tag
         if args.sha256:
             params["sha256"] = args.sha256
+        if args.tags:
+            params["tags"] = args.tags
+        if args.tags_match != "any":
+            params["tags_match"] = args.tags_match
         if args.saved_after:
             params["saved_after"] = args.saved_after
         if args.saved_before:
@@ -11532,6 +11541,28 @@ def main():
             "copies (which may carry different --tag values, or none at "
             "all) rather than every notebook. Composes with --tag as an "
             "AND, exactly like the endpoint itself."
+        )
+    )
+    prune_versions_parser.add_argument(
+        "--tags",
+        default=None,
+        help=(
+            "Only prune versions for notebooks carrying several tags at "
+            "once (comma-separated), via DELETE /api/notebooks/versions's "
+            "own ?tags= query param -- something --tag alone can't "
+            "express. See --tags-match. Composes with --tag/--sha256 as "
+            "an AND."
+        )
+    )
+    prune_versions_parser.add_argument(
+        "--tags-match",
+        choices=["any", "all"],
+        default="any",
+        dest="tags_match",
+        help=(
+            "Whether --tags means a notebook must carry at least one of "
+            "them ('any', the default) or every one ('all'). Ignored "
+            "without --tags."
         )
     )
     prune_versions_parser.add_argument(
