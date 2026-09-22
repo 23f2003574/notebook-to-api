@@ -1,7 +1,7 @@
 import shlex
 import textwrap
 
-from backend.generator.api_generator import resolve_is_background
+from backend.generator.api_generator import resolve_deprecation, resolve_is_background
 
 
 def apt_install_content(apt_packages):
@@ -374,7 +374,7 @@ def generate_env_example(output_path="generated/.env.example", env_vars=None):
 
 def readme_content(
     package_name="generated", functions=None, env_vars=None,
-    background_overrides=None,
+    background_overrides=None, deprecated_overrides=None,
 ):
     """The exact README.md text generate_readme (below) writes to disk,
     as a pure string -- no filesystem access at all. See
@@ -474,6 +474,20 @@ def readme_content(
     directly here) for the identical circular-import reason
     docker_compose_content/env_example_content's own docstrings already
     give: api_generator.py has no reason to import this module back.
+
+    `deprecated_overrides` is _extract_deprecated_functions's own
+    {name: reason_or_None} result (backend/compiler.py); together with
+    `functions`, resolve_deprecation (api_generator.py) decides which
+    endpoint bullets below get a "-- **Deprecated.**" marker (with its
+    own reason, when given). Before this, a "# notebook-to-api:
+    deprecated" directive already reached the real compiled endpoint's
+    own OpenAPI "deprecated": true, a runtime warning from either
+    generated SDK client, and even generate_curl_commands/generate_
+    postman_collection's own preview output -- but this file, the one
+    artifact this tool ships specifically so an operator doesn't have to
+    read api_generator.py's own source, said nothing about it at all: an
+    operator reading only the README a real compile just produced had no
+    way to learn any of its endpoints were already deprecated.
     """
     functions = functions or []
     env_vars = env_vars or []
@@ -495,6 +509,15 @@ def readme_content(
             "re-runs it with its original inputs"
             if is_background else ""
         )
+
+        is_deprecated, deprecation_reason = resolve_deprecation(
+            func["name"], deprecated_overrides
+        )
+
+        if is_deprecated:
+            suffix += " -- **Deprecated.**" + (
+                f" {deprecation_reason}" if deprecation_reason else ""
+            )
 
         endpoint_lines.append(f"- `POST /{func['name']}`{suffix}")
 
@@ -570,6 +593,7 @@ see `.env.example` for a ready-to-copy file.
 def generate_readme(
     output_path="generated/README.md", package_name="generated",
     functions=None, env_vars=None, background_overrides=None,
+    deprecated_overrides=None,
 ):
     """Write a README.md for the compiled app at `output_path`, alongside
     the Dockerfile/.dockerignore/docker-compose.yml/.env.example
@@ -581,7 +605,8 @@ def generate_readme(
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(
             readme_content(
-                package_name, functions, env_vars, background_overrides
+                package_name, functions, env_vars, background_overrides,
+                deprecated_overrides,
             )
         )
 
