@@ -5867,6 +5867,55 @@ def test_search_functions_command_sends_tag_query_param(fake_dashboard):
     assert handler.requests == ["/api/functions?search=train&sort=name&order=asc&offset=0&tag=prod"]
 
 
+def test_search_functions_command_sends_tags_and_tags_match_query_params(
+    fake_dashboard
+):
+    """Mirrors test_search_functions_command_sends_tag_query_param: GET
+    /api/functions' own "tags"/"tags_match" multi-tag filter had no CLI
+    flags of its own here at all.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    body = {"status": "success", "search": "train", "matches": [], "notebook_count": 0}
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        [
+            "search-functions", "train", "--tags", "staging,v1",
+            "--tags-match", "all", "--dashboard-url", dashboard_url,
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/functions?search=train&sort=name&order=asc&offset=0"
+        "&tags=staging%2Cv1&tags_match=all"
+    ]
+
+
+def test_search_functions_command_omits_tags_match_query_param_by_default(
+    fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {"status": "success", "search": "train", "matches": [], "notebook_count": 0}
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        [
+            "search-functions", "train", "--tags", "staging",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/functions?search=train&sort=name&order=asc&offset=0&tags=staging"
+    ]
+
+
 def test_search_functions_command_checksums_sends_query_param_and_prints_sha256(
     fake_dashboard
 ):
