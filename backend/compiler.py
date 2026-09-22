@@ -1810,6 +1810,7 @@ def compile_notebook_to_api(
             generate_readme(
                 readme_path, package_name, functions, GENERATED_APP_ENV_VARS,
                 background_overrides=background_overrides,
+                deprecated_overrides=deprecated_overrides,
             )
 
             write_compile_metadata(

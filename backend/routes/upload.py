@@ -14890,6 +14890,13 @@ def readme_preview_endpoint(data: dict):
         # compile of this same notebook would actually produce.
         background_overrides = _extract_background_overrides(code_cells)
 
+        # Same "# notebook-to-api: deprecated" directive compile_notebook_
+        # to_api already honors for its own generate_readme call --
+        # without this, readme_content's own "**Deprecated.**" markers
+        # would never appear, even for a function a real compile would
+        # mark deprecated.
+        deprecated_overrides = _extract_deprecated_functions(code_cells)
+
         # Discarded -- see this endpoint's own docstring for why this is
         # still called: it's the one place a reserved-name collision is
         # actually caught, and a real compile of this same notebook would
@@ -14899,11 +14906,13 @@ def readme_preview_endpoint(data: dict):
             source_notebook_sha256=hash_notebook_file(full_path),
             notebook_to_api_version=NOTEBOOK_TO_API_VERSION,
             background_overrides=background_overrides,
+            deprecated_overrides=deprecated_overrides,
         )
 
         readme = readme_content(
             package_name, functions, GENERATED_APP_ENV_VARS,
             background_overrides=background_overrides,
+            deprecated_overrides=deprecated_overrides,
         )
 
     except ReservedFunctionNameError as e:

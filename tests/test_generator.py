@@ -7123,6 +7123,55 @@ def test_readme_content_does_not_mark_a_synchronous_function_as_background():
     assert "`POST /add` --" not in content
 
 
+def test_readme_content_marks_a_deprecated_function_with_its_reason():
+    """Confirmed missing before this feature: a "# notebook-to-api:
+    deprecated" directive already reaches the real compiled endpoint's
+    own OpenAPI "deprecated": true, a runtime warning from either
+    generated SDK client, and generate_curl_commands/generate_postman_
+    collection's own preview output -- but the README a real compile
+    also writes said nothing about it at all.
+    """
+    from backend.generator.docker_generator import readme_content
+
+    content = readme_content(
+        functions=[
+            {"name": "add", "args": [], "return_type": "int"},
+            {"name": "old_add", "args": [], "return_type": "int"},
+        ],
+        deprecated_overrides={"old_add": "use add_v2 instead"},
+    )
+
+    assert "`POST /add`\n" in content or content.rstrip().endswith("`POST /add`")
+    assert (
+        "`POST /old_add` -- **Deprecated.** use add_v2 instead" in content
+    )
+
+
+def test_readme_content_deprecated_with_no_reason_omits_the_trailing_text():
+    from backend.generator.docker_generator import readme_content
+
+    content = readme_content(
+        functions=[{"name": "old_add", "args": [], "return_type": "int"}],
+        deprecated_overrides={"old_add": None},
+    )
+
+    assert "`POST /old_add` -- **Deprecated.**" in content
+    assert "use" not in content
+
+
+def test_readme_content_background_and_deprecated_function_gets_both_markers():
+
+    from backend.generator.docker_generator import readme_content
+
+    content = readme_content(
+        functions=[{"name": "train_model", "args": [], "return_type": "str"}],
+        deprecated_overrides={"train_model": "use train_v2 instead"},
+    )
+
+    assert "enqueues a background task" in content
+    assert "**Deprecated.** use train_v2 instead" in content
+
+
 def test_readme_content_with_no_functions_says_so():
     from backend.generator.docker_generator import readme_content
 
