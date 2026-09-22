@@ -1525,6 +1525,64 @@ def test_diff_notebook_functions_background_override_directive_change_is_reporte
     assert diff["unchanged"] == []
 
 
+def test_diff_notebook_functions_deprecated_directive_change_is_reported_as_changed(
+    tmp_path,
+):
+    """Confirmed exploitable before this fix: the new version marks
+    "compute_stats" "# notebook-to-api: deprecated" -- flipping its real
+    compiled endpoint's own OpenAPI "deprecated" field -- but every other
+    field _function_signature_key already compared (args, return type,
+    is_async, is_background) is byte-for-byte identical, so before this
+    fix the function was wrongly reported as "unchanged", the identical
+    bug class
+    test_diff_notebook_functions_background_override_directive_change_is_reported_as_changed
+    above already covers for a different directive.
+    """
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(
+        old_path, "def compute_stats(x: int) -> int:\n    return x * 2\n"
+    )
+    _write_notebook(
+        new_path,
+        "# notebook-to-api: deprecated: use compute_stats_v2 instead\n"
+        "def compute_stats(x: int) -> int:\n    return x * 2\n",
+    )
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+
+    assert [c["name"] for c in diff["changed"]] == ["compute_stats"]
+    assert diff["unchanged"] == []
+    assert diff["changed"][0]["old"]["is_deprecated"] is False
+    assert diff["changed"][0]["new"]["is_deprecated"] is True
+
+
+def test_classify_notebook_diff_deprecated_only_change_is_not_breaking(tmp_path):
+    """test_diff_notebook_functions_deprecated_directive_change_is_reported_as_changed
+    above already confirms diff_notebook_functions reports this as
+    "changed" -- but marking an endpoint deprecated changes nothing about
+    what a caller actually sends or receives, so it must not count as a
+    breaking change here, the identical treatment
+    test_classify_notebook_diff_async_only_change_is_not_breaking already
+    gets for its own invisible-to-HTTP field.
+    """
+
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    _write_notebook(old_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+    _write_notebook(
+        new_path,
+        "# notebook-to-api: deprecated\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+    classification = classify_notebook_diff(diff)
+
+    assert classification == {"compatible": True, "breaking_changes": []}
+
+
 def test_diff_notebook_functions_docstring_only_edit_is_not_a_change(tmp_path):
     """A function's docstring becomes its endpoint's OpenAPI description,
     not part of its actual request/response contract -- editing just that

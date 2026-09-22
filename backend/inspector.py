@@ -810,6 +810,13 @@ def _extract_notebook_functions(notebook_path):
     actual response *contract* -- an immediate {"result": ...} versus a
     {"task_id", "status"} a caller must poll -- so diff_notebook_functions
     needs it to tell the two apart.
+
+    Also carries "is_deprecated" -- whether a "# notebook-to-api:
+    deprecated" directive marks this function's own compiled endpoint
+    "deprecated": true in its real OpenAPI schema (see resolve_deprecation,
+    generator/api_generator.py), the identical "read the real compile-time
+    classification, don't re-guess it" reasoning "is_background" already
+    follows for its own directive.
     """
     notebook = load_notebook(notebook_path)
 
@@ -823,11 +830,15 @@ def _extract_notebook_functions(notebook_path):
     functions = deduplicate_functions_by_name(all_functions)
 
     background_overrides = _extract_background_overrides(code_cells)
+    deprecated_overrides = _extract_deprecated_functions(code_cells)
 
     for func in functions:
         func["is_background"] = _is_background_function(
             func["name"], background_overrides
         )
+        func["is_deprecated"] = resolve_deprecation(
+            func["name"], deprecated_overrides
+        )[0]
 
     return functions
 
@@ -872,6 +883,23 @@ def _function_signature_key(func):
     "unchanged" -- and classify_notebook_diff, having nothing to see,
     reported "compatible": True for a change that breaks every existing
     caller of that endpoint.
+
+    Also includes "is_deprecated" (see _extract_notebook_functions above)
+    -- the identical bug class "is_background" was added to fix, just for
+    a directive ("# notebook-to-api: deprecated") added after this
+    function itself was written: before this, adding, removing, or
+    changing the reason on that directive, with the function's own code
+    otherwise byte-for-byte identical, touched no field this tuple
+    compared, so a notebook author newly deprecating (or un-deprecating)
+    an endpoint between two versions had that change silently vanish from
+    diff_notebook_functions' own report -- neither "changed" nor
+    "removed" nor "added", indistinguishable from no edit at all. Unlike
+    "is_background", deprecating a function changes nothing about what a
+    caller actually sends or receives -- included here only so the edit
+    is visible in "changed" at all, the same "visible in the diff, but
+    never itself a reported breaking change" treatment "is_async" already
+    gets for the identical reason (see classify_notebook_diff's own
+    docstring).
     """
     args_without_docs = tuple(
         tuple(
@@ -886,6 +914,7 @@ def _function_signature_key(func):
         func.get("return_type"),
         func.get("is_async", False),
         func.get("is_background", False),
+        func.get("is_deprecated", False),
     )
 
 
@@ -1085,6 +1114,13 @@ def classify_notebook_diff(diff):
         (already reported under "changed" by diff_notebook_functions --
         see _function_signature_key -- but is an internal implementation
         detail invisible to an HTTP caller).
+      - a "changed" entry whose only difference is "is_deprecated" (a "#
+        notebook-to-api: deprecated" directive added, removed, or
+        reworded) -- already reported under "changed" by
+        diff_notebook_functions for the identical "otherwise invisible in
+        the diff" reason "is_async" is, but marking (or unmarking) an
+        endpoint deprecated changes nothing about what a caller actually
+        sends or receives, so it's never itself a breaking change.
       - widening a parameter's own Literal[...] value set (e.g.
         Literal["a", "b"] to Literal["a", "b", "c"]) -- see
         _is_breaking_type_change above for why "parameter_type_changed"/
