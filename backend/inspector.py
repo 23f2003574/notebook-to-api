@@ -8,6 +8,7 @@ from urllib.parse import quote, urlsplit
 from backend.compiler import (
     COMPILE_METADATA_FILENAME,
     _extract_background_overrides,
+    _extract_deprecated_functions,
     _extract_excluded_imports,
     _extract_explicit_apt_packages,
     _extract_private_function_names,
@@ -30,6 +31,7 @@ from backend.parser.ast_parser import (
 )
 
 from backend.generator.api_generator import (
+    resolve_deprecation,
     resolve_is_background,
     RESERVED_INFRASTRUCTURE_NAMES,
 )
@@ -184,7 +186,7 @@ def _is_background_function(name, background_overrides=None):
     return resolve_is_background(name, background_overrides)
 
 
-def _endpoint_metadata(functions, background_overrides=None):
+def _endpoint_metadata(functions, background_overrides=None, deprecated_overrides=None):
     """The {"path", "method", "is_async"} shape POST /api/compile's
     "endpoints" field already returns (see routes/upload.py), computed
     here from a notebook that hasn't been compiled yet.
@@ -203,6 +205,16 @@ def _endpoint_metadata(functions, background_overrides=None):
     _is_background_function so a "# notebook-to-api: background"/"#
     notebook-to-api: sync" directive is reflected here identically to how
     a real compile (generate_fastapi_code) would actually honor it.
+
+    `deprecated_overrides` (optional) is _extract_deprecated_functions's
+    own {name: reason_or_None} result (backend/compiler.py), resolved via
+    resolve_deprecation (generator/api_generator.py) the same
+    "can't disagree with what a real compile would do" way
+    background_overrides already is -- before this, a "# notebook-to-api:
+    deprecated" directive changed the real compiled app's own OpenAPI
+    "deprecated": true, but nothing previewing a notebook before
+    compiling it (POST /api/inspect, POST /api/validate, GET
+    /api/validate-all) ever surfaced that at all.
     """
     return [
         {
@@ -211,6 +223,9 @@ def _endpoint_metadata(functions, background_overrides=None):
             "is_async": _is_background_function(
                 func["name"], background_overrides
             ),
+            "deprecated": resolve_deprecation(
+                func["name"], deprecated_overrides
+            )[0],
         }
         for func in functions
     ]
@@ -369,6 +384,12 @@ def inspect_notebook(notebook_path, output_dir="generated"):
     # corrected.
     background_overrides = _extract_background_overrides(code_cells)
 
+    # Same "# notebook-to-api: deprecated" directive a real compile
+    # already honors (see the identical comment on inspect_notebook_data
+    # below) -- without this, "[deprecated]" below would never appear,
+    # even for a function whose notebook explicitly marks it.
+    deprecated_overrides = _extract_deprecated_functions(code_cells)
+
     # Same "# notebook-to-api: exclude <import-name>" directive
     # extract_third_party_imports (backend/compiler.py) already applies
     # before write_requirements pins anything -- without this, an import
@@ -404,6 +425,17 @@ def inspect_notebook(notebook_path, output_dir="generated"):
         print("-" * 20)
         for name in sorted(private_function_names):
             print(f"- {name}")
+
+    reported_deprecated = {
+        name: reason for name, reason in sorted(deprecated_overrides.items())
+        if name not in private_function_names
+    }
+
+    if reported_deprecated:
+        print("\n⚠ Deprecated Functions (still exposed, but marked deprecated):")
+        print("-" * 20)
+        for name, reason in reported_deprecated.items():
+            print(f"- {name}" + (f": {reason}" if reason else ""))
 
     if skipped_functions:
         print("\n⚠ Skipped Functions (no endpoint will be generated):")
@@ -442,6 +474,11 @@ def inspect_notebook(notebook_path, output_dir="generated"):
         route_suffix = (
             "  [background]"
             if _is_background_function(func["name"], background_overrides)
+            else ""
+        )
+        route_suffix += (
+            "  [deprecated]"
+            if resolve_deprecation(func["name"], deprecated_overrides)[0]
             else ""
         )
 
@@ -561,6 +598,15 @@ def inspect_notebook_data(
     # can't drift" reasoning above already exists to prevent.
     background_overrides = _extract_background_overrides(code_cells)
 
+    # Same "# notebook-to-api: deprecated" directive a real compile
+    # (generate_fastapi_code, via resolve_deprecation) already honors --
+    # without this, "endpoints" below would never report a deprecated
+    # function's own OpenAPI "deprecated": true, the identical "preview
+    # claims something a real compile wouldn't actually do" bug
+    # background_overrides just above already exists to prevent, applied
+    # here to a different directive.
+    deprecated_overrides = _extract_deprecated_functions(code_cells)
+
     # See the identical comment above "dependencies"/"excluded_imports"/
     # "background_overrides" -- read through this one function by every
     # caller (POST /api/inspect, POST /api/validate, POST /api/compile's
@@ -587,11 +633,29 @@ def inspect_notebook_data(
         "apt_packages": apt_packages,
         "generated_files": list_generated_files(output_dir),
         "reserved_name_conflicts": _reserved_name_conflicts(all_functions),
-        "endpoints": _endpoint_metadata(all_functions, background_overrides),
+        "endpoints": _endpoint_metadata(
+            all_functions, background_overrides, deprecated_overrides
+        ),
         "skipped_functions": _aggregate_skipped_functions(
             code_cells, {func["name"] for func in all_functions}
         ),
         "private_functions": sorted(private_function_names),
+        # The notebook's own "# notebook-to-api: deprecated" directives,
+        # by function name -- surfaced the same way "private_functions"
+        # already surfaces "# notebook-to-api: private"'s, since
+        # "endpoints" above only carries a bare per-path boolean, with no
+        # room for the directive's own optional free-text reason. Only
+        # ever names a function that's also a real "endpoints" entry --
+        # a private function marked deprecated too (a contradiction with
+        # no real effect, since it never becomes an endpoint at all
+        # regardless) is filtered back out here, the same "never claim
+        # something about a function that isn't actually compiled" rule
+        # "functions_without_docstrings" below already follows.
+        "deprecated_functions": {
+            name: reason
+            for name, reason in sorted(deprecated_overrides.items())
+            if name not in private_function_names
+        },
         # The complementary "# notebook-to-api: exclude <import-name>"
         # directive's own effect, surfaced the same way "private_functions"
         # already surfaces "# notebook-to-api: private"'s -- before this,
@@ -659,12 +723,16 @@ def print_compile_summary(notebook_path, output_dir="generated", only=None, excl
     is_async_by_path = {
         endpoint["path"]: endpoint["is_async"] for endpoint in data["endpoints"]
     }
+    is_deprecated_by_path = {
+        endpoint["path"]: endpoint["deprecated"] for endpoint in data["endpoints"]
+    }
 
     print(f"\nGenerated {len(functions)} endpoint(s):")
 
     for func in functions:
         name = func["name"]
         suffix = "  [background]" if is_async_by_path.get(f"/{name}") else ""
+        suffix += "  [deprecated]" if is_deprecated_by_path.get(f"/{name}") else ""
         print(f"  POST /{name}{suffix}")
 
     if data["dependencies"]:
@@ -688,6 +756,14 @@ def print_compile_summary(notebook_path, output_dir="generated", only=None, excl
         )
         for name in data["private_functions"]:
             print(f"  {name}")
+
+    if data["deprecated_functions"]:
+        print(
+            f"\nDeprecated {len(data['deprecated_functions'])} function(s) "
+            "(still exposed, but marked deprecated):"
+        )
+        for name, reason in data["deprecated_functions"].items():
+            print(f"  {name}" + (f": {reason}" if reason else ""))
 
     if data["excluded_imports"]:
         print(

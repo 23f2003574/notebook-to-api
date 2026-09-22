@@ -18,6 +18,7 @@ from backend.compiler import (
     _drop_private_functions,
     _explicit_requirement_package_name,
     _extract_background_overrides,
+    _extract_deprecated_functions,
     _extract_excluded_imports,
     _extract_explicit_apt_packages,
     _extract_explicit_requirements,
@@ -2697,6 +2698,88 @@ def test_extract_background_overrides_tolerates_the_same_directive_repeated():
     ]
 
     assert _extract_background_overrides(code_cells) == {"helper": True}
+
+
+def test_extract_deprecated_functions_matches_a_bare_directive():
+
+    code_cells = [
+        "# notebook-to-api: deprecated\ndef old_helper():\n    return 1\n"
+    ]
+
+    assert _extract_deprecated_functions(code_cells) == {"old_helper": None}
+
+
+def test_extract_deprecated_functions_matches_a_directive_with_a_reason():
+
+    code_cells = [
+        "# notebook-to-api: deprecated: use old_helper_v2 instead\n"
+        "def old_helper():\n    return 1\n"
+    ]
+
+    assert _extract_deprecated_functions(code_cells) == {
+        "old_helper": "use old_helper_v2 instead"
+    }
+
+
+def test_extract_deprecated_functions_tolerates_blank_lines_between_directive_and_def():
+
+    code_cells = [
+        "# notebook-to-api: deprecated\n\n\ndef helper():\n    return 1\n"
+    ]
+
+    assert _extract_deprecated_functions(code_cells) == {"helper": None}
+
+
+def test_extract_deprecated_functions_matches_an_async_def():
+
+    code_cells = [
+        "# notebook-to-api: deprecated: slow now\nasync def helper():\n    return 1\n"
+    ]
+
+    assert _extract_deprecated_functions(code_cells) == {"helper": "slow now"}
+
+
+def test_extract_deprecated_functions_ignores_a_directive_with_no_following_def():
+
+    code_cells = ["# notebook-to-api: deprecated\nx = 1\n"]
+
+    assert _extract_deprecated_functions(code_cells) == {}
+
+
+def test_extract_deprecated_functions_ignores_an_unrelated_comment():
+
+    code_cells = ["# just a regular comment\ndef add(a, b):\n    return a + b\n"]
+
+    assert _extract_deprecated_functions(code_cells) == {}
+
+
+def test_extract_deprecated_functions_collects_multiple_functions_across_cells():
+
+    code_cells = [
+        "# notebook-to-api: deprecated\ndef old_a():\n    return 1\n",
+        "# notebook-to-api: deprecated: use new_b\ndef old_b():\n    return 1\n",
+    ]
+
+    assert _extract_deprecated_functions(code_cells) == {
+        "old_a": None, "old_b": "use new_b",
+    }
+
+
+def test_extract_deprecated_functions_last_directive_wins_for_a_repeated_function():
+    """Not a conflict, unlike a genuine background/sync mismatch -- the
+    same "cell re-run with a tweaked reason" scenario
+    test_extract_background_overrides_tolerates_the_same_directive_repeated
+    covers for its own directive, just with the later reason winning
+    instead of erroring, since there's no contradictory *other* value a
+    deprecation reason could conflict with.
+    """
+
+    code_cells = [
+        "# notebook-to-api: deprecated: first reason\ndef helper():\n    return 1\n",
+        "# notebook-to-api: deprecated: second reason\ndef helper():\n    return 2\n",
+    ]
+
+    assert _extract_deprecated_functions(code_cells) == {"helper": "second reason"}
 
 
 def test_compile_notebook_with_only_generates_an_endpoint_for_just_that_function(

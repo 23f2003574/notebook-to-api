@@ -16593,7 +16593,7 @@ def test_inspect_notebook_version_reports_functions_and_dependencies_for_that_sn
     assert [f["name"] for f in body["functions"]] == ["add"]
     assert any(dep.startswith("pandas") for dep in body["dependencies"])
     assert body["endpoints"] == [
-        {"path": "/add", "method": "POST", "is_async": False}
+        {"path": "/add", "method": "POST", "is_async": False, "deprecated": False}
     ]
     assert body["reserved_name_conflicts"] == []
     assert body["skipped_functions"] == []
@@ -21769,7 +21769,7 @@ def test_upload_inspect_compile_still_works_for_a_legitimate_notebook():
     )
     assert compile_resp.status_code == 200
     assert compile_resp.json()["endpoints"] == [
-        {"path": "/add", "method": "POST", "is_async": False}
+        {"path": "/add", "method": "POST", "is_async": False, "deprecated": False}
     ]
 
 
@@ -21807,9 +21807,10 @@ def test_compile_endpoints_flag_background_functions_as_async():
 
     endpoints = {e["path"]: e for e in compile_resp.json()["endpoints"]}
 
-    assert endpoints["/add"] == {"path": "/add", "method": "POST", "is_async": False}
+    assert endpoints["/add"] == {"path": "/add", "method": "POST", "is_async": False, "deprecated": False}
     assert endpoints["/train_model"] == {
-        "path": "/train_model", "method": "POST", "is_async": True
+        "path": "/train_model", "method": "POST", "is_async": True,
+        "deprecated": False,
     }
 
 
@@ -25231,6 +25232,60 @@ def test_openapi_preview_matches_an_actual_compile_with_a_background_override_di
     )
 
 
+def test_openapi_preview_matches_an_actual_compile_with_a_deprecated_directive():
+    """Without this endpoint honoring "# notebook-to-api: deprecated" the
+    same way compile_notebook_to_api itself does (via generate_fastapi_
+    code's own deprecated_overrides), this preview's own served schema
+    would carry "deprecated": false (or omit the key entirely) for an
+    endpoint a real compile of the identical notebook marks "deprecated":
+    true -- the exact "preview claims something a real compile wouldn't
+    actually do" bug class the background-override test right above
+    already guards against for a different directive.
+    """
+
+    content = _notebook_bytes(
+        "# notebook-to-api: deprecated: use greet_v2 instead\n"
+        "def greet(name: str) -> str:\n    return f'Hello {name}'\n"
+    )
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "openapi_preview_deprecated.ipynb",
+                io.BytesIO(content),
+                "application/json",
+            )
+        },
+    )
+
+    preview_resp = client.post(
+        "/api/openapi-preview",
+        json={"notebook_path": "openapi_preview_deprecated.ipynb"},
+    )
+    assert preview_resp.status_code == 200
+    preview_body = preview_resp.json()
+    operation = preview_body["schema"]["paths"]["/greet"]["post"]
+    assert operation["deprecated"] is True
+    assert "use greet_v2 instead" in operation["description"]
+
+    compile_resp = client.post(
+        "/api/compile",
+        json={"notebook_path": "openapi_preview_deprecated.ipynb"},
+    )
+    assert compile_resp.status_code == 200
+    assert compile_resp.json()["endpoints"] == [
+        {"path": "/greet", "method": "POST", "is_async": False, "deprecated": True}
+    ]
+
+    export_resp = client.post("/api/export-openapi", json={"format": "json"})
+    assert export_resp.status_code == 200
+
+    assert preview_body["schema"]["paths"]["/greet"] == (
+        export_resp.json()["schema"]["paths"]["/greet"]
+    )
+
+
 def test_openapi_preview_respects_only_and_exclude():
 
     content = _notebook_bytes(
@@ -27146,9 +27201,10 @@ def test_inspect_reports_endpoints_and_flags_background_ones_before_compiling():
 
     endpoints = {e["path"]: e for e in inspect_resp.json()["endpoints"]}
 
-    assert endpoints["/add"] == {"path": "/add", "method": "POST", "is_async": False}
+    assert endpoints["/add"] == {"path": "/add", "method": "POST", "is_async": False, "deprecated": False}
     assert endpoints["/train_model"] == {
-        "path": "/train_model", "method": "POST", "is_async": True
+        "path": "/train_model", "method": "POST", "is_async": True,
+        "deprecated": False,
     }
 
 

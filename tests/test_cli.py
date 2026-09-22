@@ -1055,7 +1055,7 @@ def test_compile_command_json_flag_emits_machine_readable_output(tmp_path):
     assert data["dependencies"] == []
     assert data["reserved_name_conflicts"] == []
     assert data["endpoints"] == [
-        {"path": "/add", "method": "POST", "is_async": False}
+        {"path": "/add", "method": "POST", "is_async": False, "deprecated": False}
     ]
     assert data["skipped_functions"] == []
 
@@ -1096,7 +1096,7 @@ def test_compile_command_json_flag_reports_a_background_endpoint(tmp_path):
     assert proc.returncode == 0, proc.stdout + proc.stderr
     data = json.loads(proc.stdout)
     assert data["endpoints"] == [
-        {"path": "/train_model", "method": "POST", "is_async": True}
+        {"path": "/train_model", "method": "POST", "is_async": True, "deprecated": False}
     ]
 
 
@@ -13295,7 +13295,7 @@ def test_remote_compile_command_reports_success(tmp_path, fake_dashboard):
             "status": "success",
             "notebook": "nb.ipynb",
             "functions": [{"name": "add"}],
-            "endpoints": [{"path": "/add", "method": "POST", "is_async": False}],
+            "endpoints": [{"path": "/add", "method": "POST", "is_async": False, "deprecated": False}],
             "skipped_functions": [],
             "dependencies": ["fastapi"],
             "generated_files": ["app.py"],
@@ -13329,7 +13329,7 @@ def test_remote_compile_command_passes_smoke_test_through_to_the_dashboard(
             "status": "success",
             "notebook": "nb.ipynb",
             "functions": [{"name": "add"}],
-            "endpoints": [{"path": "/add", "method": "POST", "is_async": False}],
+            "endpoints": [{"path": "/add", "method": "POST", "is_async": False, "deprecated": False}],
             "skipped_functions": [],
             "dependencies": [],
             "generated_files": ["app.py"],
@@ -13366,7 +13366,7 @@ def test_remote_compile_command_exits_1_when_the_smoke_test_fails(
             "status": "success",
             "notebook": "nb.ipynb",
             "functions": [{"name": "add"}],
-            "endpoints": [{"path": "/add", "method": "POST", "is_async": False}],
+            "endpoints": [{"path": "/add", "method": "POST", "is_async": False, "deprecated": False}],
             "skipped_functions": [],
             "dependencies": [],
             "generated_files": ["app.py"],
@@ -13404,7 +13404,7 @@ def test_remote_compile_command_passes_only_through_to_the_dashboard(
             "status": "success",
             "notebook": "nb.ipynb",
             "functions": [{"name": "add"}],
-            "endpoints": [{"path": "/add", "method": "POST", "is_async": False}],
+            "endpoints": [{"path": "/add", "method": "POST", "is_async": False, "deprecated": False}],
             "skipped_functions": [],
             "dependencies": [],
             "generated_files": [],
@@ -13439,7 +13439,7 @@ def test_remote_compile_command_passes_exclude_through_to_the_dashboard(
             "status": "success",
             "notebook": "nb.ipynb",
             "functions": [{"name": "add"}],
-            "endpoints": [{"path": "/add", "method": "POST", "is_async": False}],
+            "endpoints": [{"path": "/add", "method": "POST", "is_async": False, "deprecated": False}],
             "skipped_functions": [],
             "dependencies": [],
             "generated_files": [],
@@ -13475,7 +13475,7 @@ def test_remote_compile_command_passes_the_version_id_flag_through(
             "notebook": "nb.ipynb",
             "version_id": "v1.ipynb",
             "functions": [{"name": "add"}],
-            "endpoints": [{"path": "/add", "method": "POST", "is_async": False}],
+            "endpoints": [{"path": "/add", "method": "POST", "is_async": False, "deprecated": False}],
             "skipped_functions": [],
             "dependencies": [],
             "generated_files": [],
@@ -13512,7 +13512,7 @@ def test_remote_compile_command_passes_the_expected_sha256_flag_through(
             "notebook": "nb.ipynb",
             "version_id": None,
             "functions": [{"name": "add"}],
-            "endpoints": [{"path": "/add", "method": "POST", "is_async": False}],
+            "endpoints": [{"path": "/add", "method": "POST", "is_async": False, "deprecated": False}],
             "skipped_functions": [],
             "dependencies": [],
             "generated_files": [],
@@ -13600,7 +13600,7 @@ def test_remote_compile_command_flags_background_endpoints(tmp_path, fake_dashbo
             "status": "success",
             "notebook": "nb.ipynb",
             "functions": [],
-            "endpoints": [{"path": "/train_model", "method": "POST", "is_async": True}],
+            "endpoints": [{"path": "/train_model", "method": "POST", "is_async": True, "deprecated": False}],
             "skipped_functions": [],
             "dependencies": [],
             "generated_files": [],
@@ -13732,8 +13732,8 @@ def test_remote_inspect_command_prints_the_full_report(tmp_path, fake_dashboard)
             "generated_files": ["app.py", "requirements.txt"],
             "reserved_name_conflicts": [],
             "endpoints": [
-                {"path": "/add", "method": "POST", "is_async": False},
-                {"path": "/multiply", "method": "POST", "is_async": True},
+                {"path": "/add", "method": "POST", "is_async": False, "deprecated": False},
+                {"path": "/multiply", "method": "POST", "is_async": True, "deprecated": False},
             ],
             "skipped_functions": [],
             "private_functions": [],
@@ -13778,7 +13778,7 @@ def test_remote_inspect_command_version_id_uses_the_version_inspect_endpoint(
             "dependencies": [],
             "generated_files": [],
             "reserved_name_conflicts": [],
-            "endpoints": [{"path": "/add", "method": "POST", "is_async": False}],
+            "endpoints": [{"path": "/add", "method": "POST", "is_async": False, "deprecated": False}],
             "skipped_functions": [],
             "private_functions": [],
         })
@@ -13844,7 +13844,7 @@ def test_remote_inspect_command_passes_expected_sha256_through_to_the_post_body(
             "dependencies": [],
             "generated_files": [],
             "reserved_name_conflicts": [],
-            "endpoints": [{"path": "/add", "method": "POST", "is_async": False}],
+            "endpoints": [{"path": "/add", "method": "POST", "is_async": False, "deprecated": False}],
             "skipped_functions": [],
             "private_functions": [],
         })
@@ -13881,7 +13881,7 @@ def test_remote_inspect_command_version_id_passes_expected_sha256_as_a_query_par
             "dependencies": [],
             "generated_files": [],
             "reserved_name_conflicts": [],
-            "endpoints": [{"path": "/add", "method": "POST", "is_async": False}],
+            "endpoints": [{"path": "/add", "method": "POST", "is_async": False, "deprecated": False}],
             "skipped_functions": [],
             "private_functions": [],
         })
@@ -17843,7 +17843,7 @@ def test_versions_inspect_command_prints_endpoints_and_dependencies(
             "dependencies": ["pandas==2.1.0"],
             "generated_files": [],
             "reserved_name_conflicts": [],
-            "endpoints": [{"path": "/add", "method": "POST", "is_async": False}],
+            "endpoints": [{"path": "/add", "method": "POST", "is_async": False, "deprecated": False}],
             "skipped_functions": [],
         })
     ]

@@ -859,6 +859,79 @@ def _extract_background_overrides(code_cells):
     return overrides
 
 
+# Recognizes a "# notebook-to-api: deprecated" comment directive
+# immediately above a function definition (blank lines in between are
+# tolerated, same as PRIVATE_FUNCTION_DIRECTIVE_PATTERN/BACKGROUND_
+# OVERRIDE_DIRECTIVE_PATTERN above) -- see _extract_deprecated_functions
+# below for what it's for. Positional, for the identical reason those two
+# already are: which function it applies to is the entire point. An
+# optional ": <reason>" suffix (e.g. "# notebook-to-api: deprecated: use
+# train_v2 instead") is captured as the deprecation's own free-text
+# reason, mirroring REQUIREMENT_DIRECTIVE_PATTERN's own "<spec>" capture
+# for a directive that takes an argument -- "deprecated" alone (no colon)
+# is equally valid, for a function whose author has no specific
+# replacement or reason to give.
+DEPRECATED_FUNCTION_DIRECTIVE_PATTERN = re.compile(
+    r"^[ \t]*#\s*notebook-to-api:\s*deprecated(?:\s*:\s*(?P<reason>\S.*?))?\s*$"
+    r"(?:\n[ \t]*\n)*"
+    r"\n[ \t]*(?:async\s+)?def\s+(?P<name>[A-Za-z_]\w*)\s*\(",
+    re.MULTILINE,
+)
+
+
+def _extract_deprecated_functions(code_cells):
+    """{function_name: reason_or_None} for every function `code_cells`
+    marks "# notebook-to-api: deprecated" (immediately above its own
+    `def`/`async def` line, see DEPRECATED_FUNCTION_DIRECTIVE_PATTERN
+    above), across all cells.
+
+    Before this, a notebook author had no way to tell a caller "this
+    endpoint still works, but shouldn't be used for new integrations
+    going forward" -- the exact, extremely common real-world need behind
+    OpenAPI's own standard "deprecated": true field, which every major
+    Swagger UI/Redoc renders as a strikethrough with a warning, and many
+    third-party client generators either skip or emit with a compiler
+    warning of their own. The only existing escape hatches were
+    PRIVATE_FUNCTION_DIRECTIVE_PATTERN (removes the endpoint entirely --
+    a breaking change for every existing caller, not a soft warning) or
+    silently leaving a stale endpoint's own docstring to explain the
+    situation in prose no tooling can act on.
+
+    Returns a plain dict (not a set) the same way
+    _extract_background_overrides above does, for the identical reason:
+    a caller (resolve_deprecation, generator/api_generator.py) needs each
+    deprecated function's own optional reason text, not just whether it's
+    deprecated at all -- a membership-tested set (the shape
+    _extract_private_function_names/_extract_excluded_imports return)
+    can't carry that. A function marked deprecated with no reason given
+    gets None (not ""), the same "distinct from an empty string"
+    convention this project's other docstring-adjacent free-text fields
+    already follow, so a caller can tell "no reason given" apart from a
+    reason that happens to be empty (which this pattern's own "\\S.*"
+    reason capture can never actually produce in the first place, since
+    it requires at least one non-whitespace character to match at all).
+
+    A function marked more than once (the same "cell re-run with a
+    tweaked reason" scenario BACKGROUND_OVERRIDE_DIRECTIVE_PATTERN's own
+    docstring already describes for its own directive) simply keeps
+    whichever reason was seen last, mirroring
+    deduplicate_functions_by_name's own "last one wins" resolution for a
+    function redefined outright -- unlike "background"/"sync", there's no
+    contradictory *other* value "deprecated" could conflict with, so no
+    error is raised here the way a genuine background/sync conflict is.
+    """
+    deprecated = {}
+
+    for cell in code_cells:
+
+        for match in DEPRECATED_FUNCTION_DIRECTIVE_PATTERN.finditer(cell):
+
+            reason = match.group("reason")
+            deprecated[match.group("name")] = reason.strip() if reason else None
+
+    return deprecated
+
+
 def extract_third_party_imports(code_cells):
     """The raw, STANDARD_LIBS-filtered import names `code_cells` (already
     filtered to parseable cells, as compile_notebook_to_api's own
@@ -1569,6 +1642,12 @@ def compile_notebook_to_api(
         # reaches either.
         background_overrides = _extract_background_overrides(code_cells)
 
+        # Computed here for the identical reason background_overrides
+        # just above is: available before generate_fastapi_code is
+        # called further down, regardless of which branch of this
+        # function's own control flow reaches it.
+        deprecated_overrides = _extract_deprecated_functions(code_cells)
+
         functions = []
 
         for cell in code_cells:
@@ -1627,6 +1706,7 @@ def compile_notebook_to_api(
             source_notebook_sha256=hash_notebook_file(notebook_path),
             notebook_to_api_version=NOTEBOOK_TO_API_VERSION,
             background_overrides=background_overrides,
+            deprecated_overrides=deprecated_overrides,
         )
 
         # generate_fastapi_code succeeding means this compile is now

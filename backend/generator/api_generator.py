@@ -338,6 +338,30 @@ def resolve_is_background(func_name, background_overrides=None):
 
     return any(kw in func_name.lower() for kw in LONG_RUNNING_KEYWORDS)
 
+
+def resolve_deprecation(func_name, deprecated_overrides=None):
+    """(is_deprecated, reason) for `func_name`, from a notebook's own
+    "# notebook-to-api: deprecated" directive (_extract_deprecated_
+    functions, backend/compiler.py) -- the single place every caller in
+    this codebase decides this, mirroring resolve_is_background above so
+    generate_fastapi_code's actual behavior, _endpoint_metadata's own
+    preview (backend/inspector.py), and print_compile_summary's own
+    report can never drift out of sync with each other.
+
+    `deprecated_overrides` (optional) is _extract_deprecated_functions's
+    own {name: reason_or_None} result -- `func_name` not appearing in it
+    at all (the default for every function a notebook doesn't mark)
+    means "not deprecated", returned here as (False, None); no
+    heuristic-based fallback exists for this the way LONG_RUNNING_KEYWORDS
+    is one for background/sync, since nothing about a function's own
+    name, signature, or behavior can imply "this is deprecated" the way
+    a name merely containing "train" can plausibly imply "this is slow".
+    """
+    if deprecated_overrides and func_name in deprecated_overrides:
+        return True, deprecated_overrides[func_name]
+
+    return False, None
+
 # Every environment variable the generated app itself reads to configure a
 # runtime limit or credential -- one single source of truth codegen below
 # builds its own os.getenv(name, default) calls from (see
@@ -800,6 +824,7 @@ def _annotation_has_own_field_description(type_str):
 def generate_fastapi_code(
     functions, package_name="generated", source_notebook_sha256=None,
     notebook_to_api_version="1.0.0", background_overrides=None,
+    deprecated_overrides=None,
 ):
     """Generate FastAPI app code for the given functions.
 
@@ -812,6 +837,20 @@ def generate_fastapi_code(
     `background_overrides` (optional) is _extract_background_overrides's
     own result (backend/compiler.py) -- see resolve_is_background's own
     docstring above for what it overrides and why.
+
+    `deprecated_overrides` (optional) is _extract_deprecated_functions's
+    own {name: reason_or_None} result (backend/compiler.py) -- see
+    resolve_deprecation's own docstring above for what it means. A
+    deprecated function's own route is generated with FastAPI's standard
+    `deprecated=True` (rendered by Swagger UI/Redoc as a strikethrough
+    with a warning, and honored by most third-party OpenAPI-driven
+    tooling with no further change needed on this project's own side),
+    and its own reason, when given, is prepended to the endpoint's
+    OpenAPI "description" as a "**Deprecated.**" notice -- the identical
+    "author's own words over nothing at all" precedent response_description
+    above already establishes for "Returns:"/"Raises:" docstring sections,
+    applied here to a directive's own free-text argument instead of a
+    docstring section.
 
     package_name is the top-level package the generated app imports its
     runtime module from (`<package_name>.runtime.notebook_module`). It
@@ -3438,6 +3477,29 @@ def generate_fastapi_code(
                 f"Parameters: {', '.join(arg['name'] for arg in args) if args else 'None'}."
             )
         )
+        # A "# notebook-to-api: deprecated" directive (resolve_deprecation
+        # above) prepends a "**Deprecated.**" notice -- Markdown FastAPI's
+        # own /docs already renders, the same way it renders the rest of
+        # `description` -- ahead of whatever `description` already holds
+        # (the author's own docstring, or the generic auto-generated
+        # fallback above), rather than replacing it: a deprecated endpoint
+        # is still fully documented otherwise, just with an added warning
+        # a caller reading /docs (or openapi.json's own "description")
+        # can't miss at the top. `deprecated=True` below is what actually
+        # drives Swagger UI/Redoc's own strikethrough rendering; this
+        # notice is the human-readable explanation of *why*/*what to use
+        # instead*, for a reason string this project's other Google-style
+        # docstring extraction (Args:/Returns:/Raises:) has no section to
+        # carry, since a directive's own argument -- not the docstring
+        # itself -- is where a notebook author writes it.
+        is_deprecated, deprecation_reason = resolve_deprecation(
+            func_name, deprecated_overrides
+        )
+        if is_deprecated:
+            notice = "**Deprecated.**" + (
+                f" {deprecation_reason}" if deprecation_reason else ""
+            )
+            description = f"{notice}\n\n{description}"
         if is_background:
             # A background endpoint doesn't return `example_response`/
             # `response_description` (the notebook function's own return
@@ -3535,6 +3597,7 @@ def generate_fastapi_code(
                 # Pydantic Field description and the responses={} dict's
                 # own "description" entry).
                 f'description={repr(description)}, '
+                f'deprecated={is_deprecated}, '
                 f'tags=["{tag}"], '
                 f'operation_id="{operation_id}", '
                 # "x-notebook-to-api-return-type" (the notebook function's
@@ -3826,6 +3889,7 @@ def generate_fastapi_code(
                 # Pydantic Field description and the responses={} dict's
                 # own "description" entry).
                 f'description={repr(description)}, '
+                f'deprecated={is_deprecated}, '
                 f'tags=["{tag}"], '
                 f'operation_id="{operation_id}", '
                 # See the background branch's own identical
