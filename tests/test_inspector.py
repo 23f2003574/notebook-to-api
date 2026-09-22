@@ -2536,6 +2536,45 @@ def test_generate_curl_commands_omits_retry_for_a_synchronous_function(tmp_path)
     assert "retry" not in command
 
 
+def test_generate_curl_commands_flags_a_deprecated_function(tmp_path):
+    """Confirmed missing before this feature: a "# notebook-to-api:
+    deprecated" directive already marks the real compiled endpoint's own
+    OpenAPI "deprecated": true, and warns a caller at runtime from either
+    generated SDK client -- but this "try it before you compile it"
+    preview gave a caller a ready-to-run command for a deprecated
+    endpoint with zero warning.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "# notebook-to-api: deprecated: use add_v2 instead\n"
+        "def old_add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    commands = generate_curl_commands(str(notebook_path))
+    add_command = next(c for c in commands if c.startswith("# add\n"))
+    old_add_command = next(c for c in commands if "/old_add" in c)
+
+    assert "DEPRECATED" not in add_command
+    assert old_add_command.startswith("# DEPRECATED: use add_v2 instead\n# old_add\n")
+
+
+def test_generate_curl_commands_deprecated_with_no_reason_omits_the_colon(tmp_path):
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "# notebook-to-api: deprecated\n"
+        "def old_add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    [command] = generate_curl_commands(str(notebook_path))
+
+    assert command.startswith("# DEPRECATED\n# old_add\n")
+
+
 def test_generate_postman_collection_returns_one_item_per_function(tmp_path):
 
     notebook_path = tmp_path / "nb.ipynb"
@@ -2984,3 +3023,50 @@ def test_generate_postman_collection_returns_an_empty_item_list_for_a_notebook_w
     _write_notebook(notebook_path, "x = 1\n")
 
     assert generate_postman_collection(str(notebook_path))["item"] == []
+
+
+def test_generate_postman_collection_flags_a_deprecated_synchronous_function(tmp_path):
+    """Mirrors test_generate_curl_commands_flags_a_deprecated_function for
+    the Postman collection -- the identical directive, surfaced via a
+    "[DEPRECATED]" name prefix (visible in Postman's own sidebar) and a
+    "**Deprecated.**" request description.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "# notebook-to-api: deprecated: use add_v2 instead\n"
+        "def old_add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    collection = generate_postman_collection(str(notebook_path))
+    items_by_name = {item["name"]: item for item in collection["item"]}
+
+    assert "add" in items_by_name
+    assert "description" not in items_by_name["add"]["request"]
+
+    assert "[DEPRECATED] old_add" in items_by_name
+    assert items_by_name["[DEPRECATED] old_add"]["request"]["description"] == (
+        "**Deprecated.** use add_v2 instead"
+    )
+
+
+def test_generate_postman_collection_flags_a_deprecated_background_function(tmp_path):
+    """The identical directive on a background function must prepend the
+    notice to its own existing task-polling description, not replace it.
+    """
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "# notebook-to-api: deprecated: use train_v2 instead\n"
+        "def train_model(epochs: int) -> str:\n    return 'done'\n",
+    )
+
+    collection = generate_postman_collection(str(notebook_path))
+    items_by_name = {item["name"]: item for item in collection["item"]}
+
+    description = items_by_name["[DEPRECATED] train_model"]["request"]["description"]
+    assert description.startswith("**Deprecated.** use train_v2 instead\n\n")
+    assert "task_id" in description
