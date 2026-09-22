@@ -20736,6 +20736,200 @@ def test_prune_all_notebook_versions_filters_by_sha256():
     ).json()["versions"]) == 1
 
 
+def test_prune_all_notebook_versions_filters_by_tags_any():
+    """Confirmed missing before this fix: GET /api/notebooks, GET
+    /api/notebooks/duplicates, GET /api/notebooks/storage, DELETE
+    /api/notebooks, GET /api/notebooks/export and POST
+    /api/notebooks/duplicates/resolve already accept a "tags"/
+    "tags_match" multi-tag scope, but this endpoint's only tag filter
+    was the single exact-match "tag" -- pruning "every notebook tagged
+    'scratch' or 'tmp'" meant a separate GET /api/notebooks?tags=...
+    first to discover the filenames, then a `clear` per notebook.
+    """
+
+    for filename in (
+        "prune_versions_tags_any_a.ipynb", "prune_versions_tags_any_b.ipynb",
+        "prune_versions_tags_any_c.ipynb",
+    ):
+        client.post(
+            "/api/upload",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                    "application/json",
+                )
+            },
+        )
+        client.post(
+            "/api/upload?overwrite=true",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                    "application/json",
+                )
+            },
+        )
+        version_id = client.get(
+            f"/api/notebooks/{filename}/versions"
+        ).json()["versions"][0]["version_id"]
+        _backdate_notebook_version(filename, version_id, days_ago=40)
+
+    client.put(
+        "/api/notebooks/prune_versions_tags_any_a.ipynb/tags",
+        json={"tags": ["scratch"]},
+    )
+    client.put(
+        "/api/notebooks/prune_versions_tags_any_b.ipynb/tags",
+        json={"tags": ["tmp"]},
+    )
+    client.put(
+        "/api/notebooks/prune_versions_tags_any_c.ipynb/tags",
+        json={"tags": ["prod"]},
+    )
+
+    resp = client.delete(
+        "/api/notebooks/versions",
+        params={"older_than_days": 30, "tags": "scratch,tmp"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["notebook_count_affected"] == 2
+    assert sorted(r["filename"] for r in body["results"]) == [
+        "prune_versions_tags_any_a.ipynb", "prune_versions_tags_any_b.ipynb",
+    ]
+
+    assert len(client.get(
+        "/api/notebooks/prune_versions_tags_any_c.ipynb/versions"
+    ).json()["versions"]) == 1
+
+
+def test_prune_all_notebook_versions_filters_by_tags_all():
+
+    for filename in (
+        "prune_versions_tags_all_a.ipynb", "prune_versions_tags_all_b.ipynb",
+    ):
+        client.post(
+            "/api/upload",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                    "application/json",
+                )
+            },
+        )
+        client.post(
+            "/api/upload?overwrite=true",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                    "application/json",
+                )
+            },
+        )
+        version_id = client.get(
+            f"/api/notebooks/{filename}/versions"
+        ).json()["versions"][0]["version_id"]
+        _backdate_notebook_version(filename, version_id, days_ago=40)
+
+    client.put(
+        "/api/notebooks/prune_versions_tags_all_a.ipynb/tags",
+        json={"tags": ["scratch", "v1"]},
+    )
+    client.put(
+        "/api/notebooks/prune_versions_tags_all_b.ipynb/tags",
+        json={"tags": ["scratch"]},
+    )
+
+    resp = client.delete(
+        "/api/notebooks/versions",
+        params={"older_than_days": 30, "tags": "scratch,v1", "tags_match": "all"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["notebook_count_affected"] == 1
+    assert [r["filename"] for r in body["results"]] == [
+        "prune_versions_tags_all_a.ipynb"
+    ]
+
+    assert len(client.get(
+        "/api/notebooks/prune_versions_tags_all_b.ipynb/versions"
+    ).json()["versions"]) == 1
+
+
+def test_prune_all_notebook_versions_tags_composes_with_sha256():
+
+    shared_current_content = _notebook_bytes(
+        "def shared_current() -> int:\n    return 1\n"
+    )
+
+    for filename in (
+        "prune_versions_tags_sha_a.ipynb", "prune_versions_tags_sha_b.ipynb",
+    ):
+        client.post(
+            "/api/upload",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes("def old() -> int:\n    return 0\n")),
+                    "application/json",
+                )
+            },
+        )
+        client.post(
+            "/api/upload?overwrite=true",
+            files={
+                "file": (
+                    filename, io.BytesIO(shared_current_content), "application/json"
+                )
+            },
+        )
+        version_id = client.get(
+            f"/api/notebooks/{filename}/versions"
+        ).json()["versions"][0]["version_id"]
+        _backdate_notebook_version(filename, version_id, days_ago=40)
+
+    client.put(
+        "/api/notebooks/prune_versions_tags_sha_a.ipynb/tags",
+        json={"tags": ["prod"]},
+    )
+
+    target_sha256 = hashlib.sha256(shared_current_content).hexdigest()
+
+    resp = client.delete(
+        "/api/notebooks/versions",
+        params={
+            "older_than_days": 30, "sha256": target_sha256, "tags": "prod",
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["notebook_count_affected"] == 1
+    assert [r["filename"] for r in body["results"]] == [
+        "prune_versions_tags_sha_a.ipynb"
+    ]
+
+    assert len(client.get(
+        "/api/notebooks/prune_versions_tags_sha_b.ipynb/versions"
+    ).json()["versions"]) == 1
+
+
+def test_prune_all_notebook_versions_rejects_unrecognized_tags_match():
+
+    resp = client.delete(
+        "/api/notebooks/versions",
+        params={"older_than_days": 30, "tags": "scratch", "tags_match": "bogus"},
+    )
+
+    assert resp.status_code == 400
+
+
 def test_prune_all_notebook_versions_sha256_composes_with_tag():
 
     shared_current_content = _notebook_bytes(
