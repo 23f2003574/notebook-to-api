@@ -14441,6 +14441,66 @@ def test_validate_all_command_sends_tag_query_param(tmp_path, fake_dashboard):
     assert query == {"strict": ["false"], "tag": ["prod"], "offset": ["0"]}
 
 
+def test_validate_all_command_sends_tags_and_tags_match_query_params(
+    tmp_path, fake_dashboard
+):
+    """Mirrors test_validate_all_command_sends_tag_query_param: GET
+    /api/validate-all's own "tags"/"tags_match" multi-tag filter had no
+    CLI flags of its own here at all.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "results": [], "pass_count": 0,
+            "warn_count": 0, "fail_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "validate-all", "--tags", "staging,v1", "--tags-match", "all",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    query = urllib.parse.parse_qs(handler.requests[0].split("?", 1)[1])
+    assert query == {
+        "strict": ["false"], "offset": ["0"],
+        "tags": ["staging,v1"], "tags_match": ["all"],
+    }
+
+
+def test_validate_all_command_omits_tags_match_query_param_by_default(
+    tmp_path, fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "results": [], "pass_count": 0,
+            "warn_count": 0, "fail_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["validate-all", "--tags", "staging", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    query = urllib.parse.parse_qs(handler.requests[0].split("?", 1)[1])
+    assert query == {"strict": ["false"], "offset": ["0"], "tags": ["staging"]}
+
+
 def test_validate_all_command_sends_sha256_and_modified_after_and_before_query_params(
     tmp_path, fake_dashboard
 ):

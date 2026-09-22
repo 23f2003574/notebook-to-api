@@ -13912,6 +13912,7 @@ def validate_notebook_endpoint(
 @router.get("/validate-all")
 def validate_all_notebooks(
     strict: bool = False, tag: str = None, sha256: str = None,
+    tags: str = None, tags_match: str = "any",
     modified_after: str = None, modified_before: str = None,
     limit: int = None, offset: int = 0,
     format: str = "json", checksums: bool = False, status: str = None,
@@ -13952,6 +13953,24 @@ def validate_all_notebooks(
     out-of-tag notebook (including one that would otherwise fail to
     parse) never contributes a result or counts toward
     pass_count/warn_count/fail_count at all.
+
+    "tags" (optional, a comma-separated list) plus "tags_match" ("any",
+    the default -- an OR, or "all" -- an AND) scope the scan the way
+    "tag" does but across several tags at once, the identical pair GET
+    /api/notebooks, GET /api/notebooks/duplicates, GET
+    /api/notebooks/storage, DELETE /api/notebooks, GET
+    /api/notebooks/export, DELETE /api/notebooks/versions and POST
+    /api/notebooks/duplicates/resolve already accept. Before this, a CI
+    job wanting "only my notebooks tagged both 'production' and 'v2'"
+    (an AND), or the "staging'-or-'canary'" equivalent (an OR), could not
+    express that scope here at all -- only one exact "tag" -- so it had
+    to validate the entire catalog and filter the response down
+    client-side by re-fetching each result's own tags separately.
+    Composes with "tag"/"sha256"/"modified_*" as an AND, and is applied
+    before a notebook is even parsed, the same "out-of-scope notebook
+    never contributes a result" treatment "tag" above already gets; an
+    unrecognized "tags_match" is rejected with 400 before a single
+    notebook is read.
 
     "sha256" (optional) scopes the scan to at most the notebook(s) whose
     exact content hashes to this digest -- the same exact-content-match
@@ -14083,6 +14102,17 @@ def validate_all_notebooks(
             detail="limit must be a positive integer"
         )
 
+    if tags_match not in ("any", "all"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="tags_match must be 'any' or 'all'"
+        )
+
+    tags_filter = (
+        {t.strip() for t in tags.split(",") if t.strip()} if tags else None
+    )
+
     modified_after_dt = _parse_iso_datetime_query_param(modified_after, "modified_after")
     modified_before_dt = _parse_iso_datetime_query_param(modified_before, "modified_before")
 
@@ -14109,6 +14139,16 @@ def validate_all_notebooks(
 
         if tag and tag not in _read_notebook_tags(entry.name):
             continue
+
+        if tags_filter is not None:
+
+            notebook_tags_set = set(_read_notebook_tags(entry.name))
+
+            if tags_match == "all":
+                if not tags_filter.issubset(notebook_tags_set):
+                    continue
+            elif not tags_filter & notebook_tags_set:
+                continue
 
         entry_sha256 = hash_notebook_file(entry) if (sha256 or checksums) else None
 
