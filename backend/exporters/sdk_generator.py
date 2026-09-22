@@ -1162,7 +1162,8 @@ def generate_python_sdk(
     # file nothing lints, and tracking it exactly would add real
     # complexity for no functional benefit.
     lines.append(
-        "from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict, Union"
+        "from typing import Any, Dict, Iterable, List, Literal, Optional, "
+        "Tuple, TypedDict, Union"
     )
     lines.append("")
     lines.append("")
@@ -1183,7 +1184,10 @@ def generate_python_sdk(
     # signing the re-serialized/re-parsed JSON instead of the untouched
     # raw bytes actually received) away from a broken or bypassable check.
     lines.append("def verify_webhook_signature(")
-    lines.append("    payload_body: bytes, signature_header: str, secret: str")
+    lines.append(
+        "    payload_body: bytes, signature_header: str, "
+        "secret: Union[str, Iterable[str]]"
+    )
     lines.append(") -> bool:")
     lines.append('    """Verify a task webhook delivered by a compiled app\'s own')
     lines.append("    `_deliver_task_webhook` (see api_generator.py).")
@@ -1216,6 +1220,56 @@ def generate_python_sdk(
     )
     lines.append("")
     lines.append(
+        "    `secret` also accepts an iterable of several secrets -- "
+        "checked in"
+    )
+    lines.append(
+        "    order, True as soon as any one matches -- for a zero-"
+        "downtime secret"
+    )
+    lines.append(
+        "    rotation: the compiled app itself only ever signs with "
+        "whichever"
+    )
+    lines.append(
+        "    single value NOTEBOOK_API_WEBHOOK_SECRET currently holds, so "
+        "rotating"
+    )
+    lines.append(
+        "    it (a scheduled rotation, or a suspected leak) is otherwise "
+        "an"
+    )
+    lines.append(
+        "    all-or-nothing cutover: any webhook delivered in the gap "
+        "between"
+    )
+    lines.append(
+        "    updating the server's own env var and updating every "
+        "receiver's own"
+    )
+    lines.append(
+        "    still-hardcoded secret fails to verify and is discarded. "
+        "Passing"
+    )
+    lines.append(
+        "    both the old and new secret here during the transition -- "
+        "the same"
+    )
+    lines.append(
+        "    \"generate one, let clients switch over, then remove the "
+        "old one\""
+    )
+    lines.append(
+        "    rotation this compiled app's own API_KEYS already supports "
+        "for"
+    )
+    lines.append(
+        "    request authentication -- means a webhook is never "
+        "rejected"
+    )
+    lines.append("    mid-rotation regardless of which one actually signed it.")
+    lines.append("")
+    lines.append(
         "    Returns False -- never raises -- for a missing, empty, or"
     )
     lines.append(
@@ -1234,14 +1288,18 @@ def generate_python_sdk(
     )
     lines.append("    if algorithm != \"sha256\":")
     lines.append("        return False")
+    lines.append("    secrets = (secret,) if isinstance(secret, str) else tuple(secret)")
+    lines.append("    for candidate_secret in secrets:")
+    lines.append("        expected_signature = hmac.new(")
     lines.append(
-        "    expected_signature = hmac.new("
+        "            candidate_secret.encode(\"utf-8\"), payload_body, \"sha256\""
     )
-    lines.append("        secret.encode(\"utf-8\"), payload_body, \"sha256\"")
-    lines.append("    ).hexdigest()")
+    lines.append("        ).hexdigest()")
     lines.append(
-        "    return hmac.compare_digest(expected_signature, signature)"
+        "        if hmac.compare_digest(expected_signature, signature):"
     )
+    lines.append("            return True")
+    lines.append("    return False")
     lines.append("")
     lines.append("")
     # Every {Pascal}Request/{Pascal}Response/{Pascal}TaskResult TypedDict
@@ -1992,10 +2050,52 @@ def generate_typescript_sdk(
     # server APIs commonly hand back one or the other depending on how the
     # body was read); passed straight through to createHmac's own .update,
     # which accepts both without re-encoding.
+    lines.append("/**")
+    lines.append(" * Verify a task webhook delivered by a compiled app's own")
+    lines.append(" * `_deliver_task_webhook` (see api_generator.py).")
+    lines.append(" *")
+    lines.append(
+        " * `secret` also accepts an array of several secrets -- checked in"
+    )
+    lines.append(
+        " * order, true as soon as any one matches -- for a zero-downtime"
+    )
+    lines.append(
+        " * secret rotation: the compiled app itself only ever signs with"
+    )
+    lines.append(
+        " * whichever single value NOTEBOOK_API_WEBHOOK_SECRET currently"
+    )
+    lines.append(
+        " * holds, so rotating it is otherwise an all-or-nothing cutover --"
+    )
+    lines.append(
+        " * any webhook delivered in the gap between updating the server's"
+    )
+    lines.append(
+        " * own env var and updating every receiver's own still-hardcoded"
+    )
+    lines.append(
+        " * secret fails to verify and is discarded. Passing both the old"
+    )
+    lines.append(
+        " * and new secret here during the transition -- the same \"generate"
+    )
+    lines.append(
+        " * one, let clients switch over, then remove the old one\" rotation"
+    )
+    lines.append(
+        " * this compiled app's own API_KEYS already supports for request"
+    )
+    lines.append(
+        " * authentication -- means a webhook is never rejected mid-"
+    )
+    lines.append(" * rotation regardless of which one actually signed it.")
+    lines.append(" */")
     lines.append("export function verifyWebhookSignature(")
     lines.append("  payloadBody: string | Buffer,")
     lines.append("  signatureHeader: string | null | undefined,")
-    lines.append("  secret: string")
+    lines.append("  secret: string | string[]")
     lines.append("): boolean {")
     lines.append("  if (!signatureHeader || !signatureHeader.includes(\"=\")) {")
     lines.append("    return false;")
@@ -2007,29 +2107,38 @@ def generate_typescript_sdk(
     lines.append("    return false;")
     lines.append("  }")
     lines.append(
-        '  const expectedSignature = createHmac("sha256", secret)'
+        "  const receivedBuffer = Buffer.from(signature, \"utf-8\");"
     )
-    lines.append("    .update(payloadBody)")
-    lines.append('    .digest("hex");')
+    lines.append(
+        "  const secrets = Array.isArray(secret) ? secret : [secret];"
+    )
+    lines.append("  for (const candidateSecret of secrets) {")
+    lines.append(
+        '    const expectedSignature = createHmac("sha256", candidateSecret)'
+    )
+    lines.append("      .update(payloadBody)")
+    lines.append('      .digest("hex");')
     # timingSafeEqual throws (rather than returning false) when the two
     # buffers differ in length -- an attacker-controlled signatureHeader of
     # the "wrong" length would otherwise crash a receiver's request
     # handler instead of just failing verification, so the length check
     # below must happen first.
     lines.append(
-        "  const expectedBuffer = Buffer.from(expectedSignature, \"utf-8\");"
+        "    const expectedBuffer = Buffer.from(expectedSignature, "
+        "\"utf-8\");"
     )
     lines.append(
-        "  const receivedBuffer = Buffer.from(signature, \"utf-8\");"
+        "    if (expectedBuffer.length !== receivedBuffer.length) {"
     )
+    lines.append("      continue;")
+    lines.append("    }")
     lines.append(
-        "  if (expectedBuffer.length !== receivedBuffer.length) {"
+        "    if (timingSafeEqual(expectedBuffer, receivedBuffer)) {"
     )
-    lines.append("    return false;")
+    lines.append("      return true;")
+    lines.append("    }")
     lines.append("  }")
-    lines.append(
-        "  return timingSafeEqual(expectedBuffer, receivedBuffer);"
-    )
+    lines.append("  return false;")
     lines.append("}")
     lines.append("")
     lines.append("export interface NotebookAPIClientOptions {")
