@@ -6220,6 +6220,29 @@ def test_search_content_command_sends_tag_query_param(fake_dashboard):
     assert handler.requests == ["/api/notebooks/search-content?search=read_csv&sort=name&order=asc&offset=0&tag=prod"]
 
 
+def test_search_content_command_sends_tags_and_tags_match_query_params(
+    fake_dashboard
+):
+
+    dashboard_url, handler = fake_dashboard
+    body = {"status": "success", "search": "read_csv", "matches": [], "notebook_count": 0}
+    handler.responses = [_json_response(200, body)]
+
+    proc = _run_cli(
+        [
+            "search-content", "read_csv", "--tags", "staging,v1",
+            "--tags-match", "all", "--dashboard-url", dashboard_url,
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/notebooks/search-content?search=read_csv&sort=name&order=asc"
+        "&offset=0&tags=staging%2Cv1&tags_match=all"
+    ]
+
+
 def test_search_content_command_checksums_sends_query_param_and_prints_sha256(
     fake_dashboard
 ):

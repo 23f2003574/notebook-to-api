@@ -7118,6 +7118,97 @@ def test_search_notebook_content_filters_by_tag():
     assert body["matches"][0]["filename"] == "search_content_tag_a.ipynb"
 
 
+def test_search_notebook_content_filters_by_tags_any():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes(
+        "import pandas as pd\n\n"
+        "def load() -> str:\n    df = pd.read_csv('data.csv')\n    return 'done'\n"
+    )
+
+    for filename in (
+        "search_content_tags_any_a.ipynb", "search_content_tags_any_b.ipynb",
+        "search_content_tags_any_c.ipynb",
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    client.put(
+        "/api/notebooks/search_content_tags_any_a.ipynb/tags",
+        json={"tags": ["staging"]},
+    )
+    client.put(
+        "/api/notebooks/search_content_tags_any_b.ipynb/tags",
+        json={"tags": ["canary"]},
+    )
+    client.put(
+        "/api/notebooks/search_content_tags_any_c.ipynb/tags",
+        json={"tags": ["prod"]},
+    )
+
+    resp = client.get(
+        "/api/notebooks/search-content",
+        params={"search": "read_csv", "tags": "staging,canary"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert sorted(m["filename"] for m in body["matches"]) == [
+        "search_content_tags_any_a.ipynb", "search_content_tags_any_b.ipynb",
+    ]
+
+
+def test_search_notebook_content_filters_by_tags_all():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes(
+        "import pandas as pd\n\n"
+        "def load() -> str:\n    df = pd.read_csv('data.csv')\n    return 'done'\n"
+    )
+
+    for filename in (
+        "search_content_tags_all_a.ipynb", "search_content_tags_all_b.ipynb",
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    client.put(
+        "/api/notebooks/search_content_tags_all_a.ipynb/tags",
+        json={"tags": ["staging", "v1"]},
+    )
+    client.put(
+        "/api/notebooks/search_content_tags_all_b.ipynb/tags",
+        json={"tags": ["staging"]},
+    )
+
+    resp = client.get(
+        "/api/notebooks/search-content",
+        params={"search": "read_csv", "tags": "staging,v1", "tags_match": "all"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [m["filename"] for m in body["matches"]] == [
+        "search_content_tags_all_a.ipynb"
+    ]
+
+
+def test_search_notebook_content_rejects_unrecognized_tags_match():
+
+    resp = client.get(
+        "/api/notebooks/search-content",
+        params={"search": "x", "tags": "staging", "tags_match": "bogus"},
+    )
+
+    assert resp.status_code == 400
+
+
 def test_search_notebook_content_filters_by_sha256():
     """A notebook renamed/re-uploaded under a different filename keeps
     the same content hash -- "tag" alone can't scope a scan to "this
