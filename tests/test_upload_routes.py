@@ -7889,6 +7889,62 @@ def test_search_notebook_version_content_scopes_by_tag():
     assert [m["filename"] for m in body["matches"]] == [filename_a]
 
 
+def test_search_notebook_version_content_scopes_by_tags_any():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    filenames = {
+        "a": "versions_search_content_tags_any_a.ipynb",
+        "b": "versions_search_content_tags_any_b.ipynb",
+        "c": "versions_search_content_tags_any_c.ipynb",
+    }
+    tags = {"a": ["staging"], "b": ["canary"], "c": ["prod"]}
+
+    for key, filename in filenames.items():
+        client.post(
+            "/api/upload",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes("def f() -> int:\n    return 1\n")),
+                    "application/json",
+                )
+            },
+        )
+        client.post(
+            "/api/upload?overwrite=true",
+            files={
+                "file": (
+                    filename,
+                    io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                    "application/json",
+                )
+            },
+        )
+        client.put(f"/api/notebooks/{filename}/tags", json={"tags": tags[key]})
+
+    resp = client.get(
+        "/api/notebooks/versions/search-content",
+        params={"search": "def f(", "tags": "staging,canary"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert sorted(m["filename"] for m in body["matches"]) == sorted(
+        [filenames["a"], filenames["b"]]
+    )
+
+
+def test_search_notebook_version_content_rejects_unrecognized_tags_match():
+
+    resp = client.get(
+        "/api/notebooks/versions/search-content",
+        params={"search": "x", "tags": "staging", "tags_match": "bogus"},
+    )
+
+    assert resp.status_code == 400
+
+
 def test_search_notebook_version_content_regex_matches_a_pattern():
 
     client.delete("/api/notebooks?confirm=true")
