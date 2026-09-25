@@ -575,6 +575,20 @@ GENERATED_APP_ENV_VARS = [
 ]
 
 
+def _deprecation_header_value(reason, max_length=200):
+    """`reason` (a deprecation directive's own free-text argument, or
+    None) reduced to something safe to send as an HTTP header value:
+    printable ASCII only (no CR/LF, which would otherwise split the
+    header), whitespace runs collapsed, truncated to `max_length`. None or
+    a reason with nothing printable left returns None -- no header.
+    """
+    if not reason:
+        return None
+    cleaned = "".join(ch if 32 <= ord(ch) < 127 else " " for ch in reason)
+    cleaned = " ".join(cleaned.split())[:max_length].rstrip()
+    return cleaned or None
+
+
 def _generated_app_env_var_default(name):
     """The default value GENERATED_APP_ENV_VARS declares for `name`,
     embedded into the matching os.getenv(name, default) call generated
@@ -1077,7 +1091,8 @@ def generate_fastapi_code(
         "allow_headers=['*'], "
         "expose_headers=["
         "'X-RateLimit-Limit', 'X-RateLimit-Remaining', "
-        "'X-RateLimit-Reset', 'Retry-After'"
+        "'X-RateLimit-Reset', 'Retry-After', "
+        "'Deprecation', 'X-Deprecation-Reason'"
         "]"
         ")"
     )
@@ -1157,6 +1172,39 @@ def generate_fastapi_code(
     # carry sensitive path segments, e.g. a task_id) from leaking into the
     # Referer header of a request /docs' own "Try it out" -- or any link a
     # response body might contain -- makes to a different origin.
+    # A "# notebook-to-api: deprecated" directive (resolve_deprecation
+    # above) only ever reached openapi.json/"/docs" -- a client calling
+    # the endpoint directly (an SDK, a curl script, a cron job) never sees
+    # /docs, so nothing told it at call time that it was relying on an
+    # endpoint its author has marked for removal. Every response from a
+    # deprecated endpoint now carries the standard `Deprecation: true`
+    # header (RFC 9745) -- the signal API gateways, HTTP client libraries
+    # and monitoring already look for -- plus `X-Deprecation-Reason` when
+    # the directive gave one. The reason is notebook-author-controlled
+    # text, so it is reduced to printable ASCII (header values must be
+    # latin-1 encodable and can never contain CR/LF) and repr()'d into the
+    # generated source for the same quote-safety reason `description` is.
+    deprecated_paths = {}
+    for func in functions:
+        is_deprecated, reason = resolve_deprecation(
+            func["name"], deprecated_overrides
+        )
+        if is_deprecated:
+            deprecated_paths[f"/{func['name']}"] = _deprecation_header_value(
+                reason
+            )
+    lines.append(f"_DEPRECATED_ENDPOINTS = {repr(deprecated_paths)}")
+    lines.append("")
+    lines.append("@app.middleware('http')")
+    lines.append("async def _add_deprecation_headers(request, call_next):")
+    lines.append("    response = await call_next(request)")
+    lines.append("    if request.url.path in _DEPRECATED_ENDPOINTS:")
+    lines.append("        response.headers['Deprecation'] = 'true'")
+    lines.append("        reason = _DEPRECATED_ENDPOINTS[request.url.path]")
+    lines.append("        if reason:")
+    lines.append("            response.headers['X-Deprecation-Reason'] = reason")
+    lines.append("    return response")
+    lines.append("")
     lines.append("@app.middleware('http')")
     lines.append("async def _add_security_headers(request, call_next):")
     lines.append("    response = await call_next(request)")
