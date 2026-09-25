@@ -16868,7 +16868,7 @@ def test_inspect_notebook_version_reports_functions_and_dependencies_for_that_sn
     assert [f["name"] for f in body["functions"]] == ["add"]
     assert any(dep.startswith("pandas") for dep in body["dependencies"])
     assert body["endpoints"] == [
-        {"path": "/add", "method": "POST", "is_async": False, "deprecated": False}
+        {"path": "/add", "method": "POST", "is_async": False, "deprecated": False, "sunset": None}
     ]
     assert body["reserved_name_conflicts"] == []
     assert body["skipped_functions"] == []
@@ -22044,7 +22044,7 @@ def test_upload_inspect_compile_still_works_for_a_legitimate_notebook():
     )
     assert compile_resp.status_code == 200
     assert compile_resp.json()["endpoints"] == [
-        {"path": "/add", "method": "POST", "is_async": False, "deprecated": False}
+        {"path": "/add", "method": "POST", "is_async": False, "deprecated": False, "sunset": None}
     ]
 
 
@@ -22082,10 +22082,10 @@ def test_compile_endpoints_flag_background_functions_as_async():
 
     endpoints = {e["path"]: e for e in compile_resp.json()["endpoints"]}
 
-    assert endpoints["/add"] == {"path": "/add", "method": "POST", "is_async": False, "deprecated": False}
+    assert endpoints["/add"] == {"path": "/add", "method": "POST", "is_async": False, "deprecated": False, "sunset": None}
     assert endpoints["/train_model"] == {
         "path": "/train_model", "method": "POST", "is_async": True,
-        "deprecated": False,
+        "deprecated": False, "sunset": None,
     }
 
 
@@ -25771,7 +25771,7 @@ def test_openapi_preview_matches_an_actual_compile_with_a_deprecated_directive()
     )
     assert compile_resp.status_code == 200
     assert compile_resp.json()["endpoints"] == [
-        {"path": "/greet", "method": "POST", "is_async": False, "deprecated": True}
+        {"path": "/greet", "method": "POST", "is_async": False, "deprecated": True, "sunset": None}
     ]
 
     export_resp = client.post("/api/export-openapi", json={"format": "json"})
@@ -27698,10 +27698,10 @@ def test_inspect_reports_endpoints_and_flags_background_ones_before_compiling():
 
     endpoints = {e["path"]: e for e in inspect_resp.json()["endpoints"]}
 
-    assert endpoints["/add"] == {"path": "/add", "method": "POST", "is_async": False, "deprecated": False}
+    assert endpoints["/add"] == {"path": "/add", "method": "POST", "is_async": False, "deprecated": False, "sunset": None}
     assert endpoints["/train_model"] == {
         "path": "/train_model", "method": "POST", "is_async": True,
-        "deprecated": False,
+        "deprecated": False, "sunset": None,
     }
 
 

@@ -214,11 +214,11 @@ def test_inspect_notebook_data_reports_endpoints_and_flags_background_ones(tmp_p
     endpoints = {e["path"]: e for e in data["endpoints"]}
 
     assert endpoints["/add"] == {
-        "path": "/add", "method": "POST", "is_async": False, "deprecated": False
+        "path": "/add", "method": "POST", "is_async": False, "deprecated": False, "sunset": None
     }
     assert endpoints["/train_model"] == {
         "path": "/train_model", "method": "POST", "is_async": True,
-        "deprecated": False,
+        "deprecated": False, "sunset": None,
     }
 
 
@@ -3302,3 +3302,47 @@ def test_print_notebook_diff_prints_sunset_changes(capsys):
     assert "2 deprecated endpoint(s) with a changed sunset date:" in output
     assert "! POST /add: 2026-06-01 -> 2026-01-01 (moved earlier)" in output
     assert "POST /sub: none -> 2027-01-01" in output
+
+
+def test_inspect_notebook_data_endpoints_report_each_deprecated_functions_sunset(
+    tmp_path,
+):
+    """Confirmed missing before this feature: an endpoint's metadata only
+    said "deprecated": true -- its sunset date was buried in the free-text
+    reason, invisible to anything consuming this preview structurally."""
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "# notebook-to-api: deprecated: use v2. sunset: 2026-01-15\n"
+        "def old_add(a: int) -> int:\n    return a\n\n"
+        "# notebook-to-api: deprecated: sunset: 2026-13-40\n"
+        "def bad_date(a: int) -> int:\n    return a\n\n"
+        "def add(a: int) -> int:\n    return a\n",
+    )
+
+    data = inspect_notebook_data(str(notebook_path))
+    endpoints = {entry["path"]: entry for entry in data["endpoints"]}
+
+    assert endpoints["/old_add"]["sunset"] == "2026-01-15"
+    assert endpoints["/bad_date"]["deprecated"] is True
+    assert endpoints["/bad_date"]["sunset"] is None
+    assert endpoints["/add"]["sunset"] is None
+
+
+def test_inspect_notebook_prints_the_sunset_date_next_to_deprecated(
+    tmp_path, capsys
+):
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "# notebook-to-api: deprecated: sunset: 2026-01-15\n"
+        "def old_add(a: int) -> int:\n    return a\n\n"
+        "# notebook-to-api: deprecated\n"
+        "def older(a: int) -> int:\n    return a\n",
+    )
+
+    inspect_notebook(str(notebook_path), output_dir=str(tmp_path / "out"))
+
+    output = capsys.readouterr().out
+    assert "[deprecated, sunset 2026-01-15]" in output
+    assert "older" in output and "[deprecated]" in output
