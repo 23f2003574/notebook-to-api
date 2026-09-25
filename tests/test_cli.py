@@ -27588,3 +27588,61 @@ def test_app_deprecations_404_explains_the_app_needs_recompiling(
 
     assert proc.returncode != 0
     assert "recompile" in proc.stdout + proc.stderr
+
+
+def test_app_deprecations_prints_each_endpoints_sunset_date(
+    tmp_path, fake_dashboard
+):
+    body = {
+        "rejecting": False,
+        "endpoints": [
+            {"path": "/old_add", "reason": "Use add.", "calls": 0,
+             "sunset": "2099-01-01"},
+        ],
+    }
+    proc, _ = _run_app_deprecations(tmp_path, fake_dashboard, body)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "/old_add  calls=0  sunset=2099-01-01  (Use add.)" in proc.stdout
+
+
+def test_app_deprecations_fail_if_past_sunset_exits_1_for_a_missed_removal(
+    tmp_path, fake_dashboard
+):
+    """Confirmed missing before this feature: nothing checked that an
+    endpoint whose sunset date had passed was actually removed."""
+    body = {
+        "rejecting": False,
+        "endpoints": [
+            {"path": "/old_add", "reason": None, "calls": 0,
+             "sunset": "2000-01-01"},
+            {"path": "/old_sub", "reason": None, "calls": 0,
+             "sunset": "2099-01-01"},
+        ],
+    }
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, body, "--fail-if-past-sunset"
+    )
+
+    assert proc.returncode == 1
+    assert "past their sunset date: /old_add (2000-01-01)" in proc.stderr
+    assert "/old_sub (" not in proc.stderr
+
+
+def test_app_deprecations_fail_if_past_sunset_passes_for_future_or_missing(
+    tmp_path, fake_dashboard
+):
+    body = {
+        "rejecting": False,
+        "endpoints": [
+            {"path": "/a", "reason": None, "calls": 5, "sunset": "2099-01-01"},
+            {"path": "/b", "reason": None, "calls": 5, "sunset": None},
+            {"path": "/c", "reason": None, "calls": 5},
+            {"path": "/d", "reason": None, "calls": 5, "sunset": "garbage"},
+        ],
+    }
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, body, "--fail-if-past-sunset"
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr

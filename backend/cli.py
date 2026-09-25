@@ -8417,6 +8417,7 @@ def _dispatch_core_command(args):
         # See `upload` above for why this is imported here rather than at
         # module scope.
         import httpx
+        import datetime
 
         app_url = f"http://{args.host}:{args.port}"
 
@@ -8458,8 +8459,10 @@ def _dispatch_core_command(args):
             )
             for entry in endpoints:
                 reason = entry.get("reason")
+                sunset = entry.get("sunset")
                 print(
                     f"  {entry.get('path')}  calls={entry.get('calls', 0)}"
+                    + (f"  sunset={sunset}" if sunset else "")
                     + (f"  ({reason})" if reason else "")
                 )
 
@@ -8477,6 +8480,35 @@ def _dispatch_core_command(args):
                     file=sys.stderr,
                 )
             sys.exit(1)
+
+        # An endpoint still served after its own RFC 8594 sunset date
+        # (GET /deprecations' "sunset", from a "sunset: YYYY-MM-DD"
+        # directive reason) means a promised removal was missed. The date
+        # is compared against today in UTC, the same timezone the app's
+        # own Sunset header is expressed in; an entry with no sunset, or
+        # one an older app never reports, is never past it.
+        if args.fail_if_past_sunset:
+            today = datetime.datetime.now(datetime.timezone.utc).date()
+            past_sunset = []
+            for entry in endpoints:
+                try:
+                    sunset = datetime.date.fromisoformat(entry.get("sunset") or "")
+                except ValueError:
+                    continue
+                if sunset <= today:
+                    past_sunset.append(entry)
+            if past_sunset:
+                if not args.json_output:
+                    print(
+                        f"{len(past_sunset)} deprecated endpoint(s) still "
+                        "served past their sunset date: "
+                        + ", ".join(
+                            f"{entry['path']} ({entry['sunset']})"
+                            for entry in past_sunset
+                        ),
+                        file=sys.stderr,
+                    )
+                sys.exit(1)
     elif args.command == "app-call":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -16585,6 +16617,17 @@ def main():
         action="store_true",
         dest="json_output",
         help="Print GET /deprecations' own JSON response verbatim instead of a summary."
+    )
+    app_deprecations_parser.add_argument(
+        "--fail-if-past-sunset",
+        action="store_true",
+        dest="fail_if_past_sunset",
+        help=(
+            "Exit with status 1 if any deprecated endpoint is still served "
+            "on or after its own sunset date (a \"sunset: YYYY-MM-DD\" "
+            "in its deprecation reason, reported by GET /deprecations) -- "
+            "a scheduled CI check that a promised removal actually happened."
+        )
     )
     app_deprecations_parser.add_argument(
         "--fail-if-called",
