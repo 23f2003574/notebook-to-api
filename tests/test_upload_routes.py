@@ -24713,6 +24713,7 @@ def test_validate_all_reports_zero_when_nothing_uploaded():
         "warn_count": 0,
         "fail_count": 0,
         "deprecated_notebook_count": 0,
+        "past_sunset_notebook_count": 0,
     }
 
 
@@ -34129,3 +34130,41 @@ def test_delete_all_notebooks_rejects_an_invalid_modified_before():
     )
 
     assert resp.status_code == 400
+
+
+def test_validate_all_reports_deprecated_functions_past_their_sunset():
+    """Confirmed missing before this feature: a deprecated function whose
+    own "sunset: YYYY-MM-DD" had already passed -- a missed removal -- was
+    only discoverable against a running compiled app, never from source."""
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes(
+        "# notebook-to-api: deprecated: use add_v2. sunset: 2000-01-01\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "# notebook-to-api: deprecated: sunset: 2999-01-01\n"
+        "def sub(a: int, b: int) -> int:\n    return a - b\n\n"
+        "# notebook-to-api: deprecated\n"
+        "def mul(a: int, b: int) -> int:\n    return a * b\n"
+    )
+    clean = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    for filename, body in (
+        ("validate_all_sunset_a.ipynb", content),
+        ("validate_all_sunset_b.ipynb", clean),
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(body), "application/json")},
+        )
+
+    resp = client.get("/api/validate-all")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["past_sunset_notebook_count"] == 1
+    by_filename = {r["filename"]: r for r in body["results"]}
+    assert by_filename["validate_all_sunset_a.ipynb"]["past_sunset_functions"] == {
+        "add": "2000-01-01"
+    }
+    assert by_filename["validate_all_sunset_b.ipynb"]["past_sunset_functions"] == {}

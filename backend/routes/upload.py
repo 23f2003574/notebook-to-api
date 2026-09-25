@@ -58,6 +58,7 @@ from backend.compiler import (
 )
 from backend.generator.api_generator import (
     GENERATED_APP_ENV_VARS,
+    _deprecation_sunset_date,
     ReservedFunctionNameError,
     generate_fastapi_code,
 )
@@ -14243,6 +14244,15 @@ def validate_all_notebooks(
     warn_count = 0
     fail_count = 0
     deprecated_notebook_count = 0
+    # A deprecated function whose own "sunset: YYYY-MM-DD" (the date the
+    # compiled app sends as its RFC 8594 Sunset header) is today or
+    # earlier, but which is still in the notebook -- a promised removal
+    # that was missed. Detectable here from source alone, before any
+    # compiled app is even running (unlike `app-deprecations
+    # --fail-if-past-sunset`, which needs a live deployment). UTC, the
+    # same timezone the Sunset header itself is expressed in.
+    past_sunset_notebook_count = 0
+    today_utc = datetime.now(timezone.utc).date().isoformat()
 
     for entry in sorted(upload_root.iterdir()):
 
@@ -14356,6 +14366,15 @@ def validate_all_notebooks(
         if deprecated_functions:
             deprecated_notebook_count += 1
 
+        past_sunset_functions = {}
+        for name, reason in deprecated_functions.items():
+            sunset = _deprecation_sunset_date(reason)
+            if sunset and sunset <= today_utc:
+                past_sunset_functions[name] = sunset
+
+        if past_sunset_functions:
+            past_sunset_notebook_count += 1
+
         result = {
             "filename": entry.name,
             "status": status,
@@ -14364,6 +14383,7 @@ def validate_all_notebooks(
             "duplicate_functions": duplicate_functions,
             "requirements_conflict": requirements_conflict,
             "deprecated_functions": deprecated_functions,
+            "past_sunset_functions": past_sunset_functions,
             "detail": None,
         }
         if checksums:
@@ -14434,6 +14454,7 @@ def validate_all_notebooks(
         "warn_count": warn_count,
         "fail_count": fail_count,
         "deprecated_notebook_count": deprecated_notebook_count,
+        "past_sunset_notebook_count": past_sunset_notebook_count,
     }
 
 

@@ -27646,3 +27646,74 @@ def test_app_deprecations_fail_if_past_sunset_passes_for_future_or_missing(
     )
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def _validate_all_past_sunset_response(past_sunset_count):
+    return _json_response(200, {
+        "status": "success",
+        "results": [
+            {
+                "filename": "old.ipynb", "status": "pass",
+                "reserved_name_conflicts": [], "skipped_functions": [],
+                "duplicate_functions": [], "requirements_conflict": None,
+                "deprecated_functions": {"add": "sunset: 2000-01-01"},
+                "past_sunset_functions": (
+                    {"add": "2000-01-01"} if past_sunset_count else {}
+                ),
+                "detail": None,
+            },
+        ],
+        "pass_count": 1, "warn_count": 0, "fail_count": 0,
+        "deprecated_notebook_count": 1,
+        "past_sunset_notebook_count": past_sunset_count,
+    })
+
+
+def test_validate_all_command_prints_past_sunset_functions_and_summary(
+    tmp_path, fake_dashboard
+):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_validate_all_past_sunset_response(1)]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["validate-all", "--dashboard-url", dashboard_url], cwd=workdir)
+
+    # Reported, but not fatal without --fail-on-past-sunset.
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "past sunset: add (sunset 2000-01-01)" in proc.stdout
+    assert (
+        "1 notebook(s) still define a deprecated function past its sunset date"
+        in proc.stdout
+    )
+
+
+def test_validate_all_command_fail_on_past_sunset_exits_1(tmp_path, fake_dashboard):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_validate_all_past_sunset_response(1)]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["validate-all", "--dashboard-url", dashboard_url, "--fail-on-past-sunset"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 1
+
+
+def test_validate_all_command_fail_on_past_sunset_passes_when_none(
+    tmp_path, fake_dashboard
+):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_validate_all_past_sunset_response(0)]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["validate-all", "--dashboard-url", dashboard_url, "--fail-on-past-sunset"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "past sunset" not in proc.stdout
