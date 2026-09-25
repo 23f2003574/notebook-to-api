@@ -76,6 +76,12 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # bookkeeping app-wide, not just for one endpoint related to the
     # colliding name.
     "_WEBHOOK_METRICS",
+    # Read by name from inside _add_deprecation_headers on every request
+    # (and _DEPRECATED_ENDPOINT_CALLS incremented there, then read back by
+    # metrics()/metrics_prometheus) -- a notebook function with either
+    # name would rebind it to a function object and break every request.
+    "_DEPRECATED_ENDPOINTS",
+    "_DEPRECATED_ENDPOINT_CALLS",
     # Assigned this compile's own real content hash once, at module load
     # (see write_generated_api's own caller), then read back verbatim by
     # GET /info below -- a notebook function of this exact name would
@@ -1194,11 +1200,20 @@ def generate_fastapi_code(
                 reason
             )
     lines.append(f"_DEPRECATED_ENDPOINTS = {repr(deprecated_paths)}")
+    # Per-deprecated-path call counter, reported by GET /metrics and GET
+    # /metrics/prometheus: the Deprecation header tells a caller, but only
+    # this tells the operator whether anyone still calls the endpoint --
+    # the one number that decides when it's actually safe to remove.
+    lines.append(
+        "_DEPRECATED_ENDPOINT_CALLS = "
+        "{path: 0 for path in _DEPRECATED_ENDPOINTS}"
+    )
     lines.append("")
     lines.append("@app.middleware('http')")
     lines.append("async def _add_deprecation_headers(request, call_next):")
     lines.append("    response = await call_next(request)")
     lines.append("    if request.url.path in _DEPRECATED_ENDPOINTS:")
+    lines.append("        _DEPRECATED_ENDPOINT_CALLS[request.url.path] += 1")
     lines.append("        response.headers['Deprecation'] = 'true'")
     lines.append("        reason = _DEPRECATED_ENDPOINTS[request.url.path]")
     lines.append("        if reason:")
@@ -2447,6 +2462,11 @@ def generate_fastapi_code(
     lines.append("            'delivered': _WEBHOOK_METRICS['redelivered'],")
     lines.append("            'failed': _WEBHOOK_METRICS['redelivery_failed'],")
     lines.append("        },")
+    # Purely additive, like every field above; {} when nothing in this
+    # notebook is deprecated.
+    lines.append(
+        "        'deprecated_endpoint_calls': dict(_DEPRECATED_ENDPOINT_CALLS),"
+    )
     lines.append("    }")
 
     # GET /metrics above has served this dashboard-shaped JSON summary
@@ -2603,6 +2623,26 @@ def generate_fastapi_code(
                   "{{outcome=\"failed\"}} "
                   "{_WEBHOOK_METRICS[\"redelivery_failed\"]}\\n'")
     lines.append("    )")
+    # One series per deprecated path (a "path" label, the same labelling
+    # choice as the "outcome" label above); omitted entirely when nothing
+    # is deprecated, rather than a HELP/TYPE header with no samples.
+    # Paths are always "/<python identifier>", so need no label escaping.
+    lines.append("    if _DEPRECATED_ENDPOINT_CALLS:")
+    lines.append(
+        "        body += ('# HELP notebook_api_deprecated_endpoint_calls_total "
+        "Total number of requests to each endpoint marked deprecated.\\n'"
+    )
+    lines.append(
+        "                 '# TYPE notebook_api_deprecated_endpoint_calls_total "
+        "counter\\n')"
+    )
+    lines.append(
+        "        for path, count in sorted(_DEPRECATED_ENDPOINT_CALLS.items()):"
+    )
+    lines.append(
+        "            body += f'notebook_api_deprecated_endpoint_calls_total"
+        "{{path=\"{path}\"}} {count}\\n'"
+    )
     # The Prometheus text exposition format's own registered media type --
     # not "text/plain" alone, which a real Prometheus scraper (and
     # promtool's own format validator) does not recognize as this format
