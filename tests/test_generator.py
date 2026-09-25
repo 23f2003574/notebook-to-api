@@ -75,6 +75,7 @@ def test_generated_app_env_vars_default_matches_the_actual_generated_code():
         "NOTEBOOK_API_WEBHOOK_RETRY_BACKOFF_SECONDS",
         "NOTEBOOK_API_PUBLIC_URL",
         "NOTEBOOK_API_DISABLE_DOCS",
+        "NOTEBOOK_API_REJECT_DEPRECATED",
         "NOTEBOOK_API_JSON_LOGS",
     }
 
@@ -7225,7 +7226,12 @@ def test_generate_readme_writes_exactly_what_readme_content_returns(tmp_path):
         == readme_content("my_app", functions, env_vars)
     )
 
-def _deprecation_test_client(monkeypatch, deprecated_overrides):
+def _deprecation_test_client(monkeypatch, deprecated_overrides,
+                             reject_deprecated=None):
+    if reject_deprecated is None:
+        monkeypatch.delenv("NOTEBOOK_API_REJECT_DEPRECATED", raising=False)
+    else:
+        monkeypatch.setenv("NOTEBOOK_API_REJECT_DEPRECATED", reject_deprecated)
     functions = [
         {"name": "old_add", "args": [], "return_type": "int"},
         {"name": "add", "args": [], "return_type": "int"},
@@ -7364,3 +7370,52 @@ def test_deprecated_endpoint_call_counter_names_are_reserved():
 
     assert "_DEPRECATED_ENDPOINTS" in RESERVED_INFRASTRUCTURE_NAMES
     assert "_DEPRECATED_ENDPOINT_CALLS" in RESERVED_INFRASTRUCTURE_NAMES
+
+
+def test_reject_deprecated_answers_410_without_running_the_function(monkeypatch):
+    """Confirmed missing before this feature: there was no way to trial an
+    endpoint's removal (a "brownout") short of deleting it and recompiling."""
+    client = _deprecation_test_client(
+        monkeypatch, {"old_add": "Use add."}, reject_deprecated="true"
+    )
+
+    response = client.post("/old_add", json={})
+
+    assert response.status_code == 410
+    assert "deprecated" in response.json()["detail"]
+    assert response.headers["Deprecation"] == "true"
+    assert response.headers["X-Deprecation-Reason"] == "Use add."
+    assert client.get("/metrics").json()["deprecated_endpoint_calls"] == {
+        "/old_add": 1
+    }
+
+
+def test_reject_deprecated_never_affects_non_deprecated_endpoints(monkeypatch):
+    client = _deprecation_test_client(
+        monkeypatch, {"old_add": None}, reject_deprecated="true"
+    )
+
+    response = client.post("/add", json={})
+
+    assert response.status_code == 200
+    assert response.json() == {"result": 2}
+
+
+def test_reject_deprecated_off_by_default_and_when_false(monkeypatch):
+    for value in (None, "false"):
+        client = _deprecation_test_client(
+            monkeypatch, {"old_add": None}, reject_deprecated=value
+        )
+        response = client.post("/old_add", json={})
+        assert response.status_code == 200
+        assert response.json() == {"result": 1}
+
+
+def test_reject_deprecated_rejects_before_auth_is_checked(monkeypatch):
+    client = _deprecation_test_client(
+        monkeypatch, {"old_add": None}, reject_deprecated="1"
+    )
+
+    response = client.post("/old_add", json={}, headers={"X-API-Key": "wrong"})
+
+    assert response.status_code == 410

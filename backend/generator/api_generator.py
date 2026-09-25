@@ -82,6 +82,9 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # name would rebind it to a function object and break every request.
     "_DEPRECATED_ENDPOINTS",
     "_DEPRECATED_ENDPOINT_CALLS",
+    # Read by name from inside _add_deprecation_headers on every request,
+    # the same exposure JSON_REQUEST_LOGS has for _log_request_json.
+    "REJECT_DEPRECATED_ENDPOINTS",
     # Assigned this compile's own real content hash once, at module load
     # (see write_generated_api's own caller), then read back verbatim by
     # GET /info below -- a notebook function of this exact name would
@@ -553,6 +556,22 @@ GENERATED_APP_ENV_VARS = [
             "are unaffected either way: they call this app's own "
             "openapi() method directly (in-process, at compile/export "
             "time), never through the HTTP routes this setting disables."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_REJECT_DEPRECATED",
+        "default": "false",
+        "description": (
+            "Set to \"true\" to make every endpoint marked \"# "
+            "notebook-to-api: deprecated\" answer 410 Gone (still with "
+            "its Deprecation/X-Deprecation-Reason headers) instead of "
+            "running the notebook function -- a reversible \"brownout\" "
+            "that shows which callers break before the endpoint is "
+            "actually removed from the notebook, without a recompile. "
+            "Rejected calls still count toward GET /metrics' own "
+            "\"deprecated_endpoint_calls\", so an operator can watch who "
+            "is still calling during the brownout. Endpoints that are not "
+            "deprecated are never affected."
         ),
     },
     {
@@ -1209,9 +1228,32 @@ def generate_fastapi_code(
         "{path: 0 for path in _DEPRECATED_ENDPOINTS}"
     )
     lines.append("")
+    # NOTEBOOK_API_REJECT_DEPRECATED (see GENERATED_APP_ENV_VARS): a
+    # brownout switch answering 410 Gone for deprecated paths before
+    # call_next ever reaches the endpoint -- the notebook function never
+    # runs, and auth is deliberately not checked first, since the answer
+    # ("this endpoint is gone") is the same for every caller.
+    lines.append(
+        'REJECT_DEPRECATED_ENDPOINTS = os.getenv('
+        '"NOTEBOOK_API_REJECT_DEPRECATED", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_REJECT_DEPRECATED")}"'
+        ').strip().lower() in ("true", "1", "yes", "on")'
+    )
     lines.append("@app.middleware('http')")
     lines.append("async def _add_deprecation_headers(request, call_next):")
-    lines.append("    response = await call_next(request)")
+    lines.append(
+        "    if REJECT_DEPRECATED_ENDPOINTS and "
+        "request.url.path in _DEPRECATED_ENDPOINTS:"
+    )
+    lines.append("        response = JSONResponse(")
+    lines.append("            status_code=410,")
+    lines.append(
+        "            content={'detail': f\"'{request.url.path}' is "
+        "deprecated and currently disabled on this deployment.\"},"
+    )
+    lines.append("        )")
+    lines.append("    else:")
+    lines.append("        response = await call_next(request)")
     lines.append("    if request.url.path in _DEPRECATED_ENDPOINTS:")
     lines.append("        _DEPRECATED_ENDPOINT_CALLS[request.url.path] += 1")
     lines.append("        response.headers['Deprecation'] = 'true'")

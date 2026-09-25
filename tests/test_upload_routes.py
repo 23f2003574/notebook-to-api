@@ -27580,6 +27580,7 @@ def test_env_vars_preview_requires_no_notebook_and_needs_no_body():
         "NOTEBOOK_API_WEBHOOK_RETRY_BACKOFF_SECONDS",
         "NOTEBOOK_API_PUBLIC_URL",
         "NOTEBOOK_API_DISABLE_DOCS",
+        "NOTEBOOK_API_REJECT_DEPRECATED",
         "NOTEBOOK_API_JSON_LOGS",
     }
     assert env_vars["NOTEBOOK_API_KEY"]["default"] == "notebook-to-api-dev-key"
