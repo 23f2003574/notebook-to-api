@@ -1087,6 +1087,7 @@ def test_generated_app_exposes_get_metrics_as_json(monkeypatch):
         # redelivery has happened, so every outcome stays at 0.
         "webhook_deliveries_by_outcome": {"delivered": 0, "failed": 0},
         "webhook_redeliveries_by_outcome": {"delivered": 0, "failed": 0},
+        "deprecated_endpoint_calls": {},
     }
 
 
@@ -7319,3 +7320,47 @@ def test_deprecation_header_value_helper_edge_cases():
     assert _deprecation_header_value("\u2014\n\t") is None
     assert _deprecation_header_value("a" * 500) == "a" * 200
     assert _deprecation_header_value("  spaced   out  ") == "spaced out"
+
+
+def test_metrics_counts_calls_to_each_deprecated_endpoint(monkeypatch):
+    """Confirmed missing before this feature: nothing told an operator
+    whether a deprecated endpoint was still being called -- the one signal
+    that decides when it's safe to remove."""
+    client = _deprecation_test_client(monkeypatch, {"old_add": "Use add."})
+
+    assert client.get("/metrics").json()["deprecated_endpoint_calls"] == {
+        "/old_add": 0
+    }
+
+    client.post("/old_add", json={})
+    client.post("/old_add", json={})
+    client.post("/add", json={})
+
+    assert client.get("/metrics").json()["deprecated_endpoint_calls"] == {
+        "/old_add": 2
+    }
+
+    text = client.get("/metrics/prometheus").text
+    assert "# TYPE notebook_api_deprecated_endpoint_calls_total counter" in text
+    assert 'notebook_api_deprecated_endpoint_calls_total{path="/old_add"} 2' in text
+    assert 'path="/add"' not in text
+
+
+def test_metrics_deprecated_endpoint_calls_empty_when_nothing_deprecated(
+    monkeypatch,
+):
+    client = _deprecation_test_client(monkeypatch, None)
+
+    client.post("/add", json={})
+
+    assert client.get("/metrics").json()["deprecated_endpoint_calls"] == {}
+    assert "deprecated_endpoint_calls_total" not in client.get(
+        "/metrics/prometheus"
+    ).text
+
+
+def test_deprecated_endpoint_call_counter_names_are_reserved():
+    from backend.generator.api_generator import RESERVED_INFRASTRUCTURE_NAMES
+
+    assert "_DEPRECATED_ENDPOINTS" in RESERVED_INFRASTRUCTURE_NAMES
+    assert "_DEPRECATED_ENDPOINT_CALLS" in RESERVED_INFRASTRUCTURE_NAMES
