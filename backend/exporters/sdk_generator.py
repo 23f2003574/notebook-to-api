@@ -26,6 +26,7 @@ PYTHON_RESERVED_CLIENT_METHOD_NAMES = frozenset({
     "delete_completed_tasks", "delete_failed_tasks", "redeliver_task_webhook",
     "retry_task", "cleanup_tasks", "reset_tasks",
     "health", "ready", "info", "config", "metrics", "metrics_prometheus",
+    "deprecations",
     "uptime", "auth_status", "auth_info", "auth_validate",
     # Confirmed exploitable: base_url/api_key/timeout are the client's
     # own __init__-set *instance attributes* (self.base_url, self.api_key,
@@ -52,6 +53,7 @@ TYPESCRIPT_RESERVED_CLIENT_METHOD_NAMES = frozenset({
     "deleteCompletedTasks", "deleteFailedTasks", "redeliverTaskWebhook",
     "retryTask", "cleanupTasks", "resetTasks",
     "health", "ready", "info", "config", "metrics", "metricsPrometheus",
+    "deprecations",
     "uptime", "authStatus", "authInfo", "authValidate",
     # Same hazard as PYTHON_RESERVED_CLIENT_METHOD_NAMES's base_url/
     # api_key/timeout above: baseUrl/apiKey/timeoutMs are this client's
@@ -1805,6 +1807,11 @@ def generate_python_sdk(
         ("info", "/info"),
         ("config", "/config"),
         ("metrics", "/metrics"),
+        # GET /deprecations: every deprecated endpoint with its reason
+        # and call count, plus whether the deployment is rejecting them
+        # (NOTEBOOK_API_REJECT_DEPRECATED) -- lets a caller check, from
+        # the client it already uses, which of its calls are at risk.
+        ("deprecations", "/deprecations"),
         ("uptime", "/uptime"),
         ("auth_status", "/auth/status"),
         ("auth_info", "/auth/info"),
@@ -2691,6 +2698,11 @@ def generate_typescript_sdk(
         ("info", "/info"),
         ("config", "/config"),
         ("metrics", "/metrics"),
+        # GET /deprecations: every deprecated endpoint with its reason
+        # and call count, plus whether the deployment is rejecting them
+        # (NOTEBOOK_API_REJECT_DEPRECATED) -- lets a caller check, from
+        # the client it already uses, which of its calls are at risk.
+        ("deprecations", "/deprecations"),
         ("uptime", "/uptime"),
         ("authStatus", "/auth/status"),
         ("authInfo", "/auth/info"),

@@ -338,7 +338,7 @@ def test_generate_python_sdk_constructor_accepts_a_configurable_timeout(tmp_path
     # makes no request of its own, it only calls self.get_task), plus the
     # 10 hardcoded health/ready/info/config/metrics/metrics_prometheus/
     # uptime/auth_status/auth_info/auth_validate methods.
-    assert source.count("timeout=self.timeout") == 20
+    assert source.count("timeout=self.timeout") == 21
 
 
 def test_generate_python_sdk_uses_the_configured_timeout_for_a_request(
@@ -410,7 +410,7 @@ def test_generate_typescript_sdk_constructor_accepts_a_configurable_timeout(
     # paths exist), plus the 10 hardcoded health/ready/info/config/
     # metrics/metricsPrometheus/uptime/authStatus/authInfo/authValidate
     # methods.
-    assert source.count("signal: AbortSignal.timeout(this.timeoutMs),") == 20
+    assert source.count("signal: AbortSignal.timeout(this.timeoutMs),") == 21
 
 
 def test_generate_python_sdk_method_name_handles_multi_segment_paths(tmp_path):
@@ -6734,3 +6734,92 @@ def test_typescript_sdk_statically_deprecated_endpoint_is_not_warned_twice(
     )
 
     assert warnings == ["old_add() is deprecated."]
+
+
+def test_generate_python_sdk_deprecations_calls_get_deprecations(
+    tmp_path, monkeypatch
+):
+    """Confirmed missing before this feature: the compiled app's own GET
+    /deprecations had no client method in the generated Python SDK."""
+    schema_path = _write_schema(tmp_path, {"/add": {"post": {"operationId": "add"}}})
+    output_path = tmp_path / "client.py"
+    generate_python_sdk(str(schema_path), str(output_path))
+    source = output_path.read_text(encoding="utf-8")
+    payload = {"rejecting": False, "endpoints": []}
+    calls = []
+
+    class FakeResponse:
+        headers = {}
+        url = "http://localhost:8000/deprecations"
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return payload
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs["headers"]))
+        return FakeResponse()
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.get = fake_get
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+    namespace = {}
+    exec(compile(source, str(output_path), "exec"), namespace)
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000", api_key="k")
+
+    assert client.deprecations() == payload
+    assert calls == [("http://localhost:8000/deprecations", {"X-API-Key": "k"})]
+
+
+def test_notebook_function_named_deprecations_does_not_shadow_client_method(
+    tmp_path,
+):
+    schema_path = _write_schema(
+        tmp_path,
+        {"/deprecations": {"post": {"operationId": "deprecations"}}},
+    )
+    py_path = tmp_path / "client.py"
+    ts_path = tmp_path / "client.ts"
+
+    generate_python_sdk(str(schema_path), str(py_path))
+    generate_typescript_sdk(str(schema_path), str(ts_path))
+
+    py_source = py_path.read_text(encoding="utf-8")
+    ts_source = ts_path.read_text(encoding="utf-8")
+    assert py_source.count("    def deprecations(self") == 1
+    assert ts_source.count("  async deprecations(") == 1
+
+
+@_needs_node
+def test_generate_typescript_sdk_deprecations_calls_get_deprecations(tmp_path):
+    schema_path = _write_schema(tmp_path, {"/add": {"post": {"operationId": "add"}}})
+    client_path = tmp_path / "client.ts"
+    generate_typescript_sdk(str(schema_path), str(client_path))
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        const calls = [];
+        globalThis.fetch = async (url, opts) => {{
+          calls.push(url);
+          return {{ ok: true, status: 200, headers: new Headers(),
+                   json: async () => ({{ rejecting: true, endpoints: [] }}) }};
+        }};
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+        const result = await client.deprecations();
+        console.log(JSON.stringify({{ result, calls }}));
+        """,
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        ["node", str(runner_path)], capture_output=True, text=True, timeout=30
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    output = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert output == {
+        "result": {"rejecting": True, "endpoints": []},
+        "calls": ["http://localhost:8000/deprecations"],
+    }
