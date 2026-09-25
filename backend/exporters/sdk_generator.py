@@ -2185,6 +2185,18 @@ def generate_typescript_sdk(
     lines.append("  private maxRetries: number;")
     lines.append("  private backoffFactor: number;")
     lines.append("  private static readonly TRANSIENT_STATUSES = new Set([429, 502, 503, 504]);")
+    # Paths already deprecated when this client was generated -- their own
+    # methods already console.warn statically, so warnIfServerDeprecated
+    # below skips them rather than warning twice for the same call.
+    lines.append(
+        "  private static readonly KNOWN_DEPRECATED_PATHS = new Set<string>("
+        + json.dumps(sorted(
+            path for path in method_names
+            if (paths[path].get("post") or {}).get("deprecated")
+        ))
+        + ");"
+    )
+    lines.append("  private serverDeprecationsWarned = new Set<string>();")
     lines.append("")
     lines.append(
         "  constructor(baseUrl: string, options: NotebookAPIClientOptions = {}) {"
@@ -2298,8 +2310,40 @@ def generate_typescript_sdk(
     lines.append("        error.status = response.status;")
     lines.append("        throw error;")
     lines.append("      }")
+    lines.append("      this.warnIfServerDeprecated(path, response);")
     lines.append("      return parseJson ? response.json() : response.text();")
     lines.append("    }")
+    lines.append("  }")
+    lines.append("")
+    # The TypeScript counterpart of the Python client's own
+    # _warn_if_server_deprecated: the compiled app sends `Deprecation:
+    # true` (plus an optional `X-Deprecation-Reason`) on every response
+    # from an endpoint marked "# notebook-to-api: deprecated", which a
+    # client generated before that endpoint was deprecated has no static
+    # console.warn for at all. Warns once per path per client instance.
+    lines.append(
+        "  private warnIfServerDeprecated(path: string, response: Response): void {"
+    )
+    lines.append("    const headers: any = (response as any).headers;")
+    lines.append(
+        "    const value = String(headers?.get?.(\"Deprecation\") ?? \"\").trim().toLowerCase();"
+    )
+    lines.append("    if (!value || value === \"false\") {")
+    lines.append("      return;")
+    lines.append("    }")
+    lines.append("    const bare = path.split(\"?\")[0];")
+    lines.append(
+        "    if (NotebookAPIClient.KNOWN_DEPRECATED_PATHS.has(bare) || "
+        "this.serverDeprecationsWarned.has(bare)) {"
+    )
+    lines.append("      return;")
+    lines.append("    }")
+    lines.append("    this.serverDeprecationsWarned.add(bare);")
+    lines.append("    const reason = headers.get(\"X-Deprecation-Reason\");")
+    lines.append(
+        "    console.warn(`The server reports that ${bare} is deprecated.` + "
+        "(reason ? ` ${reason}` : \"\"));"
+    )
     lines.append("  }")
     lines.append("")
     lines.append(
