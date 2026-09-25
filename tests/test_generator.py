@@ -674,7 +674,8 @@ def test_generated_app_cors_exposes_the_rate_limit_headers_to_cross_origin_js():
 
     assert (
         "expose_headers=['X-RateLimit-Limit', 'X-RateLimit-Remaining', "
-        "'X-RateLimit-Reset', 'Retry-After']"
+        "'X-RateLimit-Reset', 'Retry-After', "
+        "'Deprecation', 'X-Deprecation-Reason']"
         in code
     )
 
@@ -7222,3 +7223,99 @@ def test_generate_readme_writes_exactly_what_readme_content_returns(tmp_path):
         output_path.read_text(encoding="utf-8")
         == readme_content("my_app", functions, env_vars)
     )
+
+def _deprecation_test_client(monkeypatch, deprecated_overrides):
+    functions = [
+        {"name": "old_add", "args": [], "return_type": "int"},
+        {"name": "add", "args": [], "return_type": "int"},
+    ]
+    code = generate_fastapi_code(
+        functions, deprecated_overrides=deprecated_overrides
+    )
+    notebook_module = _register_fake_notebook_module(monkeypatch)
+    notebook_module.old_add = lambda: 1
+    notebook_module.add = lambda: 2
+    monkeypatch.setenv("NOTEBOOK_API_KEY", "test-key")
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    return TestClient(namespace["app"], headers={"X-API-Key": "test-key"})
+
+
+def test_deprecated_endpoint_response_carries_deprecation_headers(monkeypatch):
+    """Confirmed missing before this feature: a deprecated directive only
+    reached openapi.json -- a direct caller got no runtime signal at all.
+    """
+    client = _deprecation_test_client(
+        monkeypatch, {"old_add": "Use add instead."}
+    )
+
+    response = client.post("/old_add", json={})
+
+    assert response.status_code == 200
+    assert response.json() == {"result": 1}
+    assert response.headers["Deprecation"] == "true"
+    assert response.headers["X-Deprecation-Reason"] == "Use add instead."
+
+
+def test_non_deprecated_endpoint_response_has_no_deprecation_headers(
+    monkeypatch,
+):
+    client = _deprecation_test_client(monkeypatch, {"old_add": "reason"})
+
+    response = client.post("/add", json={})
+
+    assert response.status_code == 200
+    assert "Deprecation" not in response.headers
+    assert "X-Deprecation-Reason" not in response.headers
+
+
+def test_deprecated_endpoint_without_reason_sends_only_deprecation_header(
+    monkeypatch,
+):
+    client = _deprecation_test_client(monkeypatch, {"old_add": None})
+
+    response = client.post("/old_add", json={})
+
+    assert response.headers["Deprecation"] == "true"
+    assert "X-Deprecation-Reason" not in response.headers
+
+
+def test_deprecation_headers_are_sent_on_error_responses_too(monkeypatch):
+    """A 422 (bad body) from a deprecated endpoint still tells the caller
+    the endpoint is deprecated -- the middleware wraps every response."""
+    client = _deprecation_test_client(monkeypatch, {"old_add": None})
+
+    response = client.post("/old_add", content=b"not json",
+                           headers={"Content-Type": "application/json"})
+
+    assert response.status_code == 422
+    assert response.headers["Deprecation"] == "true"
+
+
+def test_deprecation_reason_with_quotes_and_newlines_is_sanitized(monkeypatch):
+    """A reason containing a quote, a CR/LF and non-ASCII text must neither
+    break the generated source nor inject a second header line."""
+    client = _deprecation_test_client(
+        monkeypatch,
+        {"old_add": 'Use "add"\r\nX-Injected: yes \u2014 caf\u00e9'},
+    )
+
+    response = client.post("/old_add", json={})
+
+    assert "X-Injected" not in response.headers
+    assert response.headers["X-Deprecation-Reason"] == (
+        'Use "add" X-Injected: yes caf'
+    )
+
+
+def test_deprecation_header_value_helper_edge_cases():
+    from backend.generator.api_generator import _deprecation_header_value
+
+    assert _deprecation_header_value(None) is None
+    assert _deprecation_header_value("") is None
+    assert _deprecation_header_value("\u2014\n\t") is None
+    assert _deprecation_header_value("a" * 500) == "a" * 200
+    assert _deprecation_header_value("  spaced   out  ") == "spaced out"
