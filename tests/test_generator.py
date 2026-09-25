@@ -7559,3 +7559,48 @@ def test_readme_content_no_scheduled_removals_without_a_valid_sunset():
 
     assert "## Deprecations" in content
     assert "Scheduled removals" not in content
+
+
+def test_openapi_operation_carries_sunset_extension_for_a_dated_deprecation(
+    monkeypatch,
+):
+    """Confirmed missing before this feature: a directive's sunset date
+    only ever reached the Sunset response header -- nothing reading
+    openapi.json (an SDK generator, a linter, a gateway) could see it."""
+    client = _deprecation_test_client(
+        monkeypatch, {"old_add": "Use add. sunset: 2025-12-31"}
+    )
+
+    schema = client.get("/openapi.json").json()
+
+    assert schema["paths"]["/old_add"]["post"]["x-notebook-to-api-sunset"] == (
+        "2025-12-31"
+    )
+    assert "x-notebook-to-api-sunset" not in schema["paths"]["/add"]["post"]
+
+
+def test_openapi_operation_has_no_sunset_extension_without_a_valid_date(
+    monkeypatch,
+):
+    client = _deprecation_test_client(monkeypatch, {"old_add": "sunset: 2025-13-40"})
+
+    operation = client.get("/openapi.json").json()["paths"]["/old_add"]["post"]
+
+    assert operation["deprecated"] is True
+    assert "x-notebook-to-api-sunset" not in operation
+
+
+def test_background_endpoint_openapi_operation_carries_sunset_extension_too(
+    monkeypatch,
+):
+    code = generate_fastapi_code(
+        [{"name": "train_model", "args": [], "return_type": "str"}],
+        deprecated_overrides={"train_model": "sunset=2026-01-15"},
+    )
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    operation = namespace["app"].openapi()["paths"]["/train_model"]["post"]
+
+    assert operation["x-notebook-to-api-sunset"] == "2026-01-15"

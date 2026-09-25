@@ -984,6 +984,23 @@ def _python_method_docstring(description, static_text):
     return repr(doc)
 
 
+def _sunset_notice(operation):
+    """" Removal scheduled for YYYY-MM-DD." when `operation` (an OpenAPI
+    operation dict) carries a valid "x-notebook-to-api-sunset" date (see
+    generate_fastapi_code), else "". Re-validated here rather than trusted
+    verbatim, since the date is embedded straight into generated source.
+    """
+    import datetime
+
+    try:
+        day = datetime.date.fromisoformat(
+            str((operation or {}).get("x-notebook-to-api-sunset") or "")
+        )
+    except ValueError:
+        return ""
+    return f" Removal scheduled for {day.isoformat()}."
+
+
 def _jsdoc_lines(description, static_text_lines, indent="  ", deprecated=False):
     """Build a `/** ... */` JSDoc comment block's lines, combining
     `description` (see _operation_description) with a method's own static
@@ -1953,7 +1970,8 @@ def generate_python_sdk(
             # DeprecationWarning in the standard library follows.
             lines.append(
                 f"        warnings.warn(f\"'{{self.__class__.__name__}}."
-                f"{method_name}' is deprecated.\", DeprecationWarning, "
+                f"{method_name}' is deprecated."
+                f"{_sunset_notice(paths[path].get('post'))}\", DeprecationWarning, "
                 "stacklevel=2)"
             )
         if is_background:
@@ -2838,7 +2856,8 @@ def generate_typescript_sdk(
             # strikethrough) and Python's own generated client already
             # gets from warnings.warn (see generate_python_sdk).
             lines.append(
-                f'    console.warn("{method_name}() is deprecated.");'
+                f'    console.warn("{method_name}() is deprecated.'
+                f'{_sunset_notice(paths[path].get("post"))}");'
             )
         if is_background:
             lines.append(

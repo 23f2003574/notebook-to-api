@@ -3708,6 +3708,18 @@ def generate_fastapi_code(
         is_deprecated, deprecation_reason = resolve_deprecation(
             func_name, deprecated_overrides
         )
+        # The directive's own "sunset: YYYY-MM-DD" (see
+        # _deprecation_sunset_date), surfaced in openapi.json as an
+        # "x-notebook-to-api-sunset" operation extension -- the Sunset
+        # response header only reaches a caller that actually calls the
+        # endpoint, never a tool reading the schema (an SDK generator, an
+        # API linter, a gateway importing the spec).
+        sunset_date = (
+            _deprecation_sunset_date(deprecation_reason) if is_deprecated else None
+        )
+        sunset_extra = (
+            f'"x-notebook-to-api-sunset": "{sunset_date}", ' if sunset_date else ""
+        )
         if is_deprecated:
             notice = "**Deprecated.**" + (
                 f" {deprecation_reason}" if deprecation_reason else ""
@@ -3829,7 +3841,7 @@ def generate_fastapi_code(
                 # nothing about the *eventual* result a real
                 # GET /tasks/{{task_id}} will carry is otherwise
                 # discoverable from this schema at all.
-                f'openapi_extra={{"x-notebook-to-api-category": "{category}", "x-notebook-to-api-async": True, "x-notebook-to-api-return-type": {repr(return_type)}, "security": [{{"ApiKeyAuth": []}}]}}, '
+                f'openapi_extra={{{sunset_extra}"x-notebook-to-api-category": "{category}", "x-notebook-to-api-async": True, "x-notebook-to-api-return-type": {repr(return_type)}, "security": [{{"ApiKeyAuth": []}}]}}, '
                 f'responses={repr(task_responses)})'
             )
             lines.append(
@@ -4111,7 +4123,7 @@ def generate_fastapi_code(
                 # deliberately {} too (see sync_responses above), so
                 # generate_typescript_sdk has no other way to learn what
                 # "result" actually contains.
-                f'openapi_extra={{"x-notebook-to-api-category": "{category}", "x-notebook-to-api-return-type": {repr(return_type)}, "security": [{{"ApiKeyAuth": []}}]}}, '
+                f'openapi_extra={{{sunset_extra}"x-notebook-to-api-category": "{category}", "x-notebook-to-api-return-type": {repr(return_type)}, "security": [{{"ApiKeyAuth": []}}]}}, '
                 f'responses={repr(sync_responses)})'
             )
             is_async = func.get("is_async", False)
