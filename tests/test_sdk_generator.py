@@ -734,7 +734,7 @@ def test_generate_python_sdk_does_not_warn_for_a_non_deprecated_endpoint(
     generate_python_sdk(str(schema_path), str(output_path))
 
     source = output_path.read_text(encoding="utf-8")
-    assert "import warnings" not in source
+    assert "_KNOWN_DEPRECATED_PATHS = ()" in source
 
     class FakeResponse:
         def raise_for_status(self):
@@ -6558,3 +6558,105 @@ def test_generate_typescript_sdk_verify_webhook_signature_accepts_several_secret
         "rejectsUnknownSecret": False,
         "stillAcceptsASingleStringSecret": True,
     }
+
+
+def _python_client_with_response_headers(tmp_path, monkeypatch, schema_paths,
+                                         headers):
+    schema_path = _write_schema(tmp_path, schema_paths)
+    output_path = tmp_path / "client.py"
+    generate_python_sdk(str(schema_path), str(output_path))
+    source = output_path.read_text(encoding="utf-8")
+    ast.parse(source)
+
+    class FakeResponse:
+        def __init__(self, url):
+            self.url = url
+            self.headers = headers
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"result": 1}
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.post = lambda url, *a, **k: FakeResponse(url)
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    namespace = {}
+    exec(compile(source, str(output_path), "exec"), namespace)
+    return namespace["NotebookAPIClient"]("http://localhost:8000")
+
+
+def test_python_sdk_warns_when_server_reports_deprecation_at_runtime(
+    tmp_path, monkeypatch
+):
+    """Confirmed missing before this feature: a client generated before an
+    endpoint was deprecated never learned about it -- the compiled app's
+    own `Deprecation: true` response header was never read."""
+    client = _python_client_with_response_headers(
+        tmp_path, monkeypatch,
+        {"/add": {"post": {"operationId": "add"}}},
+        {"Deprecation": "true", "X-Deprecation-Reason": "Use add_v2."},
+    )
+
+    with pytest.warns(DeprecationWarning, match=r"/add is deprecated\. Use add_v2\."):
+        assert client.add({}) == {"result": 1}
+
+
+def test_python_sdk_runtime_deprecation_warning_fires_once_per_path(
+    tmp_path, monkeypatch
+):
+    import warnings as warnings_module
+
+    client = _python_client_with_response_headers(
+        tmp_path, monkeypatch,
+        {"/add": {"post": {"operationId": "add"}}},
+        {"Deprecation": "true"},
+    )
+
+    with warnings_module.catch_warnings(record=True) as caught:
+        warnings_module.simplefilter("always")
+        client.add({})
+        client.add({})
+
+    messages = [str(w.message) for w in caught
+                if issubclass(w.category, DeprecationWarning)]
+    assert messages == ["The server reports that /add is deprecated."]
+
+
+def test_python_sdk_no_runtime_warning_without_or_with_false_header(
+    tmp_path, monkeypatch
+):
+    import warnings as warnings_module
+
+    for headers in ({}, {"Deprecation": "false"}):
+        client = _python_client_with_response_headers(
+            tmp_path, monkeypatch,
+            {"/add": {"post": {"operationId": "add"}}},
+            headers,
+        )
+        with warnings_module.catch_warnings():
+            warnings_module.simplefilter("error")
+            client.add({})
+
+
+def test_python_sdk_statically_deprecated_endpoint_is_not_warned_twice(
+    tmp_path, monkeypatch
+):
+    """An endpoint already deprecated at generation time warns statically;
+    the runtime header check must not add a second warning for it."""
+    import warnings as warnings_module
+
+    client = _python_client_with_response_headers(
+        tmp_path, monkeypatch,
+        {"/old_add": {"post": {"operationId": "old_add", "deprecated": True}}},
+        {"Deprecation": "true"},
+    )
+
+    with warnings_module.catch_warnings(record=True) as caught:
+        warnings_module.simplefilter("always")
+        client.old_add({})
+
+    assert len(caught) == 1
+    assert "old_add' is deprecated" in str(caught[0].message)

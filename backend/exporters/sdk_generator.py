@@ -1138,18 +1138,11 @@ def generate_python_sdk(
     lines.append("import os")
     lines.append("import time")
     lines.append("import uuid")
-    if any(
-        (paths[path].get("post") or {}).get("deprecated")
-        for path in method_names
-    ):
-        # Only emitted when at least one endpoint is actually deprecated
-        # -- an unconditional "import warnings" alongside every other
-        # generated import above would be a needless unused-import lint
-        # warning (flake8/ruff's own F401) on every client this tool
-        # generates for a notebook with no deprecated endpoints at all,
-        # unlike hmac/uuid/time above, which every generated client
-        # actually uses regardless of what the notebook itself defines.
-        lines.append("import warnings")
+    # Unconditional since _warn_if_server_deprecated (below) uses it on
+    # every response, not just for endpoints already deprecated when this
+    # client was generated.
+    lines.append("import urllib.parse")
+    lines.append("import warnings")
     lines.append("import requests")
     # Confirmed missing before this feature: every generated method's
     # own payload parameter was typed as a bare dict, with no return
@@ -1321,6 +1314,17 @@ def generate_python_sdk(
     # exactly these as transient while polling; _request below extends
     # the identical judgment to every *other* call this client makes.
     lines.append("    _TRANSIENT_STATUS_CODES = (429, 502, 503, 504)")
+    # Paths already deprecated when this client was generated -- their own
+    # methods already warn statically (see the per-method warnings.warn
+    # below), so _warn_if_server_deprecated skips them to avoid a second,
+    # redundant warning for the exact same call.
+    lines.append(
+        "    _KNOWN_DEPRECATED_PATHS = "
+        + repr(tuple(sorted(
+            path for path in method_names
+            if (paths[path].get("post") or {}).get("deprecated")
+        )))
+    )
     lines.append("")
     lines.append(
         "    def __init__(self, base_url: str, api_key: str = None, "
@@ -1432,7 +1436,33 @@ def generate_python_sdk(
     lines.append("                time.sleep(self._retry_delay(response, attempt))")
     lines.append("                attempt += 1")
     lines.append("                continue")
+    lines.append("            self._warn_if_server_deprecated(response)")
     lines.append("            return response.json() if parse_json else response.text")
+    lines.append("")
+    # The compiled app sends `Deprecation: true` (plus an optional
+    # `X-Deprecation-Reason`) on every response from an endpoint marked
+    # "# notebook-to-api: deprecated". A client generated *before* that
+    # endpoint was deprecated has no static warning for it at all, so
+    # without reading the header at call time its caller would never
+    # learn the endpoint is slated for removal. Warns once per path per
+    # client instance, so a hot loop doesn't flood the caller's logs.
+    lines.append("    def _warn_if_server_deprecated(self, response):")
+    lines.append("        headers = getattr(response, 'headers', None) or {}")
+    lines.append("        value = str(headers.get('Deprecation') or '').strip().lower()")
+    lines.append("        if not value or value == 'false':")
+    lines.append("            return")
+    lines.append("        path = urllib.parse.urlsplit(str(getattr(response, 'url', '') or '')).path")
+    lines.append("        if any(path.endswith(known) for known in self._KNOWN_DEPRECATED_PATHS):")
+    lines.append("            return")
+    lines.append("        warned = self.__dict__.setdefault('_server_deprecations_warned', set())")
+    lines.append("        if path in warned:")
+    lines.append("            return")
+    lines.append("        warned.add(path)")
+    lines.append("        reason = headers.get('X-Deprecation-Reason')")
+    lines.append("        message = f\"The server reports that {path or 'this endpoint'} is deprecated.\"")
+    lines.append("        if reason:")
+    lines.append("            message += f\" {reason}\"")
+    lines.append("        warnings.warn(message, DeprecationWarning, stacklevel=4)")
     lines.append("")
     lines.append("    def get_task(self, task_id: str) -> dict:")
     lines.append('        """Fetch the current status/result of a background task."""')
