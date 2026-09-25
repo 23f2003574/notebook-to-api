@@ -6823,3 +6823,50 @@ def test_generate_typescript_sdk_deprecations_calls_get_deprecations(tmp_path):
         "result": {"rejecting": True, "endpoints": []},
         "calls": ["http://localhost:8000/deprecations"],
     }
+
+
+def test_sdk_deprecation_warnings_include_the_operations_sunset_date(tmp_path):
+    """Confirmed missing before this feature: a generated client's own
+    static deprecation warning never said *when* the endpoint goes away,
+    even though openapi.json now carries "x-notebook-to-api-sunset"."""
+    schema_path = _write_schema(
+        tmp_path,
+        {"/old_add": {"post": {
+            "operationId": "old_add", "deprecated": True,
+            "x-notebook-to-api-sunset": "2025-12-31",
+        }}},
+    )
+    py_path = tmp_path / "client.py"
+    ts_path = tmp_path / "client.ts"
+
+    generate_python_sdk(str(schema_path), str(py_path))
+    generate_typescript_sdk(str(schema_path), str(ts_path))
+
+    py_source = py_path.read_text(encoding="utf-8")
+    ast.parse(py_source)
+    assert "old_add' is deprecated. Removal scheduled for 2025-12-31." in py_source
+    assert (
+        'console.warn("old_add() is deprecated. Removal scheduled for 2025-12-31.");'
+        in ts_path.read_text(encoding="utf-8")
+    )
+
+
+def test_sdk_ignores_a_malformed_or_injected_sunset_value(tmp_path):
+    schema_path = _write_schema(
+        tmp_path,
+        {"/old_add": {"post": {
+            "operationId": "old_add", "deprecated": True,
+            "x-notebook-to-api-sunset": '2025-12-31"); evil(); ("',
+        }}},
+    )
+    py_path = tmp_path / "client.py"
+    ts_path = tmp_path / "client.ts"
+
+    generate_python_sdk(str(schema_path), str(py_path))
+    generate_typescript_sdk(str(schema_path), str(ts_path))
+
+    py_source = py_path.read_text(encoding="utf-8")
+    ast.parse(py_source)
+    assert "evil" not in py_source
+    assert "evil" not in ts_path.read_text(encoding="utf-8")
+    assert "Removal scheduled" not in py_source
