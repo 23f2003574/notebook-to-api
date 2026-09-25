@@ -5426,6 +5426,9 @@ def _dispatch_core_command(args):
                             + (f": {reason}" if reason else "")
                         )
 
+                    for name, sunset in result.get("past_sunset_functions", {}).items():
+                        print(f"    past sunset: {name} (sunset {sunset})")
+
                 result_count = data.get("result_count", len(results))
 
                 # "results" can be a strict subset of "result_count" once
@@ -5453,9 +5456,18 @@ def _dispatch_core_command(args):
                         "expose at least one deprecated function"
                     )
 
+                if data.get("past_sunset_notebook_count", 0) > 0:
+                    print(
+                        f"{data['past_sunset_notebook_count']} notebook(s) "
+                        "still define a deprecated function past its sunset "
+                        "date"
+                    )
+
         if data.get("fail_count", 0) > 0:
             sys.exit(2)
         elif data.get("warn_count", 0) > 0:
+            sys.exit(1)
+        elif args.fail_on_past_sunset and data.get("past_sunset_notebook_count", 0) > 0:
             sys.exit(1)
     elif args.command == "requirements-preview":
         # See `upload` above for why this is imported here rather than at
@@ -13133,6 +13145,19 @@ def main():
             "/api/validate-all's own ?status= query param -- e.g. "
             "--status fail to list only the broken ones. The "
             "pass/warn/fail totals still cover every scanned notebook."
+        )
+    )
+    validate_all_parser.add_argument(
+        "--fail-on-past-sunset",
+        action="store_true",
+        dest="fail_on_past_sunset",
+        help=(
+            "Exit with status 1 if any notebook still defines a deprecated "
+            "function whose \"sunset: YYYY-MM-DD\" date is today or "
+            "earlier (the response's own \"past_sunset_notebook_count\") "
+            "-- a missed removal, caught from source before deploying. "
+            "Never overrides the exit status 2 a failing notebook already "
+            "produces."
         )
     )
     validate_all_parser.add_argument(
