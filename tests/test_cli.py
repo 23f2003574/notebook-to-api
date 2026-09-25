@@ -27717,3 +27717,106 @@ def test_validate_all_command_fail_on_past_sunset_passes_when_none(
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "past sunset" not in proc.stdout
+
+
+def _diff_sunset_directives(workdir, old_directive, new_directive):
+    body = "def add(a: int, b: int) -> int:\n    return a + b\n"
+    old_path = workdir / "old.ipynb"
+    new_path = workdir / "new.ipynb"
+    _write_notebook_with_function(old_path, old_directive + body)
+    _write_notebook_with_function(new_path, new_directive + body)
+    return old_path, new_path
+
+
+def test_diff_command_fail_on_sunset_moved_earlier_exits_1(tmp_path):
+    """Confirmed missing before this feature: classify_notebook_diff's own
+    "sunset_changed"/"moved_earlier" had no CLI flag reading it -- a CI
+    job had no way to block a PR that pulls a removal date forward."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    old_path, new_path = _diff_sunset_directives(
+        workdir,
+        "# notebook-to-api: deprecated: sunset: 2026-06-01\n",
+        "# notebook-to-api: deprecated: sunset: 2026-01-01\n",
+    )
+
+    proc = _run_cli(
+        ["diff", str(old_path), str(new_path), "--fail-on-sunset-moved-earlier"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 1
+    assert "POST /add: 2026-06-01 -> 2026-01-01 (moved earlier)" in proc.stdout
+
+
+def test_diff_command_sunset_moved_earlier_without_the_flag_exits_0(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    old_path, new_path = _diff_sunset_directives(
+        workdir,
+        "# notebook-to-api: deprecated: sunset: 2026-06-01\n",
+        "# notebook-to-api: deprecated: sunset: 2026-01-01\n",
+    )
+
+    proc = _run_cli(
+        ["diff", str(old_path), str(new_path), "--fail-on-deprecation"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_diff_command_fail_on_sunset_moved_earlier_ignores_a_postponement(
+    tmp_path,
+):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    old_path, new_path = _diff_sunset_directives(
+        workdir,
+        "# notebook-to-api: deprecated: sunset: 2026-01-01\n",
+        "# notebook-to-api: deprecated: sunset: 2027-01-01\n",
+    )
+
+    proc = _run_cli(
+        ["diff", str(old_path), str(new_path), "--fail-on-sunset-moved-earlier"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "2026-01-01 -> 2027-01-01" in proc.stdout
+
+
+def test_remote_diff_command_fail_on_sunset_moved_earlier_exits_1(
+    tmp_path, fake_dashboard
+):
+    dashboard_url, handler = fake_dashboard
+    body = "def add(a: int, b: int) -> int:\n    return a + b\n"
+    handler.responses = [
+        _raw_response(200, _notebook_bytes_with_function(
+            "# notebook-to-api: deprecated: sunset: 2026-06-01\n" + body
+        ))
+    ]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    _write_notebook_with_function(
+        workdir / "nb.ipynb",
+        "# notebook-to-api: deprecated: sunset: 2026-01-01\n" + body,
+    )
+
+    proc = _run_cli(
+        ["remote-diff", "nb.ipynb", "--dashboard-url", dashboard_url,
+         "--fail-on-sunset-moved-earlier"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 1
+
+
+def test_every_diff_command_accepts_fail_on_sunset_moved_earlier():
+    for command in (
+        ["diff"], ["remote-diff"], ["diff-notebooks"],
+        ["versions", "diff"], ["versions", "compare"],
+    ):
+        proc = _run_cli([*command, "--help"], cwd=Path.cwd())
+        assert proc.returncode == 0, proc.stderr
+        assert "--fail-on-sunset-moved-earlier" in proc.stdout, command
