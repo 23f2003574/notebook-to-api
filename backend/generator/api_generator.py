@@ -124,7 +124,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "verify_api_key", "custom_openapi",
     "root", "health_check", "readiness_check", "auth_status", "auth_info",
     "validate_auth", "service_info", "service_config", "metrics", "uptime",
-    "metrics_prometheus", "_task_status_counts",
+    "metrics_prometheus", "_task_status_counts", "deprecations",
     "get_task", "list_tasks", "delete_task", "cleanup_tasks",
     "delete_completed_tasks", "delete_failed_tasks", "reset_tasks",
     "redeliver_task_webhook", "retry_task",
@@ -2460,6 +2460,29 @@ def generate_fastapi_code(
 
     lines.append("    return processing, completed, failed")
 
+    lines.append("")
+    # A machine-readable list of what this deployment has deprecated --
+    # the data behind the Deprecation header, the call counters and the
+    # NOTEBOOK_API_REJECT_DEPRECATED brownout, in one place. Before this,
+    # a caller or operator could only reconstruct it by scanning every
+    # operation in openapi.json for "deprecated": true (and /docs can be
+    # disabled entirely via NOTEBOOK_API_DISABLE_DOCS), with no way at all
+    # to learn whether this deployment is currently rejecting them. No
+    # Depends(verify_api_key), matching GET /metrics: it exposes nothing
+    # beyond endpoint names and the author's own deprecation reasons.
+    lines.append("@app.get('/deprecations')")
+    lines.append("def deprecations():")
+    lines.append("    return {")
+    lines.append("        'rejecting': REJECT_DEPRECATED_ENDPOINTS,")
+    lines.append("        'endpoints': [")
+    lines.append("            {")
+    lines.append("                'path': path,")
+    lines.append("                'reason': reason,")
+    lines.append("                'calls': _DEPRECATED_ENDPOINT_CALLS[path],")
+    lines.append("            }")
+    lines.append("            for path, reason in sorted(_DEPRECATED_ENDPOINTS.items())")
+    lines.append("        ],")
+    lines.append("    }")
     lines.append("")
     lines.append("@app.get('/metrics')")
     lines.append("def metrics():")
