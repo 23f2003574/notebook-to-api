@@ -227,9 +227,27 @@ def _endpoint_metadata(functions, background_overrides=None, deprecated_override
             "deprecated": resolve_deprecation(
                 func["name"], deprecated_overrides
             )[0],
+            # The directive's own "sunset: YYYY-MM-DD" (None when not
+            # deprecated or no valid date) -- the same date the compiled
+            # app sends as its Sunset header, available here before
+            # compiling, so a dashboard/CI consumer of this preview needn't
+            # re-parse the free-text reason itself.
+            "sunset": _endpoint_sunset(func["name"], deprecated_overrides),
         }
         for func in functions
     ]
+
+
+def _endpoint_sunset(func_name, deprecated_overrides):
+    is_deprecated, reason = resolve_deprecation(func_name, deprecated_overrides)
+    return _deprecation_sunset_date(reason) if is_deprecated else None
+
+
+def _deprecated_route_suffix(is_deprecated, sunset):
+    """"  [deprecated]" / "  [deprecated, sunset YYYY-MM-DD]" / ""."""
+    if not is_deprecated:
+        return ""
+    return f"  [deprecated, sunset {sunset}]" if sunset else "  [deprecated]"
 
 
 def _reserved_name_conflicts(functions):
@@ -477,10 +495,9 @@ def inspect_notebook(notebook_path, output_dir="generated"):
             if _is_background_function(func["name"], background_overrides)
             else ""
         )
-        route_suffix += (
-            "  [deprecated]"
-            if resolve_deprecation(func["name"], deprecated_overrides)[0]
-            else ""
+        route_suffix += _deprecated_route_suffix(
+            resolve_deprecation(func["name"], deprecated_overrides)[0],
+            _endpoint_sunset(func["name"], deprecated_overrides),
         )
 
         print(
@@ -727,13 +744,19 @@ def print_compile_summary(notebook_path, output_dir="generated", only=None, excl
     is_deprecated_by_path = {
         endpoint["path"]: endpoint["deprecated"] for endpoint in data["endpoints"]
     }
+    # .get(): an older dashboard's response has no "sunset" at all.
+    sunset_by_path = {
+        endpoint["path"]: endpoint.get("sunset") for endpoint in data["endpoints"]
+    }
 
     print(f"\nGenerated {len(functions)} endpoint(s):")
 
     for func in functions:
         name = func["name"]
         suffix = "  [background]" if is_async_by_path.get(f"/{name}") else ""
-        suffix += "  [deprecated]" if is_deprecated_by_path.get(f"/{name}") else ""
+        suffix += _deprecated_route_suffix(
+            is_deprecated_by_path.get(f"/{name}"), sunset_by_path.get(f"/{name}"),
+        )
         print(f"  POST /{name}{suffix}")
 
     if data["dependencies"]:
