@@ -789,7 +789,7 @@ def test_generate_typescript_sdk_omits_deprecation_markers_when_not_deprecated(
     source = output_path.read_text(encoding="utf-8")
 
     assert "@deprecated" not in source
-    assert "console.warn" not in source
+    assert '() is deprecated.");' not in source
 
 
 def test_generate_python_sdk_metrics_prometheus_returns_raw_text_not_json(
@@ -6660,3 +6660,77 @@ def test_python_sdk_statically_deprecated_endpoint_is_not_warned_twice(
 
     assert len(caught) == 1
     assert "old_add' is deprecated" in str(caught[0].message)
+
+
+def _run_typescript_client_with_headers(tmp_path, schema_paths, headers, calls):
+    schema_path = _write_schema(tmp_path, schema_paths)
+    client_path = tmp_path / "client.ts"
+    generate_typescript_sdk(str(schema_path), str(client_path))
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        const headers = new Headers({json.dumps(headers)});
+        globalThis.fetch = async () => ({{
+          ok: true, status: 200, headers, json: async () => ({{ result: 1 }}),
+        }});
+        const warnings = [];
+        console.warn = (msg) => warnings.push(msg);
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+        {calls}
+        console.log(JSON.stringify(warnings));
+        """,
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        ["node", str(runner_path)], capture_output=True, text=True, timeout=30
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+_needs_node = pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
+
+
+@_needs_node
+def test_typescript_sdk_warns_once_when_server_reports_deprecation(tmp_path):
+    """Confirmed missing before this feature: a TypeScript client generated
+    before an endpoint was deprecated never read the compiled app's own
+    `Deprecation: true` response header."""
+    warnings = _run_typescript_client_with_headers(
+        tmp_path,
+        {"/add": {"post": {"operationId": "add"}}},
+        {"Deprecation": "true", "X-Deprecation-Reason": "Use add_v2."},
+        "await client.add({}); await client.add({});",
+    )
+
+    assert warnings == ["The server reports that /add is deprecated. Use add_v2."]
+
+
+@_needs_node
+def test_typescript_sdk_no_runtime_warning_without_or_with_false_header(tmp_path):
+    for headers in ({}, {"Deprecation": "false"}):
+        warnings = _run_typescript_client_with_headers(
+            tmp_path,
+            {"/add": {"post": {"operationId": "add"}}},
+            headers,
+            "await client.add({});",
+        )
+        assert warnings == []
+
+
+@_needs_node
+def test_typescript_sdk_statically_deprecated_endpoint_is_not_warned_twice(
+    tmp_path,
+):
+    warnings = _run_typescript_client_with_headers(
+        tmp_path,
+        {"/old_add": {"post": {"operationId": "old_add", "deprecated": True}}},
+        {"Deprecation": "true"},
+        "await client.old_add({});",
+    )
+
+    assert warnings == ["old_add() is deprecated."]
