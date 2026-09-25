@@ -20524,7 +20524,7 @@ def test_versions_diff_command_json_flag_emits_machine_readable_output(
     assert data == {
         "added": [], "removed": [], "changed": [], "unchanged": ["add"],
         "compatible": True, "breaking_changes": [],
-        "newly_deprecated": [], "no_longer_deprecated": [],
+        "newly_deprecated": [], "no_longer_deprecated": [], "sunset_changed": [],
     }
 
 

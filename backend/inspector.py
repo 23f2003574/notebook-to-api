@@ -31,6 +31,7 @@ from backend.parser.ast_parser import (
 )
 
 from backend.generator.api_generator import (
+    _deprecation_sunset_date,
     resolve_deprecation,
     resolve_is_background,
     RESERVED_INFRASTRUCTURE_NAMES,
@@ -919,7 +920,22 @@ def _function_signature_key(func):
         func.get("is_async", False),
         func.get("is_background", False),
         func.get("is_deprecated", False),
+        # A deprecated function's own "sunset: YYYY-MM-DD" (the date the
+        # compiled app sends as its Sunset header and publishes as
+        # "x-notebook-to-api-sunset") -- adding, moving or dropping it is
+        # a change to the endpoint's promised lifetime callers plan
+        # around, which otherwise vanished from the diff entirely when
+        # the function's code was untouched.
+        _function_sunset(func),
     )
+
+
+def _function_sunset(func):
+    """`func`'s own sunset date (YYYY-MM-DD), or None when it isn't
+    deprecated or its reason names no valid date."""
+    if not func.get("is_deprecated", False):
+        return None
+    return _deprecation_sunset_date(func.get("deprecation_reason"))
 
 
 def diff_notebook_functions(old_notebook_path, new_notebook_path):
@@ -1167,6 +1183,7 @@ def classify_notebook_diff(diff):
     """
     breaking_changes = []
     newly_deprecated = []
+    sunset_changed = []
     no_longer_deprecated = []
 
     for func in diff["removed"]:
@@ -1285,11 +1302,28 @@ def classify_notebook_diff(diff):
         elif old_is_deprecated and not new_is_deprecated:
             no_longer_deprecated.append({"name": name})
 
+        # Both versions deprecated, but the promised removal date moved
+        # (or was added/dropped) -- "earlier" is the one direction that
+        # can catch a caller out, so it's called out explicitly.
+        old_sunset = _function_sunset(entry["old"])
+        new_sunset = _function_sunset(entry["new"])
+
+        if old_is_deprecated and new_is_deprecated and old_sunset != new_sunset:
+            sunset_changed.append({
+                "name": name,
+                "old_sunset": old_sunset,
+                "new_sunset": new_sunset,
+                "moved_earlier": bool(
+                    old_sunset and new_sunset and new_sunset < old_sunset
+                ),
+            })
+
     return {
         "compatible": not breaking_changes,
         "breaking_changes": breaking_changes,
         "newly_deprecated": newly_deprecated,
         "no_longer_deprecated": no_longer_deprecated,
+        "sunset_changed": sunset_changed,
     }
 
 
@@ -1428,6 +1462,20 @@ def print_notebook_diff(diff):
         )
         for entry in diff["no_longer_deprecated"]:
             print(f"  POST /{entry['name']}")
+
+    if diff.get("sunset_changed"):
+        print(
+            f"\n{len(diff['sunset_changed'])} deprecated endpoint(s) with a "
+            "changed sunset date:"
+        )
+        for entry in diff["sunset_changed"]:
+            marker = "  ! " if entry.get("moved_earlier") else "  "
+            print(
+                f"{marker}POST /{entry['name']}: "
+                f"{entry.get('old_sunset') or 'none'} -> "
+                f"{entry.get('new_sunset') or 'none'}"
+                + (" (moved earlier)" if entry.get("moved_earlier") else "")
+            )
 
 # The generated app's own default API key (see write_app_config /
 # verify_api_key in generator/api_generator.py: `API_KEYS` defaults to

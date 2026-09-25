@@ -1585,6 +1585,7 @@ def test_classify_notebook_diff_deprecated_only_change_is_not_breaking(tmp_path)
         "breaking_changes": [],
         "newly_deprecated": [{"name": "add", "reason": None}],
         "no_longer_deprecated": [],
+        "sunset_changed": [],
     }
 
 
@@ -1665,6 +1666,7 @@ def test_print_notebook_diff_prints_newly_deprecated(capsys):
         "compatible": True, "breaking_changes": [],
         "newly_deprecated": [{"name": "add", "reason": "use add_v2 instead"}],
         "no_longer_deprecated": [],
+        "sunset_changed": [],
     })
 
     output = capsys.readouterr().out
@@ -1802,6 +1804,7 @@ def test_classify_notebook_diff_added_function_is_not_breaking(tmp_path):
         "breaking_changes": [],
         "newly_deprecated": [],
         "no_longer_deprecated": [],
+        "sunset_changed": [],
     }
 
 
@@ -1850,6 +1853,7 @@ def test_classify_notebook_diff_new_optional_parameter_is_not_breaking(tmp_path)
         "breaking_changes": [],
         "newly_deprecated": [],
         "no_longer_deprecated": [],
+        "sunset_changed": [],
     }
 
 
@@ -2076,6 +2080,7 @@ def test_classify_notebook_diff_gaining_a_return_type_annotation_is_not_breaking
         "breaking_changes": [],
         "newly_deprecated": [],
         "no_longer_deprecated": [],
+        "sunset_changed": [],
     }
 
 
@@ -2100,6 +2105,7 @@ def test_classify_notebook_diff_losing_a_return_type_annotation_is_not_breaking(
         "breaking_changes": [],
         "newly_deprecated": [],
         "no_longer_deprecated": [],
+        "sunset_changed": [],
     }
 
 
@@ -2125,6 +2131,7 @@ def test_classify_notebook_diff_async_only_change_is_not_breaking(tmp_path):
         "breaking_changes": [],
         "newly_deprecated": [],
         "no_longer_deprecated": [],
+        "sunset_changed": [],
     }
 
 
@@ -2233,6 +2240,7 @@ def test_classify_notebook_diff_no_changes_is_compatible(tmp_path):
         "breaking_changes": [],
         "newly_deprecated": [],
         "no_longer_deprecated": [],
+        "sunset_changed": [],
     }
 
 
@@ -3203,3 +3211,94 @@ def test_generate_postman_collection_flags_a_deprecated_background_function(tmp_
     description = items_by_name["[DEPRECATED] train_model"]["request"]["description"]
     assert description.startswith("**Deprecated.** use train_v2 instead\n\n")
     assert "task_id" in description
+
+
+def _classify_deprecation_directives(tmp_path, old_directive, new_directive):
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    body = "def add(a: int, b: int) -> int:\n    return a + b\n"
+    _write_notebook(old_path, old_directive + body)
+    _write_notebook(new_path, new_directive + body)
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+    return diff, classify_notebook_diff(diff)
+
+
+def test_classify_notebook_diff_reports_a_sunset_date_moved_earlier(tmp_path):
+    """Confirmed missing before this feature: changing only a deprecated
+    function's own sunset date touched nothing _function_signature_key
+    compared, so the diff reported the function as unchanged."""
+    diff, classification = _classify_deprecation_directives(
+        tmp_path,
+        "# notebook-to-api: deprecated: sunset: 2026-06-01\n",
+        "# notebook-to-api: deprecated: sunset: 2026-01-01\n",
+    )
+
+    assert [entry["name"] for entry in diff["changed"]] == ["add"]
+    assert classification["compatible"] is True
+    assert classification["newly_deprecated"] == []
+    assert classification["sunset_changed"] == [{
+        "name": "add", "old_sunset": "2026-06-01", "new_sunset": "2026-01-01",
+        "moved_earlier": True,
+    }]
+
+
+def test_classify_notebook_diff_reports_a_sunset_added_or_postponed(tmp_path):
+    _, added = _classify_deprecation_directives(
+        tmp_path,
+        "# notebook-to-api: deprecated\n",
+        "# notebook-to-api: deprecated: sunset: 2026-01-01\n",
+    )
+    _, postponed = _classify_deprecation_directives(
+        tmp_path,
+        "# notebook-to-api: deprecated: sunset: 2026-01-01\n",
+        "# notebook-to-api: deprecated: sunset: 2027-01-01\n",
+    )
+
+    assert added["sunset_changed"] == [{
+        "name": "add", "old_sunset": None, "new_sunset": "2026-01-01",
+        "moved_earlier": False,
+    }]
+    assert postponed["sunset_changed"][0]["moved_earlier"] is False
+
+
+def test_classify_notebook_diff_newly_deprecated_with_sunset_is_not_sunset_changed(
+    tmp_path,
+):
+    _, classification = _classify_deprecation_directives(
+        tmp_path, "", "# notebook-to-api: deprecated: sunset: 2026-01-01\n",
+    )
+
+    assert classification["newly_deprecated"] == [
+        {"name": "add", "reason": "sunset: 2026-01-01"}
+    ]
+    assert classification["sunset_changed"] == []
+
+
+def test_diff_ignores_a_reason_edit_that_keeps_the_same_sunset(tmp_path):
+    diff, classification = _classify_deprecation_directives(
+        tmp_path,
+        "# notebook-to-api: deprecated: use v2. sunset: 2026-01-01\n",
+        "# notebook-to-api: deprecated: use add_v2. sunset: 2026-01-01\n",
+    )
+
+    assert diff["changed"] == []
+    assert classification["sunset_changed"] == []
+
+
+def test_print_notebook_diff_prints_sunset_changes(capsys):
+    print_notebook_diff({
+        "added": [], "removed": [], "changed": [{"name": "add"}], "unchanged": [],
+        "compatible": True, "breaking_changes": [],
+        "newly_deprecated": [], "no_longer_deprecated": [],
+        "sunset_changed": [
+            {"name": "add", "old_sunset": "2026-06-01",
+             "new_sunset": "2026-01-01", "moved_earlier": True},
+            {"name": "sub", "old_sunset": None,
+             "new_sunset": "2027-01-01", "moved_earlier": False},
+        ],
+    })
+
+    output = capsys.readouterr().out
+    assert "2 deprecated endpoint(s) with a changed sunset date:" in output
+    assert "! POST /add: 2026-06-01 -> 2026-01-01 (moved earlier)" in output
+    assert "POST /sub: none -> 2027-01-01" in output
