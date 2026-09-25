@@ -27491,3 +27491,100 @@ def test_app_tasks_reset_command_prompt_warns_about_processing_tasks(
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "still processing" in proc.stdout
+
+
+_SAMPLE_DEPRECATIONS = {
+    "rejecting": False,
+    "endpoints": [
+        {"path": "/old_add", "reason": "Use add.", "calls": 3},
+        {"path": "/old_sub", "reason": None, "calls": 0},
+    ],
+}
+
+
+def _run_app_deprecations(tmp_path, fake_dashboard, body, *extra, status=200):
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [_json_response(status, body)]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    proc = _run_cli(
+        ["app-deprecations", "--host", host, "--port", str(port), *extra],
+        cwd=workdir,
+    )
+    return proc, handler
+
+
+def test_app_deprecations_prints_each_endpoint_with_reason_and_calls(
+    tmp_path, fake_dashboard
+):
+    """Confirmed missing before this feature: no CLI command read a running
+    compiled app's own GET /deprecations."""
+    proc, handler = _run_app_deprecations(
+        tmp_path, fake_dashboard, _SAMPLE_DEPRECATIONS
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/deprecations"]
+    assert "2 deprecated endpoint(s):" in proc.stdout
+    assert "/old_add  calls=3  (Use add.)" in proc.stdout
+    assert "/old_sub  calls=0\n" in proc.stdout
+
+
+def test_app_deprecations_json_prints_the_response_verbatim(
+    tmp_path, fake_dashboard
+):
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, _SAMPLE_DEPRECATIONS, "--json"
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == _SAMPLE_DEPRECATIONS
+
+
+def test_app_deprecations_fail_if_called_exits_1_when_any_is_still_called(
+    tmp_path, fake_dashboard
+):
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, _SAMPLE_DEPRECATIONS, "--fail-if-called"
+    )
+
+    assert proc.returncode == 1
+    assert "still being called: /old_add" in proc.stderr
+
+
+def test_app_deprecations_fail_if_called_passes_when_nothing_is_called(
+    tmp_path, fake_dashboard
+):
+    body = {
+        "rejecting": True,
+        "endpoints": [{"path": "/old_add", "reason": None, "calls": 0}],
+    }
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, body, "--fail-if-called"
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "REJECTED with 410" in proc.stdout
+
+
+def test_app_deprecations_reports_none_when_nothing_is_deprecated(
+    tmp_path, fake_dashboard
+):
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, {"rejecting": False, "endpoints": []}
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.strip() == "No deprecated endpoints."
+
+
+def test_app_deprecations_404_explains_the_app_needs_recompiling(
+    tmp_path, fake_dashboard
+):
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, {"detail": "Not Found"}, status=404
+    )
+
+    assert proc.returncode != 0
+    assert "recompile" in proc.stdout + proc.stderr
