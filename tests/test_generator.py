@@ -7419,3 +7419,48 @@ def test_reject_deprecated_rejects_before_auth_is_checked(monkeypatch):
     response = client.post("/old_add", json={}, headers={"X-API-Key": "wrong"})
 
     assert response.status_code == 410
+
+
+def test_get_deprecations_lists_each_deprecated_endpoint_with_reason_and_calls(
+    monkeypatch,
+):
+    """Confirmed missing before this feature: the only way to learn what a
+    deployment had deprecated was scanning openapi.json (which
+    NOTEBOOK_API_DISABLE_DOCS can hide), and nothing reported whether the
+    brownout switch was on."""
+    client = _deprecation_test_client(monkeypatch, {"old_add": "Use add."})
+    client.post("/old_add", json={})
+
+    response = client.get("/deprecations", headers={"X-API-Key": ""})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "rejecting": False,
+        "endpoints": [{"path": "/old_add", "reason": "Use add.", "calls": 1}],
+    }
+
+
+def test_get_deprecations_reports_rejecting_and_reason_none(monkeypatch):
+    client = _deprecation_test_client(
+        monkeypatch, {"old_add": None}, reject_deprecated="true"
+    )
+
+    assert client.get("/deprecations").json() == {
+        "rejecting": True,
+        "endpoints": [{"path": "/old_add", "reason": None, "calls": 0}],
+    }
+
+
+def test_get_deprecations_is_empty_when_nothing_is_deprecated(monkeypatch):
+    client = _deprecation_test_client(monkeypatch, None)
+
+    assert client.get("/deprecations").json() == {
+        "rejecting": False, "endpoints": [],
+    }
+
+
+def test_function_named_deprecations_is_reserved():
+    functions = [{"name": "deprecations", "args": [], "return_type": "dict"}]
+
+    with pytest.raises(ReservedFunctionNameError, match="deprecations"):
+        generate_fastapi_code(functions)
