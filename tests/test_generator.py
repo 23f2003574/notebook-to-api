@@ -7510,3 +7510,52 @@ def test_deprecation_sunset_date_helper_edge_cases():
     assert _deprecation_sunset_date("sunset: 2025-13-40") is None
     assert _deprecation_sunset_date("removed 2025-12-31") is None
     assert _deprecation_sunset_date("SUNSET = 2025-02-28 please") == "2025-02-28"
+
+
+def test_readme_content_documents_deprecation_runtime_behavior_when_deprecated():
+    """Confirmed missing before this feature: the README only marked a
+    deprecated endpoint's bullet -- nothing told an operator about the
+    Deprecation/Sunset headers, GET /deprecations, the
+    NOTEBOOK_API_REJECT_DEPRECATED brownout, or the CLI removal gates."""
+    from backend.generator.docker_generator import readme_content
+
+    content = readme_content(
+        functions=[{"name": "add"}, {"name": "old_add"}, {"name": "older"}],
+        deprecated_overrides={
+            "old_add": "Use add. sunset: 2025-12-31",
+            "older": None,
+        },
+    )
+
+    assert "## Deprecations" in content
+    assert "2 endpoint(s) above are deprecated." in content
+    assert "`POST /old_add` -- removal scheduled for 2025-12-31" in content
+    assert "`POST /older` -- removal scheduled" not in content
+    assert "`GET /deprecations`" in content
+    assert "NOTEBOOK_API_REJECT_DEPRECATED=true" in content
+    assert "--fail-if-called" in content and "--fail-if-past-sunset" in content
+
+
+def test_readme_content_omits_deprecations_section_when_nothing_deprecated():
+    from backend.generator.docker_generator import readme_content
+
+    content = readme_content(functions=[{"name": "add"}])
+
+    assert "## Deprecations" not in content
+    assert "Scheduled removals" not in content
+    # The endpoint itself exists on every compiled app, so it's always
+    # listed among the unauthenticated built-ins.
+    assert "`/deprecations`, `/auth/status`" in content
+    assert "- `POST /add`\n\nInteractive docs" in content
+
+
+def test_readme_content_no_scheduled_removals_without_a_valid_sunset():
+    from backend.generator.docker_generator import readme_content
+
+    content = readme_content(
+        functions=[{"name": "old_add"}],
+        deprecated_overrides={"old_add": "sunset: 2025-13-40"},
+    )
+
+    assert "## Deprecations" in content
+    assert "Scheduled removals" not in content
