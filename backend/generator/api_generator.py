@@ -1,5 +1,8 @@
 import ast
 import builtins
+import datetime
+import email.utils
+import re
 import typing
 from pathlib import Path
 
@@ -85,6 +88,8 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # Read by name from inside _add_deprecation_headers on every request,
     # the same exposure JSON_REQUEST_LOGS has for _log_request_json.
     "REJECT_DEPRECATED_ENDPOINTS",
+    # Read by name from inside _add_deprecation_headers and deprecations().
+    "_DEPRECATION_SUNSETS",
     # Assigned this compile's own real content hash once, at module load
     # (see write_generated_api's own caller), then read back verbatim by
     # GET /info below -- a notebook function of this exact name would
@@ -614,6 +619,38 @@ def _deprecation_header_value(reason, max_length=200):
     return cleaned or None
 
 
+_SUNSET_DATE_PATTERN = re.compile(
+    r"\bsunset\s*[:=]\s*(\d{4}-\d{2}-\d{2})\b", re.IGNORECASE
+)
+
+
+def _deprecation_sunset_date(reason):
+    """The ISO date (YYYY-MM-DD) a deprecation `reason` names with a
+    "sunset: YYYY-MM-DD" (or "sunset=...") marker anywhere in its text,
+    or None -- also None for a malformed date like 2025-13-40, rather than
+    emitting a Sunset header no client could parse.
+    """
+    if not reason:
+        return None
+    match = _SUNSET_DATE_PATTERN.search(reason)
+    if not match:
+        return None
+    try:
+        return datetime.date.fromisoformat(match.group(1)).isoformat()
+    except ValueError:
+        return None
+
+
+def _sunset_http_date(iso_date):
+    """`iso_date` (YYYY-MM-DD) as the IMF-fixdate RFC 8594's own Sunset
+    header requires, e.g. "Wed, 31 Dec 2025 00:00:00 GMT"."""
+    day = datetime.date.fromisoformat(iso_date)
+    return email.utils.format_datetime(
+        datetime.datetime(day.year, day.month, day.day, tzinfo=datetime.timezone.utc),
+        usegmt=True,
+    )
+
+
 def _generated_app_env_var_default(name):
     """The default value GENERATED_APP_ENV_VARS declares for `name`,
     embedded into the matching os.getenv(name, default) call generated
@@ -1117,7 +1154,7 @@ def generate_fastapi_code(
         "expose_headers=["
         "'X-RateLimit-Limit', 'X-RateLimit-Remaining', "
         "'X-RateLimit-Reset', 'Retry-After', "
-        "'Deprecation', 'X-Deprecation-Reason'"
+        "'Deprecation', 'X-Deprecation-Reason', 'Sunset'"
         "]"
         ")"
     )
@@ -1219,6 +1256,21 @@ def generate_fastapi_code(
                 reason
             )
     lines.append(f"_DEPRECATED_ENDPOINTS = {repr(deprecated_paths)}")
+    # RFC 8594 Sunset: when the directive's reason names a removal date
+    # ("sunset: 2025-12-31"), every response from that endpoint says so
+    # in the standard header clients and gateways already understand, and
+    # GET /deprecations reports it, instead of the date being prose only
+    # a human reading X-Deprecation-Reason could find. {path: (iso date,
+    # HTTP-date)}, both precomputed here so the app does no date parsing.
+    sunsets = {}
+    for func in functions:
+        is_deprecated, reason = resolve_deprecation(
+            func["name"], deprecated_overrides
+        )
+        sunset = _deprecation_sunset_date(reason) if is_deprecated else None
+        if sunset:
+            sunsets[f"/{func['name']}"] = (sunset, _sunset_http_date(sunset))
+    lines.append(f"_DEPRECATION_SUNSETS = {repr(sunsets)}")
     # Per-deprecated-path call counter, reported by GET /metrics and GET
     # /metrics/prometheus: the Deprecation header tells a caller, but only
     # this tells the operator whether anyone still calls the endpoint --
@@ -1260,6 +1312,11 @@ def generate_fastapi_code(
     lines.append("        reason = _DEPRECATED_ENDPOINTS[request.url.path]")
     lines.append("        if reason:")
     lines.append("            response.headers['X-Deprecation-Reason'] = reason")
+    lines.append("        if request.url.path in _DEPRECATION_SUNSETS:")
+    lines.append(
+        "            response.headers['Sunset'] = "
+        "_DEPRECATION_SUNSETS[request.url.path][1]"
+    )
     lines.append("    return response")
     lines.append("")
     lines.append("@app.middleware('http')")
@@ -2479,6 +2536,9 @@ def generate_fastapi_code(
     lines.append("                'path': path,")
     lines.append("                'reason': reason,")
     lines.append("                'calls': _DEPRECATED_ENDPOINT_CALLS[path],")
+    lines.append(
+        "                'sunset': _DEPRECATION_SUNSETS.get(path, (None,))[0],"
+    )
     lines.append("            }")
     lines.append("            for path, reason in sorted(_DEPRECATED_ENDPOINTS.items())")
     lines.append("        ],")

@@ -676,7 +676,7 @@ def test_generated_app_cors_exposes_the_rate_limit_headers_to_cross_origin_js():
     assert (
         "expose_headers=['X-RateLimit-Limit', 'X-RateLimit-Remaining', "
         "'X-RateLimit-Reset', 'Retry-After', "
-        "'Deprecation', 'X-Deprecation-Reason']"
+        "'Deprecation', 'X-Deprecation-Reason', 'Sunset']"
         in code
     )
 
@@ -7436,7 +7436,7 @@ def test_get_deprecations_lists_each_deprecated_endpoint_with_reason_and_calls(
     assert response.status_code == 200
     assert response.json() == {
         "rejecting": False,
-        "endpoints": [{"path": "/old_add", "reason": "Use add.", "calls": 1}],
+        "endpoints": [{"path": "/old_add", "reason": "Use add.", "calls": 1, "sunset": None}],
     }
 
 
@@ -7447,7 +7447,7 @@ def test_get_deprecations_reports_rejecting_and_reason_none(monkeypatch):
 
     assert client.get("/deprecations").json() == {
         "rejecting": True,
-        "endpoints": [{"path": "/old_add", "reason": None, "calls": 0}],
+        "endpoints": [{"path": "/old_add", "reason": None, "calls": 0, "sunset": None}],
     }
 
 
@@ -7464,3 +7464,49 @@ def test_function_named_deprecations_is_reserved():
 
     with pytest.raises(ReservedFunctionNameError, match="deprecations"):
         generate_fastapi_code(functions)
+
+
+def test_sunset_date_in_reason_emits_rfc8594_sunset_header(monkeypatch):
+    """Confirmed missing before this feature: a removal date could only be
+    written as prose in the reason -- no Sunset header, nothing in GET
+    /deprecations a client or gateway could act on."""
+    client = _deprecation_test_client(
+        monkeypatch, {"old_add": "Use add. Sunset: 2025-12-31"}
+    )
+
+    response = client.post("/old_add", json={})
+
+    assert response.headers["Sunset"] == "Wed, 31 Dec 2025 00:00:00 GMT"
+    assert client.get("/deprecations").json()["endpoints"][0]["sunset"] == (
+        "2025-12-31"
+    )
+
+
+def test_no_sunset_header_without_a_sunset_marker(monkeypatch):
+    client = _deprecation_test_client(monkeypatch, {"old_add": "Use add."})
+
+    response = client.post("/old_add", json={})
+
+    assert "Sunset" not in response.headers
+    assert "Sunset" not in client.post("/add", json={}).headers
+
+
+def test_sunset_header_sent_on_brownout_410_too(monkeypatch):
+    client = _deprecation_test_client(
+        monkeypatch, {"old_add": "sunset=2026-01-15"}, reject_deprecated="true"
+    )
+
+    response = client.post("/old_add", json={})
+
+    assert response.status_code == 410
+    assert response.headers["Sunset"] == "Thu, 15 Jan 2026 00:00:00 GMT"
+
+
+def test_deprecation_sunset_date_helper_edge_cases():
+    from backend.generator.api_generator import _deprecation_sunset_date
+
+    assert _deprecation_sunset_date(None) is None
+    assert _deprecation_sunset_date("no date here") is None
+    assert _deprecation_sunset_date("sunset: 2025-13-40") is None
+    assert _deprecation_sunset_date("removed 2025-12-31") is None
+    assert _deprecation_sunset_date("SUNSET = 2025-02-28 please") == "2025-02-28"
