@@ -2403,6 +2403,10 @@ def _dispatch_core_command(args):
             sys.exit(1)
         if args.fail_on_deprecation and diff.get("newly_deprecated"):
             sys.exit(1)
+        if args.fail_on_sunset_moved_earlier and any(
+            entry.get("moved_earlier") for entry in diff.get("sunset_changed", [])
+        ):
+            sys.exit(1)
     elif args.command == "upload":
         # Imported here, not at module scope, the same deferred-import
         # convention export-openapi/export-sdk's own dynamic imports
@@ -6812,6 +6816,10 @@ def _dispatch_core_command(args):
                 sys.exit(1)
             if args.fail_on_deprecation and diff.get("newly_deprecated"):
                 sys.exit(1)
+            if args.fail_on_sunset_moved_earlier and any(
+                entry.get("moved_earlier") for entry in diff.get("sunset_changed", [])
+            ):
+                sys.exit(1)
 
         elif args.versions_command == "compare":
 
@@ -6866,6 +6874,10 @@ def _dispatch_core_command(args):
             if args.fail_on_breaking and not data.get("compatible", True):
                 sys.exit(1)
             if args.fail_on_deprecation and data.get("newly_deprecated"):
+                sys.exit(1)
+            if args.fail_on_sunset_moved_earlier and any(
+                entry.get("moved_earlier") for entry in data.get("sunset_changed", [])
+            ):
                 sys.exit(1)
 
         elif args.versions_command == "delete":
@@ -7298,6 +7310,10 @@ def _dispatch_core_command(args):
             sys.exit(1)
         if args.fail_on_deprecation and diff.get("newly_deprecated"):
             sys.exit(1)
+        if args.fail_on_sunset_moved_earlier and any(
+            entry.get("moved_earlier") for entry in diff.get("sunset_changed", [])
+        ):
+            sys.exit(1)
     elif args.command == "diff-notebooks":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -7356,6 +7372,10 @@ def _dispatch_core_command(args):
         if args.fail_on_breaking and not data.get("compatible", True):
             sys.exit(1)
         if args.fail_on_deprecation and data.get("newly_deprecated"):
+            sys.exit(1)
+        if args.fail_on_sunset_moved_earlier and any(
+            entry.get("moved_earlier") for entry in data.get("sunset_changed", [])
+        ):
             sys.exit(1)
     elif args.command == "remote-curl":
         # See `upload` above for why these are imported here rather than
@@ -9631,6 +9651,18 @@ def main():
             "added, removed, or flipped) -- after printing the report. "
             "Purely additive changes (a new endpoint, a new parameter with "
             "a default) never trigger this."
+        )
+    )
+    diff_parser.add_argument(
+        "--fail-on-sunset-moved-earlier",
+        action="store_true",
+        dest="fail_on_sunset_moved_earlier",
+        help=(
+            "Exit with status 1 if the diff's own \"sunset_changed\" has "
+            "any entry with \"moved_earlier\" -- a still-deprecated "
+            "endpoint whose \"sunset: YYYY-MM-DD\" removal date was "
+            "pulled forward, giving its callers less time than they were "
+            "promised. Postponing or adding a date never fails it."
         )
     )
     diff_parser.add_argument(
@@ -15047,6 +15079,18 @@ def main():
         )
     )
     versions_diff_parser.add_argument(
+        "--fail-on-sunset-moved-earlier",
+        action="store_true",
+        dest="fail_on_sunset_moved_earlier",
+        help=(
+            "Exit with status 1 if the diff's own \"sunset_changed\" has "
+            "any entry with \"moved_earlier\" -- a still-deprecated "
+            "endpoint whose \"sunset: YYYY-MM-DD\" removal date was "
+            "pulled forward, giving its callers less time than they were "
+            "promised. Postponing or adding a date never fails it."
+        )
+    )
+    versions_diff_parser.add_argument(
         "--fail-on-deprecation",
         action="store_true",
         dest="fail_on_deprecation",
@@ -15123,6 +15167,18 @@ def main():
             "Exit with status 1 if GET .../versions/{version_id}/diff's "
             "own \"compatible\" field is false -- see `diff --fail-on-"
             "breaking`'s own help for exactly what counts as breaking."
+        )
+    )
+    versions_compare_parser.add_argument(
+        "--fail-on-sunset-moved-earlier",
+        action="store_true",
+        dest="fail_on_sunset_moved_earlier",
+        help=(
+            "Exit with status 1 if the diff's own \"sunset_changed\" has "
+            "any entry with \"moved_earlier\" -- a still-deprecated "
+            "endpoint whose \"sunset: YYYY-MM-DD\" removal date was "
+            "pulled forward, giving its callers less time than they were "
+            "promised. Postponing or adding a date never fails it."
         )
     )
     versions_compare_parser.add_argument(
@@ -15324,6 +15380,18 @@ def main():
         )
     )
     remote_diff_parser.add_argument(
+        "--fail-on-sunset-moved-earlier",
+        action="store_true",
+        dest="fail_on_sunset_moved_earlier",
+        help=(
+            "Exit with status 1 if the diff's own \"sunset_changed\" has "
+            "any entry with \"moved_earlier\" -- a still-deprecated "
+            "endpoint whose \"sunset: YYYY-MM-DD\" removal date was "
+            "pulled forward, giving its callers less time than they were "
+            "promised. Postponing or adding a date never fails it."
+        )
+    )
+    remote_diff_parser.add_argument(
         "--fail-on-deprecation",
         action="store_true",
         dest="fail_on_deprecation",
@@ -15439,6 +15507,18 @@ def main():
             "Exit with status 1 if GET /api/notebooks/diff's own "
             "\"compatible\" field is false -- see `diff --fail-on-"
             "breaking`'s own help for exactly what counts as breaking."
+        )
+    )
+    diff_notebooks_parser.add_argument(
+        "--fail-on-sunset-moved-earlier",
+        action="store_true",
+        dest="fail_on_sunset_moved_earlier",
+        help=(
+            "Exit with status 1 if the diff's own \"sunset_changed\" has "
+            "any entry with \"moved_earlier\" -- a still-deprecated "
+            "endpoint whose \"sunset: YYYY-MM-DD\" removal date was "
+            "pulled forward, giving its callers less time than they were "
+            "promised. Postponing or adding a date never fails it."
         )
     )
     diff_notebooks_parser.add_argument(
