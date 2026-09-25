@@ -367,6 +367,7 @@ _CORE_COMMANDS = frozenset({
     "remote-curl", "remote-postman", "app-preview", "readme-preview", "dockerfile-preview", "docker-compose-preview", "env-example-preview", "env-vars-preview",
     "postman-preview", "k8s-preview", "openapi-preview", "verify-webhook",
     "app-metrics", "app-call", "app-tasks", "app-status", "app-auth",
+    "app-deprecations",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -8412,6 +8413,70 @@ def _dispatch_core_command(args):
                     time.sleep(args.interval)
             except KeyboardInterrupt:
                 print("\nStopped watching.")
+    elif args.command == "app-deprecations":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        app_url = f"http://{args.host}:{args.port}"
+
+        try:
+            response = httpx.get(f"{app_url}/deprecations", timeout=args.timeout)
+        except httpx.HTTPError as exc:
+            raise RuntimeError(
+                f"Could not reach the compiled app at {app_url}: "
+                f"{exc}. Is it running? (see `serve`, or `docker "
+                "compose up`)"
+            )
+
+        if response.status_code == 404:
+            raise RuntimeError(
+                f"The compiled app at {app_url} has no GET /deprecations "
+                "-- it was compiled by an older notebook-to-api; recompile "
+                "it to use this command."
+            )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"App rejected the request ({response.status_code}): "
+                f"{response.text}"
+            )
+
+        data = response.json()
+        endpoints = data.get("endpoints", [])
+        still_called = [entry for entry in endpoints if entry.get("calls", 0) > 0]
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        elif not endpoints:
+            print("No deprecated endpoints.")
+        else:
+            print(
+                f"{len(endpoints)} deprecated endpoint(s)"
+                + (" -- currently REJECTED with 410 (NOTEBOOK_API_REJECT_DEPRECATED)"
+                   if data.get("rejecting") else "")
+                + ":"
+            )
+            for entry in endpoints:
+                reason = entry.get("reason")
+                print(
+                    f"  {entry.get('path')}  calls={entry.get('calls', 0)}"
+                    + (f"  ({reason})" if reason else "")
+                )
+
+        # A deprecated endpoint is only safe to remove once nothing still
+        # calls it; --fail-if-called turns that into a CI/pre-removal
+        # gate the same way `diff --fail-on-deprecation` gates a PR.
+        # Counts are per-process since the app started, so a check right
+        # after a restart can pass before traffic has had time to arrive.
+        if args.fail_if_called and still_called:
+            if not args.json_output:
+                print(
+                    f"{len(still_called)} deprecated endpoint(s) still "
+                    "being called: "
+                    + ", ".join(entry["path"] for entry in still_called),
+                    file=sys.stderr,
+                )
+            sys.exit(1)
     elif args.command == "app-call":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -16482,6 +16547,53 @@ def main():
             "Under --watch, one such object (plus a \"timestamp\") is "
             "printed per poll, one per line -- the same NDJSON-style "
             "streaming `app-status --json --watch` already gives."
+        )
+    )
+
+    # app-deprecations command -- reads a running compiled app's own GET
+    # /deprecations (every endpoint marked "# notebook-to-api: deprecated",
+    # its reason and live call count), the operator-side view the
+    # Deprecation header, /metrics counters and the
+    # NOTEBOOK_API_REJECT_DEPRECATED brownout all feed.
+    app_deprecations_parser = subparsers.add_parser(
+        "app-deprecations",
+        help=(
+            "List a compiled app's own deprecated endpoints, with each "
+            "one's reason and how many times it has been called, via its "
+            "GET /deprecations."
+        )
+    )
+    app_deprecations_parser.add_argument(
+        "--host",
+        default="localhost",
+        help="Host the compiled app is actually reachable at (default: localhost)."
+    )
+    app_deprecations_parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port the compiled app is actually reachable at (default: 8000, matching `serve`'s own default)."
+    )
+    app_deprecations_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=10.0,
+        help="Seconds to wait for the app to respond before giving up (default: 10)."
+    )
+    app_deprecations_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Print GET /deprecations' own JSON response verbatim instead of a summary."
+    )
+    app_deprecations_parser.add_argument(
+        "--fail-if-called",
+        action="store_true",
+        dest="fail_if_called",
+        help=(
+            "Exit with status 1 if any deprecated endpoint has been called "
+            "at least once since the app started -- a gate to run before "
+            "actually removing a deprecated function from the notebook."
         )
     )
 
