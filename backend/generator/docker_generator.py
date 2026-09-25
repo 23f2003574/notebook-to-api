@@ -1,7 +1,9 @@
 import shlex
 import textwrap
 
-from backend.generator.api_generator import resolve_deprecation, resolve_is_background
+from backend.generator.api_generator import (
+    _deprecation_sunset_date, resolve_deprecation, resolve_is_background,
+)
 
 
 def apt_install_content(apt_packages):
@@ -521,6 +523,53 @@ def readme_content(
 
         endpoint_lines.append(f"- `POST /{func['name']}`{suffix}")
 
+    # Only when something is actually deprecated: how the compiled app
+    # itself signals and manages that at runtime (response headers, GET
+    # /deprecations, the NOTEBOOK_API_REJECT_DEPRECATED brownout, and the
+    # CLI's own removal gates) -- none of which the per-endpoint
+    # "**Deprecated.**" marker above says anything about, so an operator
+    # reading only this file had no way to learn any of it existed.
+    deprecated_functions = []
+    for func in sorted(functions, key=lambda f: f["name"]):
+        is_deprecated, reason = resolve_deprecation(
+            func["name"], deprecated_overrides
+        )
+        if is_deprecated:
+            deprecated_functions.append((func["name"], reason))
+
+    deprecations_section = ""
+    if deprecated_functions:
+        sunset_lines = [
+            f"- `POST /{name}` -- removal scheduled for "
+            f"{_deprecation_sunset_date(reason)}"
+            for name, reason in deprecated_functions
+            if _deprecation_sunset_date(reason)
+        ]
+        sunset_block = (
+            "\n\nScheduled removals (each also sent as a `Sunset` header):"
+            "\n\n" + "\n".join(sunset_lines)
+            if sunset_lines else ""
+        )
+        deprecations_section = f"""
+## Deprecations
+
+{len(deprecated_functions)} endpoint(s) above are deprecated. Every \
+response from one carries a `Deprecation: true` header, plus \
+`X-Deprecation-Reason` when a reason was given and an RFC 8594 `Sunset` \
+header when that reason names a date (`sunset: YYYY-MM-DD`).{sunset_block}
+
+- `GET /deprecations` (no `X-API-Key` needed) lists each deprecated \
+endpoint with its reason, sunset date, and how many times it has been \
+called since the app started -- also reported by `/metrics` and \
+`/metrics/prometheus`.
+- Set `NOTEBOOK_API_REJECT_DEPRECATED=true` to make them answer \
+`410 Gone` without running the notebook function -- a reversible \
+brownout to find remaining callers before removing them for real.
+- `notebook-to-api app-deprecations --fail-if-called` (or \
+`--fail-if-past-sunset`) exits non-zero while one is still being called \
+(or is still served past its sunset date) -- a pre-removal CI gate.
+"""
+
     endpoints_section = (
         "\n".join(endpoint_lines)
         if endpoint_lines
@@ -554,10 +603,10 @@ These built-in ones deliberately do **not** -- so a load balancer, a \
 Kubernetes liveness/readiness probe, or a Prometheus scraper can reach \
 them with no credential of its own: `/`, `/health`, `/ready`, `/info`, \
 `/config`, `/metrics`, `/metrics/prometheus`, `/uptime`, \
-`/auth/status`, `/auth/info`.
+`/deprecations`, `/auth/status`, `/auth/info`.
 
 {endpoints_section}
-
+{deprecations_section}
 Interactive docs are served at `/docs` (Swagger UI) and `/redoc`, unless \
 `NOTEBOOK_API_DISABLE_DOCS=true`.
 
