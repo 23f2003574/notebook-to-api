@@ -34366,3 +34366,36 @@ def test_postman_preview_drop_past_sunset_rejects_an_only_list_left_empty():
 
     assert resp.status_code == 400
     assert "left nothing to compile" in resp.json()["detail"]
+
+
+@pytest.mark.parametrize("route", ["/api/app-preview", "/api/readme-preview", "/api/openapi-preview"])
+def test_previews_drop_past_sunset_leave_those_functions_out(route):
+    """Confirmed missing before this feature: app/readme/openapi previews
+    had no "drop_past_sunset", so they couldn't preview what POST
+    /api/compile with it would actually build."""
+    filename = "preview_drop_" + route.rsplit("/", 1)[1].replace("-", "_") + ".ipynb"
+    _upload_sunset_mix(filename)
+
+    kept = client.post(route, json={"notebook_path": filename})
+    dropped = client.post(route, json={"notebook_path": filename, "drop_past_sunset": True})
+
+    assert kept.status_code == 200 and dropped.status_code == 200, dropped.text
+    assert kept.json()["dropped_past_sunset"] == []
+    assert "old_add" in json.dumps(kept.json())
+    body = dropped.json()
+    assert body.pop("dropped_past_sunset") == ["old_add"]
+    assert "old_add" not in json.dumps(body)
+    assert "later" in json.dumps(body)
+
+
+@pytest.mark.parametrize("route", ["/api/app-preview", "/api/readme-preview", "/api/openapi-preview"])
+def test_previews_drop_past_sunset_reject_an_only_list_left_empty(route):
+    filename = "preview_empty_" + route.rsplit("/", 1)[1].replace("-", "_") + ".ipynb"
+    _upload_sunset_mix(filename)
+
+    resp = client.post(route, json={
+        "notebook_path": filename, "only": ["old_add"], "drop_past_sunset": True,
+    })
+
+    assert resp.status_code == 400
+    assert "left nothing to compile" in resp.json()["detail"]

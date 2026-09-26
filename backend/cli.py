@@ -5611,6 +5611,8 @@ def _dispatch_core_command(args):
             "only": only,
             "exclude": exclude,
         }
+        if args.drop_past_sunset:
+            app_preview_body["drop_past_sunset"] = True
         if args.version_id:
             app_preview_body["version_id"] = args.version_id
         if args.expected_sha256:
@@ -5662,6 +5664,8 @@ def _dispatch_core_command(args):
             "only": only,
             "exclude": exclude,
         }
+        if args.drop_past_sunset:
+            readme_preview_body["drop_past_sunset"] = True
         if args.version_id:
             readme_preview_body["version_id"] = args.version_id
         if args.expected_sha256:
@@ -5714,6 +5718,8 @@ def _dispatch_core_command(args):
             "exclude": exclude,
             "format": args.format,
         }
+        if args.drop_past_sunset:
+            openapi_preview_body["drop_past_sunset"] = True
         if args.version_id:
             openapi_preview_body["version_id"] = args.version_id
         if args.expected_sha256:
@@ -13767,6 +13773,16 @@ def main():
     )
     _add_dashboard_url_and_timeout_arguments(app_preview_parser)
     _add_function_selection_arguments(app_preview_parser)
+    app_preview_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Preview with every deprecated function whose \"sunset: "
+            "YYYY-MM-DD\" date is today (UTC) or earlier left out -- "
+            "exactly what `remote-compile --drop-past-sunset` would build."
+        )
+    )
     _add_version_id_argument(app_preview_parser, "POST /api/app-preview")
     app_preview_parser.add_argument(
         "--expected-sha256",
@@ -13813,6 +13829,16 @@ def main():
     )
     _add_dashboard_url_and_timeout_arguments(readme_preview_parser)
     _add_function_selection_arguments(readme_preview_parser)
+    readme_preview_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Preview with every deprecated function whose \"sunset: "
+            "YYYY-MM-DD\" date is today (UTC) or earlier left out -- "
+            "exactly what `remote-compile --drop-past-sunset` would build."
+        )
+    )
     _add_version_id_argument(readme_preview_parser, "POST /api/readme-preview")
     readme_preview_parser.add_argument(
         "--expected-sha256",
@@ -14190,6 +14216,16 @@ def main():
     )
     _add_dashboard_url_and_timeout_arguments(openapi_preview_parser)
     _add_function_selection_arguments(openapi_preview_parser)
+    openapi_preview_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Preview with every deprecated function whose \"sunset: "
+            "YYYY-MM-DD\" date is today (UTC) or earlier left out -- "
+            "exactly what `remote-compile --drop-past-sunset` would build."
+        )
+    )
     _add_version_id_argument(openapi_preview_parser, "POST /api/openapi-preview")
     openapi_preview_parser.add_argument(
         "--format",
