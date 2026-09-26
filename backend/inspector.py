@@ -1259,7 +1259,22 @@ def classify_notebook_diff(diff):
     sunset_changed = []
     no_longer_deprecated = []
 
+    # A removed function that was deprecated with a "sunset: YYYY-MM-DD"
+    # that has already arrived (UTC) is the removal its own Sunset header
+    # announced -- reported under "planned_removals", not as a breaking
+    # change, so --fail-on-breaking doesn't block exactly the change the
+    # deprecation promised. Removed before its date, or never deprecated
+    # with one, it's still breaking.
+    from datetime import datetime as _datetime, timezone as _timezone
+
+    today = _datetime.now(_timezone.utc).date().isoformat()
+    planned_removals = []
+
     for func in diff["removed"]:
+        removal_sunset = _function_sunset(func)
+        if removal_sunset and removal_sunset <= today:
+            planned_removals.append({"name": func["name"], "sunset": removal_sunset})
+            continue
         breaking_changes.append({
             "type": "removed_endpoint",
             "name": func["name"],
@@ -1397,6 +1412,7 @@ def classify_notebook_diff(diff):
         "newly_deprecated": newly_deprecated,
         "no_longer_deprecated": no_longer_deprecated,
         "sunset_changed": sunset_changed,
+        "planned_removals": planned_removals,
     }
 
 
@@ -1535,6 +1551,14 @@ def print_notebook_diff(diff):
         )
         for entry in diff["no_longer_deprecated"]:
             print(f"  POST /{entry['name']}")
+
+    if diff.get("planned_removals"):
+        print(
+            f"\n{len(diff['planned_removals'])} endpoint(s) removed on or "
+            "after their announced sunset date (not breaking):"
+        )
+        for entry in diff["planned_removals"]:
+            print(f"  POST /{entry['name']} (sunset {entry['sunset']})")
 
     if diff.get("sunset_changed"):
         print(

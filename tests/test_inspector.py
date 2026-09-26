@@ -1586,6 +1586,7 @@ def test_classify_notebook_diff_deprecated_only_change_is_not_breaking(tmp_path)
         "newly_deprecated": [{"name": "add", "reason": None}],
         "no_longer_deprecated": [],
         "sunset_changed": [],
+        "planned_removals": [],
     }
 
 
@@ -1667,6 +1668,7 @@ def test_print_notebook_diff_prints_newly_deprecated(capsys):
         "newly_deprecated": [{"name": "add", "reason": "use add_v2 instead"}],
         "no_longer_deprecated": [],
         "sunset_changed": [],
+        "planned_removals": [],
     })
 
     output = capsys.readouterr().out
@@ -1805,6 +1807,7 @@ def test_classify_notebook_diff_added_function_is_not_breaking(tmp_path):
         "newly_deprecated": [],
         "no_longer_deprecated": [],
         "sunset_changed": [],
+        "planned_removals": [],
     }
 
 
@@ -1854,6 +1857,7 @@ def test_classify_notebook_diff_new_optional_parameter_is_not_breaking(tmp_path)
         "newly_deprecated": [],
         "no_longer_deprecated": [],
         "sunset_changed": [],
+        "planned_removals": [],
     }
 
 
@@ -2081,6 +2085,7 @@ def test_classify_notebook_diff_gaining_a_return_type_annotation_is_not_breaking
         "newly_deprecated": [],
         "no_longer_deprecated": [],
         "sunset_changed": [],
+        "planned_removals": [],
     }
 
 
@@ -2106,6 +2111,7 @@ def test_classify_notebook_diff_losing_a_return_type_annotation_is_not_breaking(
         "newly_deprecated": [],
         "no_longer_deprecated": [],
         "sunset_changed": [],
+        "planned_removals": [],
     }
 
 
@@ -2132,6 +2138,7 @@ def test_classify_notebook_diff_async_only_change_is_not_breaking(tmp_path):
         "newly_deprecated": [],
         "no_longer_deprecated": [],
         "sunset_changed": [],
+        "planned_removals": [],
     }
 
 
@@ -2241,6 +2248,7 @@ def test_classify_notebook_diff_no_changes_is_compatible(tmp_path):
         "newly_deprecated": [],
         "no_longer_deprecated": [],
         "sunset_changed": [],
+        "planned_removals": [],
     }
 
 
@@ -3410,3 +3418,56 @@ def test_postman_deprecation_script_is_silent_for_a_normal_response(tmp_path):
         assert _run_postman_deprecation_script(tmp_path, headers) == {
             "tests": [], "warnings": [],
         }
+
+
+def _classify_removal(tmp_path, old_directive):
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    keep = "def add(a: int) -> int:\n    return a\n"
+    _write_notebook(old_path, keep + "\n" + old_directive + "def old_add(a: int) -> int:\n    return a\n")
+    _write_notebook(new_path, keep)
+    return classify_notebook_diff(diff_notebook_functions(str(old_path), str(new_path)))
+
+
+def test_classify_notebook_diff_removal_after_sunset_is_a_planned_removal(tmp_path):
+    """Confirmed wrong before this feature: removing a deprecated endpoint
+    on or after its own announced sunset date -- the removal the Sunset
+    header promised -- was reported as a breaking change, so
+    --fail-on-breaking blocked exactly the planned change."""
+    classification = _classify_removal(
+        tmp_path, "# notebook-to-api: deprecated: sunset: 2000-01-01\n"
+    )
+
+    assert classification["compatible"] is True
+    assert classification["breaking_changes"] == []
+    assert classification["planned_removals"] == [
+        {"name": "old_add", "sunset": "2000-01-01"}
+    ]
+
+
+@pytest.mark.parametrize("directive", [
+    "",  # never deprecated
+    "# notebook-to-api: deprecated\n",  # deprecated, no sunset
+    "# notebook-to-api: deprecated: sunset: 2999-01-01\n",  # sunset not reached
+])
+def test_classify_notebook_diff_other_removals_stay_breaking(tmp_path, directive):
+    classification = _classify_removal(tmp_path, directive)
+
+    assert classification["compatible"] is False
+    assert [change["type"] for change in classification["breaking_changes"]] == [
+        "removed_endpoint"
+    ]
+    assert classification["planned_removals"] == []
+
+
+def test_print_notebook_diff_prints_planned_removals(capsys):
+    print_notebook_diff({
+        "added": [], "removed": [{"name": "old_add"}], "changed": [], "unchanged": [],
+        "compatible": True, "breaking_changes": [],
+        "newly_deprecated": [], "no_longer_deprecated": [], "sunset_changed": [],
+        "planned_removals": [{"name": "old_add", "sunset": "2000-01-01"}],
+    })
+
+    output = capsys.readouterr().out
+    assert "1 endpoint(s) removed on or after their announced sunset date (not breaking):" in output
+    assert "POST /old_add (sunset 2000-01-01)" in output
