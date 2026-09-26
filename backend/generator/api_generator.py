@@ -2592,6 +2592,14 @@ def generate_fastapi_code(
     lines.append("                'path': path,")
     lines.append("                'reason': reason,")
     lines.append("                'calls': _DEPRECATED_ENDPOINT_CALLS[path],")
+    # How many of those calls were answered 410 instead of served -- the
+    # same per-path count /metrics reports as
+    # "deprecated_endpoint_rejections", here beside the "rejected" state
+    # it explains, so a caller of this endpoint alone can tell "still
+    # called, and those callers are now breaking" from "still served".
+    lines.append(
+        "                'rejections': _DEPRECATED_ENDPOINT_REJECTIONS[path],"
+    )
     lines.append(
         "                'sunset': _DEPRECATION_SUNSETS.get(path, (None,))[0],"
     )
