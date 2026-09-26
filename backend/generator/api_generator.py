@@ -24,7 +24,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "WEBHOOK_MAX_RETRIES", "WEBHOOK_RETRY_BACKOFF_SECONDS",
     "TASK_EXECUTION_TIMEOUT_SECONDS",
     "REQUEST_TIMEOUT_SECONDS", "_call_notebook_function", "_REQUEST_TIMEOUTS",
-    "_ENDPOINT_TIMEOUTS", "_TASK_TIMEOUTS",
+    "_ENDPOINT_TIMEOUTS", "_TASK_TIMEOUTS", "_TASK_TIMEOUT_FAILURES",
     # Read by name from inside _evict_expired_tasks' own body -- the
     # identical "referenced by name inside a helper every background
     # endpoint's own submission calls first" exposure already documented
@@ -2835,6 +2835,10 @@ def generate_fastapi_code(
     lines.append(
         "        'request_timeouts_by_endpoint': dict(sorted(_REQUEST_TIMEOUTS.items())),"
     )
+    lines.append(
+        "        'task_timeouts_by_endpoint': "
+        "dict(sorted(_TASK_TIMEOUT_FAILURES.items())),"
+    )
     lines.append("    }")
 
     # GET /metrics above has served this dashboard-shaped JSON summary
@@ -3041,6 +3045,22 @@ def generate_fastapi_code(
     lines.append("        for path, count in sorted(_REQUEST_TIMEOUTS.items()):")
     lines.append(
         "            body += f'notebook_api_request_timeouts_total"
+        "{{path=\"{path}\"}} {count}\\n'"
+    )
+    lines.append("    if _TASK_TIMEOUT_FAILURES:")
+    lines.append(
+        "        body += ('# HELP notebook_api_task_timeouts_total Total number "
+        "of background tasks that failed by exceeding their execution "
+        "timeout, by endpoint.\\n'"
+    )
+    lines.append(
+        "                 '# TYPE notebook_api_task_timeouts_total counter\\n')"
+    )
+    lines.append(
+        "        for path, count in sorted(_TASK_TIMEOUT_FAILURES.items()):"
+    )
+    lines.append(
+        "            body += f'notebook_api_task_timeouts_total"
         "{{path=\"{path}\"}} {count}\\n'"
     )
     # The Prometheus text exposition format's own registered media type --
@@ -3643,6 +3663,10 @@ def generate_fastapi_code(
         and resolve_is_background(func["name"], background_overrides)
     }
     lines.append(f"_TASK_TIMEOUTS = {repr(dict(sorted(task_timeouts.items())))}")
+    # Per-endpoint count of background tasks that failed by exceeding their
+    # execution timeout -- the background-task counterpart of
+    # _REQUEST_TIMEOUTS, reported by GET /metrics and /metrics/prometheus.
+    lines.append("_TASK_TIMEOUT_FAILURES = {}")
     lines.append(
         "async def _run_background_task(func, task_id, *args, "
         "callback_url=None, **kwargs):"
@@ -3759,6 +3783,11 @@ def generate_fastapi_code(
     # uninformative empty "error", indistinguishable from any other
     # unlabeled failure.
     lines.append("    except TimeoutError:")
+    lines.append("        timed_out_path = '/' + getattr(func, '__name__', 'unknown')")
+    lines.append(
+        "        _TASK_TIMEOUT_FAILURES[timed_out_path] = "
+        "_TASK_TIMEOUT_FAILURES.get(timed_out_path, 0) + 1"
+    )
     lines.append(
         "        timeout_error = ("
         "f'Task exceeded its {task_limit}s '"

@@ -1096,6 +1096,7 @@ def test_generated_app_exposes_get_metrics_as_json(monkeypatch):
         "deprecated_endpoint_calls": {},
         "deprecated_endpoint_rejections": {},
         "request_timeouts_by_endpoint": {},
+        "task_timeouts_by_endpoint": {},
     }
 
 
@@ -8310,3 +8311,31 @@ def test_background_endpoint_publishes_its_task_timeout_in_openapi(monkeypatch):
     assert "x-notebook-to-api-timeout-seconds" not in paths["/fit_model"]["post"]
     # A background endpoint never answers 504 -- its task fails instead.
     assert "504" not in paths["/train_model"]["post"]["responses"]
+
+
+def test_metrics_count_background_task_timeouts_per_endpoint(monkeypatch):
+    """Confirmed missing before this feature: a background task failing on
+    its execution timeout was counted nowhere -- only synchronous request
+    timeouts had a per-endpoint counter."""
+    import time as time_module
+
+    def slow():
+        time_module.sleep(2)
+        return 1
+
+    client = _background_timeout_client(monkeypatch, {"train_model": 1}, slow)
+    assert client.get("/metrics").json()["task_timeouts_by_endpoint"] == {}
+    assert "task_timeouts_total" not in client.get("/metrics/prometheus").text
+
+    client.post("/train_model", json={})
+
+    assert client.get("/metrics").json()["task_timeouts_by_endpoint"] == {"/train_model": 1}
+    text = client.get("/metrics/prometheus").text
+    assert "# TYPE notebook_api_task_timeouts_total counter" in text
+    assert 'notebook_api_task_timeouts_total{path="/train_model"} 1' in text
+
+
+def test_task_timeout_failures_name_is_reserved():
+    from backend.generator.api_generator import RESERVED_INFRASTRUCTURE_NAMES
+
+    assert "_TASK_TIMEOUT_FAILURES" in RESERVED_INFRASTRUCTURE_NAMES
