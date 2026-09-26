@@ -88,6 +88,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "_DEPRECATED_ENDPOINT_REJECTIONS",
     "_DEPRECATED_ENDPOINT_CALLERS",
     "_DEPRECATED_CALLERS_LIMIT",
+    "_DEPRECATION_COUNTERS_SINCE",
     "_record_deprecated_caller",
     # Read by name from inside _add_deprecation_headers on every request,
     # the same exposure JSON_REQUEST_LOGS has for _log_request_json.
@@ -1316,6 +1317,14 @@ def generate_fastapi_code(
     # _DEPRECATED_CALLERS_LIMIT distinct agents per path (each truncated
     # to 200 chars), with any further ones folded into "(other)", so a
     # caller rotating its User-Agent can't grow this without limit.
+    # When the deprecation counters started counting (app start, or the
+    # last POST /deprecations/reset), as an ISO-8601 UTC timestamp --
+    # "3 calls" means nothing without "since when"; GET /deprecations
+    # reports it so a reader can tell 3 calls in an hour from 3 in a month.
+    lines.append(
+        "_DEPRECATION_COUNTERS_SINCE = "
+        "[time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())]"
+    )
     lines.append("_DEPRECATED_CALLERS_LIMIT = 50")
     lines.append(
         "_DEPRECATED_ENDPOINT_CALLERS = "
@@ -2634,6 +2643,7 @@ def generate_fastapi_code(
     lines.append("    return {")
     lines.append("        'rejecting': REJECT_DEPRECATED_ENDPOINTS,")
     lines.append("        'enforcing_sunset': ENFORCE_DEPRECATION_SUNSET,")
+    lines.append("        'counting_since': _DEPRECATION_COUNTERS_SINCE[0],")
     lines.append("        'endpoints': [")
     lines.append("            {")
     lines.append("                'path': path,")
@@ -2677,7 +2687,14 @@ def generate_fastapi_code(
     lines.append("        _DEPRECATED_ENDPOINT_CALLS[path] = 0")
     lines.append("        _DEPRECATED_ENDPOINT_REJECTIONS[path] = 0")
     lines.append("        _DEPRECATED_ENDPOINT_CALLERS[path] = {}")
-    lines.append("    return {'reset': sorted(_DEPRECATED_ENDPOINTS)}")
+    lines.append(
+        "    _DEPRECATION_COUNTERS_SINCE[0] = "
+        "time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())"
+    )
+    lines.append(
+        "    return {'reset': sorted(_DEPRECATED_ENDPOINTS), "
+        "'counting_since': _DEPRECATION_COUNTERS_SINCE[0]}"
+    )
     lines.append("")
     lines.append("@app.get('/metrics')")
     lines.append("def metrics():")
