@@ -7447,7 +7447,7 @@ def test_get_deprecations_lists_each_deprecated_endpoint_with_reason_and_calls(
     assert body == {
         "rejecting": False,
         "enforcing_sunset": False,
-        "endpoints": [{"path": "/old_add", "reason": "Use add.", "calls": 1, "rejections": 0, "callers": {"testclient": 1}, "sunset": None, "rejected": False}],
+        "endpoints": [{"path": "/old_add", "reason": "Use add.", "calls": 1, "rejections": 0, "callers": {"testclient": 1}, "sunset": None, "rejected": False, "retired": False}],
     }
 
 
@@ -7459,7 +7459,7 @@ def test_get_deprecations_reports_rejecting_and_reason_none(monkeypatch):
     assert _without_counting_since(client.get("/deprecations").json()) == {
         "rejecting": True,
         "enforcing_sunset": False,
-        "endpoints": [{"path": "/old_add", "reason": None, "calls": 0, "rejections": 0, "callers": {}, "sunset": None, "rejected": True}],
+        "endpoints": [{"path": "/old_add", "reason": None, "calls": 0, "rejections": 0, "callers": {}, "sunset": None, "rejected": True, "retired": False}],
     }
 
 
@@ -7927,3 +7927,47 @@ def test_no_retired_endpoints_means_no_extra_routes(monkeypatch):
     code = generate_fastapi_code([{"name": "add", "args": [], "return_type": "int"}])
 
     assert "_retired_endpoint_" not in code
+
+
+def _retired_client(monkeypatch):
+    code = generate_fastapi_code(
+        [{"name": "add", "args": [], "return_type": "int"}],
+        retired_endpoints={"old_add": "Use add. sunset: 2000-01-01"},
+    )
+    notebook_module = _register_fake_notebook_module(monkeypatch)
+    notebook_module.add = lambda: 1
+    monkeypatch.setenv("NOTEBOOK_API_KEY", "test-key")
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    return TestClient(namespace["app"], headers={"X-API-Key": "test-key"})
+
+
+def test_retired_endpoints_are_tracked_by_get_deprecations(monkeypatch):
+    """Confirmed missing before this feature: a retired (410 tombstone)
+    endpoint was invisible to GET /deprecations and every counter, so an
+    operator couldn't see who kept calling it after its removal."""
+    client = _retired_client(monkeypatch)
+    for _ in range(2):
+        response = client.post("/old_add", json={}, headers={"User-Agent": "legacy/1"})
+
+    # Still the tombstone's own, more specific answer.
+    assert response.status_code == 410
+    assert "has been removed" in response.json()["detail"]
+    assert response.headers["Sunset"] == "Sat, 01 Jan 2000 00:00:00 GMT"
+
+    entry = client.get("/deprecations").json()["endpoints"][0]
+    assert entry["path"] == "/old_add"
+    assert (entry["retired"], entry["rejected"]) == (True, True)
+    assert (entry["calls"], entry["rejections"]) == (2, 2)
+    assert entry["callers"] == {"legacy/1": 2}
+    assert entry["sunset"] == "2000-01-01"
+    assert client.get("/metrics").json()["deprecated_endpoint_rejections"] == {"/old_add": 2}
+
+
+def test_retired_endpoints_name_is_reserved():
+    from backend.generator.api_generator import RESERVED_INFRASTRUCTURE_NAMES
+
+    assert "_RETIRED_ENDPOINTS" in RESERVED_INFRASTRUCTURE_NAMES
