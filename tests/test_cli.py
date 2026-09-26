@@ -28281,3 +28281,84 @@ def test_app_deprecations_prints_the_counting_window(tmp_path, fake_dashboard):
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "  (counts since 2026-09-01T00:00:00Z)\n" in proc.stdout
+
+
+def _write_past_sunset_notebook(workdir):
+    path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        path,
+        "# notebook-to-api: deprecated: use v2. sunset: 2000-01-01\n"
+        "def old_add(a: int) -> int:\n    return a\n",
+    )
+    return path
+
+
+def test_validate_command_reports_deprecated_and_past_sunset_functions(tmp_path):
+    """Confirmed missing before this feature: local `validate` said nothing
+    about deprecations or missed removals."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path = _write_past_sunset_notebook(workdir)
+
+    proc = _run_cli(["validate", str(path)], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ⓘ Deprecated: old_add -- use v2. sunset: 2000-01-01" in proc.stdout
+    assert "⚠ Past sunset: old_add (sunset 2000-01-01) -- still defined" in proc.stdout
+
+
+def test_validate_command_fail_on_past_sunset_exits_1(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path = _write_past_sunset_notebook(workdir)
+
+    proc = _run_cli(["validate", str(path), "--fail-on-past-sunset"], cwd=workdir)
+
+    assert proc.returncode == 1
+    assert "✗ Past sunset: old_add" in proc.stdout
+
+
+def test_validate_command_json_includes_deprecation_fields(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path = _write_past_sunset_notebook(workdir)
+
+    proc = _run_cli(["validate", str(path), "--json"], cwd=workdir)
+
+    data = json.loads(proc.stdout)
+    assert data["past_sunset_functions"] == {"old_add": "2000-01-01"}
+    assert data["deprecated_functions"] == {"old_add": "use v2. sunset: 2000-01-01"}
+
+
+def test_remote_validate_command_fail_on_past_sunset_exits_1(tmp_path, fake_dashboard):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_json_response(200, {
+        "status": "pass", "notebook": "nb.ipynb", "version_id": None,
+        "reserved_name_conflicts": [], "skipped_functions": [],
+        "duplicate_functions": [], "requirements_conflict": None,
+        "deprecated_functions": {"old_add": None},
+        "past_sunset_functions": {"old_add": "2000-01-01"},
+    })]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-validate", "nb.ipynb", "--dashboard-url", dashboard_url,
+         "--fail-on-past-sunset"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 1
+    assert "✗ Past sunset: old_add (sunset 2000-01-01)" in proc.stdout
+
+
+def test_past_sunset_functions_helper():
+    from backend.inspector import past_sunset_functions
+
+    assert past_sunset_functions({}) == {}
+    assert past_sunset_functions(None) == {}
+    assert past_sunset_functions(
+        {"a": "sunset: 2026-01-01", "b": "sunset: 2026-01-02", "c": None,
+         "d": "sunset: 2026-13-01"},
+        today="2026-01-01",
+    ) == {"a": "2026-01-01"}

@@ -32,6 +32,7 @@ from backend.parser.ast_parser import is_parseable_python
 from backend.parser.notebook_parser import extract_code_cells, load_notebook
 # Import inspector for analysis
 from backend.inspector import (
+    past_sunset_functions,
     DEFAULT_DEV_API_KEY,
     classify_notebook_diff,
     diff_notebook_functions,
@@ -1941,6 +1942,14 @@ def _dispatch_core_command(args):
         else:
             status = "pass"
 
+        # Informational only (never part of "status"): the deprecated
+        # functions this notebook defines, and any still defined on or
+        # after their own "sunset: YYYY-MM-DD" -- `validate-all` already
+        # reported both catalog-wide, but a single-notebook `validate`
+        # (the one a pre-commit hook or per-PR CI step actually runs)
+        # said nothing. --fail-on-past-sunset turns the latter into a gate.
+        past_sunset = past_sunset_functions(data["deprecated_functions"])
+
         if args.json_output:
             print(json.dumps(
                 {
@@ -1950,6 +1959,8 @@ def _dispatch_core_command(args):
                     "skipped_functions": skipped_functions,
                     "duplicate_functions": duplicate_functions,
                     "requirements_conflict": requirements_conflict,
+                    "deprecated_functions": data["deprecated_functions"],
+                    "past_sunset_functions": past_sunset,
                 },
                 indent=2,
             ))
@@ -1977,6 +1988,12 @@ def _dispatch_core_command(args):
                 for skipped in skipped_functions:
                     print(f"  - {skipped['name']}: {skipped['reason']}")
 
+            for name, reason in data["deprecated_functions"].items():
+                print(f"\nⓘ Deprecated: {name}" + (f" -- {reason}" if reason else ""))
+            for name, sunset in past_sunset.items():
+                marker = "✗" if args.fail_on_past_sunset else "⚠"
+                print(f"{marker} Past sunset: {name} (sunset {sunset}) -- still defined")
+
             if status == "pass":
                 print("\n✓ No issues found.")
             elif status == "warn":
@@ -1987,6 +2004,8 @@ def _dispatch_core_command(args):
         if status == "fail":
             sys.exit(2)
         elif status == "warn":
+            sys.exit(1)
+        elif args.fail_on_past_sunset and past_sunset:
             sys.exit(1)
     elif args.command == "export-openapi":
         from backend.exporters.openapi_exporter import export_openapi_schema
@@ -5325,6 +5344,12 @@ def _dispatch_core_command(args):
                 for skipped in skipped_functions:
                     print(f"  - {skipped['name']}: {skipped['reason']}")
 
+            for name, reason in (data.get("deprecated_functions") or {}).items():
+                print(f"\nⓘ Deprecated: {name}" + (f" -- {reason}" if reason else ""))
+            for name, sunset in (data.get("past_sunset_functions") or {}).items():
+                marker = "✗" if args.fail_on_past_sunset else "⚠"
+                print(f"{marker} Past sunset: {name} (sunset {sunset}) -- still defined")
+
             if status == "pass":
                 print("\n✓ No issues found.")
             elif status == "warn":
@@ -5335,6 +5360,8 @@ def _dispatch_core_command(args):
         if status == "fail":
             sys.exit(2)
         elif status == "warn":
+            sys.exit(1)
+        elif args.fail_on_past_sunset and data.get("past_sunset_functions"):
             sys.exit(1)
     elif args.command == "validate-all":
         # See `upload` above for why this is imported here rather than at
@@ -9379,6 +9406,17 @@ def main():
     )
     validate_parser.add_argument("notebook", help="Path to the notebook file.")
     validate_parser.add_argument(
+        "--fail-on-past-sunset",
+        action="store_true",
+        dest="fail_on_past_sunset",
+        help=(
+            "Exit with status 1 if the notebook still defines a deprecated "
+            "function whose \"sunset: YYYY-MM-DD\" date is today (UTC) or "
+            "earlier -- a missed removal. Never overrides the exit status "
+            "2 a failing notebook already produces."
+        )
+    )
+    validate_parser.add_argument(
         "--strict",
         action="store_true",
         help=(
@@ -13296,6 +13334,17 @@ def main():
     )
     _add_dashboard_url_and_timeout_arguments(remote_validate_parser)
     _add_version_id_argument(remote_validate_parser, "POST /api/validate")
+    remote_validate_parser.add_argument(
+        "--fail-on-past-sunset",
+        action="store_true",
+        dest="fail_on_past_sunset",
+        help=(
+            "Exit with status 1 if the notebook still defines a deprecated "
+            "function whose \"sunset: YYYY-MM-DD\" date is today (UTC) or "
+            "earlier -- a missed removal. Never overrides the exit status "
+            "2 a failing notebook already produces."
+        )
+    )
     remote_validate_parser.add_argument(
         "--strict",
         action="store_true",
