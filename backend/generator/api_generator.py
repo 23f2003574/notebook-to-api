@@ -4358,6 +4358,31 @@ def generate_fastapi_code(
                 },
                 **_auth_and_rate_limit_error_responses(),
             }
+            # This endpoint's own "# notebook-to-api: timeout N" directive
+            # (timeout_overrides), published in openapi.json: as an
+            # "x-notebook-to-api-timeout-seconds" extension a client or SDK
+            # generator can size its own HTTP timeout from, and -- when
+            # nonzero -- as a documented 504, the response it can now get.
+            # The global NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS is a runtime
+            # env var, unknown here, so only a directive's value appears.
+            endpoint_timeout = (timeout_overrides or {}).get(func_name)
+            timeout_extra = (
+                f'"x-notebook-to-api-timeout-seconds": {endpoint_timeout}, '
+                if endpoint_timeout is not None else ""
+            )
+            if endpoint_timeout:
+                sync_responses[504] = {
+                    "description": (
+                        f"'{func_name}' did not finish within its own "
+                        f"{endpoint_timeout}s timeout."
+                    ),
+                    "content": {"application/json": {"example": {
+                        "detail": (
+                            f"'{func_name}' did not finish within its own "
+                            f"timeout directive ({endpoint_timeout}s)."
+                        )
+                    }}},
+                }
             lines.append(
                 f'@app.post("/{func_name}", '
                 f'summary="{summary}", '
@@ -4383,7 +4408,7 @@ def generate_fastapi_code(
                 # deliberately {} too (see sync_responses above), so
                 # generate_typescript_sdk has no other way to learn what
                 # "result" actually contains.
-                f'openapi_extra={{{sunset_extra}"x-notebook-to-api-category": "{category}", "x-notebook-to-api-return-type": {repr(return_type)}, "security": [{{"ApiKeyAuth": []}}]}}, '
+                f'openapi_extra={{{sunset_extra}{timeout_extra}"x-notebook-to-api-category": "{category}", "x-notebook-to-api-return-type": {repr(return_type)}, "security": [{{"ApiKeyAuth": []}}]}}, '
                 f'responses={repr(sync_responses)})'
             )
             is_async = func.get("is_async", False)
@@ -4410,7 +4435,6 @@ def generate_fastapi_code(
             # {function_name: seconds} -- this endpoint's own "# notebook-
             # to-api: timeout N" directive, overriding the global
             # REQUEST_TIMEOUT_SECONDS (0 = no timeout for this one).
-            endpoint_timeout = (timeout_overrides or {}).get(func_name)
             lines.append(
                 f"        result = await _call_notebook_function("
                 f"functools.partial(notebook_module.{func_name}, {call_args}), "

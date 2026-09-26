@@ -8137,3 +8137,30 @@ def test_timeout_directive_zero_exempts_an_endpoint_from_the_global_timeout(monk
 
     assert response.status_code == 200
     assert response.json() == {"result": 9}
+
+
+def test_timeout_directive_is_published_in_the_openapi_schema(monkeypatch):
+    """Confirmed missing before this feature: an endpoint's own timeout
+    directive changed its behavior but never reached openapi.json -- no
+    extension a client could size its HTTP timeout from, no 504 documented."""
+    code = generate_fastapi_code(
+        [
+            {"name": "slow", "args": [], "return_type": "int"},
+            {"name": "exempt", "args": [], "return_type": "int"},
+            {"name": "plain", "args": [], "return_type": "int"},
+        ],
+        timeout_overrides={"slow": 30, "exempt": 0},
+    )
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    paths = namespace["app"].openapi()["paths"]
+    slow, exempt, plain = (paths[f"/{n}"]["post"] for n in ("slow", "exempt", "plain"))
+
+    assert slow["x-notebook-to-api-timeout-seconds"] == 30
+    assert "30s timeout" in slow["responses"]["504"]["description"]
+    assert exempt["x-notebook-to-api-timeout-seconds"] == 0
+    assert "504" not in exempt["responses"]
+    assert "x-notebook-to-api-timeout-seconds" not in plain
+    assert "504" not in plain["responses"]
