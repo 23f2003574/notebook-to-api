@@ -4099,6 +4099,15 @@ def generate_fastapi_code(
                 },
                 **_auth_and_rate_limit_error_responses(),
             }
+            # A background function's own "# notebook-to-api: timeout N"
+            # (its task execution timeout, see _TASK_TIMEOUTS) published the
+            # same way a synchronous endpoint's request timeout already is --
+            # so a client can size how long to wait for the task's result.
+            task_timeout = (timeout_overrides or {}).get(func_name)
+            task_timeout_extra = (
+                f'"x-notebook-to-api-timeout-seconds": {task_timeout}, '
+                if task_timeout is not None else ""
+            )
             lines.append(
                 f'@app.post("/{func_name}", '
                 f'summary="{summary}", '
@@ -4134,7 +4143,7 @@ def generate_fastapi_code(
                 # nothing about the *eventual* result a real
                 # GET /tasks/{{task_id}} will carry is otherwise
                 # discoverable from this schema at all.
-                f'openapi_extra={{{sunset_extra}"x-notebook-to-api-category": "{category}", "x-notebook-to-api-async": True, "x-notebook-to-api-return-type": {repr(return_type)}, "security": [{{"ApiKeyAuth": []}}]}}, '
+                f'openapi_extra={{{sunset_extra}{task_timeout_extra}"x-notebook-to-api-category": "{category}", "x-notebook-to-api-async": True, "x-notebook-to-api-return-type": {repr(return_type)}, "security": [{{"ApiKeyAuth": []}}]}}, '
                 f'responses={repr(task_responses)})'
             )
             lines.append(

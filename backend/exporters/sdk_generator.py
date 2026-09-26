@@ -2124,10 +2124,19 @@ def generate_python_sdk(
                     },
                 )
             )
+            # A background endpoint's own task timeout (its
+            # "x-notebook-to-api-timeout-seconds") -- default the wait to
+            # outlast it, so a call returns the task's real outcome (done,
+            # or failed with the server's own timeout error) instead of
+            # giving up at 60s on a task the server may still finish.
+            task_timeout = _server_timeout_seconds(paths[path].get("post"))
+            wait_default = max(
+                60, task_timeout + _SERVER_TIMEOUT_CLIENT_MARGIN_SECONDS
+            ) if task_timeout else 60
             lines.append(
                 f"    def {wait_name}(self, payload: {request_class}, "
                 "callback_url: str = None, "
-                "poll_interval: float = 1.0, timeout: float = 60.0) -> "
+                f"poll_interval: float = 1.0, timeout: float = {float(wait_default)}) -> "
                 f"{task_result_class}:"
             )
             and_wait_static_doc = (
@@ -3067,9 +3076,18 @@ def generate_typescript_sdk(
             lines.append(
                 f"    const submitted = await this.{method_name}(payload, callbackUrl);"
             )
-            lines.append(
-                "    return this.waitForTask(submitted.task_id, options);"
-            )
+            # See the Python client's identical task-timeout wait default.
+            task_timeout = _server_timeout_seconds(paths[path].get("post"))
+            if task_timeout and task_timeout + _SERVER_TIMEOUT_CLIENT_MARGIN_SECONDS > 60:
+                wait_ms = (task_timeout + _SERVER_TIMEOUT_CLIENT_MARGIN_SECONDS) * 1000
+                lines.append(
+                    "    return this.waitForTask(submitted.task_id, "
+                    f"{{ timeoutMs: {wait_ms}, ...options }});"
+                )
+            else:
+                lines.append(
+                    "    return this.waitForTask(submitted.task_id, options);"
+                )
             lines.append("  }")
     lines.append("}")
     lines.append("")

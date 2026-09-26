@@ -7308,3 +7308,33 @@ def test_typescript_sdk_does_not_retry_the_apps_own_request_timeout(tmp_path):
     proc = subprocess.run(["node", str(runner_path)], capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert json.loads(proc.stdout.strip().splitlines()[-1]) == {"marked": 1, "plain": 3}
+
+
+def test_sdk_wait_methods_default_to_outlasting_a_task_timeout(tmp_path):
+    """Confirmed missing before this feature: a generated wait method gave
+    up after a fixed 60s even for a background endpoint whose own task
+    timeout was longer, abandoning a task the server could still finish."""
+    schema_path = _write_schema(tmp_path, {
+        "/train_model": {"post": {"operationId": "train_model",
+                                  "x-notebook-to-api-async": True,
+                                  "x-notebook-to-api-timeout-seconds": 300}},
+        "/fit_model": {"post": {"operationId": "fit_model",
+                                "x-notebook-to-api-async": True,
+                                "x-notebook-to-api-timeout-seconds": 10}},
+    })
+    py_path = tmp_path / "client.py"
+    ts_path = tmp_path / "client.ts"
+
+    generate_python_sdk(str(schema_path), str(py_path))
+    generate_typescript_sdk(str(schema_path), str(ts_path))
+
+    py_source = py_path.read_text(encoding="utf-8")
+    ast.parse(py_source)
+    ts_source = ts_path.read_text(encoding="utf-8")
+    train_def = next(line for line in py_source.splitlines() if "def train_model_and_wait(" in line)
+    fit_def = next(line for line in py_source.splitlines() if "def fit_model_and_wait(" in line)
+    assert "timeout: float = 305.0)" in train_def
+    # Shorter task timeout -- the usual 60s default already outlasts it.
+    assert "timeout: float = 60.0)" in fit_def
+    assert "{ timeoutMs: 305000, ...options }" in ts_source
+    assert ts_source.count("...options }") == 1

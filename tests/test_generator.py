@@ -8290,3 +8290,23 @@ def test_task_timeouts_name_is_reserved():
     from backend.generator.api_generator import RESERVED_INFRASTRUCTURE_NAMES
 
     assert "_TASK_TIMEOUTS" in RESERVED_INFRASTRUCTURE_NAMES
+
+
+def test_background_endpoint_publishes_its_task_timeout_in_openapi(monkeypatch):
+    """Confirmed missing before this feature: a background endpoint's own
+    task timeout directive never reached openapi.json."""
+    code = generate_fastapi_code(
+        [{"name": "train_model", "args": [], "return_type": "int"},
+         {"name": "fit_model", "args": [], "return_type": "int"}],
+        timeout_overrides={"train_model": 300},
+    )
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    paths = namespace["app"].openapi()["paths"]
+
+    assert paths["/train_model"]["post"]["x-notebook-to-api-timeout-seconds"] == 300
+    assert "x-notebook-to-api-timeout-seconds" not in paths["/fit_model"]["post"]
+    # A background endpoint never answers 504 -- its task fails instead.
+    assert "504" not in paths["/train_model"]["post"]["responses"]
