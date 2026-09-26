@@ -86,6 +86,9 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "_DEPRECATED_ENDPOINTS",
     "_DEPRECATED_ENDPOINT_CALLS",
     "_DEPRECATED_ENDPOINT_REJECTIONS",
+    "_DEPRECATED_ENDPOINT_CALLERS",
+    "_DEPRECATED_CALLERS_LIMIT",
+    "_record_deprecated_caller",
     # Read by name from inside _add_deprecation_headers on every request,
     # the same exposure JSON_REQUEST_LOGS has for _log_request_json.
     "REJECT_DEPRECATED_ENDPOINTS",
@@ -1306,6 +1309,26 @@ def generate_fastapi_code(
         "_DEPRECATED_ENDPOINT_REJECTIONS = "
         "{path: 0 for path in _DEPRECATED_ENDPOINTS}"
     )
+    # Per-deprecated-path call counts broken down by User-Agent -- *who*
+    # is still calling, for a deployment with no log pipeline to mine the
+    # NOTEBOOK_API_JSON_LOGS "user_agent" field from. Bounded: at most
+    # _DEPRECATED_CALLERS_LIMIT distinct agents per path (each truncated
+    # to 200 chars), with any further ones folded into "(other)", so a
+    # caller rotating its User-Agent can't grow this without limit.
+    lines.append("_DEPRECATED_CALLERS_LIMIT = 50")
+    lines.append(
+        "_DEPRECATED_ENDPOINT_CALLERS = "
+        "{path: {} for path in _DEPRECATED_ENDPOINTS}"
+    )
+    lines.append("def _record_deprecated_caller(path, user_agent):")
+    lines.append("    callers = _DEPRECATED_ENDPOINT_CALLERS[path]")
+    lines.append("    agent = (user_agent or '(none)')[:200]")
+    lines.append(
+        "    if agent not in callers and len(callers) >= _DEPRECATED_CALLERS_LIMIT:"
+    )
+    lines.append("        agent = '(other)'")
+    lines.append("    callers[agent] = callers.get(agent, 0) + 1")
+    lines.append("")
     lines.append("")
     # NOTEBOOK_API_REJECT_DEPRECATED (see GENERATED_APP_ENV_VARS): a
     # brownout switch answering 410 Gone for deprecated paths before
@@ -1363,6 +1386,10 @@ def generate_fastapi_code(
     lines.append("        response = await call_next(request)")
     lines.append("    if request.url.path in _DEPRECATED_ENDPOINTS:")
     lines.append("        _DEPRECATED_ENDPOINT_CALLS[request.url.path] += 1")
+    lines.append(
+        "        _record_deprecated_caller("
+        "request.url.path, request.headers.get('User-Agent'))"
+    )
     lines.append("        response.headers['Deprecation'] = 'true'")
     lines.append("        reason = _DEPRECATED_ENDPOINTS[request.url.path]")
     lines.append("        if reason:")
@@ -2618,6 +2645,11 @@ def generate_fastapi_code(
     # called, and those callers are now breaking" from "still served".
     lines.append(
         "                'rejections': _DEPRECATED_ENDPOINT_REJECTIONS[path],"
+    )
+    lines.append(
+        "                'callers': dict(sorted("
+        "_DEPRECATED_ENDPOINT_CALLERS[path].items(), "
+        "key=lambda item: (-item[1], item[0]))),"
     )
     lines.append(
         "                'sunset': _DEPRECATION_SUNSETS.get(path, (None,))[0],"
