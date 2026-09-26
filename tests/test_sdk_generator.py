@@ -338,7 +338,7 @@ def test_generate_python_sdk_constructor_accepts_a_configurable_timeout(tmp_path
     # makes no request of its own, it only calls self.get_task), plus the
     # 10 hardcoded health/ready/info/config/metrics/metrics_prometheus/
     # uptime/auth_status/auth_info/auth_validate methods.
-    assert source.count("timeout=self.timeout") == 22
+    assert source.count("timeout=self.timeout") == 23
 
 
 def test_generate_python_sdk_uses_the_configured_timeout_for_a_request(
@@ -410,7 +410,7 @@ def test_generate_typescript_sdk_constructor_accepts_a_configurable_timeout(
     # paths exist), plus the 10 hardcoded health/ready/info/config/
     # metrics/metricsPrometheus/uptime/authStatus/authInfo/authValidate
     # methods.
-    assert source.count("signal: AbortSignal.timeout(this.timeoutMs),") == 21
+    assert source.count("signal: AbortSignal.timeout(this.timeoutMs),") == 22
 
 
 def test_generate_python_sdk_method_name_handles_multi_segment_paths(tmp_path):
@@ -7545,4 +7545,89 @@ def test_typescript_sdk_delete_failed_tasks_can_target_timed_out_ones(tmp_path):
     assert json.loads(proc.stdout.strip().splitlines()[-1]) == [
         "http://localhost:8000/tasks/failed",
         "http://localhost:8000/tasks/failed?timed_out=true",
+    ]
+
+
+def test_generate_python_sdk_clear_cache_sends_correct_request(tmp_path, monkeypatch):
+    """Confirmed missing before this feature: DELETE /cache existed
+    server-side with no client method of its own."""
+    schema_path = _write_schema(
+        tmp_path, {"/predict": {"post": {"operationId": "predict"}}}
+    )
+    output_path = tmp_path / "client.py"
+    generate_python_sdk(str(schema_path), str(output_path))
+    calls = []
+
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"cleared": 3, "remaining_entries": 0}
+
+    def fake_delete(url, headers=None, timeout=None, params=None):
+        calls.append({"url": url, "params": params, "headers": headers})
+        return FakeResponse()
+
+    namespace = _exec_python_client_with_fake_requests(
+        output_path, monkeypatch, delete=fake_delete
+    )
+    client = namespace["NotebookAPIClient"]("http://localhost:8000", api_key="k")
+
+    assert client.clear_cache() == {"cleared": 3, "remaining_entries": 0}
+    client.clear_cache("predict")
+
+    assert calls[0]["url"] == "http://localhost:8000/cache"
+    assert calls[0]["params"] is None
+    assert calls[1]["params"] == {"endpoint": "predict"}
+    assert calls[1]["headers"] == {"X-API-Key": "k"}
+
+
+def test_generate_python_sdk_renames_a_notebook_function_named_clear_cache(tmp_path):
+    schema_path = _write_schema(
+        tmp_path, {"/clear_cache": {"post": {"operationId": "clear_cache"}}}
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    assert output_path.read_text(encoding="utf-8").count("def clear_cache(") == 1
+
+
+def test_generate_typescript_sdk_clear_cache_sends_correct_request(tmp_path):
+    schema_path = _write_schema(
+        tmp_path, {"/predict": {"post": {"operationId": "predict"}}}
+    )
+    client_path = tmp_path / "client.ts"
+    generate_typescript_sdk(str(schema_path), str(client_path))
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        const calls = [];
+        globalThis.fetch = async (url, opts) => {{
+          calls.push({{ url, method: opts.method, key: opts.headers["X-API-Key"] }});
+          return {{ ok: true, json: async () => ({{ cleared: 1, remaining_entries: 0 }}) }};
+        }};
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+        const result = await client.clearCache();
+        await client.clearCache("/predict");
+        console.log(JSON.stringify({{ calls, result }}));
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)], capture_output=True, text=True, timeout=30
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    output = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert output["result"] == {"cleared": 1, "remaining_entries": 0}
+    assert output["calls"] == [
+        {"url": "http://localhost:8000/cache", "method": "DELETE", "key": "notebook-to-api-dev-key"},
+        {"url": "http://localhost:8000/cache?endpoint=%2Fpredict", "method": "DELETE", "key": "notebook-to-api-dev-key"},
     ]

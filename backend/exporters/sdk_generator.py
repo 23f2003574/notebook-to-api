@@ -24,7 +24,7 @@ from backend.parser.ast_parser import _matching_bracket_content
 PYTHON_RESERVED_CLIENT_METHOD_NAMES = frozenset({
     "get_task", "wait_for_task", "list_tasks", "delete_task",
     "delete_completed_tasks", "delete_failed_tasks", "redeliver_task_webhook",
-    "retry_task", "cleanup_tasks", "reset_tasks",
+    "retry_task", "cleanup_tasks", "reset_tasks", "clear_cache",
     "health", "ready", "info", "config", "metrics", "metrics_prometheus",
     "deprecations", "reset_deprecation_counters",
     "uptime", "auth_status", "auth_info", "auth_validate",
@@ -51,7 +51,7 @@ PYTHON_RESERVED_CLIENT_METHOD_NAMES = frozenset({
 TYPESCRIPT_RESERVED_CLIENT_METHOD_NAMES = frozenset({
     "getTask", "waitForTask", "listTasks", "deleteTask",
     "deleteCompletedTasks", "deleteFailedTasks", "redeliverTaskWebhook",
-    "retryTask", "cleanupTasks", "resetTasks",
+    "retryTask", "cleanupTasks", "resetTasks", "clearCache",
     "health", "ready", "info", "config", "metrics", "metricsPrometheus",
     "deprecations", "resetDeprecationCounters",
     "uptime", "authStatus", "authInfo", "authValidate",
@@ -1858,6 +1858,27 @@ def generate_python_sdk(
     # delete_completed_tasks() then delete_failed_tasks() separately;
     # reset_tasks is more drastic still -- it drops every task regardless
     # of status, including one still processing.
+    # DELETE /cache (api_generator.py) purges results cached by a
+    # "# notebook-to-api: cache N" directive; without a client method a
+    # caller had to hand-roll the request after refreshing upstream data.
+    lines.append("    def clear_cache(self, endpoint: Optional[str] = None) -> dict:")
+    lines.append(
+        '        """Drop cached endpoint results -- every entry, or only '
+        "`endpoint`'s"
+    )
+    lines.append(
+        "        (e.g. \"predict\" or \"/predict\"). Returns "
+        '{\"cleared\": n, \"remaining_entries\": m}."""'
+    )
+    lines.append("        return self._request(lambda: requests.delete(")
+    lines.append('            f"{self.base_url}/cache",')
+    lines.append(
+        '            **({"params": {"endpoint": endpoint}} if endpoint is not None else {}),'
+    )
+    lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("            timeout=self.timeout,")
+    lines.append("        ))")
+    lines.append("")
     lines.append("    def cleanup_tasks(self) -> dict:")
     lines.append(
         '        """Delete every task with status \'completed\' or '
@@ -2868,6 +2889,23 @@ def generate_typescript_sdk(
     # of calling deleteCompletedTasks() then deleteFailedTasks()
     # separately; resetTasks is more drastic still -- it drops every task
     # regardless of status, including one still processing.
+    # See generate_python_sdk's identical clear_cache.
+    lines.append("  async clearCache(endpoint?: string): Promise<any> {")
+    lines.append(
+        "    const path = endpoint === undefined ? \"/cache\" : "
+        "`/cache?endpoint=${encodeURIComponent(endpoint)}`;"
+    )
+    lines.append(
+        "    return this.requestWithRetry(path, () => fetch(`${this.baseUrl}${path}`, {"
+    )
+    lines.append('      method: "DELETE",')
+    lines.append("      headers: {")
+    lines.append('        "X-API-Key": this.apiKey,')
+    lines.append("      },")
+    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
+    lines.append("    }));")
+    lines.append("  }")
+    lines.append("")
     lines.append("  async cleanupTasks(): Promise<any> {")
     lines.append(
         '    return this.requestWithRetry("/tasks/cleanup", () => '
