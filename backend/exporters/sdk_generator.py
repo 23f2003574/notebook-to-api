@@ -984,6 +984,15 @@ def _python_method_docstring(description, static_text):
     return repr(doc)
 
 
+def _server_cache_ttl_seconds(operation):
+    """The operation's own "x-notebook-to-api-cache-ttl-seconds" (from a
+    "# notebook-to-api: cache N" directive), or None when it isn't cached."""
+    value = (operation or {}).get("x-notebook-to-api-cache-ttl-seconds")
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
+
+
 def _server_timeout_seconds(operation):
     """The operation's own "x-notebook-to-api-timeout-seconds" (its
     "# notebook-to-api: timeout N" directive, see generate_fastapi_code)
@@ -2054,9 +2063,15 @@ def generate_python_sdk(
                 f"callback_url: str = None) -> {response_class}:"
             )
         else:
+            # A "# notebook-to-api: cache N" endpoint (published as
+            # "x-notebook-to-api-cache-ttl-seconds") gains no_cache=True,
+            # sending Cache-Control: no-cache so the server re-runs the
+            # function instead of answering from its response cache.
+            is_cached = _server_cache_ttl_seconds(paths[path].get("post")) is not None
             lines.append(
-                f"    def {method_name}(self, payload: {request_class}) "
-                f"-> {response_class}:"
+                f"    def {method_name}(self, payload: {request_class}"
+                + (", no_cache: bool = False" if is_cached else "")
+                + f") -> {response_class}:"
             )
         if is_background:
             wait_name = wait_method_names[path]
@@ -2127,7 +2142,13 @@ def generate_python_sdk(
                 '"Idempotency-Key": idempotency_key},'
             )
         else:
-            lines.append(f'            headers={{"X-API-Key": self.api_key}},')
+            if is_cached:
+                lines.append(
+                    '            headers={"X-API-Key": self.api_key, '
+                    '**({"Cache-Control": "no-cache"} if no_cache else {})},'
+                )
+            else:
+                lines.append(f'            headers={{"X-API-Key": self.api_key}},')
         # An endpoint with its own "# notebook-to-api: timeout N" may
         # legitimately take up to N seconds -- a client timeout shorter
         # than that would abandon a call the server is still allowed to
@@ -2590,7 +2611,8 @@ def generate_typescript_sdk(
     # the raw HTTP request by hand.
     lines.append(
         "  private async request(path: string, payload: unknown, "
-        "callbackUrl?: string, minTimeoutMs?: number): Promise<any> {"
+        "callbackUrl?: string, minTimeoutMs?: number, "
+        "extraHeaders?: Record<string, string>): Promise<any> {"
     )
     lines.append("    let url = path;")
     lines.append("    if (callbackUrl) {")
@@ -2627,6 +2649,7 @@ def generate_typescript_sdk(
     lines.append('        "Content-Type": "application/json",')
     lines.append('        "X-API-Key": this.apiKey,')
     lines.append('        "Idempotency-Key": idempotencyKey,')
+    lines.append("        ...(extraHeaders ?? {}),")
     lines.append("      },")
     lines.append("      body: JSON.stringify(payload),")
     # minTimeoutMs: see the Python client's identical server-timeout wait.
@@ -3084,9 +3107,12 @@ def generate_typescript_sdk(
                 f"callbackUrl?: string): Promise<{response_interface}> {{"
             )
         else:
+            # See generate_python_sdk's identical no_cache.
+            is_cached = _server_cache_ttl_seconds(paths[path].get("post")) is not None
             lines.append(
-                f"  async {method_name}(payload: {request_interface}): "
-                f"Promise<{response_interface}> {{"
+                f"  async {method_name}(payload: {request_interface}"
+                + (", noCache: boolean = false" if is_cached else "")
+                + f"): Promise<{response_interface}> {{"
             )
         if is_deprecated:
             # The compiled operation's own OpenAPI "deprecated" field --
@@ -3109,7 +3135,16 @@ def generate_typescript_sdk(
             )
         else:
             server_timeout = _server_timeout_seconds(paths[path].get("post"))
-            if server_timeout:
+            if is_cached:
+                timeout_arg = (
+                    (server_timeout + _SERVER_TIMEOUT_CLIENT_MARGIN_SECONDS) * 1000
+                    if server_timeout else "undefined"
+                )
+                lines.append(
+                    f'    return this.request("{path}", payload, undefined, {timeout_arg}, '
+                    'noCache ? { "Cache-Control": "no-cache" } : undefined);'
+                )
+            elif server_timeout:
                 timeout_ms = (
                     server_timeout + _SERVER_TIMEOUT_CLIENT_MARGIN_SECONDS
                 ) * 1000

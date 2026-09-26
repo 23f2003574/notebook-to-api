@@ -7631,3 +7631,77 @@ def test_generate_typescript_sdk_clear_cache_sends_correct_request(tmp_path):
         {"url": "http://localhost:8000/cache", "method": "DELETE", "key": "notebook-to-api-dev-key"},
         {"url": "http://localhost:8000/cache?endpoint=%2Fpredict", "method": "DELETE", "key": "notebook-to-api-dev-key"},
     ]
+
+
+def _cached_schema(tmp_path):
+    return _write_schema(
+        tmp_path,
+        {
+            "/lookup": {"post": {"operationId": "lookup", "x-notebook-to-api-cache-ttl-seconds": 30}},
+            "/plain": {"post": {"operationId": "plain"}},
+        },
+    )
+
+
+def test_generate_python_sdk_no_cache_bypasses_a_cached_endpoint(tmp_path, monkeypatch):
+    """Confirmed missing before this feature: a client could not ask a
+    "# notebook-to-api: cache N" endpoint for a fresh result."""
+    output_path = tmp_path / "client.py"
+    generate_python_sdk(str(_cached_schema(tmp_path)), str(output_path))
+    calls = []
+
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"result": 1}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        calls.append(headers)
+        return FakeResponse()
+
+    namespace = _exec_python_client_with_fake_requests(
+        output_path, monkeypatch, post=fake_post
+    )
+    client = namespace["NotebookAPIClient"]("http://localhost:8000", api_key="k")
+
+    client.lookup({})
+    client.lookup({}, no_cache=True)
+
+    assert calls == [{"X-API-Key": "k"}, {"X-API-Key": "k", "Cache-Control": "no-cache"}]
+    source = output_path.read_text(encoding="utf-8")
+    assert "def plain(self, payload: PlainRequest) ->" in source
+
+
+def test_generate_typescript_sdk_no_cache_bypasses_a_cached_endpoint(tmp_path):
+    client_path = tmp_path / "client.ts"
+    generate_typescript_sdk(str(_cached_schema(tmp_path)), str(client_path))
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        const calls = [];
+        globalThis.fetch = async (url, opts) => {{
+          calls.push(opts.headers["Cache-Control"] ?? null);
+          return {{ ok: true, json: async () => ({{ result: 1 }}) }};
+        }};
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+        await client.lookup({{}});
+        await client.lookup({{}}, true);
+        await client.plain({{}});
+        console.log(JSON.stringify(calls));
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(runner_path)], capture_output=True, text=True, timeout=30
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout.strip().splitlines()[-1]) == [None, "no-cache", None]
+    assert "async plain(payload: PlainRequest): " in client_path.read_text(encoding="utf-8")
