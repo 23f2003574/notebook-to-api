@@ -8620,3 +8620,106 @@ def test_rate_limit_directive_is_published_in_openapi(monkeypatch):
     assert paths["/limited"]["post"]["x-notebook-to-api-rate-limit-per-minute"] == 7
     assert paths["/train_model"]["post"]["x-notebook-to-api-rate-limit-per-minute"] == 3
     assert "x-notebook-to-api-rate-limit-per-minute" not in paths["/free"]["post"]
+
+
+def _response_cache_client(monkeypatch, overrides, calls):
+    code = generate_fastapi_code(
+        [
+            {"name": "lookup", "args": [{"name": "x", "type": "int"}], "return_type": "int"},
+            {"name": "plain", "args": [], "return_type": "int"},
+        ],
+        cache_overrides=overrides,
+    )
+    notebook_module = _register_fake_notebook_module(monkeypatch)
+
+    def lookup(x):
+        calls.append(x)
+        return x * len(calls)
+
+    notebook_module.lookup = lookup
+    notebook_module.plain = lambda: calls.append("plain") or len(calls)
+    monkeypatch.setenv("NOTEBOOK_API_KEY", "test-key")
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    return TestClient(namespace["app"], headers={"X-API-Key": "test-key"}), namespace
+
+
+def test_cache_directive_serves_repeat_requests_without_rerunning(monkeypatch):
+    """Confirmed missing before this feature: every identical request
+    re-ran the notebook function."""
+    calls = []
+    client, _ = _response_cache_client(monkeypatch, {"lookup": 60}, calls)
+
+    first = client.post("/lookup", json={"x": 3})
+    second = client.post("/lookup", json={"x": 3})
+    other = client.post("/lookup", json={"x": 4})
+
+    assert first.json() == second.json() == {"result": 3}
+    assert first.headers["X-Cache"] == "MISS"
+    assert second.headers["X-Cache"] == "HIT"
+    assert int(second.headers["Age"]) >= 0
+    assert other.headers["X-Cache"] == "MISS"
+    assert calls == [3, 4]
+
+
+def test_cache_directive_entry_expires_after_ttl(monkeypatch):
+    calls = []
+    client, namespace = _response_cache_client(monkeypatch, {"lookup": 60}, calls)
+    client.post("/lookup", json={"x": 2})
+
+    for key, (expires_at, result) in list(namespace["_RESPONSE_CACHE"].items()):
+        namespace["_RESPONSE_CACHE"][key] = (expires_at - 120, result)
+
+    response = client.post("/lookup", json={"x": 2})
+    assert response.headers["X-Cache"] == "MISS"
+    assert calls == [2, 2]
+
+
+def test_cache_directive_no_cache_header_forces_a_fresh_call(monkeypatch):
+    calls = []
+    client, _ = _response_cache_client(monkeypatch, {"lookup": 60}, calls)
+    client.post("/lookup", json={"x": 5})
+
+    forced = client.post("/lookup", json={"x": 5}, headers={"Cache-Control": "no-cache"})
+    after = client.post("/lookup", json={"x": 5})
+
+    assert forced.headers["X-Cache"] == "MISS"
+    assert forced.json() == {"result": 10}
+    assert after.headers["X-Cache"] == "HIT"
+    assert after.json() == {"result": 10}
+
+
+def test_cache_directive_skips_failures_and_unauthenticated_calls(monkeypatch):
+    calls = []
+    client, namespace = _response_cache_client(monkeypatch, {"lookup": 60}, calls)
+    client.post("/lookup", json={"x": 1})
+
+    assert client.post("/lookup", json={"x": 1}, headers={"X-API-Key": "bad"}).status_code == 401
+    assert client.post("/lookup", json={"x": "nope"}).status_code == 422
+    assert len(namespace["_RESPONSE_CACHE"]) == 1
+
+
+def test_cache_is_bounded_by_max_entries(monkeypatch):
+    calls = []
+    client, namespace = _response_cache_client(monkeypatch, {"lookup": 60}, calls)
+    namespace["_RESPONSE_CACHE_MAX_ENTRIES"] = 2
+
+    for x in (1, 2, 3):
+        client.post("/lookup", json={"x": x})
+
+    assert len(namespace["_RESPONSE_CACHE"]) == 2
+    assert client.post("/lookup", json={"x": 1}).headers["X-Cache"] == "MISS"
+
+
+def test_no_cache_directive_leaves_endpoints_uncached(monkeypatch):
+    calls = []
+    client, _ = _response_cache_client(monkeypatch, {}, calls)
+
+    first = client.post("/plain", json={})
+    second = client.post("/plain", json={})
+
+    assert "X-Cache" not in first.headers
+    assert first.json() != second.json()

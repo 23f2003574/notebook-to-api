@@ -26,7 +26,8 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "REQUEST_TIMEOUT_SECONDS", "_call_notebook_function", "_REQUEST_TIMEOUTS",
     "_ENDPOINT_TIMEOUTS", "_TASK_TIMEOUTS", "_TASK_TIMEOUT_FAILURES",
     "_ENDPOINT_RATE_LIMIT_WINDOWS", "_enforce_endpoint_rate_limit",
-    "_ENDPOINT_RATE_LIMITED",
+    "_ENDPOINT_RATE_LIMITED", "_RESPONSE_CACHE", "_RESPONSE_CACHE_LOCK",
+    "_RESPONSE_CACHE_MAX_ENTRIES", "_cache_lookup", "_cache_store",
     # Read by name from inside _evict_expired_tasks' own body -- the
     # identical "referenced by name inside a helper every background
     # endpoint's own submission calls first" exposure already documented
@@ -943,7 +944,7 @@ def generate_fastapi_code(
     functions, package_name="generated", source_notebook_sha256=None,
     notebook_to_api_version="1.0.0", background_overrides=None,
     deprecated_overrides=None, retired_endpoints=None, timeout_overrides=None,
-    rate_limit_overrides=None,
+    rate_limit_overrides=None, cache_overrides=None,
 ):
     """Generate FastAPI app code for the given functions.
 
@@ -2057,6 +2058,32 @@ def generate_fastapi_code(
     lines.append("                'X-RateLimit-Reset': str(reset_at),")
     lines.append("            },")
     lines.append("        )")
+    lines.append("")
+    # Response cache for "# notebook-to-api: cache N" endpoints: keyed by
+    # (path, canonical JSON of the validated request body), each entry
+    # expiring N seconds after it was stored. Bounded per process by
+    # _RESPONSE_CACHE_MAX_ENTRIES (oldest insertion evicted first) so a
+    # caller cycling through unique inputs can't grow it without limit.
+    lines.append("_RESPONSE_CACHE = {}")
+    lines.append("_RESPONSE_CACHE_LOCK = threading.Lock()")
+    lines.append("_RESPONSE_CACHE_MAX_ENTRIES = 1024")
+    lines.append("")
+    lines.append("def _cache_lookup(key):")
+    lines.append("    with _RESPONSE_CACHE_LOCK:")
+    lines.append("        entry = _RESPONSE_CACHE.get(key)")
+    lines.append("        if entry is None:")
+    lines.append("            return None")
+    lines.append("        if entry[0] <= time.time():")
+    lines.append("            _RESPONSE_CACHE.pop(key, None)")
+    lines.append("            return None")
+    lines.append("        return entry")
+    lines.append("")
+    lines.append("def _cache_store(key, result, ttl):")
+    lines.append("    with _RESPONSE_CACHE_LOCK:")
+    lines.append("        _RESPONSE_CACHE.pop(key, None)")
+    lines.append("        while len(_RESPONSE_CACHE) >= _RESPONSE_CACHE_MAX_ENTRIES:")
+    lines.append("            _RESPONSE_CACHE.pop(next(iter(_RESPONSE_CACHE)))")
+    lines.append("        _RESPONSE_CACHE[key] = (time.time() + ttl, result)")
     lines.append("")
     lines.append("def verify_api_key(response: Response, x_api_key: str = Header(None)):")
     lines.append("    # hmac.compare_digest instead of != : a plain string")
@@ -4612,8 +4639,34 @@ def generate_fastapi_code(
             # NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS and -- for a plain
             # `def` -- runs it on the same worker threadpool FastAPI would
             # have used for a `def` endpoint anyway.
-            lines.append(f"async def {func_name}(req: {model_name}, {rate_limit_param}_: None = Depends(verify_api_key)):")
+            endpoint_cache_ttl = (cache_overrides or {}).get(func_name)
+            cache_param = (
+                '_cache_control: Optional[str] = Header(None, alias="Cache-Control"), '
+                if endpoint_cache_ttl else ""
+            )
+            lines.append(f"async def {func_name}(req: {model_name}, {rate_limit_param}{cache_param}_: None = Depends(verify_api_key)):")
             lines.extend(rate_limit_lines)
+            if endpoint_cache_ttl:
+                # Checked after auth and the rate limit, so a cache hit is
+                # still an authenticated, counted call. "Cache-Control:
+                # no-cache" skips the lookup (the fresh result still
+                # refreshes the entry), the standard way to force a re-run.
+                lines.append(
+                    f"    _cache_key = ('/{func_name}', json.dumps("
+                    "jsonable_encoder(req), sort_keys=True, default=str))"
+                )
+                lines.append(
+                    "    _cached = None if 'no-cache' in (_cache_control or '').lower() "
+                    "else _cache_lookup(_cache_key)"
+                )
+                lines.append("    if _cached is not None:")
+                lines.append("        return JSONResponse(")
+                lines.append("            content={'result': _cached[1]},")
+                lines.append(
+                    "            headers={'X-Cache': 'HIT', 'Age': "
+                    f"str(max(0, int({int(endpoint_cache_ttl)} - (_cached[0] - time.time()))))}},"
+                )
+                lines.append("        )")
             # _run_background_task already wraps a background function's own
             # call the same way (reporting the task "failed" with str(e)
             # instead of leaving it stuck "processing" forever), but a
@@ -4691,7 +4744,14 @@ def generate_fastapi_code(
                 "is not JSON-serializable: {e}\","
             )
             lines.append("        )")
-            lines.append("    return {\"result\": result}")
+            if endpoint_cache_ttl:
+                lines.append(f"    _cache_store(_cache_key, result, {int(endpoint_cache_ttl)})")
+                lines.append(
+                    "    return JSONResponse(content={'result': result}, "
+                    "headers={'X-Cache': 'MISS'})"
+                )
+            else:
+                lines.append("    return {\"result\": result}")
         lines.append("")
     # `retired_endpoints` (optional) is {function_name: deprecation reason}
     # for deprecated functions this compile left out *because* their own

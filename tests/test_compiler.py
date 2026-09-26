@@ -8358,3 +8358,15 @@ def test_extract_rate_limit_overrides_reads_stacked_directives_and_ignores_zero(
     ]
 
     assert _extract_rate_limit_overrides(cells) == {"predict": 5}
+
+
+def test_extract_cache_overrides_reads_stacked_directives_and_ignores_zero():
+    from backend.compiler import _extract_cache_overrides
+
+    cells = [
+        "# notebook-to-api: timeout 3\n# notebook-to-api: cache 30\ndef lookup(x):\n    return x\n",
+        "# notebook-to-api: cache 0\ndef fresh():\n    return 1\n",
+        "# notebook-to-api: rate-limit 2\ndef other():\n    return 2\n",
+    ]
+
+    assert _extract_cache_overrides(cells) == {"lookup": 30}

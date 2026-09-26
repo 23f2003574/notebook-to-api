@@ -897,6 +897,33 @@ TIMEOUT_DIRECTIVE_PATTERN = re.compile(
 # (optionally above other "# notebook-to-api:" directives) -- at most N
 # calls per minute per API key to that one endpoint, on top of the global
 # NOTEBOOK_API_RATE_LIMIT_PER_MINUTE.
+CACHE_DIRECTIVE_PATTERN = re.compile(
+    r"^[ \t]*#\s*notebook-to-api:\s*cache\s+(?P<ttl>\d+)\s*$"
+    r"(?:\n[ \t]*(?:#\s*notebook-to-api:[^\n]*)?)*"
+    r"\n[ \t]*(?:async\s+)?def\s+(?P<name>[A-Za-z_]\w*)\s*\(",
+    re.MULTILINE,
+)
+
+
+def _extract_cache_overrides(code_cells):
+    """{function_name: ttl_seconds} for every function marked
+    "# notebook-to-api: cache N" with N > 0 (see CACHE_DIRECTIVE_PATTERN).
+    Before this, every call re-ran the notebook function even when an
+    identical request had just been answered -- an expensive but
+    deterministic lookup/inference paid full cost on every repeat.
+    "cache 0" is ignored; the last directive seen for a function wins.
+    """
+    overrides = {}
+    for cell in code_cells:
+        for match in CACHE_DIRECTIVE_PATTERN.finditer(cell):
+            ttl = int(match.group("ttl"))
+            if ttl > 0:
+                overrides[match.group("name")] = ttl
+            else:
+                overrides.pop(match.group("name"), None)
+    return overrides
+
+
 RATE_LIMIT_DIRECTIVE_PATTERN = re.compile(
     r"^[ \t]*#\s*notebook-to-api:\s*rate-limit\s+(?P<limit>\d+)\s*$"
     r"(?:\n[ \t]*(?:#\s*notebook-to-api:[^\n]*)?)*"
@@ -1789,6 +1816,7 @@ def compile_notebook_to_api(
             retired_endpoints=retired_endpoints,
             timeout_overrides=_extract_timeout_overrides(code_cells),
             rate_limit_overrides=_extract_rate_limit_overrides(code_cells),
+            cache_overrides=_extract_cache_overrides(code_cells),
         )
 
         # generate_fastapi_code succeeding means this compile is now
