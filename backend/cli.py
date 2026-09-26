@@ -8536,6 +8536,14 @@ def _dispatch_core_command(args):
             today = datetime.datetime.now(datetime.timezone.utc).date()
             past_sunset = []
             for entry in endpoints:
+                # Already answering 410 (NOTEBOOK_API_ENFORCE_SUNSET or the
+                # NOTEBOOK_API_REJECT_DEPRECATED brownout, reported by GET
+                # /deprecations' own per-endpoint "rejected") -- the removal
+                # has effectively happened, so it isn't a missed one. An
+                # older app that never reports "rejected" is treated as
+                # still serving, exactly as before.
+                if entry.get("rejected"):
+                    continue
                 try:
                     sunset = datetime.date.fromisoformat(entry.get("sunset") or "")
                 except ValueError:
@@ -16758,7 +16766,9 @@ def main():
             "Exit with status 1 if any deprecated endpoint is still served "
             "on or after its own sunset date (a \"sunset: YYYY-MM-DD\" "
             "in its deprecation reason, reported by GET /deprecations) -- "
-            "a scheduled CI check that a promised removal actually happened."
+            "a scheduled CI check that a promised removal actually happened. "
+            "An endpoint the app already answers with 410 (its \"rejected\", "
+            "e.g. under NOTEBOOK_API_ENFORCE_SUNSET) counts as removed."
         )
     )
     app_deprecations_parser.add_argument(

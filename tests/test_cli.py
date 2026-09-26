@@ -27876,3 +27876,44 @@ def test_validate_all_command_sunset_within_days_prints_upcoming_and_forwards_it
         "1 notebook(s) have a deprecated function reaching its sunset date "
         "within 30 day(s)" in proc.stdout
     )
+
+
+def test_app_deprecations_fail_if_past_sunset_ignores_endpoints_already_rejected(
+    tmp_path, fake_dashboard
+):
+    """Confirmed wrong before this fix: under NOTEBOOK_API_ENFORCE_SUNSET
+    an endpoint past its sunset already answers 410 -- the removal has
+    effectively happened -- yet --fail-if-past-sunset still failed on it."""
+    body = {
+        "rejecting": False, "enforcing_sunset": True,
+        "endpoints": [
+            {"path": "/old_add", "reason": None, "calls": 3,
+             "sunset": "2000-01-01", "rejected": True},
+        ],
+    }
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, body, "--fail-if-past-sunset"
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_app_deprecations_fail_if_past_sunset_still_fails_when_not_rejected(
+    tmp_path, fake_dashboard
+):
+    body = {
+        "rejecting": False, "enforcing_sunset": False,
+        "endpoints": [
+            {"path": "/old_add", "reason": None, "calls": 0,
+             "sunset": "2000-01-01", "rejected": False},
+            {"path": "/old_sub", "reason": None, "calls": 0,
+             "sunset": "2000-01-01", "rejected": True},
+        ],
+    }
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, body, "--fail-if-past-sunset"
+    )
+
+    assert proc.returncode == 1
+    assert "past their sunset date: /old_add (2000-01-01)" in proc.stderr
+    assert "/old_sub" not in proc.stderr
