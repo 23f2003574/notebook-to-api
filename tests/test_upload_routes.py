@@ -34169,3 +34169,60 @@ def test_validate_all_reports_deprecated_functions_past_their_sunset():
         "add": "2000-01-01"
     }
     assert by_filename["validate_all_sunset_b.ipynb"]["past_sunset_functions"] == {}
+
+
+def _upload_sunset_notebook(filename, days_from_today_by_name):
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+    today = _dt.now(_tz.utc).date()
+    source = ""
+    for name, days in days_from_today_by_name.items():
+        sunset = (today + _td(days=days)).isoformat()
+        source += (
+            f"# notebook-to-api: deprecated: sunset: {sunset}\n"
+            f"def {name}(a: int) -> int:\n    return a\n\n"
+        )
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(_notebook_bytes(source)), "application/json")},
+    )
+    return {name: (today + _td(days=d)).isoformat()
+            for name, d in days_from_today_by_name.items()}
+
+
+def test_validate_all_sunset_within_days_lists_upcoming_removals():
+    """Confirmed missing before this feature: validate-all only flagged a
+    sunset once it had already passed -- nothing surfaced removals coming
+    due soon, while there was still time to schedule them."""
+    client.delete("/api/notebooks?confirm=true")
+    dates = _upload_sunset_notebook(
+        "validate_all_upcoming.ipynb",
+        {"soon": 5, "edge": 30, "later": 31, "gone": -1, "today": 0},
+    )
+
+    body = client.get("/api/validate-all", params={"sunset_within_days": 30}).json()
+
+    result = body["results"][0]
+    assert result["upcoming_sunset_functions"] == {
+        "soon": dates["soon"], "edge": dates["edge"],
+    }
+    # Already due (today or earlier) is past, not upcoming.
+    assert set(result["past_sunset_functions"]) == {"gone", "today"}
+    assert body["upcoming_sunset_notebook_count"] == 1
+
+
+def test_validate_all_omits_upcoming_sunsets_unless_asked():
+    client.delete("/api/notebooks?confirm=true")
+    _upload_sunset_notebook("validate_all_upcoming_off.ipynb", {"soon": 5})
+
+    body = client.get("/api/validate-all").json()
+
+    assert "upcoming_sunset_functions" not in body["results"][0]
+    assert "upcoming_sunset_notebook_count" not in body
+
+
+def test_validate_all_rejects_a_negative_sunset_within_days():
+    resp = client.get("/api/validate-all", params={"sunset_within_days": -1})
+
+    assert resp.status_code == 400
+    assert "sunset_within_days" in resp.json()["detail"]

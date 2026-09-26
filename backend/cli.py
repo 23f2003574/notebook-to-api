@@ -5358,6 +5358,8 @@ def _dispatch_core_command(args):
             params["modified_before"] = args.modified_before
         if args.status:
             params["status"] = args.status
+        if args.sunset_within_days is not None:
+            params["sunset_within_days"] = args.sunset_within_days
         if args.limit is not None:
             params["limit"] = args.limit
         if args.format == "csv":
@@ -5433,6 +5435,9 @@ def _dispatch_core_command(args):
                     for name, sunset in result.get("past_sunset_functions", {}).items():
                         print(f"    past sunset: {name} (sunset {sunset})")
 
+                    for name, sunset in result.get("upcoming_sunset_functions", {}).items():
+                        print(f"    upcoming sunset: {name} (sunset {sunset})")
+
                 result_count = data.get("result_count", len(results))
 
                 # "results" can be a strict subset of "result_count" once
@@ -5458,6 +5463,13 @@ def _dispatch_core_command(args):
                     print(
                         f"{data['deprecated_notebook_count']} notebook(s) "
                         "expose at least one deprecated function"
+                    )
+
+                if data.get("upcoming_sunset_notebook_count", 0) > 0:
+                    print(
+                        f"{data['upcoming_sunset_notebook_count']} notebook(s) "
+                        "have a deprecated function reaching its sunset date "
+                        f"within {args.sunset_within_days} day(s)"
                     )
 
                 if data.get("past_sunset_notebook_count", 0) > 0:
@@ -13178,6 +13190,20 @@ def main():
             "/api/validate-all's own ?status= query param -- e.g. "
             "--status fail to list only the broken ones. The "
             "pass/warn/fail totals still cover every scanned notebook."
+        )
+    )
+    validate_all_parser.add_argument(
+        "--sunset-within-days",
+        type=int,
+        default=None,
+        dest="sunset_within_days",
+        metavar="DAYS",
+        help=(
+            "Also list deprecated functions whose \"sunset: YYYY-MM-DD\" "
+            "date is still ahead but within the next DAYS days (via GET "
+            "/api/validate-all's own ?sunset_within_days=) -- removals "
+            "coming due soon. Informational only; never changes the exit "
+            "status."
         )
     )
     validate_all_parser.add_argument(

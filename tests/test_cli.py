@@ -27839,3 +27839,40 @@ def test_app_deprecations_marks_endpoints_the_app_is_rejecting(
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "/old_add  calls=0  sunset=2000-01-01  REJECTED (410)" in proc.stdout
     assert "/old_sub  calls=0  sunset=2999-01-01\n" in proc.stdout
+
+
+def test_validate_all_command_sunset_within_days_prints_upcoming_and_forwards_it(
+    tmp_path, fake_dashboard
+):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_json_response(200, {
+        "status": "success",
+        "results": [{
+            "filename": "old.ipynb", "status": "pass",
+            "reserved_name_conflicts": [], "skipped_functions": [],
+            "duplicate_functions": [], "requirements_conflict": None,
+            "deprecated_functions": {"add": "sunset: 2099-01-01"},
+            "past_sunset_functions": {},
+            "upcoming_sunset_functions": {"add": "2099-01-01"},
+            "detail": None,
+        }],
+        "pass_count": 1, "warn_count": 0, "fail_count": 0,
+        "deprecated_notebook_count": 1, "past_sunset_notebook_count": 0,
+        "upcoming_sunset_notebook_count": 1,
+    })]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["validate-all", "--dashboard-url", dashboard_url,
+         "--sunset-within-days", "30"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "sunset_within_days=30" in handler.requests[0]
+    assert "upcoming sunset: add (sunset 2099-01-01)" in proc.stdout
+    assert (
+        "1 notebook(s) have a deprecated function reaching its sunset date "
+        "within 30 day(s)" in proc.stdout
+    )
