@@ -9071,6 +9071,13 @@ def _dispatch_core_command(args):
                     print(f"  result: {data['result']!r}")
                 if "error" in data:
                     print(f"  error: {data['error']}")
+                # The app's own "timed_out" marker -- a deterministic
+                # failure the app refuses to retry without ?force=true.
+                if data.get("timed_out"):
+                    print(
+                        "  timed out: yes -- retrying would most likely time "
+                        "out again; use `app-tasks retry --force` to anyway"
+                    )
                 webhook = data.get("webhook")
                 if webhook is not None:
                     print(
@@ -9189,10 +9196,19 @@ def _dispatch_core_command(args):
 
         elif args.app_tasks_command == "retry":
 
-            data = _app_request(
-                "POST", f"/tasks/{args.task_id}/retry",
-                params={"force": "true"} if args.force else None,
-            )
+            try:
+                data = _app_request(
+                    "POST", f"/tasks/{args.task_id}/retry",
+                    params={"force": "true"} if args.force else None,
+                )
+            except RuntimeError as exc:
+                # The app's 409 for a timed-out task names its own
+                # "?force=true" -- point at this command's equivalent flag.
+                if "(409)" in str(exc) and "force=true" in str(exc):
+                    raise RuntimeError(
+                        f"{exc} (Re-run with --force to retry it anyway.)"
+                    ) from exc
+                raise
 
             if args.json_output:
                 print(json.dumps(data, indent=2))

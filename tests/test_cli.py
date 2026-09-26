@@ -28931,3 +28931,50 @@ def test_app_tasks_list_marks_timed_out_tasks_and_counts_them(tmp_path, fake_das
     assert "t1  (failed)  TIMED OUT" in proc.stdout
     assert "t2  (completed)\n" in proc.stdout
     assert "2 matching task(s) (0 with a failed webhook delivery, 1 timed out)" in proc.stdout
+
+
+def test_app_tasks_get_says_when_a_task_timed_out(tmp_path, fake_dashboard):
+    """Confirmed missing before this feature: `app-tasks get` never showed a
+    task's "timed_out" marker, nor that retrying it needs --force."""
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [_json_response(200, {
+        "status": "failed", "timed_out": True,
+        "error": "Task exceeded its 1s execution timeout",
+    })]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["app-tasks", "get", "t1", "--host", host, "--port", str(port)], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "  timed out: yes -- retrying would most likely time out again" in proc.stdout
+    assert "app-tasks retry --force" in proc.stdout
+
+
+def test_app_tasks_get_omits_timed_out_for_other_failures(tmp_path, fake_dashboard):
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [_json_response(200, {"status": "failed", "error": "boom"})]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["app-tasks", "get", "t1", "--host", host, "--port", str(port)], cwd=workdir)
+
+    assert "timed out" not in proc.stdout
+
+
+def test_app_tasks_retry_refused_for_timing_out_points_at_force(tmp_path, fake_dashboard):
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [_json_response(409, {"detail": (
+        "Task t1 failed by exceeding its execution timeout; retrying would most "
+        "likely time out again. Pass ?force=true to retry anyway."
+    )})]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["app-tasks", "retry", "t1", "--host", host, "--port", str(port)], cwd=workdir)
+
+    assert proc.returncode != 0
+    assert "(Re-run with --force to retry it anyway.)" in proc.stdout + proc.stderr
