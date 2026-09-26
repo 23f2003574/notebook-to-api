@@ -7822,3 +7822,41 @@ def test_deprecated_callers_are_bounded_per_path(monkeypatch):
     assert len(callers) == 51  # 50 distinct + "(other)"
     assert callers["(other)"] == 5
     assert all(len(agent) <= 200 for agent in callers)
+
+
+def test_post_deprecations_reset_zeroes_every_deprecation_counter(monkeypatch):
+    """Confirmed missing before this feature: the deprecation counters only
+    ever grew for the process's lifetime -- no fresh measurement after
+    contacting callers without restarting the app."""
+    client = _deprecation_test_client(
+        monkeypatch, {"old_add": None}, reject_deprecated="true"
+    )
+    client.post("/old_add", json={}, headers={"User-Agent": "cron"})
+
+    response = client.post("/deprecations/reset")
+
+    assert response.status_code == 200
+    assert response.json() == {"reset": ["/old_add"]}
+    entry = client.get("/deprecations").json()["endpoints"][0]
+    assert (entry["calls"], entry["rejections"], entry["callers"]) == (0, 0, {})
+    metrics = client.get("/metrics").json()
+    assert metrics["deprecated_endpoint_calls"] == {"/old_add": 0}
+    assert metrics["deprecated_endpoint_rejections"] == {"/old_add": 0}
+
+    client.post("/old_add", json={}, headers={"User-Agent": "cron"})
+    assert client.get("/deprecations").json()["endpoints"][0]["calls"] == 1
+
+
+def test_post_deprecations_reset_requires_the_api_key(monkeypatch):
+    client = _deprecation_test_client(monkeypatch, {"old_add": None})
+
+    response = client.post("/deprecations/reset", headers={"X-API-Key": "wrong"})
+
+    assert response.status_code == 401
+
+
+def test_function_named_reset_deprecation_counters_is_reserved():
+    functions = [{"name": "reset_deprecation_counters", "args": [], "return_type": "dict"}]
+
+    with pytest.raises(ReservedFunctionNameError, match="reset_deprecation_counters"):
+        generate_fastapi_code(functions)

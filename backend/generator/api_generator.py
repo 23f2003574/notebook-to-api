@@ -137,6 +137,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "root", "health_check", "readiness_check", "auth_status", "auth_info",
     "validate_auth", "service_info", "service_config", "metrics", "uptime",
     "metrics_prometheus", "_task_status_counts", "deprecations",
+    "reset_deprecation_counters",
     "get_task", "list_tasks", "delete_task", "cleanup_tasks",
     "delete_completed_tasks", "delete_failed_tasks", "reset_tasks",
     "redeliver_task_webhook", "retry_task",
@@ -2661,6 +2662,22 @@ def generate_fastapi_code(
     lines.append("            for path, reason in sorted(_DEPRECATED_ENDPOINTS.items())")
     lines.append("        ],")
     lines.append("    }")
+    lines.append("")
+    # The deprecation counters (calls, rejections, callers) accumulate for
+    # the process's whole lifetime -- after contacting the callers GET
+    # /deprecations named, an operator had no way to start a fresh
+    # measurement ("is anyone *still* calling since I emailed them?")
+    # short of restarting the app. Unlike GET /deprecations, this changes
+    # state, so it requires X-API-Key like POST /tasks/reset does.
+    lines.append("@app.post('/deprecations/reset')")
+    lines.append(
+        "def reset_deprecation_counters(_: None = Depends(verify_api_key)):"
+    )
+    lines.append("    for path in _DEPRECATED_ENDPOINTS:")
+    lines.append("        _DEPRECATED_ENDPOINT_CALLS[path] = 0")
+    lines.append("        _DEPRECATED_ENDPOINT_REJECTIONS[path] = 0")
+    lines.append("        _DEPRECATED_ENDPOINT_CALLERS[path] = {}")
+    lines.append("    return {'reset': sorted(_DEPRECATED_ENDPOINTS)}")
     lines.append("")
     lines.append("@app.get('/metrics')")
     lines.append("def metrics():")
