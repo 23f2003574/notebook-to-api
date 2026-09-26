@@ -5771,6 +5771,8 @@ def _dispatch_core_command(args):
             "only": only,
             "exclude": exclude,
         }
+        if args.drop_past_sunset:
+            curl_preview_body["drop_past_sunset"] = True
         if args.version_id:
             curl_preview_body["version_id"] = args.version_id
         if args.callback_url:
@@ -5831,6 +5833,8 @@ def _dispatch_core_command(args):
             "exclude": exclude,
             "collection_name": args.collection_name,
         }
+        if args.drop_past_sunset:
+            postman_preview_body["drop_past_sunset"] = True
         if args.version_id:
             postman_preview_body["version_id"] = args.version_id
         if args.callback_url:
@@ -7510,6 +7514,11 @@ def _dispatch_core_command(args):
 
             only = _parse_comma_separated_names(args.only)
             exclude = _parse_comma_separated_names(args.exclude)
+            # Applied to the downloaded copy -- see apply_drop_past_sunset.
+            if args.drop_past_sunset:
+                only, exclude = apply_drop_past_sunset(
+                    remote_notebook_path, only, exclude,
+                )
 
             commands = generate_curl_commands(
                 remote_notebook_path, host=args.host, port=args.port,
@@ -7619,6 +7628,11 @@ def _dispatch_core_command(args):
 
             only = _parse_comma_separated_names(args.only)
             exclude = _parse_comma_separated_names(args.exclude)
+            # Applied to the downloaded copy -- see apply_drop_past_sunset.
+            if args.drop_past_sunset:
+                only, exclude = apply_drop_past_sunset(
+                    remote_notebook_path, only, exclude,
+                )
 
             collection = generate_postman_collection(
                 remote_notebook_path, host=args.host, port=args.port,
@@ -13867,6 +13881,17 @@ def main():
         )
     )
     _add_function_selection_arguments(curl_preview_parser)
+    curl_preview_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Leave out requests for every deprecated function whose "
+            "\"sunset: YYYY-MM-DD\" date is today (UTC) or earlier -- "
+            "matching an app built with `compile`/`remote-compile "
+            "--drop-past-sunset`."
+        )
+    )
     _add_version_id_argument(curl_preview_parser, "POST /api/curl-preview")
     _add_callback_url_argument(curl_preview_parser)
     curl_preview_parser.add_argument(
@@ -13945,6 +13970,17 @@ def main():
         )
     )
     _add_function_selection_arguments(postman_preview_parser)
+    postman_preview_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Leave out requests for every deprecated function whose "
+            "\"sunset: YYYY-MM-DD\" date is today (UTC) or earlier -- "
+            "matching an app built with `compile`/`remote-compile "
+            "--drop-past-sunset`."
+        )
+    )
     _add_version_id_argument(postman_preview_parser, "POST /api/postman-preview")
     _add_callback_url_argument(postman_preview_parser)
     postman_preview_parser.add_argument(
@@ -15960,6 +15996,17 @@ def main():
         )
     )
     _add_function_selection_arguments(remote_curl_parser)
+    remote_curl_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Leave out requests for every deprecated function whose "
+            "\"sunset: YYYY-MM-DD\" date is today (UTC) or earlier -- "
+            "matching an app built with `compile`/`remote-compile "
+            "--drop-past-sunset`."
+        )
+    )
     _add_callback_url_argument(remote_curl_parser)
     remote_curl_parser.add_argument(
         "--json",
@@ -16065,6 +16112,17 @@ def main():
         )
     )
     _add_function_selection_arguments(remote_postman_parser)
+    remote_postman_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Leave out requests for every deprecated function whose "
+            "\"sunset: YYYY-MM-DD\" date is today (UTC) or earlier -- "
+            "matching an app built with `compile`/`remote-compile "
+            "--drop-past-sunset`."
+        )
+    )
     _add_callback_url_argument(remote_postman_parser)
     remote_postman_parser.add_argument(
         "--json",

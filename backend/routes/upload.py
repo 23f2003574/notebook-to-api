@@ -74,6 +74,7 @@ from backend.generator.kubernetes_generator import (
     kubernetes_manifest_content,
 )
 from backend.inspector import (
+    apply_drop_past_sunset,
     past_sunset_functions,
     EXCLUDED_GENERATED_DIR_NAMES,
     EXCLUDED_GENERATED_FILE_NAMES,
@@ -15038,6 +15039,21 @@ def readme_preview_endpoint(data: dict):
     }
 
 
+def _drop_past_sunset_selection(notebook_path, only, exclude, drop_past_sunset):
+    """(only, exclude, dropped) for a preview route's own
+    "drop_past_sunset" -- apply_drop_past_sunset (backend/inspector.py),
+    the same selection `compile`/`deploy --drop-past-sunset` use, plus the
+    names it dropped so the response can say so. A ValueError (an "only"
+    list it would leave empty) propagates to the caller's own 400."""
+    if not drop_past_sunset:
+        return only, exclude, []
+    dropped = sorted(past_sunset_functions(
+        inspect_notebook_data(notebook_path=notebook_path)["deprecated_functions"]
+    ))
+    only, exclude = apply_drop_past_sunset(notebook_path, only, exclude)
+    return only, exclude, dropped
+
+
 @router.post("/curl-preview")
 def curl_preview_endpoint(data: dict):
     """A ready-to-run `curl` command for every function an already-
@@ -15118,6 +15134,10 @@ def curl_preview_endpoint(data: dict):
     version_id = data.get("version_id")
     only = data.get("only")
     exclude = data.get("exclude")
+    # "drop_past_sunset": leave out every deprecated function past its own
+    # sunset date -- matching an app compiled with it (POST /api/compile's
+    # own identical option) -- see _drop_past_sunset_selection.
+    drop_past_sunset = bool(data.get("drop_past_sunset", False))
     callback_url = data.get("callback_url")
     expected_sha256 = data.get("expected_sha256")
 
@@ -15197,6 +15217,9 @@ def curl_preview_endpoint(data: dict):
 
         with COMPILE_LOCK:
 
+            only, exclude, dropped_past_sunset = _drop_past_sunset_selection(
+                str(full_path), only, exclude, drop_past_sunset,
+            )
             commands = generate_curl_commands(
                 str(full_path), host=host, port=port, api_key=api_key,
                 only=only, exclude=exclude, callback_url=callback_url,
@@ -15213,6 +15236,7 @@ def curl_preview_endpoint(data: dict):
         "status": "success",
         "notebook": notebook_path,
         "version_id": version_id,
+        "dropped_past_sunset": dropped_past_sunset,
         "commands": commands,
     }
 
@@ -15260,6 +15284,10 @@ def postman_preview_endpoint(data: dict):
     version_id = data.get("version_id")
     only = data.get("only")
     exclude = data.get("exclude")
+    # "drop_past_sunset": leave out every deprecated function past its own
+    # sunset date -- matching an app compiled with it (POST /api/compile's
+    # own identical option) -- see _drop_past_sunset_selection.
+    drop_past_sunset = bool(data.get("drop_past_sunset", False))
     callback_url = data.get("callback_url")
     expected_sha256 = data.get("expected_sha256")
 
@@ -15347,6 +15375,9 @@ def postman_preview_endpoint(data: dict):
 
         with COMPILE_LOCK:
 
+            only, exclude, dropped_past_sunset = _drop_past_sunset_selection(
+                str(full_path), only, exclude, drop_past_sunset,
+            )
             collection = generate_postman_collection(
                 str(full_path), host=host, port=port, api_key=api_key,
                 only=only, exclude=exclude, collection_name=collection_name,
@@ -15364,6 +15395,7 @@ def postman_preview_endpoint(data: dict):
         "status": "success",
         "notebook": notebook_path,
         "version_id": version_id,
+        "dropped_past_sunset": dropped_past_sunset,
         "collection": collection,
     }
 
