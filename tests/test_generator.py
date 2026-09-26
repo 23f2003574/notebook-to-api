@@ -77,6 +77,7 @@ def test_generated_app_env_vars_default_matches_the_actual_generated_code():
         "NOTEBOOK_API_DISABLE_DOCS",
         "NOTEBOOK_API_REJECT_DEPRECATED",
         "NOTEBOOK_API_ENFORCE_SUNSET",
+        "NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS",
         "NOTEBOOK_API_JSON_LOGS",
     }
 
@@ -3854,7 +3855,8 @@ def test_async_function_generates_awaited_async_endpoint():
     code = generate_fastapi_code(functions)
 
     assert "async def fetch_data(" in code
-    assert "await notebook_module.fetch_data(" in code
+    assert "functools.partial(notebook_module.fetch_data, " in code
+    assert "is_async=True)" in code
 
 
 def test_sync_function_generates_unawaited_sync_endpoint():
@@ -3871,9 +3873,9 @@ def test_sync_function_generates_unawaited_sync_endpoint():
     code = generate_fastapi_code(functions)
 
     assert "def add(" in code
-    assert "async def add(" not in code
+    assert "is_async=False)" in code
     assert "await notebook_module.add(" not in code
-    assert "result = notebook_module.add(" in code
+    assert "functools.partial(notebook_module.add, " in code
 
 
 def test_keyword_only_arg_is_passed_by_keyword_in_generated_call():
@@ -3894,7 +3896,7 @@ def test_keyword_only_arg_is_passed_by_keyword_in_generated_call():
 
     code = generate_fastapi_code(functions)
 
-    assert "notebook_module.score(req.data, epochs=req.epochs)" in code
+    assert "functools.partial(notebook_module.score, req.data, epochs=req.epochs)" in code
 
 
 def test_tasks_endpoints_require_api_key_auth():
@@ -7971,3 +7973,80 @@ def test_retired_endpoints_name_is_reserved():
     from backend.generator.api_generator import RESERVED_INFRASTRUCTURE_NAMES
 
     assert "_RETIRED_ENDPOINTS" in RESERVED_INFRASTRUCTURE_NAMES
+
+
+def _request_timeout_client(monkeypatch, timeout, impl, is_async=False):
+    code = generate_fastapi_code(
+        [{"name": "slow", "args": [], "return_type": "int", "is_async": is_async}]
+    )
+    notebook_module = _register_fake_notebook_module(monkeypatch)
+    notebook_module.slow = impl
+    monkeypatch.setenv("NOTEBOOK_API_KEY", "test-key")
+    if timeout is None:
+        monkeypatch.delenv("NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS", raising=False)
+    else:
+        monkeypatch.setenv("NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS", str(timeout))
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    return TestClient(namespace["app"], headers={"X-API-Key": "test-key"})
+
+
+def test_request_timeout_answers_504_for_a_hung_sync_endpoint(monkeypatch):
+    """Confirmed missing before this feature: a synchronous endpoint whose
+    notebook function hung held its request open forever -- only
+    background tasks had NOTEBOOK_API_TASK_EXECUTION_TIMEOUT_SECONDS."""
+    import time as time_module
+
+    client = _request_timeout_client(monkeypatch, 1, lambda: time_module.sleep(3) or 1)
+
+    started = time_module.monotonic()
+    response = client.post("/slow", json={})
+    elapsed = time_module.monotonic() - started
+
+    assert response.status_code == 504
+    assert "NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS (1s)" in response.json()["detail"]
+    assert elapsed < 2.5
+
+
+def test_request_timeout_lets_a_fast_call_through(monkeypatch):
+    client = _request_timeout_client(monkeypatch, 5, lambda: 7)
+
+    response = client.post("/slow", json={})
+
+    assert response.status_code == 200
+    assert response.json() == {"result": 7}
+
+
+def test_request_timeout_is_off_by_default(monkeypatch):
+    import time as time_module
+
+    client = _request_timeout_client(monkeypatch, None, lambda: time_module.sleep(1.2) or 3)
+
+    response = client.post("/slow", json={})
+
+    assert response.status_code == 200
+    assert response.json() == {"result": 3}
+
+
+def test_request_timeout_applies_to_async_notebook_functions_too(monkeypatch):
+    import asyncio
+
+    async def slow():
+        await asyncio.sleep(3)
+        return 1
+
+    client = _request_timeout_client(monkeypatch, 1, slow, is_async=True)
+
+    response = client.post("/slow", json={})
+
+    assert response.status_code == 504
+
+
+def test_request_timeout_names_are_reserved():
+    from backend.generator.api_generator import RESERVED_INFRASTRUCTURE_NAMES
+
+    assert "REQUEST_TIMEOUT_SECONDS" in RESERVED_INFRASTRUCTURE_NAMES
+    assert "_call_notebook_function" in RESERVED_INFRASTRUCTURE_NAMES
