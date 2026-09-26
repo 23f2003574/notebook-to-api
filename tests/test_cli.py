@@ -28978,3 +28978,20 @@ def test_app_tasks_retry_refused_for_timing_out_points_at_force(tmp_path, fake_d
 
     assert proc.returncode != 0
     assert "(Re-run with --force to retry it anyway.)" in proc.stdout + proc.stderr
+
+
+def test_app_tasks_purge_failed_forwards_timed_out(tmp_path, fake_dashboard):
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [_json_response(200, {"deleted": 1, "remaining_tasks": 1})]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-tasks", "purge-failed", "--host", host, "--port", str(port),
+         "--timed-out", "true", "--yes"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests[0] == "/tasks/failed?timed_out=true"

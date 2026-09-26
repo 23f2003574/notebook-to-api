@@ -9366,7 +9366,13 @@ def _dispatch_core_command(args):
                     print("Aborted.")
                     return
 
-            data = _app_request("DELETE", "/tasks/failed")
+            data = _app_request(
+                "DELETE", "/tasks/failed",
+                params=(
+                    {"timed_out": args.timed_out}
+                    if args.timed_out is not None else None
+                ),
+            )
 
             if args.json_output:
                 print(json.dumps(data, indent=2))
@@ -17891,6 +17897,18 @@ def main():
         )
     )
     _add_app_host_port_arguments(app_tasks_purge_failed_parser)
+    app_tasks_purge_failed_parser.add_argument(
+        "--timed-out",
+        default=None,
+        dest="timed_out",
+        choices=["true", "false"],
+        help=(
+            "Only purge failed tasks that did (\"true\") or didn't "
+            "(\"false\") fail by exceeding their execution timeout, via "
+            "DELETE /tasks/failed's own ?timed_out= -- e.g. clear timed-out "
+            "tasks after raising the limit while keeping real errors to debug."
+        )
+    )
     app_tasks_purge_failed_parser.add_argument(
         "--json",
         action="store_true",

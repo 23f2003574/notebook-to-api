@@ -2650,7 +2650,10 @@ def generate_fastapi_code(
 
     lines.append("")
     lines.append("@app.delete('/tasks/failed')")
-    lines.append("def delete_failed_tasks(_: None = Depends(verify_api_key)):")
+    lines.append(
+        "def delete_failed_tasks(timed_out: Optional[bool] = None, "
+        "_: None = Depends(verify_api_key)):"
+    )
 
     # list(...) snapshot -- same "RuntimeError: dictionary changed size
     # during iteration" reasoning as delete_completed_tasks just above.
@@ -2658,6 +2661,12 @@ def generate_fastapi_code(
     lines.append("        task_id")
     lines.append("        for task_id, task in list(TASKS.items())")
     lines.append("        if task.get('status') == 'failed'")
+    # ?timed_out=: narrow the purge to failed tasks that did (true) or
+    # didn't (false) time out -- e.g. clear out timed-out tasks once their
+    # limit has been raised, while keeping genuine errors around to debug.
+    lines.append(
+        "        and (timed_out is None or bool(task.get('timed_out')) == timed_out)"
+    )
     lines.append("    ]")
 
     lines.append("    for task_id in failed_task_ids:")

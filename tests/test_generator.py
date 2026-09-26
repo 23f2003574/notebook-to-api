@@ -3919,7 +3919,7 @@ def test_tasks_endpoints_require_api_key_auth():
     assert "_: None = Depends(verify_api_key)" in list_tasks_signature
     assert "def get_task(task_id: str, _: None = Depends(verify_api_key)):" in code
     assert "def delete_completed_tasks(_: None = Depends(verify_api_key)):" in code
-    assert "def delete_failed_tasks(_: None = Depends(verify_api_key)):" in code
+    assert "def delete_failed_tasks(timed_out: Optional[bool] = None, _: None = Depends(verify_api_key)):" in code
     assert "def cleanup_tasks(_: None = Depends(verify_api_key)):" in code
     assert "def reset_tasks(_: None = Depends(verify_api_key)):" in code
     assert "def delete_task(task_id: str, _: None = Depends(verify_api_key)):" in code
@@ -8492,3 +8492,41 @@ def test_list_tasks_reports_a_timed_out_task_count(monkeypatch):
     assert body["timed_out_tasks"] == 1
     # Counted across every task, regardless of the filter applied.
     assert filtered["timed_out_tasks"] == 1
+
+
+def test_delete_failed_tasks_can_target_only_timed_out_ones(monkeypatch):
+    """Confirmed missing before this feature: DELETE /tasks/failed purged
+    every failed task -- no way to clear only the timed-out ones while
+    keeping genuine errors around to debug."""
+    import time as time_module
+
+    calls = {"n": 0}
+
+    def slow_then_broken():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            time_module.sleep(2)
+            return 1
+        raise ValueError("boom")
+
+    client = _background_timeout_client(monkeypatch, {"train_model": 1}, slow_then_broken)
+    timed_out_id = client.post("/train_model", json={}).json()["task_id"]
+    broken_id = client.post("/train_model", json={}).json()["task_id"]
+
+    response = client.delete("/tasks/failed", params={"timed_out": "true"})
+
+    assert response.json()["deleted"] == 1
+    remaining = set(client.get("/tasks").json()["tasks"])
+    assert remaining == {broken_id}
+    assert timed_out_id not in remaining
+
+
+def test_delete_failed_tasks_without_the_filter_still_purges_all(monkeypatch):
+    def broken():
+        raise ValueError("boom")
+
+    client = _background_timeout_client(monkeypatch, {"train_model": 5}, broken)
+    client.post("/train_model", json={})
+    client.post("/train_model", json={})
+
+    assert client.delete("/tasks/failed").json()["deleted"] == 2
