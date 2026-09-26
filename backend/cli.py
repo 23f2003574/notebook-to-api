@@ -8494,51 +8494,84 @@ def _dispatch_core_command(args):
 
         app_url = f"http://{args.host}:{args.port}"
 
-        try:
-            response = httpx.get(f"{app_url}/deprecations", timeout=args.timeout)
-        except httpx.HTTPError as exc:
-            raise RuntimeError(
-                f"Could not reach the compiled app at {app_url}: "
-                f"{exc}. Is it running? (see `serve`, or `docker "
-                "compose up`)"
-            )
+        def _fetch_deprecations():
+            try:
+                response = httpx.get(f"{app_url}/deprecations", timeout=args.timeout)
+            except httpx.HTTPError as exc:
+                raise RuntimeError(
+                    f"Could not reach the compiled app at {app_url}: "
+                    f"{exc}. Is it running? (see `serve`, or `docker "
+                    "compose up`)"
+                )
 
-        if response.status_code == 404:
-            raise RuntimeError(
-                f"The compiled app at {app_url} has no GET /deprecations "
-                "-- it was compiled by an older notebook-to-api; recompile "
-                "it to use this command."
-            )
-        if response.status_code >= 400:
-            raise RuntimeError(
-                f"App rejected the request ({response.status_code}): "
-                f"{response.text}"
-            )
+            if response.status_code == 404:
+                raise RuntimeError(
+                    f"The compiled app at {app_url} has no GET /deprecations "
+                    "-- it was compiled by an older notebook-to-api; recompile "
+                    "it to use this command."
+                )
+            if response.status_code >= 400:
+                raise RuntimeError(
+                    f"App rejected the request ({response.status_code}): "
+                    f"{response.text}"
+                )
+            return response.json()
 
-        data = response.json()
+        def _report_deprecations(endpoints, data):
+            if not endpoints:
+                print("No deprecated endpoints.")
+            else:
+                print(
+                    f"{len(endpoints)} deprecated endpoint(s)"
+                    + (" -- currently REJECTED with 410 (NOTEBOOK_API_REJECT_DEPRECATED)"
+                       if data.get("rejecting") else "")
+                    + ":"
+                )
+                for entry in endpoints:
+                    reason = entry.get("reason")
+                    sunset = entry.get("sunset")
+                    print(
+                        f"  {entry.get('path')}  calls={entry.get('calls', 0)}"
+                        + (f"  sunset={sunset}" if sunset else "")
+                        + ("  REJECTED (410)" if entry.get("rejected") else "")
+                        + (f"  ({reason})" if reason else "")
+                    )
+
+        # --watch: re-poll every --interval seconds (Ctrl+C to stop), the
+        # same live view `app-metrics --watch` gives -- during a brownout
+        # (NOTEBOOK_API_REJECT_DEPRECATED) or around a sunset date, an
+        # operator wants to see each endpoint's call count move in real
+        # time, not one snapshot. The --fail-* gates are one-shot CI
+        # checks with no meaningful answer mid-watch, so they're refused.
+        if args.watch:
+            if args.fail_if_called or args.fail_if_past_sunset:
+                raise ValueError(
+                    "--watch cannot be combined with --fail-if-called or "
+                    "--fail-if-past-sunset."
+                )
+            try:
+                while True:
+                    data = _fetch_deprecations()
+                    if args.json_output:
+                        data["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                        print(json.dumps(data), flush=True)
+                    else:
+                        print(f"--- {time.strftime('%Y-%m-%dT%H:%M:%S')} ---")
+                        _report_deprecations(data.get("endpoints", []), data)
+                        sys.stdout.flush()
+                    time.sleep(args.interval)
+            except KeyboardInterrupt:
+                print("\nStopped watching.")
+            return
+
+        data = _fetch_deprecations()
         endpoints = data.get("endpoints", [])
         still_called = [entry for entry in endpoints if entry.get("calls", 0) > 0]
 
         if args.json_output:
             print(json.dumps(data, indent=2))
-        elif not endpoints:
-            print("No deprecated endpoints.")
         else:
-            print(
-                f"{len(endpoints)} deprecated endpoint(s)"
-                + (" -- currently REJECTED with 410 (NOTEBOOK_API_REJECT_DEPRECATED)"
-                   if data.get("rejecting") else "")
-                + ":"
-            )
-            for entry in endpoints:
-                reason = entry.get("reason")
-                sunset = entry.get("sunset")
-                print(
-                    f"  {entry.get('path')}  calls={entry.get('calls', 0)}"
-                    + (f"  sunset={sunset}" if sunset else "")
-                    + ("  REJECTED (410)" if entry.get("rejected") else "")
-                    + (f"  ({reason})" if reason else "")
-                )
+            _report_deprecations(endpoints, data)
 
         # A deprecated endpoint is only safe to remove once nothing still
         # calls it; --fail-if-called turns that into a CI/pre-removal
@@ -16815,6 +16848,22 @@ def main():
         action="store_true",
         dest="json_output",
         help="Print GET /deprecations' own JSON response verbatim instead of a summary."
+    )
+    app_deprecations_parser.add_argument(
+        "--watch",
+        action="store_true",
+        help=(
+            "Keep polling every --interval seconds (Ctrl+C to stop) "
+            "instead of reading once -- watch each deprecated endpoint's "
+            "call count live during a brownout or around its sunset date. "
+            "Under --json, one object (plus a \"timestamp\") per line."
+        )
+    )
+    app_deprecations_parser.add_argument(
+        "--interval",
+        type=float,
+        default=2.0,
+        help="Seconds to wait between polls under --watch (default: 2)."
     )
     app_deprecations_parser.add_argument(
         "--fail-if-past-sunset",

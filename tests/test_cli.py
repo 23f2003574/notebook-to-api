@@ -28091,3 +28091,58 @@ def test_app_status_command_still_fails_on_a_non_404_deprecations_error(
 
     assert proc.returncode != 0
     assert "(500)" in proc.stdout + proc.stderr
+
+
+def _watch_app_deprecations(tmp_path, fake_dashboard, *extra):
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [_json_response(200, _SAMPLE_DEPRECATIONS) for _ in range(50)]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(PROJECT_ROOT)
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "backend.cli", "app-deprecations",
+         "--host", host, "--port", str(port), "--watch", "--interval", "0.05",
+         *extra],
+        cwd=str(workdir), env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    time.sleep(2.5)
+    proc.send_signal(signal.SIGINT)
+    stdout, stderr = proc.communicate(timeout=10)
+    return proc, stdout, stderr
+
+
+def test_app_deprecations_watch_polls_repeatedly_and_stops_cleanly(
+    tmp_path, fake_dashboard
+):
+    """Confirmed missing before this feature: app-deprecations could only
+    take one snapshot -- no way to watch call counts move live during a
+    brownout, unlike app-metrics/app-status --watch."""
+    proc, stdout, stderr = _watch_app_deprecations(tmp_path, fake_dashboard)
+
+    assert proc.returncode == 0, stdout + stderr
+    assert stdout.count("2 deprecated endpoint(s):") >= 2
+    assert stdout.count("---") >= 4
+    assert "Stopped watching." in stdout
+
+
+def test_app_deprecations_watch_json_emits_one_object_per_line(
+    tmp_path, fake_dashboard
+):
+    proc, stdout, stderr = _watch_app_deprecations(tmp_path, fake_dashboard, "--json")
+
+    assert proc.returncode == 0, stdout + stderr
+    objects = [json.loads(line) for line in stdout.splitlines() if line.startswith("{")]
+    assert len(objects) >= 2
+    assert all("timestamp" in obj and obj["endpoints"] for obj in objects)
+
+
+def test_app_deprecations_watch_refuses_the_fail_gates(tmp_path, fake_dashboard):
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, _SAMPLE_DEPRECATIONS, "--watch", "--fail-if-called"
+    )
+
+    assert proc.returncode != 0
+    assert "--watch cannot be combined" in proc.stdout + proc.stderr
