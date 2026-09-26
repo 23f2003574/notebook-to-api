@@ -24,6 +24,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "WEBHOOK_MAX_RETRIES", "WEBHOOK_RETRY_BACKOFF_SECONDS",
     "TASK_EXECUTION_TIMEOUT_SECONDS",
     "REQUEST_TIMEOUT_SECONDS", "_call_notebook_function", "_REQUEST_TIMEOUTS",
+    "_ENDPOINT_TIMEOUTS",
     # Read by name from inside _evict_expired_tasks' own body -- the
     # identical "referenced by name inside a helper every background
     # endpoint's own submission calls first" exposure already documented
@@ -1775,6 +1776,19 @@ def generate_fastapi_code(
     # 5xx status-class counter can't say *which* endpoint keeps hitting
     # the limit (the one to optimize, or to move to a background task).
     lines.append("_REQUEST_TIMEOUTS = {}")
+    # {path: seconds} for every synchronous endpoint with its own
+    # "# notebook-to-api: timeout N" directive (timeout_overrides) --
+    # reported by GET /config beside the global REQUEST_TIMEOUT_SECONDS,
+    # so a deployment's effective per-endpoint limits are discoverable
+    # without the notebook source. Background endpoints are left out:
+    # the directive doesn't apply to them.
+    endpoint_timeouts = {
+        f"/{func['name']}": (timeout_overrides or {})[func["name"]]
+        for func in functions
+        if func["name"] in (timeout_overrides or {})
+        and not resolve_is_background(func["name"], background_overrides)
+    }
+    lines.append(f"_ENDPOINT_TIMEOUTS = {repr(dict(sorted(endpoint_timeouts.items())))}")
     lines.append("async def _call_notebook_function(call, is_async=False, timeout=None):")
     lines.append("    limit = REQUEST_TIMEOUT_SECONDS if timeout is None else timeout")
     lines.append("    with anyio.fail_after(limit or None):")
@@ -2429,6 +2443,7 @@ def generate_fastapi_code(
     lines.append(
         "        'request_timeout_seconds': REQUEST_TIMEOUT_SECONDS or None,"
     )
+    lines.append("        'endpoint_timeouts': dict(_ENDPOINT_TIMEOUTS),")
     lines.append("        'webhook_timeout_seconds': WEBHOOK_TIMEOUT_SECONDS,")
     lines.append("        'webhook_signing_enabled': bool(WEBHOOK_SECRET),")
     lines.append("        'webhook_max_retries': WEBHOOK_MAX_RETRIES,")

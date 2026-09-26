@@ -8436,6 +8436,13 @@ def _dispatch_core_command(args):
                 print(f"  request timeout: {f'{request_timeout}s' if request_timeout else 'disabled'}")
             else:
                 print("  request timeout: unknown (app predates this setting)")
+            # GET /config's own "endpoint_timeouts" -- each endpoint's own
+            # timeout directive, overriding the global value just above.
+            for path, seconds in (config.get("endpoint_timeouts") or {}).items():
+                print(
+                    f"    {path}: "
+                    + (f"{seconds}s" if seconds else "exempt (no timeout)")
+                )
             print(f"  webhook timeout: {config.get('webhook_timeout_seconds')}s")
             print(
                 "  webhook signing: "

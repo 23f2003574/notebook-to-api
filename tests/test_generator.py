@@ -8183,3 +8183,33 @@ def test_readme_content_notes_each_endpoints_own_timeout():
     assert "- `POST /add`\n" in content
     # Ignored on a background endpoint, so not advertised there.
     assert "longer than 10s" not in content
+
+
+def test_get_config_reports_each_endpoints_own_timeout(monkeypatch):
+    """Confirmed missing before this feature: GET /config reported only the
+    global request timeout, never an endpoint's own timeout directive."""
+    code = generate_fastapi_code(
+        [
+            {"name": "report", "args": [], "return_type": "int"},
+            {"name": "exempt", "args": [], "return_type": "int"},
+            {"name": "add", "args": [], "return_type": "int"},
+            {"name": "train_model", "args": [], "return_type": "int"},
+        ],
+        timeout_overrides={"report": 30, "exempt": 0, "train_model": 10},
+    )
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    config = TestClient(namespace["app"]).get("/config").json()
+
+    # train_model is a background endpoint -- the directive doesn't apply.
+    assert config["endpoint_timeouts"] == {"/exempt": 0, "/report": 30}
+
+
+def test_endpoint_timeouts_name_is_reserved():
+    from backend.generator.api_generator import RESERVED_INFRASTRUCTURE_NAMES
+
+    assert "_ENDPOINT_TIMEOUTS" in RESERVED_INFRASTRUCTURE_NAMES

@@ -28853,3 +28853,13 @@ def test_every_diff_command_accepts_fail_on_timeout_tightened():
         proc = _run_cli([*command, "--help"], cwd=Path.cwd())
         assert proc.returncode == 0, proc.stderr
         assert "--fail-on-timeout-tightened" in proc.stdout, command
+
+
+def test_app_status_lists_each_endpoints_own_timeout(tmp_path, fake_dashboard):
+    proc = _app_status_with_config(
+        tmp_path, fake_dashboard, request_timeout_seconds=None,
+        endpoint_timeouts={"/report": 30, "/exempt": 0},
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "  request timeout: disabled\n    /report: 30s\n    /exempt: exempt (no timeout)\n" in proc.stdout
