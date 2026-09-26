@@ -1090,6 +1090,7 @@ def test_generated_app_exposes_get_metrics_as_json(monkeypatch):
         "webhook_deliveries_by_outcome": {"delivered": 0, "failed": 0},
         "webhook_redeliveries_by_outcome": {"delivered": 0, "failed": 0},
         "deprecated_endpoint_calls": {},
+        "deprecated_endpoint_rejections": {},
     }
 
 
@@ -7684,3 +7685,43 @@ def test_get_deprecations_reports_per_endpoint_rejected_under_enforce_sunset(
     # "rejected" must agree with what the endpoint actually does.
     assert client.post("/old_add", json={}).status_code == 410
     assert client.post("/add", json={}).status_code == 200
+
+
+def test_metrics_count_rejected_deprecated_calls_separately(monkeypatch):
+    """Confirmed missing before this feature: /metrics counted every call
+    to a deprecated endpoint the same whether it was served or answered
+    410 -- no way to see how many callers a brownout actually broke."""
+    client = _deprecation_test_client(
+        monkeypatch,
+        {"old_add": "sunset: 2000-01-01", "add": "sunset: 2999-01-01"},
+        enforce_sunset="true",
+    )
+
+    client.post("/old_add", json={})
+    client.post("/old_add", json={})
+    client.post("/add", json={})
+
+    metrics = client.get("/metrics").json()
+    assert metrics["deprecated_endpoint_calls"] == {"/old_add": 2, "/add": 1}
+    assert metrics["deprecated_endpoint_rejections"] == {"/old_add": 2, "/add": 0}
+
+    text = client.get("/metrics/prometheus").text
+    assert "# TYPE notebook_api_deprecated_endpoint_rejections_total counter" in text
+    assert 'notebook_api_deprecated_endpoint_rejections_total{path="/old_add"} 2' in text
+    assert 'notebook_api_deprecated_endpoint_rejections_total{path="/add"} 0' in text
+
+
+def test_metrics_rejections_stay_zero_when_nothing_is_rejected(monkeypatch):
+    client = _deprecation_test_client(monkeypatch, {"old_add": None})
+
+    client.post("/old_add", json={})
+
+    metrics = client.get("/metrics").json()
+    assert metrics["deprecated_endpoint_calls"] == {"/old_add": 1}
+    assert metrics["deprecated_endpoint_rejections"] == {"/old_add": 0}
+
+
+def test_deprecated_endpoint_rejections_counter_name_is_reserved():
+    from backend.generator.api_generator import RESERVED_INFRASTRUCTURE_NAMES
+
+    assert "_DEPRECATED_ENDPOINT_REJECTIONS" in RESERVED_INFRASTRUCTURE_NAMES
