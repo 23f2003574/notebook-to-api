@@ -14014,6 +14014,7 @@ def validate_all_notebooks(
     modified_after: str = None, modified_before: str = None,
     limit: int = None, offset: int = 0,
     format: str = "json", checksums: bool = False, status: str = None,
+    sunset_within_days: int = None,
 ):
     """Run the identical pass/warn/fail check POST /api/validate already
     performs for one notebook, across every notebook already uploaded to
@@ -14254,6 +14255,21 @@ def validate_all_notebooks(
     past_sunset_notebook_count = 0
     today_utc = datetime.now(timezone.utc).date().isoformat()
 
+    # ?sunset_within_days=N: deprecated functions whose sunset date is
+    # still ahead but within the next N days (inclusive) -- the removals
+    # coming due soon, so they can be scheduled before they turn into
+    # past_sunset_functions above. Omitted entirely unless asked for.
+    if sunset_within_days is not None and sunset_within_days < 0:
+        raise HTTPException(
+            status_code=400,
+            detail="sunset_within_days must be zero or a positive number of days.",
+        )
+    upcoming_sunset_notebook_count = 0
+    upcoming_cutoff = (
+        (datetime.now(timezone.utc).date() + timedelta(days=sunset_within_days)).isoformat()
+        if sunset_within_days is not None else None
+    )
+
     for entry in sorted(upload_root.iterdir()):
 
         if not (entry.is_file() and entry.suffix == ".ipynb"):
@@ -14375,6 +14391,15 @@ def validate_all_notebooks(
         if past_sunset_functions:
             past_sunset_notebook_count += 1
 
+        upcoming_sunset_functions = {}
+        if upcoming_cutoff is not None:
+            for name, reason in deprecated_functions.items():
+                sunset = _deprecation_sunset_date(reason)
+                if sunset and today_utc < sunset <= upcoming_cutoff:
+                    upcoming_sunset_functions[name] = sunset
+            if upcoming_sunset_functions:
+                upcoming_sunset_notebook_count += 1
+
         result = {
             "filename": entry.name,
             "status": status,
@@ -14386,6 +14411,8 @@ def validate_all_notebooks(
             "past_sunset_functions": past_sunset_functions,
             "detail": None,
         }
+        if upcoming_cutoff is not None:
+            result["upcoming_sunset_functions"] = upcoming_sunset_functions
         if checksums:
             result["sha256"] = entry_sha256
         results.append(result)
@@ -14455,6 +14482,10 @@ def validate_all_notebooks(
         "fail_count": fail_count,
         "deprecated_notebook_count": deprecated_notebook_count,
         "past_sunset_notebook_count": past_sunset_notebook_count,
+        **(
+            {"upcoming_sunset_notebook_count": upcoming_sunset_notebook_count}
+            if upcoming_cutoff is not None else {}
+        ),
     }
 
 
