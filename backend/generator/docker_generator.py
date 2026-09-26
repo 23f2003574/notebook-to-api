@@ -527,7 +527,13 @@ def readme_content(
         # endpoint (the directive is ignored on a background one, see
         # inspect_notebook_data's "ignored_timeout_directives").
         endpoint_timeout = (timeout_overrides or {}).get(func["name"])
-        if endpoint_timeout is not None and not is_background:
+        if endpoint_timeout is not None and is_background:
+            suffix += (
+                f" -- its task fails if it runs longer than {endpoint_timeout}s"
+                if endpoint_timeout
+                else " -- exempt from `NOTEBOOK_API_TASK_EXECUTION_TIMEOUT_SECONDS`"
+            )
+        elif endpoint_timeout is not None:
             suffix += (
                 f" -- answers `504` if it runs longer than {endpoint_timeout}s"
                 if endpoint_timeout

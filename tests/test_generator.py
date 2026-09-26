@@ -8182,8 +8182,9 @@ def test_readme_content_notes_each_endpoints_own_timeout():
     assert "- `POST /report` -- answers `504` if it runs longer than 30s" in content
     assert "- `POST /exempt` -- exempt from `NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS`" in content
     assert "- `POST /add`\n" in content
-    # Ignored on a background endpoint, so not advertised there.
-    assert "longer than 10s" not in content
+    # A background endpoint's directive bounds its task instead.
+    assert "- `POST /train_model` -- enqueues a background task" in content
+    assert "its task fails if it runs longer than 10s" in content
 
 
 def test_get_config_reports_each_endpoints_own_timeout(monkeypatch):
@@ -8206,8 +8207,8 @@ def test_get_config_reports_each_endpoints_own_timeout(monkeypatch):
 
     config = TestClient(namespace["app"]).get("/config").json()
 
-    # train_model is a background endpoint -- the directive doesn't apply.
-    assert config["endpoint_timeouts"] == {"/exempt": 0, "/report": 30}
+    # train_model is a background endpoint -- its directive bounds its task.
+    assert config["endpoint_timeouts"] == {"/exempt": 0, "/report": 30, "/train_model": 10}
 
 
 def test_endpoint_timeouts_name_is_reserved():
@@ -8227,3 +8228,65 @@ def test_request_timeout_504_carries_the_timeout_marker_header(monkeypatch):
 
     assert response.status_code == 504
     assert response.headers["X-Notebook-API-Timeout"] == "true"
+
+
+def _background_timeout_client(monkeypatch, overrides, impl, global_timeout=None):
+    code = generate_fastapi_code(
+        [{"name": "train_model", "args": [], "return_type": "int"}],
+        timeout_overrides=overrides,
+    )
+    notebook_module = _register_fake_notebook_module(monkeypatch)
+    impl.__name__ = "train_model"
+    notebook_module.train_model = impl
+    monkeypatch.setenv("NOTEBOOK_API_KEY", "test-key")
+    if global_timeout is None:
+        monkeypatch.delenv("NOTEBOOK_API_TASK_EXECUTION_TIMEOUT_SECONDS", raising=False)
+    else:
+        monkeypatch.setenv("NOTEBOOK_API_TASK_EXECUTION_TIMEOUT_SECONDS", str(global_timeout))
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    return TestClient(namespace["app"], headers={"X-API-Key": "test-key"})
+
+
+def test_timeout_directive_bounds_a_background_functions_task(monkeypatch):
+    """Confirmed missing before this feature: a timeout directive on a
+    background function was silently ignored -- only the global
+    NOTEBOOK_API_TASK_EXECUTION_TIMEOUT_SECONDS could bound its tasks."""
+    import time as time_module
+
+    def slow():
+        time_module.sleep(3)
+        return 1
+
+    client = _background_timeout_client(monkeypatch, {"train_model": 1}, slow)
+
+    task_id = client.post("/train_model", json={}).json()["task_id"]
+    task = client.get(f"/tasks/{task_id}").json()
+
+    assert task["status"] == "failed"
+    assert task["error"] == "Task exceeded its 1s execution timeout"
+
+
+def test_background_timeout_directive_zero_exempts_from_the_global_limit(monkeypatch):
+    import time as time_module
+
+    def slow():
+        time_module.sleep(1.5)
+        return 7
+
+    client = _background_timeout_client(monkeypatch, {"train_model": 0}, slow, global_timeout=1)
+
+    task_id = client.post("/train_model", json={}).json()["task_id"]
+    task = client.get(f"/tasks/{task_id}").json()
+
+    assert task["status"] == "completed"
+    assert task["result"] == 7
+
+
+def test_task_timeouts_name_is_reserved():
+    from backend.generator.api_generator import RESERVED_INFRASTRUCTURE_NAMES
+
+    assert "_TASK_TIMEOUTS" in RESERVED_INFRASTRUCTURE_NAMES

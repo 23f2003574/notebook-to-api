@@ -1981,7 +1981,6 @@ def _dispatch_core_command(args):
                     "deprecated_functions": data["deprecated_functions"],
                     "past_sunset_functions": past_sunset,
                     "timeout_overrides": data["timeout_overrides"],
-                    "ignored_timeout_directives": data["ignored_timeout_directives"],
                 },
                 indent=2,
             ))
@@ -2014,16 +2013,6 @@ def _dispatch_core_command(args):
             for name, sunset in past_sunset.items():
                 marker = "✗" if args.fail_on_past_sunset else "⚠"
                 print(f"{marker} Past sunset: {name} (sunset {sunset}) -- still defined")
-
-            # A "# notebook-to-api: timeout N" directive on a background
-            # function does nothing (see inspect_notebook_data) -- said so
-            # here rather than letting its author believe it's enforced.
-            for name in data["ignored_timeout_directives"]:
-                print(
-                    f"⚠ Ignored timeout directive: {name} is a background "
-                    "endpoint -- bound it with "
-                    "NOTEBOOK_API_TASK_EXECUTION_TIMEOUT_SECONDS instead"
-                )
 
             if status == "pass":
                 print("\n✓ No issues found.")
@@ -5411,16 +5400,6 @@ def _dispatch_core_command(args):
             for name, sunset in (data.get("past_sunset_functions") or {}).items():
                 marker = "✗" if args.fail_on_past_sunset else "⚠"
                 print(f"{marker} Past sunset: {name} (sunset {sunset}) -- still defined")
-
-            # A "# notebook-to-api: timeout N" directive on a background
-            # function does nothing (see inspect_notebook_data) -- said so
-            # here rather than letting its author believe it's enforced.
-            for name in data.get("ignored_timeout_directives") or []:
-                print(
-                    f"⚠ Ignored timeout directive: {name} is a background "
-                    "endpoint -- bound it with "
-                    "NOTEBOOK_API_TASK_EXECUTION_TIMEOUT_SECONDS instead"
-                )
 
             if status == "pass":
                 print("\n✓ No issues found.")

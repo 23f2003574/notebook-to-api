@@ -23434,7 +23434,6 @@ def test_validate_reports_pass_for_a_clean_notebook():
         "deprecated_functions": {},
         "past_sunset_functions": {},
         "timeout_overrides": {},
-        "ignored_timeout_directives": [],
     }
 
 
@@ -34425,9 +34424,7 @@ def test_compile_history_records_which_functions_drop_past_sunset_removed():
     assert csv_rows[1].endswith(",old_add")
 
 
-def test_validate_reports_timeout_directives_and_flags_ignored_ones():
-    """Confirmed missing before this feature: a timeout directive on a
-    background function silently did nothing, and nothing said so."""
+def test_validate_reports_timeout_directives():
     client.delete("/api/notebooks?confirm=true")
     content = _notebook_bytes(
         "# notebook-to-api: timeout 30\n"
@@ -34444,7 +34441,7 @@ def test_validate_reports_timeout_directives_and_flags_ignored_ones():
 
     assert body["status"] == "pass"
     assert body["timeout_overrides"] == {"report": 30, "train_model": 10}
-    assert body["ignored_timeout_directives"] == ["train_model"]
+    assert "ignored_timeout_directives" not in body
 
 
 def test_readme_preview_and_compile_readme_note_endpoint_timeouts():

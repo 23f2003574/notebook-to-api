@@ -729,21 +729,13 @@ def inspect_notebook_data(
             if name not in private_function_names
         },
         # Every "# notebook-to-api: timeout N" directive on a function
-        # that becomes an endpoint -- and, separately, the ones that do
-        # nothing: the directive only bounds a *synchronous* endpoint's
-        # request (NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS); on a background
-        # function it's silently ignored, since background tasks are bound
-        # by NOTEBOOK_API_TASK_EXECUTION_TIMEOUT_SECONDS instead.
+        # that becomes an endpoint -- the request timeout of a synchronous
+        # endpoint, or the task execution timeout of a background one.
         "timeout_overrides": {
             name: seconds
             for name, seconds in sorted(timeout_overrides.items())
             if name in endpoint_names
         },
-        "ignored_timeout_directives": sorted(
-            name for name in timeout_overrides
-            if name in endpoint_names
-            and _is_background_function(name, background_overrides)
-        ),
         # The complementary "# notebook-to-api: exclude <import-name>"
         # directive's own effect, surfaced the same way "private_functions"
         # already surfaces "# notebook-to-api: private"'s -- before this,

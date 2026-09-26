@@ -24,7 +24,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "WEBHOOK_MAX_RETRIES", "WEBHOOK_RETRY_BACKOFF_SECONDS",
     "TASK_EXECUTION_TIMEOUT_SECONDS",
     "REQUEST_TIMEOUT_SECONDS", "_call_notebook_function", "_REQUEST_TIMEOUTS",
-    "_ENDPOINT_TIMEOUTS",
+    "_ENDPOINT_TIMEOUTS", "_TASK_TIMEOUTS",
     # Read by name from inside _evict_expired_tasks' own body -- the
     # identical "referenced by name inside a helper every background
     # endpoint's own submission calls first" exposure already documented
@@ -1787,7 +1787,6 @@ def generate_fastapi_code(
         f"/{func['name']}": (timeout_overrides or {})[func["name"]]
         for func in functions
         if func["name"] in (timeout_overrides or {})
-        and not resolve_is_background(func["name"], background_overrides)
     }
     lines.append(f"_ENDPOINT_TIMEOUTS = {repr(dict(sorted(endpoint_timeouts.items())))}")
     lines.append("async def _call_notebook_function(call, is_async=False, timeout=None):")
@@ -3630,9 +3629,27 @@ def generate_fastapi_code(
     lines.append("            'error': str(e),")
     lines.append("        }")
     lines.append("")
+    # {function_name: seconds} for every *background* function with its own
+    # "# notebook-to-api: timeout N" directive -- overriding
+    # TASK_EXECUTION_TIMEOUT_SECONDS for that function's tasks, the way the
+    # same directive already overrides REQUEST_TIMEOUT_SECONDS on a
+    # synchronous endpoint. Looked up by the notebook function's own
+    # __name__, so a task re-run via POST /tasks/{task_id}/retry gets the
+    # same limit without threading it through every call site.
+    task_timeouts = {
+        func["name"]: (timeout_overrides or {})[func["name"]]
+        for func in functions
+        if func["name"] in (timeout_overrides or {})
+        and resolve_is_background(func["name"], background_overrides)
+    }
+    lines.append(f"_TASK_TIMEOUTS = {repr(dict(sorted(task_timeouts.items())))}")
     lines.append(
         "async def _run_background_task(func, task_id, *args, "
         "callback_url=None, **kwargs):"
+    )
+    lines.append(
+        "    task_limit = _TASK_TIMEOUTS.get("
+        "getattr(func, '__name__', None), TASK_EXECUTION_TIMEOUT_SECONDS)"
     )
     lines.append("    try:")
     lines.append("        # Calling a plain (non-async) notebook function directly")
@@ -3675,7 +3692,7 @@ def generate_fastapi_code(
     lines.append("        # orphaned thread itself still runs to completion")
     lines.append("        # afterward, an unavoidable limit of cooperatively")
     lines.append("        # cancelling arbitrary synchronous code at all.")
-    lines.append("        with anyio.fail_after(TASK_EXECUTION_TIMEOUT_SECONDS or None):")
+    lines.append("        with anyio.fail_after(task_limit or None):")
     lines.append("            if inspect.iscoroutinefunction(func):")
     lines.append("                result = await func(*args, **kwargs)")
     lines.append("            else:")
@@ -3744,7 +3761,7 @@ def generate_fastapi_code(
     lines.append("    except TimeoutError:")
     lines.append(
         "        timeout_error = ("
-        "f'Task exceeded its {TASK_EXECUTION_TIMEOUT_SECONDS}s '"
+        "f'Task exceeded its {task_limit}s '"
         "'execution timeout')"
     )
     lines.append("        if task_id in TASKS:")
