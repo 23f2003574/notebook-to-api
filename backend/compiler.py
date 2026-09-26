@@ -880,6 +880,36 @@ DEPRECATED_FUNCTION_DIRECTIVE_PATTERN = re.compile(
 )
 
 
+# "# notebook-to-api: timeout <seconds>" directly above a function's own
+# `def` (optionally above other "# notebook-to-api:" directives for the
+# same function, with only blank lines between) -- that endpoint's own
+# NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS. "0" means "no timeout for this
+# one", even if a global timeout is set.
+TIMEOUT_DIRECTIVE_PATTERN = re.compile(
+    r"^[ \t]*#\s*notebook-to-api:\s*timeout\s+(?P<seconds>\d+)\s*$"
+    r"(?:\n[ \t]*(?:#\s*notebook-to-api:[^\n]*)?)*"
+    r"\n[ \t]*(?:async\s+)?def\s+(?P<name>[A-Za-z_]\w*)\s*\(",
+    re.MULTILINE,
+)
+
+
+def _extract_timeout_overrides(code_cells):
+    """{function_name: seconds} for every function `code_cells` marks
+    "# notebook-to-api: timeout <seconds>" (see TIMEOUT_DIRECTIVE_PATTERN).
+    Before this, NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS was one global bound
+    for every synchronous endpoint -- a notebook with one legitimately slow
+    function (a report, a model fit) and many fast ones had to choose
+    between a limit loose enough for the slow one (useless for the rest)
+    or one that 504s it. A function marked more than once keeps the last
+    value seen, the same "last one wins" rule as the deprecated directive.
+    """
+    overrides = {}
+    for cell in code_cells:
+        for match in TIMEOUT_DIRECTIVE_PATTERN.finditer(cell):
+            overrides[match.group("name")] = int(match.group("seconds"))
+    return overrides
+
+
 def _extract_deprecated_functions(code_cells):
     """{function_name: reason_or_None} for every function `code_cells`
     marks "# notebook-to-api: deprecated" (immediately above its own
@@ -1724,6 +1754,7 @@ def compile_notebook_to_api(
             background_overrides=background_overrides,
             deprecated_overrides=deprecated_overrides,
             retired_endpoints=retired_endpoints,
+            timeout_overrides=_extract_timeout_overrides(code_cells),
         )
 
         # generate_fastapi_code succeeding means this compile is now

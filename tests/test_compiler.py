@@ -8311,3 +8311,38 @@ def test_compile_notebook_without_any_directive_behaves_as_before(tmp_path):
 
     assert any(line.startswith("nbformat==") for line in lines)
     assert any(line.startswith("fastapi==") for line in lines)
+
+
+def test_extract_timeout_overrides_reads_the_directive_above_a_def():
+    """Confirmed missing before this feature: there was no per-function
+    way to set a synchronous endpoint's request timeout."""
+    from backend.compiler import _extract_timeout_overrides
+
+    cells = [
+        "# notebook-to-api: timeout 30\ndef report(a: int) -> int:\n    return a\n",
+        # Stacked above another directive, with a blank line.
+        "# notebook-to-api: timeout 0\n\n# notebook-to-api: deprecated\n"
+        "async def fit(a: int) -> int:\n    return a\n",
+        "def plain(a: int) -> int:\n    return a\n",
+        # Not directly above a def -- ignored.
+        "# notebook-to-api: timeout 5\nx = 1\ndef later(a: int) -> int:\n    return a\n",
+    ]
+
+    assert _extract_timeout_overrides(cells) == {"report": 30, "fit": 0}
+
+
+def test_compile_applies_the_timeout_directive_to_that_endpoint_only(tmp_path):
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells = [nbformat.v4.new_code_cell(
+        "# notebook-to-api: timeout 7\ndef slow(a: int) -> int:\n    return a\n\n"
+        "def fast(a: int) -> int:\n    return a\n"
+    )]
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    compile_notebook(str(notebook_path), str(tmp_path / "generated"))
+
+    app_source = (tmp_path / "generated" / "app.py").read_text(encoding="utf-8")
+    assert "functools.partial(notebook_module.slow, req.a), is_async=False, timeout=7)" in app_source
+    assert "functools.partial(notebook_module.fast, req.a), is_async=False)" in app_source

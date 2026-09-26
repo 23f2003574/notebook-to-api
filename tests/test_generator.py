@@ -8089,3 +8089,51 @@ def test_request_timeouts_counter_name_is_reserved():
     from backend.generator.api_generator import RESERVED_INFRASTRUCTURE_NAMES
 
     assert "_REQUEST_TIMEOUTS" in RESERVED_INFRASTRUCTURE_NAMES
+
+
+def _per_endpoint_timeout_client(monkeypatch, global_timeout, overrides, impl):
+    code = generate_fastapi_code(
+        [{"name": "slow", "args": [], "return_type": "int"}],
+        timeout_overrides=overrides,
+    )
+    notebook_module = _register_fake_notebook_module(monkeypatch)
+    notebook_module.slow = impl
+    monkeypatch.setenv("NOTEBOOK_API_KEY", "test-key")
+    if global_timeout is None:
+        monkeypatch.delenv("NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS", raising=False)
+    else:
+        monkeypatch.setenv("NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS", str(global_timeout))
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    return TestClient(namespace["app"], headers={"X-API-Key": "test-key"})
+
+
+def test_timeout_directive_bounds_one_endpoint_without_a_global_timeout(monkeypatch):
+    """Confirmed missing before this feature: NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS
+    was the only bound, shared by every synchronous endpoint."""
+    import time as time_module
+
+    client = _per_endpoint_timeout_client(
+        monkeypatch, None, {"slow": 1}, lambda: time_module.sleep(3) or 1
+    )
+
+    response = client.post("/slow", json={})
+
+    assert response.status_code == 504
+    assert "its own timeout directive (1s)" in response.json()["detail"]
+
+
+def test_timeout_directive_zero_exempts_an_endpoint_from_the_global_timeout(monkeypatch):
+    import time as time_module
+
+    client = _per_endpoint_timeout_client(
+        monkeypatch, 1, {"slow": 0}, lambda: time_module.sleep(1.5) or 9
+    )
+
+    response = client.post("/slow", json={})
+
+    assert response.status_code == 200
+    assert response.json() == {"result": 9}

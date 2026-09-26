@@ -939,7 +939,7 @@ def _annotation_has_own_field_description(type_str):
 def generate_fastapi_code(
     functions, package_name="generated", source_notebook_sha256=None,
     notebook_to_api_version="1.0.0", background_overrides=None,
-    deprecated_overrides=None, retired_endpoints=None,
+    deprecated_overrides=None, retired_endpoints=None, timeout_overrides=None,
 ):
     """Generate FastAPI app code for the given functions.
 
@@ -1775,8 +1775,9 @@ def generate_fastapi_code(
     # 5xx status-class counter can't say *which* endpoint keeps hitting
     # the limit (the one to optimize, or to move to a background task).
     lines.append("_REQUEST_TIMEOUTS = {}")
-    lines.append("async def _call_notebook_function(call, is_async=False):")
-    lines.append("    with anyio.fail_after(REQUEST_TIMEOUT_SECONDS or None):")
+    lines.append("async def _call_notebook_function(call, is_async=False, timeout=None):")
+    lines.append("    limit = REQUEST_TIMEOUT_SECONDS if timeout is None else timeout")
+    lines.append("    with anyio.fail_after(limit or None):")
     lines.append("        if is_async:")
     lines.append("            return await call()")
     lines.append("        return await anyio.to_thread.run_sync(call, abandon_on_cancel=True)")
@@ -4405,10 +4406,17 @@ def generate_fastapi_code(
             # deliberately raises one (e.g. HTTPException(404, ...)) is
             # already choosing its own status code and message on purpose.
             lines.append("    try:")
+            # `timeout_overrides` (optional) is _extract_timeout_overrides'
+            # {function_name: seconds} -- this endpoint's own "# notebook-
+            # to-api: timeout N" directive, overriding the global
+            # REQUEST_TIMEOUT_SECONDS (0 = no timeout for this one).
+            endpoint_timeout = (timeout_overrides or {}).get(func_name)
             lines.append(
                 f"        result = await _call_notebook_function("
                 f"functools.partial(notebook_module.{func_name}, {call_args}), "
-                f"is_async={is_async})"
+                f"is_async={is_async}"
+                + (f", timeout={endpoint_timeout}" if endpoint_timeout is not None else "")
+                + ")"
             )
             lines.append("    except HTTPException:")
             lines.append("        raise")
@@ -4419,10 +4427,14 @@ def generate_fastapi_code(
             )
             lines.append("        raise HTTPException(")
             lines.append("            status_code=504,")
+            timeout_label = (
+                f"its own timeout directive ({endpoint_timeout}s)"
+                if endpoint_timeout is not None
+                else "NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS ({REQUEST_TIMEOUT_SECONDS}s)"
+            )
             lines.append(
                 f"            detail=f\"'{func_name}' did not finish within "
-                "NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS "
-                "({REQUEST_TIMEOUT_SECONDS}s).\","
+                f"{timeout_label}.\","
             )
             lines.append("        )")
             lines.append("    except Exception as e:")

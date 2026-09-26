@@ -36,6 +36,7 @@ import httpx
 from nbformat import ValidationError as NotebookValidationError
 
 from backend.compiler import (
+    _extract_timeout_overrides,
     COMPILE_LOCK,
     COMPILE_METADATA_FILENAME,
     NOTEBOOK_TO_API_VERSION,
@@ -14822,6 +14823,7 @@ def app_preview_endpoint(data: dict):
             notebook_to_api_version=NOTEBOOK_TO_API_VERSION,
             background_overrides=background_overrides,
             deprecated_overrides=deprecated_overrides,
+            timeout_overrides=_extract_timeout_overrides(code_cells),
         )
 
     except ReservedFunctionNameError as e:
@@ -15011,6 +15013,7 @@ def readme_preview_endpoint(data: dict):
             notebook_to_api_version=NOTEBOOK_TO_API_VERSION,
             background_overrides=background_overrides,
             deprecated_overrides=deprecated_overrides,
+            timeout_overrides=_extract_timeout_overrides(code_cells),
         )
 
         readme = readme_content(
@@ -15901,6 +15904,7 @@ def openapi_preview_endpoint(data: dict):
             notebook_to_api_version=NOTEBOOK_TO_API_VERSION,
             background_overrides=background_overrides,
             deprecated_overrides=deprecated_overrides,
+            timeout_overrides=_extract_timeout_overrides(code_cells),
         )
 
     except ReservedFunctionNameError as e:
