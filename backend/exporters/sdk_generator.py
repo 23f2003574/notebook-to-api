@@ -26,7 +26,7 @@ PYTHON_RESERVED_CLIENT_METHOD_NAMES = frozenset({
     "delete_completed_tasks", "delete_failed_tasks", "redeliver_task_webhook",
     "retry_task", "cleanup_tasks", "reset_tasks",
     "health", "ready", "info", "config", "metrics", "metrics_prometheus",
-    "deprecations",
+    "deprecations", "reset_deprecation_counters",
     "uptime", "auth_status", "auth_info", "auth_validate",
     # Confirmed exploitable: base_url/api_key/timeout are the client's
     # own __init__-set *instance attributes* (self.base_url, self.api_key,
@@ -53,7 +53,7 @@ TYPESCRIPT_RESERVED_CLIENT_METHOD_NAMES = frozenset({
     "deleteCompletedTasks", "deleteFailedTasks", "redeliverTaskWebhook",
     "retryTask", "cleanupTasks", "resetTasks",
     "health", "ready", "info", "config", "metrics", "metricsPrometheus",
-    "deprecations",
+    "deprecations", "resetDeprecationCounters",
     "uptime", "authStatus", "authInfo", "authValidate",
     # Same hazard as PYTHON_RESERVED_CLIENT_METHOD_NAMES's base_url/
     # api_key/timeout above: baseUrl/apiKey/timeoutMs are this client's
@@ -1847,6 +1847,20 @@ def generate_python_sdk(
     lines.append("            timeout=self.timeout,")
     lines.append("        ))")
     lines.append("")
+    # POST /deprecations/reset: the state-changing counterpart of the
+    # read-only deprecations() method -- every compiled app has it, but
+    # neither client could reach it short of a hand-rolled request.
+    lines.append("    def reset_deprecation_counters(self) -> dict:")
+    lines.append(
+        '        """Zero the app\'s deprecation call/rejection/caller '
+        'counters (POST /deprecations/reset)."""'
+    )
+    lines.append("        return self._request(lambda: requests.post(")
+    lines.append('            f"{self.base_url}/deprecations/reset",')
+    lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("            timeout=self.timeout,")
+    lines.append("        ))")
+    lines.append("")
     # health/ready/info/config/metrics/uptime/auth_status/auth_info/
     # auth_validate are, like get_task/list_tasks/... above, hardcoded
     # rather than derived from the per-path loop below: every compiled app
@@ -2772,6 +2786,20 @@ def generate_typescript_sdk(
     lines.append(
         '    return this.requestWithRetry("/tasks/cleanup", () => '
         "fetch(`${this.baseUrl}/tasks/cleanup`, {"
+    )
+    lines.append('      method: "POST",')
+    lines.append("      headers: {")
+    lines.append('        "X-API-Key": this.apiKey,')
+    lines.append("      },")
+    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
+    lines.append("    }));")
+    lines.append("  }")
+    lines.append("")
+    # See generate_python_sdk's identical reset_deprecation_counters.
+    lines.append("  async resetDeprecationCounters(): Promise<any> {")
+    lines.append(
+        '    return this.requestWithRetry("/deprecations/reset", () => '
+        "fetch(`${this.baseUrl}/deprecations/reset`, {"
     )
     lines.append('      method: "POST",')
     lines.append("      headers: {")
