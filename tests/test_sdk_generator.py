@@ -410,7 +410,7 @@ def test_generate_typescript_sdk_constructor_accepts_a_configurable_timeout(
     # paths exist), plus the 10 hardcoded health/ready/info/config/
     # metrics/metricsPrometheus/uptime/authStatus/authInfo/authValidate
     # methods.
-    assert source.count("signal: AbortSignal.timeout(this.timeoutMs),") == 22
+    assert source.count("signal: AbortSignal.timeout(this.timeoutMs),") == 21
 
 
 def test_generate_python_sdk_method_name_handles_multi_segment_paths(tmp_path):
@@ -7148,3 +7148,71 @@ def test_generate_typescript_sdk_reset_deprecation_counters_posts(tmp_path):
         "calls": [{"url": "http://localhost:8000/deprecations/reset",
                    "method": "POST", "key": "k"}],
     }
+
+
+def test_sdks_wait_at_least_an_endpoints_own_server_timeout(tmp_path):
+    """Confirmed missing before this feature: a client timeout shorter than
+    an endpoint's own "# notebook-to-api: timeout N" abandoned calls the
+    server was still allowed to finish, surfacing a bare client-side
+    timeout instead of the server's 504 detail."""
+    schema_path = _write_schema(tmp_path, {
+        "/report": {"post": {"operationId": "report",
+                             "x-notebook-to-api-timeout-seconds": 120}},
+        "/add": {"post": {"operationId": "add"}},
+    })
+    py_path = tmp_path / "client.py"
+    ts_path = tmp_path / "client.ts"
+
+    generate_python_sdk(str(schema_path), str(py_path))
+    generate_typescript_sdk(str(schema_path), str(ts_path))
+
+    py_source = py_path.read_text(encoding="utf-8")
+    ast.parse(py_source)
+    assert "timeout=max(self.timeout, 125)," in py_source
+    ts_source = ts_path.read_text(encoding="utf-8")
+    assert 'return this.request("/report", payload, undefined, 125000);' in ts_source
+    assert 'return this.request("/add", payload);' in ts_source
+
+
+@pytest.mark.parametrize("value", [0, -5, "120", True, None])
+def test_sdks_ignore_an_invalid_or_zero_server_timeout(tmp_path, value):
+    schema_path = _write_schema(tmp_path, {
+        "/report": {"post": {"operationId": "report",
+                             "x-notebook-to-api-timeout-seconds": value}},
+    })
+    py_path = tmp_path / "client.py"
+    ts_path = tmp_path / "client.ts"
+
+    generate_python_sdk(str(schema_path), str(py_path))
+    generate_typescript_sdk(str(schema_path), str(ts_path))
+
+    assert "max(self.timeout" not in py_path.read_text(encoding="utf-8")
+    assert "undefined, " not in ts_path.read_text(encoding="utf-8")
+
+
+@_needs_node
+def test_typescript_sdk_request_uses_the_longer_of_the_two_timeouts(tmp_path):
+    schema_path = _write_schema(tmp_path, {
+        "/report": {"post": {"operationId": "report",
+                             "x-notebook-to-api-timeout-seconds": 120}},
+    })
+    client_path = tmp_path / "client.ts"
+    generate_typescript_sdk(str(schema_path), str(client_path))
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        const seen = [];
+        const original = AbortSignal.timeout;
+        AbortSignal.timeout = (ms) => {{ seen.push(ms); return original.call(AbortSignal, ms); }};
+        globalThis.fetch = async () => ({{ ok: true, status: 200, headers: new Headers(),
+                                          json: async () => ({{ result: 1 }}) }});
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000", {{ timeoutMs: 1000 }});
+        await client.report({{}});
+        console.log(JSON.stringify(seen));
+        """,
+        encoding="utf-8",
+    )
+    proc = subprocess.run(["node", str(runner_path)], capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout.strip().splitlines()[-1]) == [125000]

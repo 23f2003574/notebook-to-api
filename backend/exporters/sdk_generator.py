@@ -984,6 +984,23 @@ def _python_method_docstring(description, static_text):
     return repr(doc)
 
 
+def _server_timeout_seconds(operation):
+    """The operation's own "x-notebook-to-api-timeout-seconds" (its
+    "# notebook-to-api: timeout N" directive, see generate_fastapi_code)
+    as a positive int, else 0 -- re-validated rather than trusted verbatim,
+    since it's embedded straight into generated source."""
+    value = (operation or {}).get("x-notebook-to-api-timeout-seconds")
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return 0
+    return value
+
+
+# Extra seconds a client waits beyond an endpoint's own server-side timeout,
+# so the server's 504 (with its explanatory detail) arrives before the
+# client gives up on its own with a bare, detail-free timeout error.
+_SERVER_TIMEOUT_CLIENT_MARGIN_SECONDS = 5
+
+
 def _sunset_notice(operation):
     """" Removal scheduled for YYYY-MM-DD." when `operation` (an OpenAPI
     operation dict) carries a valid "x-notebook-to-api-sunset" date (see
@@ -2063,7 +2080,19 @@ def generate_python_sdk(
             )
         else:
             lines.append(f'            headers={{"X-API-Key": self.api_key}},')
-        lines.append(f'            timeout=self.timeout,')
+        # An endpoint with its own "# notebook-to-api: timeout N" may
+        # legitimately take up to N seconds -- a client timeout shorter
+        # than that would abandon a call the server is still allowed to
+        # finish. Waits at least N + a small margin, never less than the
+        # caller's own configured self.timeout.
+        server_timeout = _server_timeout_seconds(paths[path].get("post"))
+        if server_timeout:
+            lines.append(
+                f"            timeout=max(self.timeout, "
+                f"{server_timeout + _SERVER_TIMEOUT_CLIENT_MARGIN_SECONDS}),"
+            )
+        else:
+            lines.append(f'            timeout=self.timeout,')
         if is_background:
             lines.append(
                 "            params={'callback_url': callback_url} "
@@ -2499,7 +2528,7 @@ def generate_typescript_sdk(
     # the raw HTTP request by hand.
     lines.append(
         "  private async request(path: string, payload: unknown, "
-        "callbackUrl?: string): Promise<any> {"
+        "callbackUrl?: string, minTimeoutMs?: number): Promise<any> {"
     )
     lines.append("    let url = path;")
     lines.append("    if (callbackUrl) {")
@@ -2538,7 +2567,10 @@ def generate_typescript_sdk(
     lines.append('        "Idempotency-Key": idempotencyKey,')
     lines.append("      },")
     lines.append("      body: JSON.stringify(payload),")
-    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
+    # minTimeoutMs: see the Python client's identical server-timeout wait.
+    lines.append(
+        "      signal: AbortSignal.timeout(Math.max(this.timeoutMs, minTimeoutMs ?? 0)),"
+    )
     lines.append("    }));")
     lines.append("  }")
     lines.append("")
@@ -2984,7 +3016,16 @@ def generate_typescript_sdk(
                 f'    return this.request("{path}", payload, callbackUrl);'
             )
         else:
-            lines.append(f'    return this.request("{path}", payload);')
+            server_timeout = _server_timeout_seconds(paths[path].get("post"))
+            if server_timeout:
+                timeout_ms = (
+                    server_timeout + _SERVER_TIMEOUT_CLIENT_MARGIN_SECONDS
+                ) * 1000
+                lines.append(
+                    f'    return this.request("{path}", payload, undefined, {timeout_ms});'
+                )
+            else:
+                lines.append(f'    return this.request("{path}", payload);')
         lines.append("  }")
 
         if is_background:
