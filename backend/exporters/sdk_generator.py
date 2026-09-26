@@ -1323,6 +1323,34 @@ def generate_python_sdk(
     # eagerly, at `def` time, when this module loads; the per-path loop
     # that discovers what to generate for each one doesn't run until
     # after the class declaration line below is already appended.
+    # Raised by _request (below) instead of a bare HTTPError when a
+    # deprecated endpoint answers 410 Gone -- the compiled app's own
+    # NOTEBOOK_API_REJECT_DEPRECATED brownout or NOTEBOOK_API_ENFORCE_SUNSET
+    # -- so a caller can tell "this endpoint was retired" apart from any
+    # other client error, and read why and when without parsing headers.
+    # Subclasses requests.HTTPError, so an existing `except HTTPError`
+    # still catches it unchanged.
+    lines.append(
+        "class EndpointRemovedError(getattr(requests, 'HTTPError', Exception)):"
+    )
+    lines.append(
+        '    """A deprecated endpoint answered 410 Gone -- it has been '
+        'retired."""'
+    )
+    lines.append("")
+    lines.append("    def __init__(self, path, reason=None, sunset=None, response=None):")
+    lines.append("        self.path = path")
+    lines.append("        self.reason = reason")
+    lines.append("        self.sunset = sunset")
+    lines.append("        message = f\"{path} has been retired (410 Gone).\"")
+    lines.append("        if reason:")
+    lines.append("            message += f\" {reason}\"")
+    lines.append("        if sunset:")
+    lines.append("            message += f\" (sunset: {sunset})\"")
+    lines.append("        super().__init__(message)")
+    lines.append("        self.response = response")
+    lines.append("")
+    lines.append("")
     typeddict_lines = []
     class_declaration_index = len(lines)
     lines.append("class NotebookAPIClient:")
@@ -1443,6 +1471,21 @@ def generate_python_sdk(
     lines.append("            except Exception as exc:")
     lines.append("                response = getattr(exc, 'response', None)")
     lines.append("                status_code = getattr(response, 'status_code', None)")
+    lines.append("                headers = getattr(response, 'headers', None) or {}")
+    lines.append(
+        "                if status_code == 410 and str(headers.get('Deprecation') "
+        "or '').strip().lower() not in ('', 'false'):"
+    )
+    lines.append(
+        "                    path = urllib.parse.urlsplit("
+        "str(getattr(response, 'url', '') or '')).path"
+    )
+    lines.append("                    raise EndpointRemovedError(")
+    lines.append("                        path or 'this endpoint',")
+    lines.append("                        reason=headers.get('X-Deprecation-Reason'),")
+    lines.append("                        sunset=headers.get('Sunset'),")
+    lines.append("                        response=response,")
+    lines.append("                    ) from exc")
     lines.append(
         "                if attempt >= self.max_retries or ("
     )

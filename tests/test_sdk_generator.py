@@ -6870,3 +6870,84 @@ def test_sdk_ignores_a_malformed_or_injected_sunset_value(tmp_path):
     assert "evil" not in py_source
     assert "evil" not in ts_path.read_text(encoding="utf-8")
     assert "Removal scheduled" not in py_source
+
+
+def _python_client_with_failing_response(tmp_path, monkeypatch, status, headers):
+    schema_path = _write_schema(tmp_path, {"/old_add": {"post": {"operationId": "old_add"}}})
+    output_path = tmp_path / "client.py"
+    generate_python_sdk(str(schema_path), str(output_path))
+    source = output_path.read_text(encoding="utf-8")
+    ast.parse(source)
+
+    class FakeHTTPError(Exception):
+        def __init__(self, *args, response=None):
+            super().__init__(*args)
+            self.response = response
+
+    class FakeResponse:
+        url = "http://localhost:8000/old_add"
+
+        def __init__(self):
+            self.status_code = status
+            self.headers = headers
+
+        def raise_for_status(self):
+            raise FakeHTTPError(f"{self.status_code} error", response=self)
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.HTTPError = FakeHTTPError
+    fake_requests.post = lambda *a, **k: FakeResponse()
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+    namespace = {}
+    exec(compile(source, str(output_path), "exec"), namespace)
+    client = namespace["NotebookAPIClient"]("http://localhost:8000", max_retries=0)
+    return client, namespace, FakeHTTPError
+
+
+def test_python_sdk_raises_endpoint_removed_error_on_a_deprecated_410(
+    tmp_path, monkeypatch
+):
+    """Confirmed missing before this feature: a retired (410) deprecated
+    endpoint surfaced as a bare HTTPError, indistinguishable from any other
+    client error, with its reason/sunset only in raw headers."""
+    client, namespace, http_error = _python_client_with_failing_response(
+        tmp_path, monkeypatch, 410,
+        {"Deprecation": "true", "X-Deprecation-Reason": "Use add.",
+         "Sunset": "Sat, 01 Jan 2000 00:00:00 GMT"},
+    )
+
+    with pytest.raises(namespace["EndpointRemovedError"]) as excinfo:
+        client.old_add({})
+
+    error = excinfo.value
+    assert isinstance(error, http_error)
+    assert error.path == "/old_add"
+    assert error.reason == "Use add."
+    assert error.sunset == "Sat, 01 Jan 2000 00:00:00 GMT"
+    assert "/old_add has been retired (410 Gone). Use add." in str(error)
+
+
+def test_python_sdk_plain_410_without_deprecation_header_stays_http_error(
+    tmp_path, monkeypatch
+):
+    client, namespace, http_error = _python_client_with_failing_response(
+        tmp_path, monkeypatch, 410, {},
+    )
+
+    with pytest.raises(http_error) as excinfo:
+        client.old_add({})
+
+    assert not isinstance(excinfo.value, namespace["EndpointRemovedError"])
+
+
+def test_python_sdk_other_status_with_deprecation_header_stays_http_error(
+    tmp_path, monkeypatch
+):
+    client, namespace, http_error = _python_client_with_failing_response(
+        tmp_path, monkeypatch, 400, {"Deprecation": "true"},
+    )
+
+    with pytest.raises(http_error) as excinfo:
+        client.old_add({})
+
+    assert not isinstance(excinfo.value, namespace["EndpointRemovedError"])
