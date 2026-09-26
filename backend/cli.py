@@ -8234,11 +8234,22 @@ def _dispatch_core_command(args):
             ready = _app_get("/ready")
             info = _app_get("/info")
             config = _app_get("/config")
+            # GET /deprecations only exists on apps compiled since it was
+            # added -- an older deployment's 404 is reported as None
+            # ("not available") rather than failing the whole status
+            # check the way every other route above rightly does.
+            try:
+                deprecations = _app_get("/deprecations")
+            except RuntimeError as exc:
+                if "(404)" not in str(exc):
+                    raise
+                deprecations = None
 
             if args.json_output:
                 result = {
                     "health": health, "ready": ready,
                     "info": info, "config": config,
+                    "deprecations": deprecations,
                 }
                 if args.watch:
                     # One compact object per line (NDJSON), not
@@ -8294,6 +8305,24 @@ def _dispatch_core_command(args):
                 "  docs: "
                 f"{'disabled' if config.get('disable_docs') else 'enabled'}"
             )
+
+            # Only when something is deprecated -- a status check on an
+            # app with nothing deprecated (or too old to say) stays as
+            # short as before. Anything already answering 410 is called
+            # out, since that's what a caller will actually hit.
+            deprecated_endpoints = (deprecations or {}).get("endpoints") or []
+            if deprecated_endpoints:
+                rejected = [e for e in deprecated_endpoints if e.get("rejected")]
+                print(
+                    f"\nDeprecated endpoints: {len(deprecated_endpoints)}"
+                    + (f" ({len(rejected)} answering 410)" if rejected else "")
+                )
+                for entry in deprecated_endpoints:
+                    print(
+                        f"  {entry.get('path')}  calls={entry.get('calls', 0)}"
+                        + (f"  sunset={entry['sunset']}" if entry.get("sunset") else "")
+                        + ("  REJECTED (410)" if entry.get("rejected") else "")
+                    )
 
         if not args.watch:
             _fetch_and_report_status()
