@@ -8493,6 +8493,9 @@ def _dispatch_core_command(args):
         import httpx
         import datetime
 
+        if args.top_callers < 0:
+            raise ValueError("--top-callers must be zero or a positive number.")
+
         app_url = f"http://{args.host}:{args.port}"
 
         def _fetch_deprecations():
@@ -8538,6 +8541,18 @@ def _dispatch_core_command(args):
                         + ("  REJECTED (410)" if entry.get("rejected") else "")
                         + (f"  ({reason})" if reason else "")
                     )
+                    # GET /deprecations' own "callers" (calls per
+                    # User-Agent, most frequent first) -- who to contact
+                    # before removal. Top --top-callers only; an older
+                    # app that never reports it prints nothing extra.
+                    callers = list((entry.get("callers") or {}).items())
+                    for agent, count in callers[:args.top_callers]:
+                        print(f"      caller: {agent}  calls={count}")
+                    if len(callers) > args.top_callers > 0:
+                        print(
+                            f"      ... and {len(callers) - args.top_callers} "
+                            "more caller(s) (see --json)"
+                        )
 
         # --watch: re-poll every --interval seconds (Ctrl+C to stop), the
         # same live view `app-metrics --watch` gives -- during a brownout
@@ -16850,6 +16865,19 @@ def main():
         action="store_true",
         dest="json_output",
         help="Print GET /deprecations' own JSON response verbatim instead of a summary."
+    )
+    app_deprecations_parser.add_argument(
+        "--top-callers",
+        type=int,
+        default=5,
+        dest="top_callers",
+        metavar="N",
+        help=(
+            "How many of each endpoint's callers (GET /deprecations' own "
+            "per-User-Agent \"callers\" breakdown, most frequent first) "
+            "to list under it (default: 5; 0 hides them). --json always "
+            "includes all of them."
+        )
     )
     app_deprecations_parser.add_argument(
         "--watch",
