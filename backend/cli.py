@@ -2160,6 +2160,12 @@ def _dispatch_core_command(args):
     elif args.command == "export-curl":
         only = _parse_comma_separated_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
+        # --drop-past-sunset (apply_drop_past_sunset): the same functions
+        # `compile`/`deploy --drop-past-sunset` leave out of the app itself
+        # -- without it, these exports kept shipping requests for
+        # endpoints the matching build no longer serves.
+        if args.drop_past_sunset:
+            only, exclude = apply_drop_past_sunset(args.notebook, only, exclude)
         commands = generate_curl_commands(
             args.notebook, host=args.host, port=args.port, api_key=args.api_key,
             only=only, exclude=exclude, callback_url=args.callback_url,
@@ -2198,6 +2204,12 @@ def _dispatch_core_command(args):
     elif args.command == "export-postman":
         only = _parse_comma_separated_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
+        # --drop-past-sunset (apply_drop_past_sunset): the same functions
+        # `compile`/`deploy --drop-past-sunset` leave out of the app itself
+        # -- without it, these exports kept shipping requests for
+        # endpoints the matching build no longer serves.
+        if args.drop_past_sunset:
+            only, exclude = apply_drop_past_sunset(args.notebook, only, exclude)
         collection = generate_postman_collection(
             args.notebook, host=args.host, port=args.port, api_key=args.api_key,
             only=only, exclude=exclude, collection_name=args.collection_name,
@@ -9659,6 +9671,17 @@ def main():
         help="Path to write the generated shell script to. Default: requests.sh"
     )
     _add_function_selection_arguments(curl_parser)
+    curl_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Leave out requests for every deprecated function whose "
+            "\"sunset: YYYY-MM-DD\" date is today (UTC) or earlier -- "
+            "matching an app built with `compile`/`deploy "
+            "--drop-past-sunset`."
+        )
+    )
     _add_callback_url_argument(curl_parser)
     curl_parser.add_argument(
         "--json",
@@ -9718,6 +9741,17 @@ def main():
         help="Path to write the generated collection to. Default: postman_collection.json"
     )
     _add_function_selection_arguments(postman_parser)
+    postman_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Leave out requests for every deprecated function whose "
+            "\"sunset: YYYY-MM-DD\" date is today (UTC) or earlier -- "
+            "matching an app built with `compile`/`deploy "
+            "--drop-past-sunset`."
+        )
+    )
     _add_callback_url_argument(postman_parser)
     postman_parser.add_argument(
         "--json",
