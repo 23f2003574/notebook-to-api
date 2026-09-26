@@ -924,7 +924,7 @@ def _annotation_has_own_field_description(type_str):
 def generate_fastapi_code(
     functions, package_name="generated", source_notebook_sha256=None,
     notebook_to_api_version="1.0.0", background_overrides=None,
-    deprecated_overrides=None,
+    deprecated_overrides=None, retired_endpoints=None,
 ):
     """Generate FastAPI app code for the given functions.
 
@@ -4347,6 +4347,35 @@ def generate_fastapi_code(
             )
             lines.append("        )")
             lines.append("    return {\"result\": result}")
+        lines.append("")
+    # `retired_endpoints` (optional) is {function_name: deprecation reason}
+    # for deprecated functions this compile left out *because* their own
+    # "sunset: YYYY-MM-DD" has arrived (see compile_notebook_to_api). A
+    # plain omission would answer a caller still using one with a bare
+    # 404 -- indistinguishable from a typo'd URL. Each instead gets a
+    # hidden route answering 410 Gone with the same Deprecation /
+    # X-Deprecation-Reason / Sunset headers it carried while still
+    # served, the status RFC 9110 reserves for "intentionally removed".
+    # No X-API-Key check: the answer is the same for every caller.
+    for retired_name, retired_reason in sorted((retired_endpoints or {}).items()):
+        headers = {"Deprecation": "true"}
+        reason_header = _deprecation_header_value(retired_reason)
+        if reason_header:
+            headers["X-Deprecation-Reason"] = reason_header
+        retired_sunset = _deprecation_sunset_date(retired_reason)
+        if retired_sunset:
+            headers["Sunset"] = _sunset_http_date(retired_sunset)
+        detail = (
+            f"'/{retired_name}' has been removed"
+            + (f" (sunset {retired_sunset})" if retired_sunset else "")
+            + "."
+        )
+        lines.append(f'@app.post("/{retired_name}", include_in_schema=False)')
+        lines.append(f"def _retired_endpoint_{retired_name}():")
+        lines.append(
+            f"    return JSONResponse(status_code=410, "
+            f"content={{'detail': {repr(detail)}}}, headers={repr(headers)})"
+        )
         lines.append("")
     return "\n".join(lines)
 
