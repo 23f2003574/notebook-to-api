@@ -28907,3 +28907,27 @@ def test_app_tasks_retry_force_forwards_the_flag(tmp_path, fake_dashboard):
 
     assert handler.requests[0] == "/tasks/old/retry?force=true"
     assert handler.requests[1] == "/tasks/old/retry"
+
+
+def test_app_tasks_list_marks_timed_out_tasks_and_counts_them(tmp_path, fake_dashboard):
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [_json_response(200, {
+        "tasks": {
+            "t1": {"status": "failed", "timed_out": True, "error": "Task exceeded its 1s execution timeout"},
+            "t2": {"status": "completed", "result": 1},
+        },
+        "total_tasks": 2, "matching_tasks": 2, "completed_tasks": 1,
+        "failed_tasks": 1, "processing_tasks": 0,
+        "webhook_delivery_failed_tasks": 0, "timed_out_tasks": 1,
+        "limit": 100, "offset": 0,
+    })]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["app-tasks", "list", "--host", host, "--port", str(port)], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "t1  (failed)  TIMED OUT" in proc.stdout
+    assert "t2  (completed)\n" in proc.stdout
+    assert "2 matching task(s) (0 with a failed webhook delivery, 1 timed out)" in proc.stdout

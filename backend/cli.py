@@ -9130,12 +9130,16 @@ def _dispatch_core_command(args):
                                 "  webhook: delivered" if webhook.get("delivered")
                                 else "  webhook: FAILED"
                             )
-                        print(f"{task_id}  ({task.get('status')}){webhook_note}")
+                        timed_out_note = "  TIMED OUT" if task.get("timed_out") else ""
+                        print(f"{task_id}  ({task.get('status')}){timed_out_note}{webhook_note}")
 
+                timed_out_count = data.get("timed_out_tasks", 0)
                 print(
                     f"\n{data.get('matching_tasks', 0)} matching task(s) "
                     f"({data.get('webhook_delivery_failed_tasks', 0)} with "
-                    "a failed webhook delivery)"
+                    "a failed webhook delivery"
+                    + (f", {timed_out_count} timed out" if timed_out_count else "")
+                    + ")"
                 )
 
             if not args.watch:

@@ -2533,6 +2533,12 @@ def generate_fastapi_code(
     lines.append("        for _, task in tasks_snapshot")
     lines.append("        if task.get('webhook', {}).get('delivered') is False")
     lines.append("    )")
+    # Tasks that failed by exceeding their execution timeout ("timed_out")
+    # -- counted across every task, like the counts above, so a caller
+    # sees at a glance how many there are before filtering with ?timed_out=.
+    lines.append("    timed_out_tasks = sum(")
+    lines.append("        1 for _, task in tasks_snapshot if task.get('timed_out')")
+    lines.append("    )")
 
     # Before this, a caller who'd just learned from GET /metrics that N
     # automatic webhook deliveries have failed (see _WEBHOOK_METRICS) had
@@ -2578,6 +2584,9 @@ def generate_fastapi_code(
     lines.append("        'failed_tasks': failed_tasks,")
     lines.append(
         "        'webhook_delivery_failed_tasks': webhook_delivery_failed_tasks,"
+    )
+    lines.append(
+        "        'timed_out_tasks': timed_out_tasks,"
     )
     lines.append("        'matching_tasks': len(matching_items),")
     lines.append("        'limit': limit,")

@@ -8467,3 +8467,28 @@ def test_retry_of_an_ordinary_failure_needs_no_force(monkeypatch):
     response = client.post(f"/tasks/{task_id}/retry")
 
     assert response.status_code == 200, response.text
+
+
+def test_list_tasks_reports_a_timed_out_task_count(monkeypatch):
+    """Confirmed missing before this feature: GET /tasks counted completed,
+    failed and webhook-failed tasks, but not timed-out ones."""
+    import time as time_module
+
+    calls = {"n": 0}
+
+    def sometimes_slow():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            time_module.sleep(2)
+        return calls["n"]
+
+    client = _background_timeout_client(monkeypatch, {"train_model": 1}, sometimes_slow)
+    client.post("/train_model", json={})
+    client.post("/train_model", json={})
+
+    body = client.get("/tasks").json()
+    filtered = client.get("/tasks", params={"status": "completed"}).json()
+
+    assert body["timed_out_tasks"] == 1
+    # Counted across every task, regardless of the filter applied.
+    assert filtered["timed_out_tasks"] == 1
