@@ -1,5 +1,8 @@
 import ast
 import builtins
+import datetime
+import email.utils
+import re
 import typing
 from pathlib import Path
 
@@ -20,6 +23,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "MAX_PENDING_TASKS", "WEBHOOK_TIMEOUT_SECONDS", "WEBHOOK_SECRET",
     "WEBHOOK_MAX_RETRIES", "WEBHOOK_RETRY_BACKOFF_SECONDS",
     "TASK_EXECUTION_TIMEOUT_SECONDS",
+    "REQUEST_TIMEOUT_SECONDS", "_call_notebook_function",
     # Read by name from inside _evict_expired_tasks' own body -- the
     # identical "referenced by name inside a helper every background
     # endpoint's own submission calls first" exposure already documented
@@ -76,6 +80,26 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # bookkeeping app-wide, not just for one endpoint related to the
     # colliding name.
     "_WEBHOOK_METRICS",
+    # Read by name from inside _add_deprecation_headers on every request
+    # (and _DEPRECATED_ENDPOINT_CALLS incremented there, then read back by
+    # metrics()/metrics_prometheus) -- a notebook function with either
+    # name would rebind it to a function object and break every request.
+    "_DEPRECATED_ENDPOINTS",
+    "_DEPRECATED_ENDPOINT_CALLS",
+    "_DEPRECATED_ENDPOINT_REJECTIONS",
+    "_DEPRECATED_ENDPOINT_CALLERS",
+    "_DEPRECATED_CALLERS_LIMIT",
+    "_DEPRECATION_COUNTERS_SINCE",
+    "_RETIRED_ENDPOINTS",
+    "_record_deprecated_caller",
+    # Read by name from inside _add_deprecation_headers on every request,
+    # the same exposure JSON_REQUEST_LOGS has for _log_request_json.
+    "REJECT_DEPRECATED_ENDPOINTS",
+    "ENFORCE_DEPRECATION_SUNSET",
+    "_sunset_has_passed",
+    "_deprecated_endpoint_is_rejected",
+    # Read by name from inside _add_deprecation_headers and deprecations().
+    "_DEPRECATION_SUNSETS",
     # Assigned this compile's own real content hash once, at module load
     # (see write_generated_api's own caller), then read back verbatim by
     # GET /info below -- a notebook function of this exact name would
@@ -115,7 +139,8 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "verify_api_key", "custom_openapi",
     "root", "health_check", "readiness_check", "auth_status", "auth_info",
     "validate_auth", "service_info", "service_config", "metrics", "uptime",
-    "metrics_prometheus", "_task_status_counts",
+    "metrics_prometheus", "_task_status_counts", "deprecations",
+    "reset_deprecation_counters",
     "get_task", "list_tasks", "delete_task", "cleanup_tasks",
     "delete_completed_tasks", "delete_failed_tasks", "reset_tasks",
     "redeliver_task_webhook", "retry_task",
@@ -420,6 +445,19 @@ GENERATED_APP_ENV_VARS = [
         ),
     },
     {
+        "name": "NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS",
+        "default": "0",
+        "description": (
+            "Maximum seconds a synchronous endpoint's notebook function "
+            "may run before the request is answered 504 Gateway Timeout "
+            "-- the same bound NOTEBOOK_API_TASK_EXECUTION_TIMEOUT_SECONDS "
+            "puts on background tasks. Without it, a hung notebook "
+            "function holds its request (and a worker thread) open "
+            "forever. The abandoned call itself still finishes in the "
+            "background. 0 (the default) disables this entirely."
+        ),
+    },
+    {
         "name": "NOTEBOOK_API_TASK_EXECUTION_TIMEOUT_SECONDS",
         "default": "0",
         "description": (
@@ -550,6 +588,37 @@ GENERATED_APP_ENV_VARS = [
         ),
     },
     {
+        "name": "NOTEBOOK_API_REJECT_DEPRECATED",
+        "default": "false",
+        "description": (
+            "Set to \"true\" to make every endpoint marked \"# "
+            "notebook-to-api: deprecated\" answer 410 Gone (still with "
+            "its Deprecation/X-Deprecation-Reason headers) instead of "
+            "running the notebook function -- a reversible \"brownout\" "
+            "that shows which callers break before the endpoint is "
+            "actually removed from the notebook, without a recompile. "
+            "Rejected calls still count toward GET /metrics' own "
+            "\"deprecated_endpoint_calls\", so an operator can watch who "
+            "is still calling during the brownout. Endpoints that are not "
+            "deprecated are never affected."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_ENFORCE_SUNSET",
+        "default": "false",
+        "description": (
+            "Set to \"true\" to make each deprecated endpoint whose "
+            "directive names a sunset date (\"sunset: YYYY-MM-DD\") "
+            "answer 410 Gone automatically from that date on (UTC), "
+            "exactly as NOTEBOOK_API_REJECT_DEPRECATED would -- so the "
+            "removal date a caller was promised via the Sunset header "
+            "actually takes effect without anyone having to flip a switch "
+            "or recompile on the day. Deprecated endpoints without a "
+            "sunset date, and every non-deprecated endpoint, are never "
+            "affected."
+        ),
+    },
+    {
         "name": "NOTEBOOK_API_JSON_LOGS",
         "default": "false",
         "description": (
@@ -573,6 +642,52 @@ GENERATED_APP_ENV_VARS = [
         ),
     },
 ]
+
+
+def _deprecation_header_value(reason, max_length=200):
+    """`reason` (a deprecation directive's own free-text argument, or
+    None) reduced to something safe to send as an HTTP header value:
+    printable ASCII only (no CR/LF, which would otherwise split the
+    header), whitespace runs collapsed, truncated to `max_length`. None or
+    a reason with nothing printable left returns None -- no header.
+    """
+    if not reason:
+        return None
+    cleaned = "".join(ch if 32 <= ord(ch) < 127 else " " for ch in reason)
+    cleaned = " ".join(cleaned.split())[:max_length].rstrip()
+    return cleaned or None
+
+
+_SUNSET_DATE_PATTERN = re.compile(
+    r"\bsunset\s*[:=]\s*(\d{4}-\d{2}-\d{2})\b", re.IGNORECASE
+)
+
+
+def _deprecation_sunset_date(reason):
+    """The ISO date (YYYY-MM-DD) a deprecation `reason` names with a
+    "sunset: YYYY-MM-DD" (or "sunset=...") marker anywhere in its text,
+    or None -- also None for a malformed date like 2025-13-40, rather than
+    emitting a Sunset header no client could parse.
+    """
+    if not reason:
+        return None
+    match = _SUNSET_DATE_PATTERN.search(reason)
+    if not match:
+        return None
+    try:
+        return datetime.date.fromisoformat(match.group(1)).isoformat()
+    except ValueError:
+        return None
+
+
+def _sunset_http_date(iso_date):
+    """`iso_date` (YYYY-MM-DD) as the IMF-fixdate RFC 8594's own Sunset
+    header requires, e.g. "Wed, 31 Dec 2025 00:00:00 GMT"."""
+    day = datetime.date.fromisoformat(iso_date)
+    return email.utils.format_datetime(
+        datetime.datetime(day.year, day.month, day.day, tzinfo=datetime.timezone.utc),
+        usegmt=True,
+    )
 
 
 def _generated_app_env_var_default(name):
@@ -824,7 +939,7 @@ def _annotation_has_own_field_description(type_str):
 def generate_fastapi_code(
     functions, package_name="generated", source_notebook_sha256=None,
     notebook_to_api_version="1.0.0", background_overrides=None,
-    deprecated_overrides=None,
+    deprecated_overrides=None, retired_endpoints=None,
 ):
     """Generate FastAPI app code for the given functions.
 
@@ -1077,7 +1192,8 @@ def generate_fastapi_code(
         "allow_headers=['*'], "
         "expose_headers=["
         "'X-RateLimit-Limit', 'X-RateLimit-Remaining', "
-        "'X-RateLimit-Reset', 'Retry-After'"
+        "'X-RateLimit-Reset', 'Retry-After', "
+        "'Deprecation', 'X-Deprecation-Reason', 'Sunset'"
         "]"
         ")"
     )
@@ -1157,6 +1273,181 @@ def generate_fastapi_code(
     # carry sensitive path segments, e.g. a task_id) from leaking into the
     # Referer header of a request /docs' own "Try it out" -- or any link a
     # response body might contain -- makes to a different origin.
+    # A "# notebook-to-api: deprecated" directive (resolve_deprecation
+    # above) only ever reached openapi.json/"/docs" -- a client calling
+    # the endpoint directly (an SDK, a curl script, a cron job) never sees
+    # /docs, so nothing told it at call time that it was relying on an
+    # endpoint its author has marked for removal. Every response from a
+    # deprecated endpoint now carries the standard `Deprecation: true`
+    # header (RFC 9745) -- the signal API gateways, HTTP client libraries
+    # and monitoring already look for -- plus `X-Deprecation-Reason` when
+    # the directive gave one. The reason is notebook-author-controlled
+    # text, so it is reduced to printable ASCII (header values must be
+    # latin-1 encodable and can never contain CR/LF) and repr()'d into the
+    # generated source for the same quote-safety reason `description` is.
+    deprecated_paths = {}
+    for func in functions:
+        is_deprecated, reason = resolve_deprecation(
+            func["name"], deprecated_overrides
+        )
+        if is_deprecated:
+            deprecated_paths[f"/{func['name']}"] = _deprecation_header_value(
+                reason
+            )
+    # `retired_endpoints` (their 410 tombstone routes, emitted at the end
+    # of this function) are tracked like any other deprecated path --
+    # headers, call/rejection/caller counters, GET /deprecations -- so an
+    # operator can still see who keeps calling an endpoint after it was
+    # removed, not just before. _RETIRED_ENDPOINTS marks them.
+    retired_paths = sorted(f"/{name}" for name in (retired_endpoints or {}))
+    for retired_name, retired_reason in (retired_endpoints or {}).items():
+        deprecated_paths[f"/{retired_name}"] = _deprecation_header_value(
+            retired_reason
+        )
+    lines.append(f"_DEPRECATED_ENDPOINTS = {repr(deprecated_paths)}")
+    lines.append(f"_RETIRED_ENDPOINTS = frozenset({repr(retired_paths)})")
+    # RFC 8594 Sunset: when the directive's reason names a removal date
+    # ("sunset: 2025-12-31"), every response from that endpoint says so
+    # in the standard header clients and gateways already understand, and
+    # GET /deprecations reports it, instead of the date being prose only
+    # a human reading X-Deprecation-Reason could find. {path: (iso date,
+    # HTTP-date)}, both precomputed here so the app does no date parsing.
+    sunsets = {}
+    for func in functions:
+        is_deprecated, reason = resolve_deprecation(
+            func["name"], deprecated_overrides
+        )
+        sunset = _deprecation_sunset_date(reason) if is_deprecated else None
+        if sunset:
+            sunsets[f"/{func['name']}"] = (sunset, _sunset_http_date(sunset))
+    for retired_name, retired_reason in (retired_endpoints or {}).items():
+        sunset = _deprecation_sunset_date(retired_reason)
+        if sunset:
+            sunsets[f"/{retired_name}"] = (sunset, _sunset_http_date(sunset))
+    lines.append(f"_DEPRECATION_SUNSETS = {repr(sunsets)}")
+    # Per-deprecated-path call counter, reported by GET /metrics and GET
+    # /metrics/prometheus: the Deprecation header tells a caller, but only
+    # this tells the operator whether anyone still calls the endpoint --
+    # the one number that decides when it's actually safe to remove.
+    lines.append(
+        "_DEPRECATED_ENDPOINT_CALLS = "
+        "{path: 0 for path in _DEPRECATED_ENDPOINTS}"
+    )
+    # The subset of those calls answered 410 (brownout or enforced
+    # sunset) rather than served -- during a brownout, the callers that
+    # would actually break on removal, as distinct from ones still being
+    # served normally.
+    lines.append(
+        "_DEPRECATED_ENDPOINT_REJECTIONS = "
+        "{path: 0 for path in _DEPRECATED_ENDPOINTS}"
+    )
+    # Per-deprecated-path call counts broken down by User-Agent -- *who*
+    # is still calling, for a deployment with no log pipeline to mine the
+    # NOTEBOOK_API_JSON_LOGS "user_agent" field from. Bounded: at most
+    # _DEPRECATED_CALLERS_LIMIT distinct agents per path (each truncated
+    # to 200 chars), with any further ones folded into "(other)", so a
+    # caller rotating its User-Agent can't grow this without limit.
+    # When the deprecation counters started counting (app start, or the
+    # last POST /deprecations/reset), as an ISO-8601 UTC timestamp --
+    # "3 calls" means nothing without "since when"; GET /deprecations
+    # reports it so a reader can tell 3 calls in an hour from 3 in a month.
+    lines.append(
+        "_DEPRECATION_COUNTERS_SINCE = "
+        "[time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())]"
+    )
+    lines.append("_DEPRECATED_CALLERS_LIMIT = 50")
+    lines.append(
+        "_DEPRECATED_ENDPOINT_CALLERS = "
+        "{path: {} for path in _DEPRECATED_ENDPOINTS}"
+    )
+    lines.append("def _record_deprecated_caller(path, user_agent):")
+    lines.append("    callers = _DEPRECATED_ENDPOINT_CALLERS[path]")
+    lines.append("    agent = (user_agent or '(none)')[:200]")
+    lines.append(
+        "    if agent not in callers and len(callers) >= _DEPRECATED_CALLERS_LIMIT:"
+    )
+    lines.append("        agent = '(other)'")
+    lines.append("    callers[agent] = callers.get(agent, 0) + 1")
+    lines.append("")
+    lines.append("")
+    # NOTEBOOK_API_REJECT_DEPRECATED (see GENERATED_APP_ENV_VARS): a
+    # brownout switch answering 410 Gone for deprecated paths before
+    # call_next ever reaches the endpoint -- the notebook function never
+    # runs, and auth is deliberately not checked first, since the answer
+    # ("this endpoint is gone") is the same for every caller.
+    lines.append(
+        'REJECT_DEPRECATED_ENDPOINTS = os.getenv('
+        '"NOTEBOOK_API_REJECT_DEPRECATED", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_REJECT_DEPRECATED")}"'
+        ').strip().lower() in ("true", "1", "yes", "on")'
+    )
+    # NOTEBOOK_API_ENFORCE_SUNSET (see GENERATED_APP_ENV_VARS): the
+    # date-driven counterpart of the brownout switch above. Compared as
+    # ISO date strings against today's UTC date on every request, so a
+    # long-running process starts rejecting at midnight UTC on the day
+    # itself, with no restart needed.
+    lines.append(
+        'ENFORCE_DEPRECATION_SUNSET = os.getenv('
+        '"NOTEBOOK_API_ENFORCE_SUNSET", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_ENFORCE_SUNSET")}"'
+        ').strip().lower() in ("true", "1", "yes", "on")'
+    )
+    lines.append("def _sunset_has_passed(path):")
+    lines.append("    sunset = _DEPRECATION_SUNSETS.get(path)")
+    lines.append("    return bool(sunset) and (")
+    lines.append(
+        "        time.strftime('%Y-%m-%d', time.gmtime()) >= sunset[0]"
+    )
+    lines.append("    )")
+    lines.append("")
+    # The one place "is this deprecated path answering 410 right now"
+    # is decided -- shared by the middleware below and GET /deprecations'
+    # own per-endpoint "rejected", so the two can never disagree.
+    lines.append("def _deprecated_endpoint_is_rejected(path):")
+    lines.append("    if path in _RETIRED_ENDPOINTS:")
+    lines.append("        return True")
+    lines.append("    return path in _DEPRECATED_ENDPOINTS and (")
+    lines.append("        REJECT_DEPRECATED_ENDPOINTS")
+    lines.append("        or (ENFORCE_DEPRECATION_SUNSET and _sunset_has_passed(path))")
+    lines.append("    )")
+    lines.append("")
+    lines.append("@app.middleware('http')")
+    lines.append("async def _add_deprecation_headers(request, call_next):")
+    # A retired path is always rejected, but by its own tombstone route
+    # (with its more specific "has been removed" detail) -- so it's only
+    # counted here, then passed through to that route via call_next.
+    lines.append(
+        "    if _deprecated_endpoint_is_rejected(request.url.path):"
+    )
+    lines.append("        _DEPRECATED_ENDPOINT_REJECTIONS[request.url.path] += 1")
+    lines.append("    if (_deprecated_endpoint_is_rejected(request.url.path)")
+    lines.append("            and request.url.path not in _RETIRED_ENDPOINTS):")
+    lines.append("        response = JSONResponse(")
+    lines.append("            status_code=410,")
+    lines.append(
+        "            content={'detail': f\"'{request.url.path}' is "
+        "deprecated and currently disabled on this deployment.\"},"
+    )
+    lines.append("        )")
+    lines.append("    else:")
+    lines.append("        response = await call_next(request)")
+    lines.append("    if request.url.path in _DEPRECATED_ENDPOINTS:")
+    lines.append("        _DEPRECATED_ENDPOINT_CALLS[request.url.path] += 1")
+    lines.append(
+        "        _record_deprecated_caller("
+        "request.url.path, request.headers.get('User-Agent'))"
+    )
+    lines.append("        response.headers['Deprecation'] = 'true'")
+    lines.append("        reason = _DEPRECATED_ENDPOINTS[request.url.path]")
+    lines.append("        if reason:")
+    lines.append("            response.headers['X-Deprecation-Reason'] = reason")
+    lines.append("        if request.url.path in _DEPRECATION_SUNSETS:")
+    lines.append(
+        "            response.headers['Sunset'] = "
+        "_DEPRECATION_SUNSETS[request.url.path][1]"
+    )
+    lines.append("    return response")
+    lines.append("")
     lines.append("@app.middleware('http')")
     lines.append("async def _add_security_headers(request, call_next):")
     lines.append("    response = await call_next(request)")
@@ -1269,7 +1560,14 @@ def generate_fastapi_code(
     lines.append("async def _log_request_json(request, call_next):")
     lines.append("    response = await call_next(request)")
     lines.append("    if JSON_REQUEST_LOGS:")
-    lines.append("        print(json.dumps({")
+    # "deprecated" on every line lets a log pipeline filter to calls
+    # against endpoints marked "# notebook-to-api: deprecated"; for those
+    # (only), "client_ip"/"user_agent" say *who* is still calling -- the
+    # /metrics and GET /deprecations counters only say *how many*, which
+    # isn't enough to go tell a caller to migrate before removing it.
+    # Kept off every other line so ordinary access logs don't start
+    # recording caller IPs they never did before.
+    lines.append("        entry = {")
     lines.append("            'timestamp': time.time(),")
     lines.append(
         "            'request_id': response.headers.get('X-Request-ID'),"
@@ -1281,7 +1579,19 @@ def generate_fastapi_code(
         "            'duration_ms': float("
         "response.headers.get('X-Process-Time-Ms', '0')),"
     )
-    lines.append("        }), flush=True)")
+    lines.append(
+        "            'deprecated': request.url.path in _DEPRECATED_ENDPOINTS,"
+    )
+    lines.append("        }")
+    lines.append("        if entry['deprecated']:")
+    lines.append(
+        "            entry['client_ip'] = "
+        "request.client.host if request.client else None"
+    )
+    lines.append(
+        "            entry['user_agent'] = request.headers.get('User-Agent')"
+    )
+    lines.append("        print(json.dumps(entry), flush=True)")
     lines.append("    return response")
     lines.append("")
     # GET /metrics/GET /metrics/prometheus below already report this
@@ -1448,6 +1758,24 @@ def generate_fastapi_code(
         f'"{_generated_app_env_var_default("NOTEBOOK_API_TASK_EXECUTION_TIMEOUT_SECONDS")}"'
         '))'
     )
+    # The synchronous-endpoint counterpart of TASK_EXECUTION_TIMEOUT_SECONDS
+    # (see GENERATED_APP_ENV_VARS): a hung notebook function behind a
+    # plain endpoint used to hold its request -- and a worker thread --
+    # open forever. Same "0 means off" convention, and the same
+    # abandon_on_cancel caveat: the caller gets a prompt 504, while the
+    # orphaned thread itself still runs to completion in the background.
+    lines.append(
+        'REQUEST_TIMEOUT_SECONDS = int(os.getenv('
+        '"NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS")}"'
+        '))'
+    )
+    lines.append("async def _call_notebook_function(call, is_async=False):")
+    lines.append("    with anyio.fail_after(REQUEST_TIMEOUT_SECONDS or None):")
+    lines.append("        if is_async:")
+    lines.append("            return await call()")
+    lines.append("        return await anyio.to_thread.run_sync(call, abandon_on_cancel=True)")
+    lines.append("")
     # Bounds _deliver_task_webhook's own single delivery attempt below --
     # a caller-supplied ?callback_url= pointing at a slow or unresponsive
     # endpoint must never be allowed to tie up a worker thread (and, by
@@ -2356,6 +2684,74 @@ def generate_fastapi_code(
     lines.append("    return processing, completed, failed")
 
     lines.append("")
+    # A machine-readable list of what this deployment has deprecated --
+    # the data behind the Deprecation header, the call counters and the
+    # NOTEBOOK_API_REJECT_DEPRECATED brownout, in one place. Before this,
+    # a caller or operator could only reconstruct it by scanning every
+    # operation in openapi.json for "deprecated": true (and /docs can be
+    # disabled entirely via NOTEBOOK_API_DISABLE_DOCS), with no way at all
+    # to learn whether this deployment is currently rejecting them. No
+    # Depends(verify_api_key), matching GET /metrics: it exposes nothing
+    # beyond endpoint names and the author's own deprecation reasons.
+    lines.append("@app.get('/deprecations')")
+    lines.append("def deprecations():")
+    lines.append("    return {")
+    lines.append("        'rejecting': REJECT_DEPRECATED_ENDPOINTS,")
+    lines.append("        'enforcing_sunset': ENFORCE_DEPRECATION_SUNSET,")
+    lines.append("        'counting_since': _DEPRECATION_COUNTERS_SINCE[0],")
+    lines.append("        'endpoints': [")
+    lines.append("            {")
+    lines.append("                'path': path,")
+    lines.append("                'reason': reason,")
+    lines.append("                'calls': _DEPRECATED_ENDPOINT_CALLS[path],")
+    # How many of those calls were answered 410 instead of served -- the
+    # same per-path count /metrics reports as
+    # "deprecated_endpoint_rejections", here beside the "rejected" state
+    # it explains, so a caller of this endpoint alone can tell "still
+    # called, and those callers are now breaking" from "still served".
+    lines.append(
+        "                'rejections': _DEPRECATED_ENDPOINT_REJECTIONS[path],"
+    )
+    lines.append(
+        "                'callers': dict(sorted("
+        "_DEPRECATED_ENDPOINT_CALLERS[path].items(), "
+        "key=lambda item: (-item[1], item[0]))),"
+    )
+    lines.append(
+        "                'sunset': _DEPRECATION_SUNSETS.get(path, (None,))[0],"
+    )
+    lines.append(
+        "                'rejected': _deprecated_endpoint_is_rejected(path),"
+    )
+    lines.append("                'retired': path in _RETIRED_ENDPOINTS,")
+    lines.append("            }")
+    lines.append("            for path, reason in sorted(_DEPRECATED_ENDPOINTS.items())")
+    lines.append("        ],")
+    lines.append("    }")
+    lines.append("")
+    # The deprecation counters (calls, rejections, callers) accumulate for
+    # the process's whole lifetime -- after contacting the callers GET
+    # /deprecations named, an operator had no way to start a fresh
+    # measurement ("is anyone *still* calling since I emailed them?")
+    # short of restarting the app. Unlike GET /deprecations, this changes
+    # state, so it requires X-API-Key like POST /tasks/reset does.
+    lines.append("@app.post('/deprecations/reset')")
+    lines.append(
+        "def reset_deprecation_counters(_: None = Depends(verify_api_key)):"
+    )
+    lines.append("    for path in _DEPRECATED_ENDPOINTS:")
+    lines.append("        _DEPRECATED_ENDPOINT_CALLS[path] = 0")
+    lines.append("        _DEPRECATED_ENDPOINT_REJECTIONS[path] = 0")
+    lines.append("        _DEPRECATED_ENDPOINT_CALLERS[path] = {}")
+    lines.append(
+        "    _DEPRECATION_COUNTERS_SINCE[0] = "
+        "time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())"
+    )
+    lines.append(
+        "    return {'reset': sorted(_DEPRECATED_ENDPOINTS), "
+        "'counting_since': _DEPRECATION_COUNTERS_SINCE[0]}"
+    )
+    lines.append("")
     lines.append("@app.get('/metrics')")
     lines.append("def metrics():")
 
@@ -2399,6 +2795,15 @@ def generate_fastapi_code(
     lines.append("            'delivered': _WEBHOOK_METRICS['redelivered'],")
     lines.append("            'failed': _WEBHOOK_METRICS['redelivery_failed'],")
     lines.append("        },")
+    # Purely additive, like every field above; {} when nothing in this
+    # notebook is deprecated.
+    lines.append(
+        "        'deprecated_endpoint_calls': dict(_DEPRECATED_ENDPOINT_CALLS),"
+    )
+    lines.append(
+        "        'deprecated_endpoint_rejections': "
+        "dict(_DEPRECATED_ENDPOINT_REJECTIONS),"
+    )
     lines.append("    }")
 
     # GET /metrics above has served this dashboard-shaped JSON summary
@@ -2555,6 +2960,42 @@ def generate_fastapi_code(
                   "{{outcome=\"failed\"}} "
                   "{_WEBHOOK_METRICS[\"redelivery_failed\"]}\\n'")
     lines.append("    )")
+    # One series per deprecated path (a "path" label, the same labelling
+    # choice as the "outcome" label above); omitted entirely when nothing
+    # is deprecated, rather than a HELP/TYPE header with no samples.
+    # Paths are always "/<python identifier>", so need no label escaping.
+    lines.append("    if _DEPRECATED_ENDPOINT_CALLS:")
+    lines.append(
+        "        body += ('# HELP notebook_api_deprecated_endpoint_calls_total "
+        "Total number of requests to each endpoint marked deprecated.\\n'"
+    )
+    lines.append(
+        "                 '# TYPE notebook_api_deprecated_endpoint_calls_total "
+        "counter\\n')"
+    )
+    lines.append(
+        "        for path, count in sorted(_DEPRECATED_ENDPOINT_CALLS.items()):"
+    )
+    lines.append(
+        "            body += f'notebook_api_deprecated_endpoint_calls_total"
+        "{{path=\"{path}\"}} {count}\\n'"
+    )
+    lines.append(
+        "        body += ('# HELP notebook_api_deprecated_endpoint_rejections_total "
+        "Total number of requests to each deprecated endpoint answered 410 "
+        "Gone instead of being served.\\n'"
+    )
+    lines.append(
+        "                 '# TYPE notebook_api_deprecated_endpoint_rejections_total "
+        "counter\\n')"
+    )
+    lines.append(
+        "        for path, count in sorted(_DEPRECATED_ENDPOINT_REJECTIONS.items()):"
+    )
+    lines.append(
+        "            body += f'notebook_api_deprecated_endpoint_rejections_total"
+        "{{path=\"{path}\"}} {count}\\n'"
+    )
     # The Prometheus text exposition format's own registered media type --
     # not "text/plain" alone, which a real Prometheus scraper (and
     # promtool's own format validator) does not recognize as this format
@@ -3495,6 +3936,18 @@ def generate_fastapi_code(
         is_deprecated, deprecation_reason = resolve_deprecation(
             func_name, deprecated_overrides
         )
+        # The directive's own "sunset: YYYY-MM-DD" (see
+        # _deprecation_sunset_date), surfaced in openapi.json as an
+        # "x-notebook-to-api-sunset" operation extension -- the Sunset
+        # response header only reaches a caller that actually calls the
+        # endpoint, never a tool reading the schema (an SDK generator, an
+        # API linter, a gateway importing the spec).
+        sunset_date = (
+            _deprecation_sunset_date(deprecation_reason) if is_deprecated else None
+        )
+        sunset_extra = (
+            f'"x-notebook-to-api-sunset": "{sunset_date}", ' if sunset_date else ""
+        )
         if is_deprecated:
             notice = "**Deprecated.**" + (
                 f" {deprecation_reason}" if deprecation_reason else ""
@@ -3616,7 +4069,7 @@ def generate_fastapi_code(
                 # nothing about the *eventual* result a real
                 # GET /tasks/{{task_id}} will carry is otherwise
                 # discoverable from this schema at all.
-                f'openapi_extra={{"x-notebook-to-api-category": "{category}", "x-notebook-to-api-async": True, "x-notebook-to-api-return-type": {repr(return_type)}, "security": [{{"ApiKeyAuth": []}}]}}, '
+                f'openapi_extra={{{sunset_extra}"x-notebook-to-api-category": "{category}", "x-notebook-to-api-async": True, "x-notebook-to-api-return-type": {repr(return_type)}, "security": [{{"ApiKeyAuth": []}}]}}, '
                 f'responses={repr(task_responses)})'
             )
             lines.append(
@@ -3898,13 +4351,16 @@ def generate_fastapi_code(
                 # deliberately {} too (see sync_responses above), so
                 # generate_typescript_sdk has no other way to learn what
                 # "result" actually contains.
-                f'openapi_extra={{"x-notebook-to-api-category": "{category}", "x-notebook-to-api-return-type": {repr(return_type)}, "security": [{{"ApiKeyAuth": []}}]}}, '
+                f'openapi_extra={{{sunset_extra}"x-notebook-to-api-category": "{category}", "x-notebook-to-api-return-type": {repr(return_type)}, "security": [{{"ApiKeyAuth": []}}]}}, '
                 f'responses={repr(sync_responses)})'
             )
             is_async = func.get("is_async", False)
-            def_keyword = "async def" if is_async else "def"
-            call_prefix = "await " if is_async else ""
-            lines.append(f"{def_keyword} {func_name}(req: {model_name}, _: None = Depends(verify_api_key)):")
+            # Always `async def` now: the notebook function itself is run
+            # through _call_notebook_function (below), which applies
+            # NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS and -- for a plain
+            # `def` -- runs it on the same worker threadpool FastAPI would
+            # have used for a `def` endpoint anyway.
+            lines.append(f"async def {func_name}(req: {model_name}, _: None = Depends(verify_api_key)):")
             # _run_background_task already wraps a background function's own
             # call the same way (reporting the task "failed" with str(e)
             # instead of leaving it stuck "processing" forever), but a
@@ -3918,9 +4374,22 @@ def generate_fastapi_code(
             # deliberately raises one (e.g. HTTPException(404, ...)) is
             # already choosing its own status code and message on purpose.
             lines.append("    try:")
-            lines.append(f"        result = {call_prefix}notebook_module.{func_name}({call_args})")
+            lines.append(
+                f"        result = await _call_notebook_function("
+                f"functools.partial(notebook_module.{func_name}, {call_args}), "
+                f"is_async={is_async})"
+            )
             lines.append("    except HTTPException:")
             lines.append("        raise")
+            lines.append("    except TimeoutError:")
+            lines.append("        raise HTTPException(")
+            lines.append("            status_code=504,")
+            lines.append(
+                f"            detail=f\"'{func_name}' did not finish within "
+                "NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS "
+                "({REQUEST_TIMEOUT_SECONDS}s).\","
+            )
+            lines.append("        )")
             lines.append("    except Exception as e:")
             lines.append("        raise HTTPException(")
             lines.append("            status_code=500,")
@@ -3950,6 +4419,35 @@ def generate_fastapi_code(
             )
             lines.append("        )")
             lines.append("    return {\"result\": result}")
+        lines.append("")
+    # `retired_endpoints` (optional) is {function_name: deprecation reason}
+    # for deprecated functions this compile left out *because* their own
+    # "sunset: YYYY-MM-DD" has arrived (see compile_notebook_to_api). A
+    # plain omission would answer a caller still using one with a bare
+    # 404 -- indistinguishable from a typo'd URL. Each instead gets a
+    # hidden route answering 410 Gone with the same Deprecation /
+    # X-Deprecation-Reason / Sunset headers it carried while still
+    # served, the status RFC 9110 reserves for "intentionally removed".
+    # No X-API-Key check: the answer is the same for every caller.
+    for retired_name, retired_reason in sorted((retired_endpoints or {}).items()):
+        headers = {"Deprecation": "true"}
+        reason_header = _deprecation_header_value(retired_reason)
+        if reason_header:
+            headers["X-Deprecation-Reason"] = reason_header
+        retired_sunset = _deprecation_sunset_date(retired_reason)
+        if retired_sunset:
+            headers["Sunset"] = _sunset_http_date(retired_sunset)
+        detail = (
+            f"'/{retired_name}' has been removed"
+            + (f" (sunset {retired_sunset})" if retired_sunset else "")
+            + "."
+        )
+        lines.append(f'@app.post("/{retired_name}", include_in_schema=False)')
+        lines.append(f"def _retired_endpoint_{retired_name}():")
+        lines.append(
+            f"    return JSONResponse(status_code=410, "
+            f"content={{'detail': {repr(detail)}}}, headers={repr(headers)})"
+        )
         lines.append("")
     return "\n".join(lines)
 

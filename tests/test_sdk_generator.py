@@ -338,7 +338,7 @@ def test_generate_python_sdk_constructor_accepts_a_configurable_timeout(tmp_path
     # makes no request of its own, it only calls self.get_task), plus the
     # 10 hardcoded health/ready/info/config/metrics/metrics_prometheus/
     # uptime/auth_status/auth_info/auth_validate methods.
-    assert source.count("timeout=self.timeout") == 20
+    assert source.count("timeout=self.timeout") == 22
 
 
 def test_generate_python_sdk_uses_the_configured_timeout_for_a_request(
@@ -410,7 +410,7 @@ def test_generate_typescript_sdk_constructor_accepts_a_configurable_timeout(
     # paths exist), plus the 10 hardcoded health/ready/info/config/
     # metrics/metricsPrometheus/uptime/authStatus/authInfo/authValidate
     # methods.
-    assert source.count("signal: AbortSignal.timeout(this.timeoutMs),") == 20
+    assert source.count("signal: AbortSignal.timeout(this.timeoutMs),") == 22
 
 
 def test_generate_python_sdk_method_name_handles_multi_segment_paths(tmp_path):
@@ -734,7 +734,7 @@ def test_generate_python_sdk_does_not_warn_for_a_non_deprecated_endpoint(
     generate_python_sdk(str(schema_path), str(output_path))
 
     source = output_path.read_text(encoding="utf-8")
-    assert "import warnings" not in source
+    assert "_KNOWN_DEPRECATED_PATHS = ()" in source
 
     class FakeResponse:
         def raise_for_status(self):
@@ -789,7 +789,7 @@ def test_generate_typescript_sdk_omits_deprecation_markers_when_not_deprecated(
     source = output_path.read_text(encoding="utf-8")
 
     assert "@deprecated" not in source
-    assert "console.warn" not in source
+    assert '() is deprecated.");' not in source
 
 
 def test_generate_python_sdk_metrics_prometheus_returns_raw_text_not_json(
@@ -6557,4 +6557,594 @@ def test_generate_typescript_sdk_verify_webhook_signature_accepts_several_secret
         "acceptsNewDuringRotation": True,
         "rejectsUnknownSecret": False,
         "stillAcceptsASingleStringSecret": True,
+    }
+
+
+def _python_client_with_response_headers(tmp_path, monkeypatch, schema_paths,
+                                         headers):
+    schema_path = _write_schema(tmp_path, schema_paths)
+    output_path = tmp_path / "client.py"
+    generate_python_sdk(str(schema_path), str(output_path))
+    source = output_path.read_text(encoding="utf-8")
+    ast.parse(source)
+
+    class FakeResponse:
+        def __init__(self, url):
+            self.url = url
+            self.headers = headers
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"result": 1}
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.post = lambda url, *a, **k: FakeResponse(url)
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    namespace = {}
+    exec(compile(source, str(output_path), "exec"), namespace)
+    return namespace["NotebookAPIClient"]("http://localhost:8000")
+
+
+def test_python_sdk_warns_when_server_reports_deprecation_at_runtime(
+    tmp_path, monkeypatch
+):
+    """Confirmed missing before this feature: a client generated before an
+    endpoint was deprecated never learned about it -- the compiled app's
+    own `Deprecation: true` response header was never read."""
+    client = _python_client_with_response_headers(
+        tmp_path, monkeypatch,
+        {"/add": {"post": {"operationId": "add"}}},
+        {"Deprecation": "true", "X-Deprecation-Reason": "Use add_v2."},
+    )
+
+    with pytest.warns(DeprecationWarning, match=r"/add is deprecated\. Use add_v2\."):
+        assert client.add({}) == {"result": 1}
+
+
+def test_python_sdk_runtime_deprecation_warning_fires_once_per_path(
+    tmp_path, monkeypatch
+):
+    import warnings as warnings_module
+
+    client = _python_client_with_response_headers(
+        tmp_path, monkeypatch,
+        {"/add": {"post": {"operationId": "add"}}},
+        {"Deprecation": "true"},
+    )
+
+    with warnings_module.catch_warnings(record=True) as caught:
+        warnings_module.simplefilter("always")
+        client.add({})
+        client.add({})
+
+    messages = [str(w.message) for w in caught
+                if issubclass(w.category, DeprecationWarning)]
+    assert messages == ["The server reports that /add is deprecated."]
+
+
+def test_python_sdk_no_runtime_warning_without_or_with_false_header(
+    tmp_path, monkeypatch
+):
+    import warnings as warnings_module
+
+    for headers in ({}, {"Deprecation": "false"}):
+        client = _python_client_with_response_headers(
+            tmp_path, monkeypatch,
+            {"/add": {"post": {"operationId": "add"}}},
+            headers,
+        )
+        with warnings_module.catch_warnings():
+            warnings_module.simplefilter("error")
+            client.add({})
+
+
+def test_python_sdk_statically_deprecated_endpoint_is_not_warned_twice(
+    tmp_path, monkeypatch
+):
+    """An endpoint already deprecated at generation time warns statically;
+    the runtime header check must not add a second warning for it."""
+    import warnings as warnings_module
+
+    client = _python_client_with_response_headers(
+        tmp_path, monkeypatch,
+        {"/old_add": {"post": {"operationId": "old_add", "deprecated": True}}},
+        {"Deprecation": "true"},
+    )
+
+    with warnings_module.catch_warnings(record=True) as caught:
+        warnings_module.simplefilter("always")
+        client.old_add({})
+
+    assert len(caught) == 1
+    assert "old_add' is deprecated" in str(caught[0].message)
+
+
+def _run_typescript_client_with_headers(tmp_path, schema_paths, headers, calls):
+    schema_path = _write_schema(tmp_path, schema_paths)
+    client_path = tmp_path / "client.ts"
+    generate_typescript_sdk(str(schema_path), str(client_path))
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        const headers = new Headers({json.dumps(headers)});
+        globalThis.fetch = async () => ({{
+          ok: true, status: 200, headers, json: async () => ({{ result: 1 }}),
+        }});
+        const warnings = [];
+        console.warn = (msg) => warnings.push(msg);
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+        {calls}
+        console.log(JSON.stringify(warnings));
+        """,
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        ["node", str(runner_path)], capture_output=True, text=True, timeout=30
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+_needs_node = pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
+
+
+@_needs_node
+def test_typescript_sdk_warns_once_when_server_reports_deprecation(tmp_path):
+    """Confirmed missing before this feature: a TypeScript client generated
+    before an endpoint was deprecated never read the compiled app's own
+    `Deprecation: true` response header."""
+    warnings = _run_typescript_client_with_headers(
+        tmp_path,
+        {"/add": {"post": {"operationId": "add"}}},
+        {"Deprecation": "true", "X-Deprecation-Reason": "Use add_v2."},
+        "await client.add({}); await client.add({});",
+    )
+
+    assert warnings == ["The server reports that /add is deprecated. Use add_v2."]
+
+
+@_needs_node
+def test_typescript_sdk_no_runtime_warning_without_or_with_false_header(tmp_path):
+    for headers in ({}, {"Deprecation": "false"}):
+        warnings = _run_typescript_client_with_headers(
+            tmp_path,
+            {"/add": {"post": {"operationId": "add"}}},
+            headers,
+            "await client.add({});",
+        )
+        assert warnings == []
+
+
+@_needs_node
+def test_typescript_sdk_statically_deprecated_endpoint_is_not_warned_twice(
+    tmp_path,
+):
+    warnings = _run_typescript_client_with_headers(
+        tmp_path,
+        {"/old_add": {"post": {"operationId": "old_add", "deprecated": True}}},
+        {"Deprecation": "true"},
+        "await client.old_add({});",
+    )
+
+    assert warnings == ["old_add() is deprecated."]
+
+
+def test_generate_python_sdk_deprecations_calls_get_deprecations(
+    tmp_path, monkeypatch
+):
+    """Confirmed missing before this feature: the compiled app's own GET
+    /deprecations had no client method in the generated Python SDK."""
+    schema_path = _write_schema(tmp_path, {"/add": {"post": {"operationId": "add"}}})
+    output_path = tmp_path / "client.py"
+    generate_python_sdk(str(schema_path), str(output_path))
+    source = output_path.read_text(encoding="utf-8")
+    payload = {"rejecting": False, "endpoints": []}
+    calls = []
+
+    class FakeResponse:
+        headers = {}
+        url = "http://localhost:8000/deprecations"
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return payload
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs["headers"]))
+        return FakeResponse()
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.get = fake_get
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+    namespace = {}
+    exec(compile(source, str(output_path), "exec"), namespace)
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000", api_key="k")
+
+    assert client.deprecations() == payload
+    assert calls == [("http://localhost:8000/deprecations", {"X-API-Key": "k"})]
+
+
+def test_notebook_function_named_deprecations_does_not_shadow_client_method(
+    tmp_path,
+):
+    schema_path = _write_schema(
+        tmp_path,
+        {"/deprecations": {"post": {"operationId": "deprecations"}}},
+    )
+    py_path = tmp_path / "client.py"
+    ts_path = tmp_path / "client.ts"
+
+    generate_python_sdk(str(schema_path), str(py_path))
+    generate_typescript_sdk(str(schema_path), str(ts_path))
+
+    py_source = py_path.read_text(encoding="utf-8")
+    ts_source = ts_path.read_text(encoding="utf-8")
+    assert py_source.count("    def deprecations(self") == 1
+    assert ts_source.count("  async deprecations(") == 1
+
+
+@_needs_node
+def test_generate_typescript_sdk_deprecations_calls_get_deprecations(tmp_path):
+    schema_path = _write_schema(tmp_path, {"/add": {"post": {"operationId": "add"}}})
+    client_path = tmp_path / "client.ts"
+    generate_typescript_sdk(str(schema_path), str(client_path))
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        const calls = [];
+        globalThis.fetch = async (url, opts) => {{
+          calls.push(url);
+          return {{ ok: true, status: 200, headers: new Headers(),
+                   json: async () => ({{ rejecting: true, endpoints: [] }}) }};
+        }};
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+        const result = await client.deprecations();
+        console.log(JSON.stringify({{ result, calls }}));
+        """,
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        ["node", str(runner_path)], capture_output=True, text=True, timeout=30
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    output = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert output == {
+        "result": {"rejecting": True, "endpoints": []},
+        "calls": ["http://localhost:8000/deprecations"],
+    }
+
+
+def test_sdk_deprecation_warnings_include_the_operations_sunset_date(tmp_path):
+    """Confirmed missing before this feature: a generated client's own
+    static deprecation warning never said *when* the endpoint goes away,
+    even though openapi.json now carries "x-notebook-to-api-sunset"."""
+    schema_path = _write_schema(
+        tmp_path,
+        {"/old_add": {"post": {
+            "operationId": "old_add", "deprecated": True,
+            "x-notebook-to-api-sunset": "2025-12-31",
+        }}},
+    )
+    py_path = tmp_path / "client.py"
+    ts_path = tmp_path / "client.ts"
+
+    generate_python_sdk(str(schema_path), str(py_path))
+    generate_typescript_sdk(str(schema_path), str(ts_path))
+
+    py_source = py_path.read_text(encoding="utf-8")
+    ast.parse(py_source)
+    assert "old_add' is deprecated. Removal scheduled for 2025-12-31." in py_source
+    assert (
+        'console.warn("old_add() is deprecated. Removal scheduled for 2025-12-31.");'
+        in ts_path.read_text(encoding="utf-8")
+    )
+
+
+def test_sdk_ignores_a_malformed_or_injected_sunset_value(tmp_path):
+    schema_path = _write_schema(
+        tmp_path,
+        {"/old_add": {"post": {
+            "operationId": "old_add", "deprecated": True,
+            "x-notebook-to-api-sunset": '2025-12-31"); evil(); ("',
+        }}},
+    )
+    py_path = tmp_path / "client.py"
+    ts_path = tmp_path / "client.ts"
+
+    generate_python_sdk(str(schema_path), str(py_path))
+    generate_typescript_sdk(str(schema_path), str(ts_path))
+
+    py_source = py_path.read_text(encoding="utf-8")
+    ast.parse(py_source)
+    assert "evil" not in py_source
+    assert "evil" not in ts_path.read_text(encoding="utf-8")
+    assert "Removal scheduled" not in py_source
+
+
+def _python_client_with_failing_response(tmp_path, monkeypatch, status, headers):
+    schema_path = _write_schema(tmp_path, {"/old_add": {"post": {"operationId": "old_add"}}})
+    output_path = tmp_path / "client.py"
+    generate_python_sdk(str(schema_path), str(output_path))
+    source = output_path.read_text(encoding="utf-8")
+    ast.parse(source)
+
+    class FakeHTTPError(Exception):
+        def __init__(self, *args, response=None):
+            super().__init__(*args)
+            self.response = response
+
+    class FakeResponse:
+        url = "http://localhost:8000/old_add"
+
+        def __init__(self):
+            self.status_code = status
+            self.headers = headers
+
+        def raise_for_status(self):
+            raise FakeHTTPError(f"{self.status_code} error", response=self)
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.HTTPError = FakeHTTPError
+    fake_requests.post = lambda *a, **k: FakeResponse()
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+    namespace = {}
+    exec(compile(source, str(output_path), "exec"), namespace)
+    client = namespace["NotebookAPIClient"]("http://localhost:8000", max_retries=0)
+    return client, namespace, FakeHTTPError
+
+
+def test_python_sdk_raises_endpoint_removed_error_on_a_deprecated_410(
+    tmp_path, monkeypatch
+):
+    """Confirmed missing before this feature: a retired (410) deprecated
+    endpoint surfaced as a bare HTTPError, indistinguishable from any other
+    client error, with its reason/sunset only in raw headers."""
+    client, namespace, http_error = _python_client_with_failing_response(
+        tmp_path, monkeypatch, 410,
+        {"Deprecation": "true", "X-Deprecation-Reason": "Use add.",
+         "Sunset": "Sat, 01 Jan 2000 00:00:00 GMT"},
+    )
+
+    with pytest.raises(namespace["EndpointRemovedError"]) as excinfo:
+        client.old_add({})
+
+    error = excinfo.value
+    assert isinstance(error, http_error)
+    assert error.path == "/old_add"
+    assert error.reason == "Use add."
+    assert error.sunset == "Sat, 01 Jan 2000 00:00:00 GMT"
+    assert "/old_add has been retired (410 Gone). Use add." in str(error)
+
+
+def test_python_sdk_plain_410_without_deprecation_header_stays_http_error(
+    tmp_path, monkeypatch
+):
+    client, namespace, http_error = _python_client_with_failing_response(
+        tmp_path, monkeypatch, 410, {},
+    )
+
+    with pytest.raises(http_error) as excinfo:
+        client.old_add({})
+
+    assert not isinstance(excinfo.value, namespace["EndpointRemovedError"])
+
+
+def test_python_sdk_other_status_with_deprecation_header_stays_http_error(
+    tmp_path, monkeypatch
+):
+    client, namespace, http_error = _python_client_with_failing_response(
+        tmp_path, monkeypatch, 400, {"Deprecation": "true"},
+    )
+
+    with pytest.raises(http_error) as excinfo:
+        client.old_add({})
+
+    assert not isinstance(excinfo.value, namespace["EndpointRemovedError"])
+
+
+def _run_typescript_client_failing(tmp_path, status, headers):
+    schema_path = _write_schema(tmp_path, {"/old_add": {"post": {"operationId": "old_add"}}})
+    client_path = tmp_path / "client.ts"
+    generate_typescript_sdk(str(schema_path), str(client_path))
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        globalThis.fetch = async () => ({{
+          ok: false, status: {status}, headers: new Headers({json.dumps(headers)}),
+          json: async () => ({{}}),
+        }});
+        const mod = await import({json.dumps(str(client_path))});
+        const client = new mod.NotebookAPIClient("http://localhost:8000", {{ maxRetries: 0 }});
+        try {{
+          await client.old_add({{}});
+          console.log(JSON.stringify({{ threw: false }}));
+        }} catch (err) {{
+          console.log(JSON.stringify({{
+            removed: err instanceof mod.EndpointRemovedError,
+            isError: err instanceof Error,
+            status: err.status, message: err.message,
+            path: err.path ?? null, reason: err.reason ?? null, sunset: err.sunset ?? null,
+          }}));
+        }}
+        """,
+        encoding="utf-8",
+    )
+    proc = subprocess.run(["node", str(runner_path)], capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+@_needs_node
+def test_typescript_sdk_throws_endpoint_removed_error_on_a_deprecated_410(tmp_path):
+    """Confirmed missing before this feature: a retired (410) deprecated
+    endpoint surfaced from the TypeScript client as a generic Error."""
+    result = _run_typescript_client_failing(
+        tmp_path, 410,
+        {"Deprecation": "true", "X-Deprecation-Reason": "Use add.",
+         "Sunset": "Sat, 01 Jan 2000 00:00:00 GMT"},
+    )
+
+    assert result == {
+        "removed": True, "isError": True, "status": 410,
+        "message": "/old_add has been retired (410 Gone). Use add. "
+                   "(sunset: Sat, 01 Jan 2000 00:00:00 GMT)",
+        "path": "/old_add", "reason": "Use add.",
+        "sunset": "Sat, 01 Jan 2000 00:00:00 GMT",
+    }
+
+
+@_needs_node
+def test_typescript_sdk_plain_410_or_other_status_stays_a_generic_error(tmp_path):
+    for status, headers in ((410, {}), (400, {"Deprecation": "true"})):
+        result = _run_typescript_client_failing(tmp_path, status, headers)
+        assert result["removed"] is False
+        assert result["status"] == status
+
+
+def test_python_sdk_runtime_deprecation_warning_includes_the_sunset_header(
+    tmp_path, monkeypatch
+):
+    """Confirmed missing before this feature: the runtime warning carried
+    X-Deprecation-Reason but dropped the Sunset header -- the date a
+    caller most needs to plan around."""
+    client = _python_client_with_response_headers(
+        tmp_path, monkeypatch,
+        {"/add": {"post": {"operationId": "add"}}},
+        {"Deprecation": "true", "X-Deprecation-Reason": "Use add_v2.",
+         "Sunset": "Thu, 31 Dec 2099 00:00:00 GMT"},
+    )
+
+    with pytest.warns(DeprecationWarning) as record:
+        client.add({})
+
+    assert str(record[0].message) == (
+        "The server reports that /add is deprecated. Use add_v2. "
+        "(sunset: Thu, 31 Dec 2099 00:00:00 GMT)"
+    )
+
+
+def test_python_sdk_runtime_warning_without_sunset_is_unchanged(
+    tmp_path, monkeypatch
+):
+    client = _python_client_with_response_headers(
+        tmp_path, monkeypatch,
+        {"/add": {"post": {"operationId": "add"}}},
+        {"Deprecation": "true"},
+    )
+
+    with pytest.warns(DeprecationWarning) as record:
+        client.add({})
+
+    assert str(record[0].message) == "The server reports that /add is deprecated."
+
+
+@_needs_node
+def test_typescript_sdk_runtime_deprecation_warning_includes_the_sunset_header(
+    tmp_path,
+):
+    warnings = _run_typescript_client_with_headers(
+        tmp_path,
+        {"/add": {"post": {"operationId": "add"}}},
+        {"Deprecation": "true", "Sunset": "Thu, 31 Dec 2099 00:00:00 GMT"},
+        "await client.add({});",
+    )
+
+    assert warnings == [
+        "The server reports that /add is deprecated. "
+        "(sunset: Thu, 31 Dec 2099 00:00:00 GMT)"
+    ]
+
+
+def test_generate_python_sdk_reset_deprecation_counters_posts_to_the_reset_route(
+    tmp_path, monkeypatch
+):
+    """Confirmed missing before this feature: the compiled app's own POST
+    /deprecations/reset had no method in either generated client."""
+    schema_path = _write_schema(tmp_path, {"/add": {"post": {"operationId": "add"}}})
+    output_path = tmp_path / "client.py"
+    generate_python_sdk(str(schema_path), str(output_path))
+    source = output_path.read_text(encoding="utf-8")
+    calls = []
+
+    class FakeResponse:
+        headers = {}
+        url = "http://localhost:8000/deprecations/reset"
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"reset": ["/old_add"]}
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs["headers"]))
+        return FakeResponse()
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.post = fake_post
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+    namespace = {}
+    exec(compile(source, str(output_path), "exec"), namespace)
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000", api_key="k")
+
+    assert client.reset_deprecation_counters() == {"reset": ["/old_add"]}
+    assert calls == [("http://localhost:8000/deprecations/reset", {"X-API-Key": "k"})]
+
+
+def test_notebook_function_named_reset_deprecation_counters_cannot_shadow_it(tmp_path):
+    schema_path = _write_schema(tmp_path, {
+        "/reset_deprecation_counters": {"post": {"operationId": "reset_deprecation_counters"}},
+        "/resetDeprecationCounters": {"post": {"operationId": "resetDeprecationCounters"}},
+    })
+    py_path = tmp_path / "client.py"
+    ts_path = tmp_path / "client.ts"
+
+    generate_python_sdk(str(schema_path), str(py_path))
+    generate_typescript_sdk(str(schema_path), str(ts_path))
+
+    assert py_path.read_text(encoding="utf-8").count(
+        "    def reset_deprecation_counters(self") == 1
+    assert ts_path.read_text(encoding="utf-8").count(
+        "  async resetDeprecationCounters(") == 1
+
+
+@_needs_node
+def test_generate_typescript_sdk_reset_deprecation_counters_posts(tmp_path):
+    schema_path = _write_schema(tmp_path, {"/add": {"post": {"operationId": "add"}}})
+    client_path = tmp_path / "client.ts"
+    generate_typescript_sdk(str(schema_path), str(client_path))
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        const calls = [];
+        globalThis.fetch = async (url, opts) => {{
+          calls.push({{ url, method: opts.method, key: opts.headers["X-API-Key"] }});
+          return {{ ok: true, status: 200, headers: new Headers(),
+                   json: async () => ({{ reset: ["/old_add"] }}) }};
+        }};
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000", {{ apiKey: "k" }});
+        const result = await client.resetDeprecationCounters();
+        console.log(JSON.stringify({{ result, calls }}));
+        """,
+        encoding="utf-8",
+    )
+    proc = subprocess.run(["node", str(runner_path)], capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout.strip().splitlines()[-1]) == {
+        "result": {"reset": ["/old_add"]},
+        "calls": [{"url": "http://localhost:8000/deprecations/reset",
+                   "method": "POST", "key": "k"}],
     }

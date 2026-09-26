@@ -1332,3 +1332,77 @@ def test_deploy_smoke_test_ignored_under_dry_run(tmp_path):
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert not log_path.exists()
+
+
+def _write_sunset_notebook(path, source):
+    path.write_text(json.dumps({
+        "cells": [{"cell_type": "code", "execution_count": None, "metadata": {},
+                   "outputs": [], "source": source}],
+        "metadata": {}, "nbformat": 4, "nbformat_minor": 5,
+    }), encoding="utf-8")
+
+
+_SUNSET_MIX_SOURCE = (
+    "# notebook-to-api: deprecated: sunset: 2000-01-01\n"
+    "def old_add(a: int) -> int:\n    return a\n\n"
+    "def add(a: int) -> int:\n    return a\n"
+)
+
+
+def test_deploy_drop_past_sunset_leaves_them_out_of_the_built_app(tmp_path):
+    """Confirmed missing before this feature: `deploy` -- the build that
+    actually ships -- had no --drop-past-sunset, unlike `compile`."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_sunset_notebook(notebook_path, _SUNSET_MIX_SOURCE)
+    bin_dir = tmp_path / "fakebin"
+    _install_fake_docker(bin_dir, tmp_path / "docker.log")
+
+    proc = _run_cli(
+        ["deploy", str(notebook_path), "--output", "built_api", "--drop-past-sunset"],
+        cwd=workdir, path_dirs=[str(bin_dir)],
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Dropping 1 function(s) past their sunset date: old_add" in proc.stderr
+    app_source = (workdir / "built_api" / "app.py").read_text(encoding="utf-8")
+    assert '@app.post("/old_add", summary=' not in app_source
+    assert '@app.post("/add"' in app_source
+
+
+def test_deploy_without_drop_past_sunset_keeps_the_function(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_sunset_notebook(notebook_path, _SUNSET_MIX_SOURCE)
+    bin_dir = tmp_path / "fakebin"
+    _install_fake_docker(bin_dir, tmp_path / "docker.log")
+
+    proc = _run_cli(
+        ["deploy", str(notebook_path), "--output", "built_api"],
+        cwd=workdir, path_dirs=[str(bin_dir)],
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert '@app.post("/old_add"' in (workdir / "built_api" / "app.py").read_text(encoding="utf-8")
+
+
+def test_deploy_drop_past_sunset_refuses_an_only_list_it_would_empty(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_sunset_notebook(notebook_path, _SUNSET_MIX_SOURCE)
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker.log"
+    _install_fake_docker(bin_dir, log_path)
+
+    proc = _run_cli(
+        ["deploy", str(notebook_path), "--output", "built_api",
+         "--only", "old_add", "--drop-past-sunset"],
+        cwd=workdir, path_dirs=[str(bin_dir)],
+    )
+
+    assert proc.returncode != 0
+    assert "left nothing to compile" in proc.stdout + proc.stderr
+    assert not log_path.exists()  # never reached docker build

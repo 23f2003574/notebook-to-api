@@ -32,6 +32,8 @@ from backend.parser.ast_parser import is_parseable_python
 from backend.parser.notebook_parser import extract_code_cells, load_notebook
 # Import inspector for analysis
 from backend.inspector import (
+    apply_drop_past_sunset,
+    past_sunset_functions,
     DEFAULT_DEV_API_KEY,
     classify_notebook_diff,
     diff_notebook_functions,
@@ -367,6 +369,7 @@ _CORE_COMMANDS = frozenset({
     "remote-curl", "remote-postman", "app-preview", "readme-preview", "dockerfile-preview", "docker-compose-preview", "env-example-preview", "env-vars-preview",
     "postman-preview", "k8s-preview", "openapi-preview", "verify-webhook",
     "app-metrics", "app-call", "app-tasks", "app-status", "app-auth",
+    "app-deprecations",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -786,6 +789,21 @@ def _add_callback_url_argument(parser):
             "matching the generated app's own identical restriction."
         )
     )
+
+
+def _deprecation_state_marker(entry):
+    """The suffix `app-status`/`app-deprecations` print for one GET
+    /deprecations entry: "RETIRED (removed, 410)" for a tombstone a
+    past-sunset compile left behind (its own "retired") -- permanent until
+    the endpoint is added back -- vs "REJECTED (410)" for one a brownout or
+    enforced sunset is turning away while it still exists and can be
+    switched back on. An older app that never reports "retired" gets the
+    old REJECTED marker unchanged."""
+    if entry.get("retired"):
+        return "  RETIRED (removed, 410)"
+    if entry.get("rejected"):
+        return "  REJECTED (410)"
+    return ""
 
 
 def _parse_comma_separated_names(value):
@@ -1767,6 +1785,9 @@ def _dispatch_core_command(args):
         output_dir.mkdir(parents=True, exist_ok=True)
         only = _parse_comma_separated_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
+        # --drop-past-sunset: see _apply_drop_past_sunset.
+        if args.drop_past_sunset:
+            only, exclude = apply_drop_past_sunset(args.notebook, only, exclude)
         if args.json_output:
             # compile_notebook (backend/compiler.py) unconditionally prints
             # its own progress lines ("Starting compilation for: ...",
@@ -1940,6 +1961,14 @@ def _dispatch_core_command(args):
         else:
             status = "pass"
 
+        # Informational only (never part of "status"): the deprecated
+        # functions this notebook defines, and any still defined on or
+        # after their own "sunset: YYYY-MM-DD" -- `validate-all` already
+        # reported both catalog-wide, but a single-notebook `validate`
+        # (the one a pre-commit hook or per-PR CI step actually runs)
+        # said nothing. --fail-on-past-sunset turns the latter into a gate.
+        past_sunset = past_sunset_functions(data["deprecated_functions"])
+
         if args.json_output:
             print(json.dumps(
                 {
@@ -1949,6 +1978,8 @@ def _dispatch_core_command(args):
                     "skipped_functions": skipped_functions,
                     "duplicate_functions": duplicate_functions,
                     "requirements_conflict": requirements_conflict,
+                    "deprecated_functions": data["deprecated_functions"],
+                    "past_sunset_functions": past_sunset,
                 },
                 indent=2,
             ))
@@ -1976,6 +2007,12 @@ def _dispatch_core_command(args):
                 for skipped in skipped_functions:
                     print(f"  - {skipped['name']}: {skipped['reason']}")
 
+            for name, reason in data["deprecated_functions"].items():
+                print(f"\nⓘ Deprecated: {name}" + (f" -- {reason}" if reason else ""))
+            for name, sunset in past_sunset.items():
+                marker = "✗" if args.fail_on_past_sunset else "⚠"
+                print(f"{marker} Past sunset: {name} (sunset {sunset}) -- still defined")
+
             if status == "pass":
                 print("\n✓ No issues found.")
             elif status == "warn":
@@ -1986,6 +2023,8 @@ def _dispatch_core_command(args):
         if status == "fail":
             sys.exit(2)
         elif status == "warn":
+            sys.exit(1)
+        elif args.fail_on_past_sunset and past_sunset:
             sys.exit(1)
     elif args.command == "export-openapi":
         from backend.exporters.openapi_exporter import export_openapi_schema
@@ -2136,6 +2175,12 @@ def _dispatch_core_command(args):
     elif args.command == "export-curl":
         only = _parse_comma_separated_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
+        # --drop-past-sunset (apply_drop_past_sunset): the same functions
+        # `compile`/`deploy --drop-past-sunset` leave out of the app itself
+        # -- without it, these exports kept shipping requests for
+        # endpoints the matching build no longer serves.
+        if args.drop_past_sunset:
+            only, exclude = apply_drop_past_sunset(args.notebook, only, exclude)
         commands = generate_curl_commands(
             args.notebook, host=args.host, port=args.port, api_key=args.api_key,
             only=only, exclude=exclude, callback_url=args.callback_url,
@@ -2174,6 +2219,12 @@ def _dispatch_core_command(args):
     elif args.command == "export-postman":
         only = _parse_comma_separated_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
+        # --drop-past-sunset (apply_drop_past_sunset): the same functions
+        # `compile`/`deploy --drop-past-sunset` leave out of the app itself
+        # -- without it, these exports kept shipping requests for
+        # endpoints the matching build no longer serves.
+        if args.drop_past_sunset:
+            only, exclude = apply_drop_past_sunset(args.notebook, only, exclude)
         collection = generate_postman_collection(
             args.notebook, host=args.host, port=args.port, api_key=args.api_key,
             only=only, exclude=exclude, collection_name=args.collection_name,
@@ -2205,6 +2256,7 @@ def _dispatch_core_command(args):
             args.notebook, args.output, args.port, args.host,
             only=only, exclude=exclude, debounce_seconds=args.debounce_seconds,
             on_change=args.on_change,
+            drop_past_sunset=args.drop_past_sunset,
         )
     elif args.command == "watch":
         if args.debounce_seconds < 0:
@@ -2214,12 +2266,18 @@ def _dispatch_core_command(args):
         watch_notebook(
             args.notebook, args.output, only=only, exclude=exclude,
             debounce_seconds=args.debounce_seconds, on_change=args.on_change,
+            drop_past_sunset=args.drop_past_sunset,
         )
     elif args.command == "deploy":
         output_dir = Path(args.output)
         output_dir.mkdir(parents=True, exist_ok=True)
         only = _parse_comma_separated_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
+        # --drop-past-sunset: see _apply_drop_past_sunset -- the image
+        # this builds is what actually ships, so it's where a missed
+        # removal matters most.
+        if args.drop_past_sunset:
+            only, exclude = apply_drop_past_sunset(args.notebook, only, exclude)
         tag = args.tag or f"{output_dir.name.lower()}:latest"
         # `docker build`'s own default target platform is whatever the
         # local Docker daemon's host architecture is -- correct for a
@@ -2401,6 +2459,10 @@ def _dispatch_core_command(args):
         if args.fail_on_breaking and not diff["compatible"]:
             sys.exit(1)
         if args.fail_on_deprecation and diff.get("newly_deprecated"):
+            sys.exit(1)
+        if args.fail_on_sunset_moved_earlier and any(
+            entry.get("moved_earlier") for entry in diff.get("sunset_changed", [])
+        ):
             sys.exit(1)
     elif args.command == "upload":
         # Imported here, not at module scope, the same deferred-import
@@ -5064,6 +5126,8 @@ def _dispatch_core_command(args):
             request_body["version_id"] = args.version_id
         if args.smoke_test:
             request_body["smoke_test"] = True
+        if args.drop_past_sunset:
+            request_body["drop_past_sunset"] = True
         if args.expected_sha256:
             request_body["expected_sha256"] = args.expected_sha256
 
@@ -5095,6 +5159,12 @@ def _dispatch_core_command(args):
                 else f"'{data.get('notebook', args.filename)}'"
             )
             print(f"Compiled {target} on {dashboard_url}")
+            dropped = data.get("dropped_past_sunset") or []
+            if dropped:
+                print(
+                    f"Dropped {len(dropped)} function(s) past their sunset "
+                    f"date: {', '.join(dropped)}"
+                )
 
             endpoints = data.get("endpoints", [])
 
@@ -5320,6 +5390,12 @@ def _dispatch_core_command(args):
                 for skipped in skipped_functions:
                     print(f"  - {skipped['name']}: {skipped['reason']}")
 
+            for name, reason in (data.get("deprecated_functions") or {}).items():
+                print(f"\nⓘ Deprecated: {name}" + (f" -- {reason}" if reason else ""))
+            for name, sunset in (data.get("past_sunset_functions") or {}).items():
+                marker = "✗" if args.fail_on_past_sunset else "⚠"
+                print(f"{marker} Past sunset: {name} (sunset {sunset}) -- still defined")
+
             if status == "pass":
                 print("\n✓ No issues found.")
             elif status == "warn":
@@ -5330,6 +5406,8 @@ def _dispatch_core_command(args):
         if status == "fail":
             sys.exit(2)
         elif status == "warn":
+            sys.exit(1)
+        elif args.fail_on_past_sunset and data.get("past_sunset_functions"):
             sys.exit(1)
     elif args.command == "validate-all":
         # See `upload` above for why this is imported here rather than at
@@ -5353,6 +5431,8 @@ def _dispatch_core_command(args):
             params["modified_before"] = args.modified_before
         if args.status:
             params["status"] = args.status
+        if args.sunset_within_days is not None:
+            params["sunset_within_days"] = args.sunset_within_days
         if args.limit is not None:
             params["limit"] = args.limit
         if args.format == "csv":
@@ -5425,6 +5505,12 @@ def _dispatch_core_command(args):
                             + (f": {reason}" if reason else "")
                         )
 
+                    for name, sunset in result.get("past_sunset_functions", {}).items():
+                        print(f"    past sunset: {name} (sunset {sunset})")
+
+                    for name, sunset in result.get("upcoming_sunset_functions", {}).items():
+                        print(f"    upcoming sunset: {name} (sunset {sunset})")
+
                 result_count = data.get("result_count", len(results))
 
                 # "results" can be a strict subset of "result_count" once
@@ -5452,9 +5538,25 @@ def _dispatch_core_command(args):
                         "expose at least one deprecated function"
                     )
 
+                if data.get("upcoming_sunset_notebook_count", 0) > 0:
+                    print(
+                        f"{data['upcoming_sunset_notebook_count']} notebook(s) "
+                        "have a deprecated function reaching its sunset date "
+                        f"within {args.sunset_within_days} day(s)"
+                    )
+
+                if data.get("past_sunset_notebook_count", 0) > 0:
+                    print(
+                        f"{data['past_sunset_notebook_count']} notebook(s) "
+                        "still define a deprecated function past its sunset "
+                        "date"
+                    )
+
         if data.get("fail_count", 0) > 0:
             sys.exit(2)
         elif data.get("warn_count", 0) > 0:
+            sys.exit(1)
+        elif args.fail_on_past_sunset and data.get("past_sunset_notebook_count", 0) > 0:
             sys.exit(1)
     elif args.command == "requirements-preview":
         # See `upload` above for why this is imported here rather than at
@@ -5524,6 +5626,8 @@ def _dispatch_core_command(args):
             "only": only,
             "exclude": exclude,
         }
+        if args.drop_past_sunset:
+            app_preview_body["drop_past_sunset"] = True
         if args.version_id:
             app_preview_body["version_id"] = args.version_id
         if args.expected_sha256:
@@ -5575,6 +5679,8 @@ def _dispatch_core_command(args):
             "only": only,
             "exclude": exclude,
         }
+        if args.drop_past_sunset:
+            readme_preview_body["drop_past_sunset"] = True
         if args.version_id:
             readme_preview_body["version_id"] = args.version_id
         if args.expected_sha256:
@@ -5627,6 +5733,8 @@ def _dispatch_core_command(args):
             "exclude": exclude,
             "format": args.format,
         }
+        if args.drop_past_sunset:
+            openapi_preview_body["drop_past_sunset"] = True
         if args.version_id:
             openapi_preview_body["version_id"] = args.version_id
         if args.expected_sha256:
@@ -5684,6 +5792,8 @@ def _dispatch_core_command(args):
             "only": only,
             "exclude": exclude,
         }
+        if args.drop_past_sunset:
+            curl_preview_body["drop_past_sunset"] = True
         if args.version_id:
             curl_preview_body["version_id"] = args.version_id
         if args.callback_url:
@@ -5744,6 +5854,8 @@ def _dispatch_core_command(args):
             "exclude": exclude,
             "collection_name": args.collection_name,
         }
+        if args.drop_past_sunset:
+            postman_preview_body["drop_past_sunset"] = True
         if args.version_id:
             postman_preview_body["version_id"] = args.version_id
         if args.callback_url:
@@ -6799,6 +6911,10 @@ def _dispatch_core_command(args):
                 sys.exit(1)
             if args.fail_on_deprecation and diff.get("newly_deprecated"):
                 sys.exit(1)
+            if args.fail_on_sunset_moved_earlier and any(
+                entry.get("moved_earlier") for entry in diff.get("sunset_changed", [])
+            ):
+                sys.exit(1)
 
         elif args.versions_command == "compare":
 
@@ -6853,6 +6969,10 @@ def _dispatch_core_command(args):
             if args.fail_on_breaking and not data.get("compatible", True):
                 sys.exit(1)
             if args.fail_on_deprecation and data.get("newly_deprecated"):
+                sys.exit(1)
+            if args.fail_on_sunset_moved_earlier and any(
+                entry.get("moved_earlier") for entry in data.get("sunset_changed", [])
+            ):
                 sys.exit(1)
 
         elif args.versions_command == "delete":
@@ -7285,6 +7405,10 @@ def _dispatch_core_command(args):
             sys.exit(1)
         if args.fail_on_deprecation and diff.get("newly_deprecated"):
             sys.exit(1)
+        if args.fail_on_sunset_moved_earlier and any(
+            entry.get("moved_earlier") for entry in diff.get("sunset_changed", [])
+        ):
+            sys.exit(1)
     elif args.command == "diff-notebooks":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -7343,6 +7467,10 @@ def _dispatch_core_command(args):
         if args.fail_on_breaking and not data.get("compatible", True):
             sys.exit(1)
         if args.fail_on_deprecation and data.get("newly_deprecated"):
+            sys.exit(1)
+        if args.fail_on_sunset_moved_earlier and any(
+            entry.get("moved_earlier") for entry in data.get("sunset_changed", [])
+        ):
             sys.exit(1)
     elif args.command == "remote-curl":
         # See `upload` above for why these are imported here rather than
@@ -7407,6 +7535,11 @@ def _dispatch_core_command(args):
 
             only = _parse_comma_separated_names(args.only)
             exclude = _parse_comma_separated_names(args.exclude)
+            # Applied to the downloaded copy -- see apply_drop_past_sunset.
+            if args.drop_past_sunset:
+                only, exclude = apply_drop_past_sunset(
+                    remote_notebook_path, only, exclude,
+                )
 
             commands = generate_curl_commands(
                 remote_notebook_path, host=args.host, port=args.port,
@@ -7516,6 +7649,11 @@ def _dispatch_core_command(args):
 
             only = _parse_comma_separated_names(args.only)
             exclude = _parse_comma_separated_names(args.exclude)
+            # Applied to the downloaded copy -- see apply_drop_past_sunset.
+            if args.drop_past_sunset:
+                only, exclude = apply_drop_past_sunset(
+                    remote_notebook_path, only, exclude,
+                )
 
             collection = generate_postman_collection(
                 remote_notebook_path, host=args.host, port=args.port,
@@ -7921,9 +8059,14 @@ def _dispatch_core_command(args):
                     endpoint_count = entry.get("endpoint_count", 0)
                     notebook = entry.get("notebook_filename") or "(unknown notebook)"
 
+                    dropped = entry.get("dropped_past_sunset") or []
                     print(
                         f"{entry.get('compiled_at')}  {notebook}  "
                         f"({endpoint_count} endpoint(s))"
+                        + (
+                            f"  dropped past sunset: {', '.join(dropped)}"
+                            if dropped else ""
+                        )
                     )
 
                 print(f"\n{data.get('entry_count', len(entries))} compile(s) on {dashboard_url}")
@@ -8189,11 +8332,22 @@ def _dispatch_core_command(args):
             ready = _app_get("/ready")
             info = _app_get("/info")
             config = _app_get("/config")
+            # GET /deprecations only exists on apps compiled since it was
+            # added -- an older deployment's 404 is reported as None
+            # ("not available") rather than failing the whole status
+            # check the way every other route above rightly does.
+            try:
+                deprecations = _app_get("/deprecations")
+            except RuntimeError as exc:
+                if "(404)" not in str(exc):
+                    raise
+                deprecations = None
 
             if args.json_output:
                 result = {
                     "health": health, "ready": ready,
                     "info": info, "config": config,
+                    "deprecations": deprecations,
                 }
                 if args.watch:
                     # One compact object per line (NDJSON), not
@@ -8249,6 +8403,28 @@ def _dispatch_core_command(args):
                 "  docs: "
                 f"{'disabled' if config.get('disable_docs') else 'enabled'}"
             )
+
+            # Only when something is deprecated -- a status check on an
+            # app with nothing deprecated (or too old to say) stays as
+            # short as before. Anything already answering 410 is called
+            # out, since that's what a caller will actually hit.
+            deprecated_endpoints = (deprecations or {}).get("endpoints") or []
+            if deprecated_endpoints:
+                rejected = [e for e in deprecated_endpoints if e.get("rejected")]
+                retired = [e for e in deprecated_endpoints if e.get("retired")]
+                print(
+                    f"\nDeprecated endpoints: {len(deprecated_endpoints)}"
+                    + (f" ({len(rejected)} answering 410" if rejected else "")
+                    + (f", {len(retired)} retired" if rejected and retired else "")
+                    + (")" if rejected else "")
+                )
+                for entry in deprecated_endpoints:
+                    print(
+                        f"  {entry.get('path')}  calls={entry.get('calls', 0)}"
+                        + (f" (rejected={entry['rejections']})" if entry.get("rejections") else "")
+                        + (f"  sunset={entry['sunset']}" if entry.get("sunset") else "")
+                        + _deprecation_state_marker(entry)
+                    )
 
         if not args.watch:
             _fetch_and_report_status()
@@ -8412,6 +8588,209 @@ def _dispatch_core_command(args):
                     time.sleep(args.interval)
             except KeyboardInterrupt:
                 print("\nStopped watching.")
+    elif args.command == "app-deprecations":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+        import datetime
+
+        if args.top_callers < 0:
+            raise ValueError("--top-callers must be zero or a positive number.")
+
+        app_url = f"http://{args.host}:{args.port}"
+
+        # --reset: POST /deprecations/reset -- zero the app's own call,
+        # rejection and caller counters to start a fresh measurement
+        # (e.g. right after contacting the callers this command listed),
+        # instead of restarting the app. A one-shot state change, so it
+        # can't be mixed with --watch or the read-only --fail-* gates.
+        if args.reset:
+            if args.watch or args.fail_if_called or args.fail_if_past_sunset:
+                raise ValueError(
+                    "--reset cannot be combined with --watch, "
+                    "--fail-if-called or --fail-if-past-sunset."
+                )
+            try:
+                response = httpx.post(
+                    f"{app_url}/deprecations/reset",
+                    headers={"X-API-Key": args.api_key}, timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise RuntimeError(
+                    f"Could not reach the compiled app at {app_url}: "
+                    f"{exc}. Is it running? (see `serve`, or `docker "
+                    "compose up`)"
+                )
+            if response.status_code == 404:
+                raise RuntimeError(
+                    f"The compiled app at {app_url} has no POST "
+                    "/deprecations/reset -- it was compiled by an older "
+                    "notebook-to-api; recompile it to use --reset."
+                )
+            if response.status_code >= 400:
+                raise RuntimeError(
+                    f"App rejected the reset ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+            data = response.json()
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                reset_paths = data.get("reset", [])
+                print(
+                    f"Reset deprecation counters for {len(reset_paths)} "
+                    "endpoint(s)"
+                    + (f": {', '.join(reset_paths)}" if reset_paths else ".")
+                )
+            return
+
+        def _fetch_deprecations():
+            try:
+                response = httpx.get(f"{app_url}/deprecations", timeout=args.timeout)
+            except httpx.HTTPError as exc:
+                raise RuntimeError(
+                    f"Could not reach the compiled app at {app_url}: "
+                    f"{exc}. Is it running? (see `serve`, or `docker "
+                    "compose up`)"
+                )
+
+            if response.status_code == 404:
+                raise RuntimeError(
+                    f"The compiled app at {app_url} has no GET /deprecations "
+                    "-- it was compiled by an older notebook-to-api; recompile "
+                    "it to use this command."
+                )
+            if response.status_code >= 400:
+                raise RuntimeError(
+                    f"App rejected the request ({response.status_code}): "
+                    f"{response.text}"
+                )
+            return response.json()
+
+        def _report_deprecations(endpoints, data):
+            if not endpoints:
+                print("No deprecated endpoints.")
+            else:
+                print(
+                    f"{len(endpoints)} deprecated endpoint(s)"
+                    + (" -- currently REJECTED with 410 (NOTEBOOK_API_REJECT_DEPRECATED)"
+                       if data.get("rejecting") else "")
+                    + ":"
+                )
+                # GET /deprecations' own "counting_since" -- the window the
+                # calls= counts below cover. Absent on older apps.
+                if data.get("counting_since"):
+                    print(f"  (counts since {data['counting_since']})")
+                for entry in endpoints:
+                    reason = entry.get("reason")
+                    sunset = entry.get("sunset")
+                    print(
+                        f"  {entry.get('path')}  calls={entry.get('calls', 0)}"
+                        + (f" (rejected={entry['rejections']})" if entry.get("rejections") else "")
+                        + (f"  sunset={sunset}" if sunset else "")
+                        + _deprecation_state_marker(entry)
+                        + (f"  ({reason})" if reason else "")
+                    )
+                    # GET /deprecations' own "callers" (calls per
+                    # User-Agent, most frequent first) -- who to contact
+                    # before removal. Top --top-callers only; an older
+                    # app that never reports it prints nothing extra.
+                    callers = list((entry.get("callers") or {}).items())
+                    for agent, count in callers[:args.top_callers]:
+                        print(f"      caller: {agent}  calls={count}")
+                    if len(callers) > args.top_callers > 0:
+                        print(
+                            f"      ... and {len(callers) - args.top_callers} "
+                            "more caller(s) (see --json)"
+                        )
+
+        # --watch: re-poll every --interval seconds (Ctrl+C to stop), the
+        # same live view `app-metrics --watch` gives -- during a brownout
+        # (NOTEBOOK_API_REJECT_DEPRECATED) or around a sunset date, an
+        # operator wants to see each endpoint's call count move in real
+        # time, not one snapshot. The --fail-* gates are one-shot CI
+        # checks with no meaningful answer mid-watch, so they're refused.
+        if args.watch:
+            if args.fail_if_called or args.fail_if_past_sunset:
+                raise ValueError(
+                    "--watch cannot be combined with --fail-if-called or "
+                    "--fail-if-past-sunset."
+                )
+            try:
+                while True:
+                    data = _fetch_deprecations()
+                    if args.json_output:
+                        data["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                        print(json.dumps(data), flush=True)
+                    else:
+                        print(f"--- {time.strftime('%Y-%m-%dT%H:%M:%S')} ---")
+                        _report_deprecations(data.get("endpoints", []), data)
+                        sys.stdout.flush()
+                    time.sleep(args.interval)
+            except KeyboardInterrupt:
+                print("\nStopped watching.")
+            return
+
+        data = _fetch_deprecations()
+        endpoints = data.get("endpoints", [])
+        still_called = [entry for entry in endpoints if entry.get("calls", 0) > 0]
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+            _report_deprecations(endpoints, data)
+
+        # A deprecated endpoint is only safe to remove once nothing still
+        # calls it; --fail-if-called turns that into a CI/pre-removal
+        # gate the same way `diff --fail-on-deprecation` gates a PR.
+        # Counts are per-process since the app started, so a check right
+        # after a restart can pass before traffic has had time to arrive.
+        if args.fail_if_called and still_called:
+            if not args.json_output:
+                print(
+                    f"{len(still_called)} deprecated endpoint(s) still "
+                    "being called: "
+                    + ", ".join(entry["path"] for entry in still_called),
+                    file=sys.stderr,
+                )
+            sys.exit(1)
+
+        # An endpoint still served after its own RFC 8594 sunset date
+        # (GET /deprecations' "sunset", from a "sunset: YYYY-MM-DD"
+        # directive reason) means a promised removal was missed. The date
+        # is compared against today in UTC, the same timezone the app's
+        # own Sunset header is expressed in; an entry with no sunset, or
+        # one an older app never reports, is never past it.
+        if args.fail_if_past_sunset:
+            today = datetime.datetime.now(datetime.timezone.utc).date()
+            past_sunset = []
+            for entry in endpoints:
+                # Already answering 410 (NOTEBOOK_API_ENFORCE_SUNSET or the
+                # NOTEBOOK_API_REJECT_DEPRECATED brownout, reported by GET
+                # /deprecations' own per-endpoint "rejected") -- the removal
+                # has effectively happened, so it isn't a missed one. An
+                # older app that never reports "rejected" is treated as
+                # still serving, exactly as before.
+                if entry.get("rejected"):
+                    continue
+                try:
+                    sunset = datetime.date.fromisoformat(entry.get("sunset") or "")
+                except ValueError:
+                    continue
+                if sunset <= today:
+                    past_sunset.append(entry)
+            if past_sunset:
+                if not args.json_output:
+                    print(
+                        f"{len(past_sunset)} deprecated endpoint(s) still "
+                        "served past their sunset date: "
+                        + ", ".join(
+                            f"{entry['path']} ({entry['sunset']})"
+                            for entry in past_sunset
+                        ),
+                        file=sys.stderr,
+                    )
+                sys.exit(1)
     elif args.command == "app-call":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -8509,6 +8888,31 @@ def _dispatch_core_command(args):
                 "it running? (see `serve`, or `docker compose up`)"
             )
 
+        # The compiled app marks every response from a deprecated endpoint
+        # with `Deprecation: true` (plus X-Deprecation-Reason/Sunset), but
+        # this command -- often the very thing a smoke test or cron job
+        # uses to hit it -- never read them, so an operator calling a
+        # soon-to-be-removed endpoint got no hint at all. Warned on stderr
+        # so --json output on stdout stays machine-parseable.
+        deprecation = (response.headers.get("Deprecation") or "").strip().lower()
+        is_deprecated = bool(deprecation) and deprecation != "false"
+        if is_deprecated:
+            reason = response.headers.get("X-Deprecation-Reason")
+            sunset = response.headers.get("Sunset")
+            deprecation_note = (
+                (f" {reason}" if reason else "")
+                + (f" (sunset: {sunset})" if sunset else "")
+            )
+            if response.status_code == 410:
+                raise RuntimeError(
+                    f"POST /{args.function} has been retired (410 Gone)."
+                    f"{deprecation_note}"
+                )
+            print(
+                f"Warning: POST /{args.function} is deprecated.{deprecation_note}",
+                file=sys.stderr,
+            )
+
         if response.status_code >= 400:
 
             raise RuntimeError(
@@ -8571,6 +8975,10 @@ def _dispatch_core_command(args):
                 print(f"Task {result.get('status')}: {result.get('error')}")
         else:
             print(f"Result: {result.get('result')!r}")
+
+        # After the result is printed, so a CI smoke test still sees it.
+        if args.fail_on_deprecated and is_deprecated:
+            sys.exit(1)
     elif args.command == "app-tasks":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -8963,6 +9371,18 @@ def main():
     compile_parser = subparsers.add_parser("compile", help="Compile a notebook to FastAPI app.")
     compile_parser.add_argument("notebook", help="Path to the notebook file.")
     compile_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Leave out of the compiled app every deprecated function whose "
+            "\"sunset: YYYY-MM-DD\" date is today (UTC) or earlier -- as if "
+            "each were passed to --exclude -- so a rebuild actually removes "
+            "endpoints whose promised removal date has arrived. The dropped "
+            "names are listed on stderr."
+        )
+    )
+    compile_parser.add_argument(
         "--output",
         default="generated",
         help="Output directory where the FastAPI app and assets will be written."
@@ -9071,6 +9491,17 @@ def main():
         help="Check whether a notebook would compile cleanly, without writing any output -- exits non-zero on issues, for CI."
     )
     validate_parser.add_argument("notebook", help="Path to the notebook file.")
+    validate_parser.add_argument(
+        "--fail-on-past-sunset",
+        action="store_true",
+        dest="fail_on_past_sunset",
+        help=(
+            "Exit with status 1 if the notebook still defines a deprecated "
+            "function whose \"sunset: YYYY-MM-DD\" date is today (UTC) or "
+            "earlier -- a missed removal. Never overrides the exit status "
+            "2 a failing notebook already produces."
+        )
+    )
     validate_parser.add_argument(
         "--strict",
         action="store_true",
@@ -9283,6 +9714,17 @@ def main():
         help="Path to write the generated shell script to. Default: requests.sh"
     )
     _add_function_selection_arguments(curl_parser)
+    curl_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Leave out requests for every deprecated function whose "
+            "\"sunset: YYYY-MM-DD\" date is today (UTC) or earlier -- "
+            "matching an app built with `compile`/`deploy "
+            "--drop-past-sunset`."
+        )
+    )
     _add_callback_url_argument(curl_parser)
     curl_parser.add_argument(
         "--json",
@@ -9342,6 +9784,17 @@ def main():
         help="Path to write the generated collection to. Default: postman_collection.json"
     )
     _add_function_selection_arguments(postman_parser)
+    postman_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Leave out requests for every deprecated function whose "
+            "\"sunset: YYYY-MM-DD\" date is today (UTC) or earlier -- "
+            "matching an app built with `compile`/`deploy "
+            "--drop-past-sunset`."
+        )
+    )
     _add_callback_url_argument(postman_parser)
     postman_parser.add_argument(
         "--json",
@@ -9357,6 +9810,18 @@ def main():
     # serve command (live notebook server)
     serve_parser = subparsers.add_parser("serve", help="Serve notebook as live API with hot recompilation.")
     serve_parser.add_argument("notebook", help="Path to the notebook file.")
+    serve_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Leave out every deprecated function whose \"sunset: "
+            "YYYY-MM-DD\" date is today (UTC) or earlier -- re-checked on "
+            "every recompile, so a long session that crosses a sunset date "
+            "drops that endpoint at its next rebuild. See `compile "
+            "--drop-past-sunset`."
+        )
+    )
     serve_parser.add_argument(
         "--output",
         default="generated",
@@ -9388,6 +9853,18 @@ def main():
     )
     watch_parser.add_argument("notebook", help="Path to the notebook file.")
     watch_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Leave out every deprecated function whose \"sunset: "
+            "YYYY-MM-DD\" date is today (UTC) or earlier -- re-checked on "
+            "every recompile, so a long session that crosses a sunset date "
+            "drops that endpoint at its next rebuild. See `compile "
+            "--drop-past-sunset`."
+        )
+    )
+    watch_parser.add_argument(
         "--output",
         default="generated",
         help="Output directory where the FastAPI app and assets will be written."
@@ -9401,6 +9878,17 @@ def main():
         "deploy", help="Compile a notebook and build a Docker image for the generated FastAPI app."
     )
     deploy_parser.add_argument("notebook", help="Path to the notebook file.")
+    deploy_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Leave out of the compiled app (and so the built image) every "
+            "deprecated function whose \"sunset: YYYY-MM-DD\" date is "
+            "today (UTC) or earlier -- the same as `compile "
+            "--drop-past-sunset`. The dropped names are listed on stderr."
+        )
+    )
     deploy_parser.add_argument(
         "--output",
         default="generated",
@@ -9522,6 +10010,18 @@ def main():
             "added, removed, or flipped) -- after printing the report. "
             "Purely additive changes (a new endpoint, a new parameter with "
             "a default) never trigger this."
+        )
+    )
+    diff_parser.add_argument(
+        "--fail-on-sunset-moved-earlier",
+        action="store_true",
+        dest="fail_on_sunset_moved_earlier",
+        help=(
+            "Exit with status 1 if the diff's own \"sunset_changed\" has "
+            "any entry with \"moved_earlier\" -- a still-deprecated "
+            "endpoint whose \"sunset: YYYY-MM-DD\" removal date was "
+            "pulled forward, giving its callers less time than they were "
+            "promised. Postponing or adding a date never fails it."
         )
     )
     diff_parser.add_argument(
@@ -12836,6 +13336,17 @@ def main():
         help="Compile a notebook already uploaded to a running dashboard instance, via its POST /api/compile."
     )
     remote_compile_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Leave out every deprecated function whose \"sunset: "
+            "YYYY-MM-DD\" date is today (UTC) or earlier, via POST "
+            "/api/compile's own \"drop_past_sunset\" -- the same as "
+            "`compile --drop-past-sunset`, run on the dashboard."
+        )
+    )
+    remote_compile_parser.add_argument(
         "filename",
         help="Filename of the notebook already uploaded to the dashboard, as reported by `list`."
     )
@@ -12978,6 +13489,17 @@ def main():
     _add_dashboard_url_and_timeout_arguments(remote_validate_parser)
     _add_version_id_argument(remote_validate_parser, "POST /api/validate")
     remote_validate_parser.add_argument(
+        "--fail-on-past-sunset",
+        action="store_true",
+        dest="fail_on_past_sunset",
+        help=(
+            "Exit with status 1 if the notebook still defines a deprecated "
+            "function whose \"sunset: YYYY-MM-DD\" date is today (UTC) or "
+            "earlier -- a missed removal. Never overrides the exit status "
+            "2 a failing notebook already produces."
+        )
+    )
+    remote_validate_parser.add_argument(
         "--strict",
         action="store_true",
         help=(
@@ -13036,6 +13558,33 @@ def main():
             "/api/validate-all's own ?status= query param -- e.g. "
             "--status fail to list only the broken ones. The "
             "pass/warn/fail totals still cover every scanned notebook."
+        )
+    )
+    validate_all_parser.add_argument(
+        "--sunset-within-days",
+        type=int,
+        default=None,
+        dest="sunset_within_days",
+        metavar="DAYS",
+        help=(
+            "Also list deprecated functions whose \"sunset: YYYY-MM-DD\" "
+            "date is still ahead but within the next DAYS days (via GET "
+            "/api/validate-all's own ?sunset_within_days=) -- removals "
+            "coming due soon. Informational only; never changes the exit "
+            "status."
+        )
+    )
+    validate_all_parser.add_argument(
+        "--fail-on-past-sunset",
+        action="store_true",
+        dest="fail_on_past_sunset",
+        help=(
+            "Exit with status 1 if any notebook still defines a deprecated "
+            "function whose \"sunset: YYYY-MM-DD\" date is today or "
+            "earlier (the response's own \"past_sunset_notebook_count\") "
+            "-- a missed removal, caught from source before deploying. "
+            "Never overrides the exit status 2 a failing notebook already "
+            "produces."
         )
     )
     validate_all_parser.add_argument(
@@ -13247,6 +13796,16 @@ def main():
     )
     _add_dashboard_url_and_timeout_arguments(app_preview_parser)
     _add_function_selection_arguments(app_preview_parser)
+    app_preview_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Preview with every deprecated function whose \"sunset: "
+            "YYYY-MM-DD\" date is today (UTC) or earlier left out -- "
+            "exactly what `remote-compile --drop-past-sunset` would build."
+        )
+    )
     _add_version_id_argument(app_preview_parser, "POST /api/app-preview")
     app_preview_parser.add_argument(
         "--expected-sha256",
@@ -13293,6 +13852,16 @@ def main():
     )
     _add_dashboard_url_and_timeout_arguments(readme_preview_parser)
     _add_function_selection_arguments(readme_preview_parser)
+    readme_preview_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Preview with every deprecated function whose \"sunset: "
+            "YYYY-MM-DD\" date is today (UTC) or earlier left out -- "
+            "exactly what `remote-compile --drop-past-sunset` would build."
+        )
+    )
     _add_version_id_argument(readme_preview_parser, "POST /api/readme-preview")
     readme_preview_parser.add_argument(
         "--expected-sha256",
@@ -13361,6 +13930,17 @@ def main():
         )
     )
     _add_function_selection_arguments(curl_preview_parser)
+    curl_preview_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Leave out requests for every deprecated function whose "
+            "\"sunset: YYYY-MM-DD\" date is today (UTC) or earlier -- "
+            "matching an app built with `compile`/`remote-compile "
+            "--drop-past-sunset`."
+        )
+    )
     _add_version_id_argument(curl_preview_parser, "POST /api/curl-preview")
     _add_callback_url_argument(curl_preview_parser)
     curl_preview_parser.add_argument(
@@ -13439,6 +14019,17 @@ def main():
         )
     )
     _add_function_selection_arguments(postman_preview_parser)
+    postman_preview_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Leave out requests for every deprecated function whose "
+            "\"sunset: YYYY-MM-DD\" date is today (UTC) or earlier -- "
+            "matching an app built with `compile`/`remote-compile "
+            "--drop-past-sunset`."
+        )
+    )
     _add_version_id_argument(postman_preview_parser, "POST /api/postman-preview")
     _add_callback_url_argument(postman_preview_parser)
     postman_preview_parser.add_argument(
@@ -13648,6 +14239,16 @@ def main():
     )
     _add_dashboard_url_and_timeout_arguments(openapi_preview_parser)
     _add_function_selection_arguments(openapi_preview_parser)
+    openapi_preview_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Preview with every deprecated function whose \"sunset: "
+            "YYYY-MM-DD\" date is today (UTC) or earlier left out -- "
+            "exactly what `remote-compile --drop-past-sunset` would build."
+        )
+    )
     _add_version_id_argument(openapi_preview_parser, "POST /api/openapi-preview")
     openapi_preview_parser.add_argument(
         "--format",
@@ -14925,6 +15526,18 @@ def main():
         )
     )
     versions_diff_parser.add_argument(
+        "--fail-on-sunset-moved-earlier",
+        action="store_true",
+        dest="fail_on_sunset_moved_earlier",
+        help=(
+            "Exit with status 1 if the diff's own \"sunset_changed\" has "
+            "any entry with \"moved_earlier\" -- a still-deprecated "
+            "endpoint whose \"sunset: YYYY-MM-DD\" removal date was "
+            "pulled forward, giving its callers less time than they were "
+            "promised. Postponing or adding a date never fails it."
+        )
+    )
+    versions_diff_parser.add_argument(
         "--fail-on-deprecation",
         action="store_true",
         dest="fail_on_deprecation",
@@ -15001,6 +15614,18 @@ def main():
             "Exit with status 1 if GET .../versions/{version_id}/diff's "
             "own \"compatible\" field is false -- see `diff --fail-on-"
             "breaking`'s own help for exactly what counts as breaking."
+        )
+    )
+    versions_compare_parser.add_argument(
+        "--fail-on-sunset-moved-earlier",
+        action="store_true",
+        dest="fail_on_sunset_moved_earlier",
+        help=(
+            "Exit with status 1 if the diff's own \"sunset_changed\" has "
+            "any entry with \"moved_earlier\" -- a still-deprecated "
+            "endpoint whose \"sunset: YYYY-MM-DD\" removal date was "
+            "pulled forward, giving its callers less time than they were "
+            "promised. Postponing or adding a date never fails it."
         )
     )
     versions_compare_parser.add_argument(
@@ -15202,6 +15827,18 @@ def main():
         )
     )
     remote_diff_parser.add_argument(
+        "--fail-on-sunset-moved-earlier",
+        action="store_true",
+        dest="fail_on_sunset_moved_earlier",
+        help=(
+            "Exit with status 1 if the diff's own \"sunset_changed\" has "
+            "any entry with \"moved_earlier\" -- a still-deprecated "
+            "endpoint whose \"sunset: YYYY-MM-DD\" removal date was "
+            "pulled forward, giving its callers less time than they were "
+            "promised. Postponing or adding a date never fails it."
+        )
+    )
+    remote_diff_parser.add_argument(
         "--fail-on-deprecation",
         action="store_true",
         dest="fail_on_deprecation",
@@ -15320,6 +15957,18 @@ def main():
         )
     )
     diff_notebooks_parser.add_argument(
+        "--fail-on-sunset-moved-earlier",
+        action="store_true",
+        dest="fail_on_sunset_moved_earlier",
+        help=(
+            "Exit with status 1 if the diff's own \"sunset_changed\" has "
+            "any entry with \"moved_earlier\" -- a still-deprecated "
+            "endpoint whose \"sunset: YYYY-MM-DD\" removal date was "
+            "pulled forward, giving its callers less time than they were "
+            "promised. Postponing or adding a date never fails it."
+        )
+    )
+    diff_notebooks_parser.add_argument(
         "--fail-on-deprecation",
         action="store_true",
         dest="fail_on_deprecation",
@@ -15406,6 +16055,17 @@ def main():
         )
     )
     _add_function_selection_arguments(remote_curl_parser)
+    remote_curl_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Leave out requests for every deprecated function whose "
+            "\"sunset: YYYY-MM-DD\" date is today (UTC) or earlier -- "
+            "matching an app built with `compile`/`remote-compile "
+            "--drop-past-sunset`."
+        )
+    )
     _add_callback_url_argument(remote_curl_parser)
     remote_curl_parser.add_argument(
         "--json",
@@ -15511,6 +16171,17 @@ def main():
         )
     )
     _add_function_selection_arguments(remote_postman_parser)
+    remote_postman_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Leave out requests for every deprecated function whose "
+            "\"sunset: YYYY-MM-DD\" date is today (UTC) or earlier -- "
+            "matching an app built with `compile`/`remote-compile "
+            "--drop-past-sunset`."
+        )
+    )
     _add_callback_url_argument(remote_postman_parser)
     remote_postman_parser.add_argument(
         "--json",
@@ -16485,6 +17156,115 @@ def main():
         )
     )
 
+    # app-deprecations command -- reads a running compiled app's own GET
+    # /deprecations (every endpoint marked "# notebook-to-api: deprecated",
+    # its reason and live call count), the operator-side view the
+    # Deprecation header, /metrics counters and the
+    # NOTEBOOK_API_REJECT_DEPRECATED brownout all feed.
+    app_deprecations_parser = subparsers.add_parser(
+        "app-deprecations",
+        help=(
+            "List a compiled app's own deprecated endpoints, with each "
+            "one's reason and how many times it has been called, via its "
+            "GET /deprecations."
+        )
+    )
+    app_deprecations_parser.add_argument(
+        "--host",
+        default="localhost",
+        help="Host the compiled app is actually reachable at (default: localhost)."
+    )
+    app_deprecations_parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port the compiled app is actually reachable at (default: 8000, matching `serve`'s own default)."
+    )
+    app_deprecations_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=10.0,
+        help="Seconds to wait for the app to respond before giving up (default: 10)."
+    )
+    app_deprecations_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Print GET /deprecations' own JSON response verbatim instead of a summary."
+    )
+    app_deprecations_parser.add_argument(
+        "--reset",
+        action="store_true",
+        help=(
+            "Zero the app's own deprecation counters (calls, rejections, "
+            "callers) via POST /deprecations/reset instead of reading them "
+            "-- start a fresh measurement, e.g. right after contacting the "
+            "callers this command listed. Requires --api-key."
+        )
+    )
+    app_deprecations_parser.add_argument(
+        "--api-key",
+        default=_default_app_api_key(),
+        dest="api_key",
+        help=(
+            "X-API-Key sent with --reset (default: $NOTEBOOK_API_KEY if set, "
+            "else the generated app's own default dev key). Reading GET "
+            "/deprecations needs no key."
+        )
+    )
+    app_deprecations_parser.add_argument(
+        "--top-callers",
+        type=int,
+        default=5,
+        dest="top_callers",
+        metavar="N",
+        help=(
+            "How many of each endpoint's callers (GET /deprecations' own "
+            "per-User-Agent \"callers\" breakdown, most frequent first) "
+            "to list under it (default: 5; 0 hides them). --json always "
+            "includes all of them."
+        )
+    )
+    app_deprecations_parser.add_argument(
+        "--watch",
+        action="store_true",
+        help=(
+            "Keep polling every --interval seconds (Ctrl+C to stop) "
+            "instead of reading once -- watch each deprecated endpoint's "
+            "call count live during a brownout or around its sunset date. "
+            "Under --json, one object (plus a \"timestamp\") per line."
+        )
+    )
+    app_deprecations_parser.add_argument(
+        "--interval",
+        type=float,
+        default=2.0,
+        help="Seconds to wait between polls under --watch (default: 2)."
+    )
+    app_deprecations_parser.add_argument(
+        "--fail-if-past-sunset",
+        action="store_true",
+        dest="fail_if_past_sunset",
+        help=(
+            "Exit with status 1 if any deprecated endpoint is still served "
+            "on or after its own sunset date (a \"sunset: YYYY-MM-DD\" "
+            "in its deprecation reason, reported by GET /deprecations) -- "
+            "a scheduled CI check that a promised removal actually happened. "
+            "An endpoint the app already answers with 410 (its \"rejected\", "
+            "e.g. under NOTEBOOK_API_ENFORCE_SUNSET) counts as removed."
+        )
+    )
+    app_deprecations_parser.add_argument(
+        "--fail-if-called",
+        action="store_true",
+        dest="fail_if_called",
+        help=(
+            "Exit with status 1 if any deprecated endpoint has been called "
+            "at least once since the app started -- a gate to run before "
+            "actually removing a deprecated function from the notebook."
+        )
+    )
+
     # app-call command -- the second command (after app-metrics above) to
     # actually call a *deployed* compiled app's own runtime directly, this
     # one to actually invoke one of its endpoints, not just read its
@@ -16505,6 +17285,18 @@ def main():
             "Call one of a notebook's own compiled endpoints on a "
             "deployed app directly (POST /<function>), rather than only "
             "previewing what that call would look like."
+        )
+    )
+    app_call_parser.add_argument(
+        "--fail-on-deprecated",
+        action="store_true",
+        dest="fail_on_deprecated",
+        help=(
+            "Exit with status 1 (after printing the result) if the app "
+            "marks the called endpoint deprecated via its Deprecation "
+            "response header -- a smoke test's way to catch a still-used "
+            "endpoint slated for removal. The warning itself is always "
+            "printed to stderr either way."
         )
     )
     app_call_parser.add_argument(

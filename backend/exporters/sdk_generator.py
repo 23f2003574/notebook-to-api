@@ -26,6 +26,7 @@ PYTHON_RESERVED_CLIENT_METHOD_NAMES = frozenset({
     "delete_completed_tasks", "delete_failed_tasks", "redeliver_task_webhook",
     "retry_task", "cleanup_tasks", "reset_tasks",
     "health", "ready", "info", "config", "metrics", "metrics_prometheus",
+    "deprecations", "reset_deprecation_counters",
     "uptime", "auth_status", "auth_info", "auth_validate",
     # Confirmed exploitable: base_url/api_key/timeout are the client's
     # own __init__-set *instance attributes* (self.base_url, self.api_key,
@@ -52,6 +53,7 @@ TYPESCRIPT_RESERVED_CLIENT_METHOD_NAMES = frozenset({
     "deleteCompletedTasks", "deleteFailedTasks", "redeliverTaskWebhook",
     "retryTask", "cleanupTasks", "resetTasks",
     "health", "ready", "info", "config", "metrics", "metricsPrometheus",
+    "deprecations", "resetDeprecationCounters",
     "uptime", "authStatus", "authInfo", "authValidate",
     # Same hazard as PYTHON_RESERVED_CLIENT_METHOD_NAMES's base_url/
     # api_key/timeout above: baseUrl/apiKey/timeoutMs are this client's
@@ -982,6 +984,23 @@ def _python_method_docstring(description, static_text):
     return repr(doc)
 
 
+def _sunset_notice(operation):
+    """" Removal scheduled for YYYY-MM-DD." when `operation` (an OpenAPI
+    operation dict) carries a valid "x-notebook-to-api-sunset" date (see
+    generate_fastapi_code), else "". Re-validated here rather than trusted
+    verbatim, since the date is embedded straight into generated source.
+    """
+    import datetime
+
+    try:
+        day = datetime.date.fromisoformat(
+            str((operation or {}).get("x-notebook-to-api-sunset") or "")
+        )
+    except ValueError:
+        return ""
+    return f" Removal scheduled for {day.isoformat()}."
+
+
 def _jsdoc_lines(description, static_text_lines, indent="  ", deprecated=False):
     """Build a `/** ... */` JSDoc comment block's lines, combining
     `description` (see _operation_description) with a method's own static
@@ -1138,18 +1157,11 @@ def generate_python_sdk(
     lines.append("import os")
     lines.append("import time")
     lines.append("import uuid")
-    if any(
-        (paths[path].get("post") or {}).get("deprecated")
-        for path in method_names
-    ):
-        # Only emitted when at least one endpoint is actually deprecated
-        # -- an unconditional "import warnings" alongside every other
-        # generated import above would be a needless unused-import lint
-        # warning (flake8/ruff's own F401) on every client this tool
-        # generates for a notebook with no deprecated endpoints at all,
-        # unlike hmac/uuid/time above, which every generated client
-        # actually uses regardless of what the notebook itself defines.
-        lines.append("import warnings")
+    # Unconditional since _warn_if_server_deprecated (below) uses it on
+    # every response, not just for endpoints already deprecated when this
+    # client was generated.
+    lines.append("import urllib.parse")
+    lines.append("import warnings")
     lines.append("import requests")
     # Confirmed missing before this feature: every generated method's
     # own payload parameter was typed as a bare dict, with no return
@@ -1311,6 +1323,34 @@ def generate_python_sdk(
     # eagerly, at `def` time, when this module loads; the per-path loop
     # that discovers what to generate for each one doesn't run until
     # after the class declaration line below is already appended.
+    # Raised by _request (below) instead of a bare HTTPError when a
+    # deprecated endpoint answers 410 Gone -- the compiled app's own
+    # NOTEBOOK_API_REJECT_DEPRECATED brownout or NOTEBOOK_API_ENFORCE_SUNSET
+    # -- so a caller can tell "this endpoint was retired" apart from any
+    # other client error, and read why and when without parsing headers.
+    # Subclasses requests.HTTPError, so an existing `except HTTPError`
+    # still catches it unchanged.
+    lines.append(
+        "class EndpointRemovedError(getattr(requests, 'HTTPError', Exception)):"
+    )
+    lines.append(
+        '    """A deprecated endpoint answered 410 Gone -- it has been '
+        'retired."""'
+    )
+    lines.append("")
+    lines.append("    def __init__(self, path, reason=None, sunset=None, response=None):")
+    lines.append("        self.path = path")
+    lines.append("        self.reason = reason")
+    lines.append("        self.sunset = sunset")
+    lines.append("        message = f\"{path} has been retired (410 Gone).\"")
+    lines.append("        if reason:")
+    lines.append("            message += f\" {reason}\"")
+    lines.append("        if sunset:")
+    lines.append("            message += f\" (sunset: {sunset})\"")
+    lines.append("        super().__init__(message)")
+    lines.append("        self.response = response")
+    lines.append("")
+    lines.append("")
     typeddict_lines = []
     class_declaration_index = len(lines)
     lines.append("class NotebookAPIClient:")
@@ -1321,6 +1361,17 @@ def generate_python_sdk(
     # exactly these as transient while polling; _request below extends
     # the identical judgment to every *other* call this client makes.
     lines.append("    _TRANSIENT_STATUS_CODES = (429, 502, 503, 504)")
+    # Paths already deprecated when this client was generated -- their own
+    # methods already warn statically (see the per-method warnings.warn
+    # below), so _warn_if_server_deprecated skips them to avoid a second,
+    # redundant warning for the exact same call.
+    lines.append(
+        "    _KNOWN_DEPRECATED_PATHS = "
+        + repr(tuple(sorted(
+            path for path in method_names
+            if (paths[path].get("post") or {}).get("deprecated")
+        )))
+    )
     lines.append("")
     lines.append(
         "    def __init__(self, base_url: str, api_key: str = None, "
@@ -1420,6 +1471,21 @@ def generate_python_sdk(
     lines.append("            except Exception as exc:")
     lines.append("                response = getattr(exc, 'response', None)")
     lines.append("                status_code = getattr(response, 'status_code', None)")
+    lines.append("                headers = getattr(response, 'headers', None) or {}")
+    lines.append(
+        "                if status_code == 410 and str(headers.get('Deprecation') "
+        "or '').strip().lower() not in ('', 'false'):"
+    )
+    lines.append(
+        "                    path = urllib.parse.urlsplit("
+        "str(getattr(response, 'url', '') or '')).path"
+    )
+    lines.append("                    raise EndpointRemovedError(")
+    lines.append("                        path or 'this endpoint',")
+    lines.append("                        reason=headers.get('X-Deprecation-Reason'),")
+    lines.append("                        sunset=headers.get('Sunset'),")
+    lines.append("                        response=response,")
+    lines.append("                    ) from exc")
     lines.append(
         "                if attempt >= self.max_retries or ("
     )
@@ -1432,7 +1498,39 @@ def generate_python_sdk(
     lines.append("                time.sleep(self._retry_delay(response, attempt))")
     lines.append("                attempt += 1")
     lines.append("                continue")
+    lines.append("            self._warn_if_server_deprecated(response)")
     lines.append("            return response.json() if parse_json else response.text")
+    lines.append("")
+    # The compiled app sends `Deprecation: true` (plus an optional
+    # `X-Deprecation-Reason`) on every response from an endpoint marked
+    # "# notebook-to-api: deprecated". A client generated *before* that
+    # endpoint was deprecated has no static warning for it at all, so
+    # without reading the header at call time its caller would never
+    # learn the endpoint is slated for removal. Warns once per path per
+    # client instance, so a hot loop doesn't flood the caller's logs.
+    lines.append("    def _warn_if_server_deprecated(self, response):")
+    lines.append("        headers = getattr(response, 'headers', None) or {}")
+    lines.append("        value = str(headers.get('Deprecation') or '').strip().lower()")
+    lines.append("        if not value or value == 'false':")
+    lines.append("            return")
+    lines.append("        path = urllib.parse.urlsplit(str(getattr(response, 'url', '') or '')).path")
+    lines.append("        if any(path.endswith(known) for known in self._KNOWN_DEPRECATED_PATHS):")
+    lines.append("            return")
+    lines.append("        warned = self.__dict__.setdefault('_server_deprecations_warned', set())")
+    lines.append("        if path in warned:")
+    lines.append("            return")
+    lines.append("        warned.add(path)")
+    lines.append("        reason = headers.get('X-Deprecation-Reason')")
+    lines.append("        message = f\"The server reports that {path or 'this endpoint'} is deprecated.\"")
+    lines.append("        if reason:")
+    lines.append("            message += f\" {reason}\"")
+    # The compiled app's own RFC 8594 Sunset header -- the one thing a
+    # caller most needs to plan the migration (when it stops working),
+    # which this warning previously dropped.
+    lines.append("        sunset = headers.get('Sunset')")
+    lines.append("        if sunset:")
+    lines.append("            message += f\" (sunset: {sunset})\"")
+    lines.append("        warnings.warn(message, DeprecationWarning, stacklevel=4)")
     lines.append("")
     lines.append("    def get_task(self, task_id: str) -> dict:")
     lines.append('        """Fetch the current status/result of a background task."""')
@@ -1749,6 +1847,20 @@ def generate_python_sdk(
     lines.append("            timeout=self.timeout,")
     lines.append("        ))")
     lines.append("")
+    # POST /deprecations/reset: the state-changing counterpart of the
+    # read-only deprecations() method -- every compiled app has it, but
+    # neither client could reach it short of a hand-rolled request.
+    lines.append("    def reset_deprecation_counters(self) -> dict:")
+    lines.append(
+        '        """Zero the app\'s deprecation call/rejection/caller '
+        'counters (POST /deprecations/reset)."""'
+    )
+    lines.append("        return self._request(lambda: requests.post(")
+    lines.append('            f"{self.base_url}/deprecations/reset",')
+    lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("            timeout=self.timeout,")
+    lines.append("        ))")
+    lines.append("")
     # health/ready/info/config/metrics/uptime/auth_status/auth_info/
     # auth_validate are, like get_task/list_tasks/... above, hardcoded
     # rather than derived from the per-path loop below: every compiled app
@@ -1775,6 +1887,11 @@ def generate_python_sdk(
         ("info", "/info"),
         ("config", "/config"),
         ("metrics", "/metrics"),
+        # GET /deprecations: every deprecated endpoint with its reason
+        # and call count, plus whether the deployment is rejecting them
+        # (NOTEBOOK_API_REJECT_DEPRECATED) -- lets a caller check, from
+        # the client it already uses, which of its calls are at risk.
+        ("deprecations", "/deprecations"),
         ("uptime", "/uptime"),
         ("auth_status", "/auth/status"),
         ("auth_info", "/auth/info"),
@@ -1916,7 +2033,8 @@ def generate_python_sdk(
             # DeprecationWarning in the standard library follows.
             lines.append(
                 f"        warnings.warn(f\"'{{self.__class__.__name__}}."
-                f"{method_name}' is deprecated.\", DeprecationWarning, "
+                f"{method_name}' is deprecated."
+                f"{_sunset_notice(paths[path].get('post'))}\", DeprecationWarning, "
                 "stacklevel=2)"
             )
         if is_background:
@@ -2148,6 +2266,34 @@ def generate_typescript_sdk(
     lines.append("  backoffFactor?: number;")
     lines.append("}")
     lines.append("")
+    # The TypeScript counterpart of the Python client's own
+    # EndpointRemovedError: thrown by requestWithRetry (below) instead of
+    # a generic Error when a deprecated endpoint answers 410 Gone (the
+    # compiled app's brownout or enforced sunset), so a caller can
+    # `instanceof`-check for a retired endpoint and read why/when. Keeps
+    # the same `.status` every other thrown request error already carries.
+    lines.append("export class EndpointRemovedError extends Error {")
+    # Explicit fields rather than constructor parameter properties
+    # (`public path: string`) -- Node's own type-stripping, which runs
+    # this client directly, rejects parameter properties outright.
+    lines.append("  status = 410;")
+    lines.append("  path: string;")
+    lines.append("  reason: string | null;")
+    lines.append("  sunset: string | null;")
+    lines.append(
+        "  constructor(path: string, reason: string | null, sunset: string | null) {"
+    )
+    lines.append(
+        "    super(`${path} has been retired (410 Gone).` + "
+        "(reason ? ` ${reason}` : \"\") + (sunset ? ` (sunset: ${sunset})` : \"\"));"
+    )
+    lines.append('    this.name = "EndpointRemovedError";')
+    lines.append("    this.path = path;")
+    lines.append("    this.reason = reason;")
+    lines.append("    this.sunset = sunset;")
+    lines.append("  }")
+    lines.append("}")
+    lines.append("")
     lines.append("export class NotebookAPIClient {")
     lines.append("  private baseUrl: string;")
     lines.append("  private apiKey: string;")
@@ -2155,6 +2301,18 @@ def generate_typescript_sdk(
     lines.append("  private maxRetries: number;")
     lines.append("  private backoffFactor: number;")
     lines.append("  private static readonly TRANSIENT_STATUSES = new Set([429, 502, 503, 504]);")
+    # Paths already deprecated when this client was generated -- their own
+    # methods already console.warn statically, so warnIfServerDeprecated
+    # below skips them rather than warning twice for the same call.
+    lines.append(
+        "  private static readonly KNOWN_DEPRECATED_PATHS = new Set<string>("
+        + json.dumps(sorted(
+            path for path in method_names
+            if (paths[path].get("post") or {}).get("deprecated")
+        ))
+        + ");"
+    )
+    lines.append("  private serverDeprecationsWarned = new Set<string>();")
     lines.append("")
     lines.append(
         "  constructor(baseUrl: string, options: NotebookAPIClientOptions = {}) {"
@@ -2261,6 +2419,19 @@ def generate_typescript_sdk(
     # around getTask -- see its own docstring above -- so neither is
     # touched here, avoiding two independent retry loops nested inside
     # one another).
+    lines.append("        const gone: any = (response as any).headers;")
+    lines.append(
+        "        const deprecation = String(gone?.get?.(\"Deprecation\") ?? \"\")"
+        ".trim().toLowerCase();"
+    )
+    lines.append(
+        "        if (response.status === 410 && deprecation && deprecation !== \"false\") {"
+    )
+    lines.append(
+        "          throw new EndpointRemovedError(path.split(\"?\")[0], "
+        "gone.get(\"X-Deprecation-Reason\"), gone.get(\"Sunset\"));"
+    )
+    lines.append("        }")
     lines.append(
         "        const error: any = new Error(`Request to ${path} failed "
         "with status ${response.status}`);"
@@ -2268,8 +2439,42 @@ def generate_typescript_sdk(
     lines.append("        error.status = response.status;")
     lines.append("        throw error;")
     lines.append("      }")
+    lines.append("      this.warnIfServerDeprecated(path, response);")
     lines.append("      return parseJson ? response.json() : response.text();")
     lines.append("    }")
+    lines.append("  }")
+    lines.append("")
+    # The TypeScript counterpart of the Python client's own
+    # _warn_if_server_deprecated: the compiled app sends `Deprecation:
+    # true` (plus an optional `X-Deprecation-Reason`) on every response
+    # from an endpoint marked "# notebook-to-api: deprecated", which a
+    # client generated before that endpoint was deprecated has no static
+    # console.warn for at all. Warns once per path per client instance.
+    lines.append(
+        "  private warnIfServerDeprecated(path: string, response: Response): void {"
+    )
+    lines.append("    const headers: any = (response as any).headers;")
+    lines.append(
+        "    const value = String(headers?.get?.(\"Deprecation\") ?? \"\").trim().toLowerCase();"
+    )
+    lines.append("    if (!value || value === \"false\") {")
+    lines.append("      return;")
+    lines.append("    }")
+    lines.append("    const bare = path.split(\"?\")[0];")
+    lines.append(
+        "    if (NotebookAPIClient.KNOWN_DEPRECATED_PATHS.has(bare) || "
+        "this.serverDeprecationsWarned.has(bare)) {"
+    )
+    lines.append("      return;")
+    lines.append("    }")
+    lines.append("    this.serverDeprecationsWarned.add(bare);")
+    lines.append("    const reason = headers.get(\"X-Deprecation-Reason\");")
+    # See the Python client's identical Sunset addition.
+    lines.append("    const sunset = headers.get(\"Sunset\");")
+    lines.append(
+        "    console.warn(`The server reports that ${bare} is deprecated.` + "
+        "(reason ? ` ${reason}` : \"\") + (sunset ? ` (sunset: ${sunset})` : \"\"));"
+    )
     lines.append("  }")
     lines.append("")
     lines.append(
@@ -2590,6 +2795,20 @@ def generate_typescript_sdk(
     lines.append("    }));")
     lines.append("  }")
     lines.append("")
+    # See generate_python_sdk's identical reset_deprecation_counters.
+    lines.append("  async resetDeprecationCounters(): Promise<any> {")
+    lines.append(
+        '    return this.requestWithRetry("/deprecations/reset", () => '
+        "fetch(`${this.baseUrl}/deprecations/reset`, {"
+    )
+    lines.append('      method: "POST",')
+    lines.append("      headers: {")
+    lines.append('        "X-API-Key": this.apiKey,')
+    lines.append("      },")
+    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
+    lines.append("    }));")
+    lines.append("  }")
+    lines.append("")
     lines.append("  async resetTasks(): Promise<any> {")
     lines.append(
         '    return this.requestWithRetry("/tasks/reset", () => '
@@ -2617,6 +2836,11 @@ def generate_typescript_sdk(
         ("info", "/info"),
         ("config", "/config"),
         ("metrics", "/metrics"),
+        # GET /deprecations: every deprecated endpoint with its reason
+        # and call count, plus whether the deployment is rejecting them
+        # (NOTEBOOK_API_REJECT_DEPRECATED) -- lets a caller check, from
+        # the client it already uses, which of its calls are at risk.
+        ("deprecations", "/deprecations"),
         ("uptime", "/uptime"),
         ("authStatus", "/auth/status"),
         ("authInfo", "/auth/info"),
@@ -2752,7 +2976,8 @@ def generate_typescript_sdk(
             # strikethrough) and Python's own generated client already
             # gets from warnings.warn (see generate_python_sdk).
             lines.append(
-                f'    console.warn("{method_name}() is deprecated.");'
+                f'    console.warn("{method_name}() is deprecated.'
+                f'{_sunset_notice(paths[path].get("post"))}");'
             )
         if is_background:
             lines.append(

@@ -75,6 +75,9 @@ def test_generated_app_env_vars_default_matches_the_actual_generated_code():
         "NOTEBOOK_API_WEBHOOK_RETRY_BACKOFF_SECONDS",
         "NOTEBOOK_API_PUBLIC_URL",
         "NOTEBOOK_API_DISABLE_DOCS",
+        "NOTEBOOK_API_REJECT_DEPRECATED",
+        "NOTEBOOK_API_ENFORCE_SUNSET",
+        "NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS",
         "NOTEBOOK_API_JSON_LOGS",
     }
 
@@ -674,7 +677,8 @@ def test_generated_app_cors_exposes_the_rate_limit_headers_to_cross_origin_js():
 
     assert (
         "expose_headers=['X-RateLimit-Limit', 'X-RateLimit-Remaining', "
-        "'X-RateLimit-Reset', 'Retry-After']"
+        "'X-RateLimit-Reset', 'Retry-After', "
+        "'Deprecation', 'X-Deprecation-Reason', 'Sunset']"
         in code
     )
 
@@ -828,7 +832,7 @@ def test_generated_app_configures_a_json_request_log_middleware_registered_outer
     )
     assert "async def _log_request_json(request, call_next):" in code
     assert "if JSON_REQUEST_LOGS:" in code
-    assert "print(json.dumps({" in code
+    assert "print(json.dumps(entry), flush=True)" in code
     assert "'request_id': response.headers.get('X-Request-ID')," in code
     assert "'method': request.method," in code
     assert "'path': request.url.path," in code
@@ -914,6 +918,8 @@ def test_json_request_logs_emit_a_structured_line_matching_the_response_headers(
     assert log_entry["status_code"] == 200 == resp.status_code
     assert log_entry["duration_ms"] == float(resp.headers["X-Process-Time-Ms"])
     assert isinstance(log_entry["timestamp"], float)
+    assert log_entry["deprecated"] is False
+    assert "client_ip" not in log_entry and "user_agent" not in log_entry
 
 
 def test_json_request_logs_accepts_common_truthy_spellings(monkeypatch, capsys):
@@ -1086,6 +1092,8 @@ def test_generated_app_exposes_get_metrics_as_json(monkeypatch):
         # redelivery has happened, so every outcome stays at 0.
         "webhook_deliveries_by_outcome": {"delivered": 0, "failed": 0},
         "webhook_redeliveries_by_outcome": {"delivered": 0, "failed": 0},
+        "deprecated_endpoint_calls": {},
+        "deprecated_endpoint_rejections": {},
     }
 
 
@@ -3847,7 +3855,8 @@ def test_async_function_generates_awaited_async_endpoint():
     code = generate_fastapi_code(functions)
 
     assert "async def fetch_data(" in code
-    assert "await notebook_module.fetch_data(" in code
+    assert "functools.partial(notebook_module.fetch_data, " in code
+    assert "is_async=True)" in code
 
 
 def test_sync_function_generates_unawaited_sync_endpoint():
@@ -3864,9 +3873,9 @@ def test_sync_function_generates_unawaited_sync_endpoint():
     code = generate_fastapi_code(functions)
 
     assert "def add(" in code
-    assert "async def add(" not in code
+    assert "is_async=False)" in code
     assert "await notebook_module.add(" not in code
-    assert "result = notebook_module.add(" in code
+    assert "functools.partial(notebook_module.add, " in code
 
 
 def test_keyword_only_arg_is_passed_by_keyword_in_generated_call():
@@ -3887,7 +3896,7 @@ def test_keyword_only_arg_is_passed_by_keyword_in_generated_call():
 
     code = generate_fastapi_code(functions)
 
-    assert "notebook_module.score(req.data, epochs=req.epochs)" in code
+    assert "functools.partial(notebook_module.score, req.data, epochs=req.epochs)" in code
 
 
 def test_tasks_endpoints_require_api_key_auth():
@@ -7222,3 +7231,822 @@ def test_generate_readme_writes_exactly_what_readme_content_returns(tmp_path):
         output_path.read_text(encoding="utf-8")
         == readme_content("my_app", functions, env_vars)
     )
+
+def _deprecation_test_client(monkeypatch, deprecated_overrides,
+                             reject_deprecated=None, enforce_sunset=None):
+    if enforce_sunset is None:
+        monkeypatch.delenv("NOTEBOOK_API_ENFORCE_SUNSET", raising=False)
+    else:
+        monkeypatch.setenv("NOTEBOOK_API_ENFORCE_SUNSET", enforce_sunset)
+    if reject_deprecated is None:
+        monkeypatch.delenv("NOTEBOOK_API_REJECT_DEPRECATED", raising=False)
+    else:
+        monkeypatch.setenv("NOTEBOOK_API_REJECT_DEPRECATED", reject_deprecated)
+    functions = [
+        {"name": "old_add", "args": [], "return_type": "int"},
+        {"name": "add", "args": [], "return_type": "int"},
+    ]
+    code = generate_fastapi_code(
+        functions, deprecated_overrides=deprecated_overrides
+    )
+    notebook_module = _register_fake_notebook_module(monkeypatch)
+    notebook_module.old_add = lambda: 1
+    notebook_module.add = lambda: 2
+    monkeypatch.setenv("NOTEBOOK_API_KEY", "test-key")
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    return TestClient(namespace["app"], headers={"X-API-Key": "test-key"})
+
+
+def test_deprecated_endpoint_response_carries_deprecation_headers(monkeypatch):
+    """Confirmed missing before this feature: a deprecated directive only
+    reached openapi.json -- a direct caller got no runtime signal at all.
+    """
+    client = _deprecation_test_client(
+        monkeypatch, {"old_add": "Use add instead."}
+    )
+
+    response = client.post("/old_add", json={})
+
+    assert response.status_code == 200
+    assert response.json() == {"result": 1}
+    assert response.headers["Deprecation"] == "true"
+    assert response.headers["X-Deprecation-Reason"] == "Use add instead."
+
+
+def test_non_deprecated_endpoint_response_has_no_deprecation_headers(
+    monkeypatch,
+):
+    client = _deprecation_test_client(monkeypatch, {"old_add": "reason"})
+
+    response = client.post("/add", json={})
+
+    assert response.status_code == 200
+    assert "Deprecation" not in response.headers
+    assert "X-Deprecation-Reason" not in response.headers
+
+
+def test_deprecated_endpoint_without_reason_sends_only_deprecation_header(
+    monkeypatch,
+):
+    client = _deprecation_test_client(monkeypatch, {"old_add": None})
+
+    response = client.post("/old_add", json={})
+
+    assert response.headers["Deprecation"] == "true"
+    assert "X-Deprecation-Reason" not in response.headers
+
+
+def test_deprecation_headers_are_sent_on_error_responses_too(monkeypatch):
+    """A 422 (bad body) from a deprecated endpoint still tells the caller
+    the endpoint is deprecated -- the middleware wraps every response."""
+    client = _deprecation_test_client(monkeypatch, {"old_add": None})
+
+    response = client.post("/old_add", content=b"not json",
+                           headers={"Content-Type": "application/json"})
+
+    assert response.status_code == 422
+    assert response.headers["Deprecation"] == "true"
+
+
+def test_deprecation_reason_with_quotes_and_newlines_is_sanitized(monkeypatch):
+    """A reason containing a quote, a CR/LF and non-ASCII text must neither
+    break the generated source nor inject a second header line."""
+    client = _deprecation_test_client(
+        monkeypatch,
+        {"old_add": 'Use "add"\r\nX-Injected: yes \u2014 caf\u00e9'},
+    )
+
+    response = client.post("/old_add", json={})
+
+    assert "X-Injected" not in response.headers
+    assert response.headers["X-Deprecation-Reason"] == (
+        'Use "add" X-Injected: yes caf'
+    )
+
+
+def test_deprecation_header_value_helper_edge_cases():
+    from backend.generator.api_generator import _deprecation_header_value
+
+    assert _deprecation_header_value(None) is None
+    assert _deprecation_header_value("") is None
+    assert _deprecation_header_value("\u2014\n\t") is None
+    assert _deprecation_header_value("a" * 500) == "a" * 200
+    assert _deprecation_header_value("  spaced   out  ") == "spaced out"
+
+
+def test_metrics_counts_calls_to_each_deprecated_endpoint(monkeypatch):
+    """Confirmed missing before this feature: nothing told an operator
+    whether a deprecated endpoint was still being called -- the one signal
+    that decides when it's safe to remove."""
+    client = _deprecation_test_client(monkeypatch, {"old_add": "Use add."})
+
+    assert client.get("/metrics").json()["deprecated_endpoint_calls"] == {
+        "/old_add": 0
+    }
+
+    client.post("/old_add", json={})
+    client.post("/old_add", json={})
+    client.post("/add", json={})
+
+    assert client.get("/metrics").json()["deprecated_endpoint_calls"] == {
+        "/old_add": 2
+    }
+
+    text = client.get("/metrics/prometheus").text
+    assert "# TYPE notebook_api_deprecated_endpoint_calls_total counter" in text
+    assert 'notebook_api_deprecated_endpoint_calls_total{path="/old_add"} 2' in text
+    assert 'path="/add"' not in text
+
+
+def test_metrics_deprecated_endpoint_calls_empty_when_nothing_deprecated(
+    monkeypatch,
+):
+    client = _deprecation_test_client(monkeypatch, None)
+
+    client.post("/add", json={})
+
+    assert client.get("/metrics").json()["deprecated_endpoint_calls"] == {}
+    assert "deprecated_endpoint_calls_total" not in client.get(
+        "/metrics/prometheus"
+    ).text
+
+
+def test_deprecated_endpoint_call_counter_names_are_reserved():
+    from backend.generator.api_generator import RESERVED_INFRASTRUCTURE_NAMES
+
+    assert "_DEPRECATED_ENDPOINTS" in RESERVED_INFRASTRUCTURE_NAMES
+    assert "_DEPRECATED_ENDPOINT_CALLS" in RESERVED_INFRASTRUCTURE_NAMES
+
+
+def test_reject_deprecated_answers_410_without_running_the_function(monkeypatch):
+    """Confirmed missing before this feature: there was no way to trial an
+    endpoint's removal (a "brownout") short of deleting it and recompiling."""
+    client = _deprecation_test_client(
+        monkeypatch, {"old_add": "Use add."}, reject_deprecated="true"
+    )
+
+    response = client.post("/old_add", json={})
+
+    assert response.status_code == 410
+    assert "deprecated" in response.json()["detail"]
+    assert response.headers["Deprecation"] == "true"
+    assert response.headers["X-Deprecation-Reason"] == "Use add."
+    assert client.get("/metrics").json()["deprecated_endpoint_calls"] == {
+        "/old_add": 1
+    }
+
+
+def test_reject_deprecated_never_affects_non_deprecated_endpoints(monkeypatch):
+    client = _deprecation_test_client(
+        monkeypatch, {"old_add": None}, reject_deprecated="true"
+    )
+
+    response = client.post("/add", json={})
+
+    assert response.status_code == 200
+    assert response.json() == {"result": 2}
+
+
+def test_reject_deprecated_off_by_default_and_when_false(monkeypatch):
+    for value in (None, "false"):
+        client = _deprecation_test_client(
+            monkeypatch, {"old_add": None}, reject_deprecated=value
+        )
+        response = client.post("/old_add", json={})
+        assert response.status_code == 200
+        assert response.json() == {"result": 1}
+
+
+def test_reject_deprecated_rejects_before_auth_is_checked(monkeypatch):
+    client = _deprecation_test_client(
+        monkeypatch, {"old_add": None}, reject_deprecated="1"
+    )
+
+    response = client.post("/old_add", json={}, headers={"X-API-Key": "wrong"})
+
+    assert response.status_code == 410
+
+
+def test_get_deprecations_lists_each_deprecated_endpoint_with_reason_and_calls(
+    monkeypatch,
+):
+    """Confirmed missing before this feature: the only way to learn what a
+    deployment had deprecated was scanning openapi.json (which
+    NOTEBOOK_API_DISABLE_DOCS can hide), and nothing reported whether the
+    brownout switch was on."""
+    client = _deprecation_test_client(monkeypatch, {"old_add": "Use add."})
+    client.post("/old_add", json={})
+
+    response = client.get("/deprecations", headers={"X-API-Key": ""})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body.pop("counting_since"), str)
+    assert body == {
+        "rejecting": False,
+        "enforcing_sunset": False,
+        "endpoints": [{"path": "/old_add", "reason": "Use add.", "calls": 1, "rejections": 0, "callers": {"testclient": 1}, "sunset": None, "rejected": False, "retired": False}],
+    }
+
+
+def test_get_deprecations_reports_rejecting_and_reason_none(monkeypatch):
+    client = _deprecation_test_client(
+        monkeypatch, {"old_add": None}, reject_deprecated="true"
+    )
+
+    assert _without_counting_since(client.get("/deprecations").json()) == {
+        "rejecting": True,
+        "enforcing_sunset": False,
+        "endpoints": [{"path": "/old_add", "reason": None, "calls": 0, "rejections": 0, "callers": {}, "sunset": None, "rejected": True, "retired": False}],
+    }
+
+
+def test_get_deprecations_is_empty_when_nothing_is_deprecated(monkeypatch):
+    client = _deprecation_test_client(monkeypatch, None)
+
+    assert _without_counting_since(client.get("/deprecations").json()) == {
+        "rejecting": False, "enforcing_sunset": False, "endpoints": [],
+    }
+
+
+def test_function_named_deprecations_is_reserved():
+    functions = [{"name": "deprecations", "args": [], "return_type": "dict"}]
+
+    with pytest.raises(ReservedFunctionNameError, match="deprecations"):
+        generate_fastapi_code(functions)
+
+
+def test_sunset_date_in_reason_emits_rfc8594_sunset_header(monkeypatch):
+    """Confirmed missing before this feature: a removal date could only be
+    written as prose in the reason -- no Sunset header, nothing in GET
+    /deprecations a client or gateway could act on."""
+    client = _deprecation_test_client(
+        monkeypatch, {"old_add": "Use add. Sunset: 2025-12-31"}
+    )
+
+    response = client.post("/old_add", json={})
+
+    assert response.headers["Sunset"] == "Wed, 31 Dec 2025 00:00:00 GMT"
+    assert client.get("/deprecations").json()["endpoints"][0]["sunset"] == (
+        "2025-12-31"
+    )
+
+
+def test_no_sunset_header_without_a_sunset_marker(monkeypatch):
+    client = _deprecation_test_client(monkeypatch, {"old_add": "Use add."})
+
+    response = client.post("/old_add", json={})
+
+    assert "Sunset" not in response.headers
+    assert "Sunset" not in client.post("/add", json={}).headers
+
+
+def test_sunset_header_sent_on_brownout_410_too(monkeypatch):
+    client = _deprecation_test_client(
+        monkeypatch, {"old_add": "sunset=2026-01-15"}, reject_deprecated="true"
+    )
+
+    response = client.post("/old_add", json={})
+
+    assert response.status_code == 410
+    assert response.headers["Sunset"] == "Thu, 15 Jan 2026 00:00:00 GMT"
+
+
+def test_deprecation_sunset_date_helper_edge_cases():
+    from backend.generator.api_generator import _deprecation_sunset_date
+
+    assert _deprecation_sunset_date(None) is None
+    assert _deprecation_sunset_date("no date here") is None
+    assert _deprecation_sunset_date("sunset: 2025-13-40") is None
+    assert _deprecation_sunset_date("removed 2025-12-31") is None
+    assert _deprecation_sunset_date("SUNSET = 2025-02-28 please") == "2025-02-28"
+
+
+def test_readme_content_documents_deprecation_runtime_behavior_when_deprecated():
+    """Confirmed missing before this feature: the README only marked a
+    deprecated endpoint's bullet -- nothing told an operator about the
+    Deprecation/Sunset headers, GET /deprecations, the
+    NOTEBOOK_API_REJECT_DEPRECATED brownout, or the CLI removal gates."""
+    from backend.generator.docker_generator import readme_content
+
+    content = readme_content(
+        functions=[{"name": "add"}, {"name": "old_add"}, {"name": "older"}],
+        deprecated_overrides={
+            "old_add": "Use add. sunset: 2025-12-31",
+            "older": None,
+        },
+    )
+
+    assert "## Deprecations" in content
+    assert "2 endpoint(s) above are deprecated." in content
+    assert "`POST /old_add` -- removal scheduled for 2025-12-31" in content
+    assert "`POST /older` -- removal scheduled" not in content
+    assert "`GET /deprecations`" in content
+    assert "NOTEBOOK_API_REJECT_DEPRECATED=true" in content
+    assert "--fail-if-called" in content and "--fail-if-past-sunset" in content
+
+
+def test_readme_content_omits_deprecations_section_when_nothing_deprecated():
+    from backend.generator.docker_generator import readme_content
+
+    content = readme_content(functions=[{"name": "add"}])
+
+    assert "## Deprecations" not in content
+    assert "Scheduled removals" not in content
+    # The endpoint itself exists on every compiled app, so it's always
+    # listed among the unauthenticated built-ins.
+    assert "`/deprecations`, `/auth/status`" in content
+    assert "- `POST /add`\n\nInteractive docs" in content
+
+
+def test_readme_content_no_scheduled_removals_without_a_valid_sunset():
+    from backend.generator.docker_generator import readme_content
+
+    content = readme_content(
+        functions=[{"name": "old_add"}],
+        deprecated_overrides={"old_add": "sunset: 2025-13-40"},
+    )
+
+    assert "## Deprecations" in content
+    assert "Scheduled removals" not in content
+
+
+def test_openapi_operation_carries_sunset_extension_for_a_dated_deprecation(
+    monkeypatch,
+):
+    """Confirmed missing before this feature: a directive's sunset date
+    only ever reached the Sunset response header -- nothing reading
+    openapi.json (an SDK generator, a linter, a gateway) could see it."""
+    client = _deprecation_test_client(
+        monkeypatch, {"old_add": "Use add. sunset: 2025-12-31"}
+    )
+
+    schema = client.get("/openapi.json").json()
+
+    assert schema["paths"]["/old_add"]["post"]["x-notebook-to-api-sunset"] == (
+        "2025-12-31"
+    )
+    assert "x-notebook-to-api-sunset" not in schema["paths"]["/add"]["post"]
+
+
+def test_openapi_operation_has_no_sunset_extension_without_a_valid_date(
+    monkeypatch,
+):
+    client = _deprecation_test_client(monkeypatch, {"old_add": "sunset: 2025-13-40"})
+
+    operation = client.get("/openapi.json").json()["paths"]["/old_add"]["post"]
+
+    assert operation["deprecated"] is True
+    assert "x-notebook-to-api-sunset" not in operation
+
+
+def test_background_endpoint_openapi_operation_carries_sunset_extension_too(
+    monkeypatch,
+):
+    code = generate_fastapi_code(
+        [{"name": "train_model", "args": [], "return_type": "str"}],
+        deprecated_overrides={"train_model": "sunset=2026-01-15"},
+    )
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    operation = namespace["app"].openapi()["paths"]["/train_model"]["post"]
+
+    assert operation["x-notebook-to-api-sunset"] == "2026-01-15"
+
+
+def test_enforce_sunset_rejects_a_deprecated_endpoint_past_its_sunset(monkeypatch):
+    """Confirmed missing before this feature: a Sunset date was only ever
+    advisory -- the endpoint kept serving after it unless someone flipped
+    NOTEBOOK_API_REJECT_DEPRECATED (or recompiled) on the day."""
+    client = _deprecation_test_client(
+        monkeypatch, {"old_add": "sunset: 2000-01-01"}, enforce_sunset="true"
+    )
+
+    response = client.post("/old_add", json={})
+
+    assert response.status_code == 410
+    assert response.headers["Sunset"] == "Sat, 01 Jan 2000 00:00:00 GMT"
+    assert client.post("/add", json={}).status_code == 200
+
+
+def test_enforce_sunset_still_serves_before_the_sunset_date(monkeypatch):
+    client = _deprecation_test_client(
+        monkeypatch, {"old_add": "sunset: 2999-01-01"}, enforce_sunset="true"
+    )
+
+    assert client.post("/old_add", json={}).status_code == 200
+
+
+def test_enforce_sunset_ignores_deprecations_without_a_sunset(monkeypatch):
+    client = _deprecation_test_client(
+        monkeypatch, {"old_add": "Use add."}, enforce_sunset="true"
+    )
+
+    assert client.post("/old_add", json={}).status_code == 200
+
+
+def test_past_sunset_is_still_served_when_enforce_sunset_is_off(monkeypatch):
+    for value in (None, "false"):
+        client = _deprecation_test_client(
+            monkeypatch, {"old_add": "sunset: 2000-01-01"}, enforce_sunset=value
+        )
+        response = client.post("/old_add", json={})
+        assert response.status_code == 200
+        assert response.headers["Deprecation"] == "true"
+
+
+def test_enforce_sunset_backing_names_are_reserved():
+    from backend.generator.api_generator import RESERVED_INFRASTRUCTURE_NAMES
+
+    assert "ENFORCE_DEPRECATION_SUNSET" in RESERVED_INFRASTRUCTURE_NAMES
+    assert "_sunset_has_passed" in RESERVED_INFRASTRUCTURE_NAMES
+
+
+def test_get_deprecations_reports_per_endpoint_rejected_under_enforce_sunset(
+    monkeypatch,
+):
+    """Confirmed missing before this feature: GET /deprecations only had
+    the global "rejecting" (the brownout switch) -- with
+    NOTEBOOK_API_ENFORCE_SUNSET rejecting individual endpoints by date,
+    nothing said which ones were actually answering 410 right now."""
+    client = _deprecation_test_client(
+        monkeypatch,
+        {"old_add": "sunset: 2000-01-01", "add": "sunset: 2999-01-01"},
+        enforce_sunset="true",
+    )
+
+    body = client.get("/deprecations").json()
+
+    assert body["rejecting"] is False
+    assert body["enforcing_sunset"] is True
+    by_path = {entry["path"]: entry for entry in body["endpoints"]}
+    assert by_path["/old_add"]["rejected"] is True
+    assert by_path["/add"]["rejected"] is False
+    # "rejected" must agree with what the endpoint actually does.
+    assert client.post("/old_add", json={}).status_code == 410
+    assert client.post("/add", json={}).status_code == 200
+
+
+def test_metrics_count_rejected_deprecated_calls_separately(monkeypatch):
+    """Confirmed missing before this feature: /metrics counted every call
+    to a deprecated endpoint the same whether it was served or answered
+    410 -- no way to see how many callers a brownout actually broke."""
+    client = _deprecation_test_client(
+        monkeypatch,
+        {"old_add": "sunset: 2000-01-01", "add": "sunset: 2999-01-01"},
+        enforce_sunset="true",
+    )
+
+    client.post("/old_add", json={})
+    client.post("/old_add", json={})
+    client.post("/add", json={})
+
+    metrics = client.get("/metrics").json()
+    assert metrics["deprecated_endpoint_calls"] == {"/old_add": 2, "/add": 1}
+    assert metrics["deprecated_endpoint_rejections"] == {"/old_add": 2, "/add": 0}
+
+    text = client.get("/metrics/prometheus").text
+    assert "# TYPE notebook_api_deprecated_endpoint_rejections_total counter" in text
+    assert 'notebook_api_deprecated_endpoint_rejections_total{path="/old_add"} 2' in text
+    assert 'notebook_api_deprecated_endpoint_rejections_total{path="/add"} 0' in text
+
+
+def test_metrics_rejections_stay_zero_when_nothing_is_rejected(monkeypatch):
+    client = _deprecation_test_client(monkeypatch, {"old_add": None})
+
+    client.post("/old_add", json={})
+
+    metrics = client.get("/metrics").json()
+    assert metrics["deprecated_endpoint_calls"] == {"/old_add": 1}
+    assert metrics["deprecated_endpoint_rejections"] == {"/old_add": 0}
+
+
+def test_deprecated_endpoint_rejections_counter_name_is_reserved():
+    from backend.generator.api_generator import RESERVED_INFRASTRUCTURE_NAMES
+
+    assert "_DEPRECATED_ENDPOINT_REJECTIONS" in RESERVED_INFRASTRUCTURE_NAMES
+
+
+def test_get_deprecations_reports_each_endpoints_rejection_count(monkeypatch):
+    """Confirmed missing before this feature: GET /deprecations said
+    whether an endpoint is rejecting now, but not how many calls it has
+    already turned away -- only /metrics carried that count."""
+    client = _deprecation_test_client(
+        monkeypatch,
+        {"old_add": "sunset: 2000-01-01", "add": "sunset: 2999-01-01"},
+        enforce_sunset="true",
+    )
+    client.post("/old_add", json={})
+    client.post("/old_add", json={})
+    client.post("/add", json={})
+
+    by_path = {
+        entry["path"]: entry for entry in client.get("/deprecations").json()["endpoints"]
+    }
+
+    assert (by_path["/old_add"]["calls"], by_path["/old_add"]["rejections"]) == (2, 2)
+    assert (by_path["/add"]["calls"], by_path["/add"]["rejections"]) == (1, 0)
+    # Agrees with /metrics' own per-path counter.
+    assert client.get("/metrics").json()["deprecated_endpoint_rejections"] == {
+        "/old_add": 2, "/add": 0,
+    }
+
+
+def test_json_request_log_identifies_callers_of_a_deprecated_endpoint(
+    monkeypatch, capsys
+):
+    """Confirmed missing before this feature: the call counters said how
+    many calls a deprecated endpoint still got, but nothing recorded who
+    was making them -- the one thing needed to get them to migrate."""
+    monkeypatch.setenv("NOTEBOOK_API_JSON_LOGS", "true")
+    client = _deprecation_test_client(monkeypatch, {"old_add": "Use add."})
+    capsys.readouterr()
+
+    client.post("/old_add", json={}, headers={"User-Agent": "billing-cron/2.1"})
+    client.post("/add", json={})
+
+    entries = [
+        json.loads(line) for line in capsys.readouterr().out.splitlines()
+        if line.startswith("{")
+    ]
+    by_path = {entry["path"]: entry for entry in entries}
+    assert by_path["/old_add"]["deprecated"] is True
+    assert by_path["/old_add"]["user_agent"] == "billing-cron/2.1"
+    assert by_path["/old_add"]["client_ip"] == "testclient"
+    assert by_path["/add"]["deprecated"] is False
+    assert "client_ip" not in by_path["/add"]
+
+
+def test_json_request_log_marks_a_rejected_deprecated_call_too(monkeypatch, capsys):
+    monkeypatch.setenv("NOTEBOOK_API_JSON_LOGS", "true")
+    client = _deprecation_test_client(
+        monkeypatch, {"old_add": None}, reject_deprecated="true"
+    )
+    capsys.readouterr()
+
+    client.post("/old_add", json={}, headers={"User-Agent": "legacy-app"})
+
+    entry = next(
+        json.loads(line) for line in capsys.readouterr().out.splitlines()
+        if line.startswith("{")
+    )
+    assert entry["status_code"] == 410
+    assert entry["deprecated"] is True
+    assert entry["user_agent"] == "legacy-app"
+
+
+def test_get_deprecations_breaks_calls_down_by_user_agent(monkeypatch):
+    """Confirmed missing before this feature: GET /deprecations said how
+    many calls a deprecated endpoint got, never from whom -- identifying a
+    caller required a log pipeline over NOTEBOOK_API_JSON_LOGS."""
+    client = _deprecation_test_client(monkeypatch, {"old_add": None})
+    for agent in ("billing-cron/2", "billing-cron/2", "mobile/1"):
+        client.post("/old_add", json={}, headers={"User-Agent": agent})
+    client.post("/old_add", json={}, headers={"User-Agent": ""})
+
+    entry = client.get("/deprecations").json()["endpoints"][0]
+
+    assert entry["callers"] == {"billing-cron/2": 2, "(none)": 1, "mobile/1": 1}
+    assert list(entry["callers"]) == ["billing-cron/2", "(none)", "mobile/1"]
+
+
+def test_deprecated_callers_are_bounded_per_path(monkeypatch):
+    client = _deprecation_test_client(monkeypatch, {"old_add": None})
+    for i in range(55):
+        client.post("/old_add", json={}, headers={"User-Agent": f"agent-{i}" + "x" * 300})
+
+    callers = client.get("/deprecations").json()["endpoints"][0]["callers"]
+
+    assert len(callers) == 51  # 50 distinct + "(other)"
+    assert callers["(other)"] == 5
+    assert all(len(agent) <= 200 for agent in callers)
+
+
+def test_post_deprecations_reset_zeroes_every_deprecation_counter(monkeypatch):
+    """Confirmed missing before this feature: the deprecation counters only
+    ever grew for the process's lifetime -- no fresh measurement after
+    contacting callers without restarting the app."""
+    client = _deprecation_test_client(
+        monkeypatch, {"old_add": None}, reject_deprecated="true"
+    )
+    client.post("/old_add", json={}, headers={"User-Agent": "cron"})
+
+    response = client.post("/deprecations/reset")
+
+    assert response.status_code == 200
+    assert _without_counting_since(response.json()) == {"reset": ["/old_add"]}
+    entry = client.get("/deprecations").json()["endpoints"][0]
+    assert (entry["calls"], entry["rejections"], entry["callers"]) == (0, 0, {})
+    metrics = client.get("/metrics").json()
+    assert metrics["deprecated_endpoint_calls"] == {"/old_add": 0}
+    assert metrics["deprecated_endpoint_rejections"] == {"/old_add": 0}
+
+    client.post("/old_add", json={}, headers={"User-Agent": "cron"})
+    assert client.get("/deprecations").json()["endpoints"][0]["calls"] == 1
+
+
+def test_post_deprecations_reset_requires_the_api_key(monkeypatch):
+    client = _deprecation_test_client(monkeypatch, {"old_add": None})
+
+    response = client.post("/deprecations/reset", headers={"X-API-Key": "wrong"})
+
+    assert response.status_code == 401
+
+
+def test_function_named_reset_deprecation_counters_is_reserved():
+    functions = [{"name": "reset_deprecation_counters", "args": [], "return_type": "dict"}]
+
+    with pytest.raises(ReservedFunctionNameError, match="reset_deprecation_counters"):
+        generate_fastapi_code(functions)
+
+
+def _without_counting_since(body):
+    body = dict(body)
+    body.pop("counting_since")
+    return body
+
+
+def test_get_deprecations_reports_when_counting_started_and_reset_moves_it(
+    monkeypatch,
+):
+    """Confirmed missing before this feature: GET /deprecations' counts
+    had no time window -- "3 calls" could mean an hour or a month."""
+    import re
+    import time as time_module
+
+    client = _deprecation_test_client(monkeypatch, {"old_add": None})
+    since = client.get("/deprecations").json()["counting_since"]
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", since)
+
+    time_module.sleep(1.1)
+    reset = client.post("/deprecations/reset").json()
+
+    assert reset["counting_since"] > since
+    assert client.get("/deprecations").json()["counting_since"] == reset["counting_since"]
+
+
+def test_deprecation_counters_since_name_is_reserved():
+    from backend.generator.api_generator import RESERVED_INFRASTRUCTURE_NAMES
+
+    assert "_DEPRECATION_COUNTERS_SINCE" in RESERVED_INFRASTRUCTURE_NAMES
+
+
+def test_retired_endpoint_answers_410_with_its_deprecation_headers(monkeypatch):
+    """Confirmed missing before this feature: a deprecated function left
+    out of a compile past its sunset (`--drop-past-sunset`) simply vanished,
+    so a caller still using it got a bare 404 -- indistinguishable from a
+    typo'd URL -- instead of 410 Gone."""
+    code = generate_fastapi_code(
+        [{"name": "add", "args": [], "return_type": "int"}],
+        retired_endpoints={"old_add": "Use add. sunset: 2000-01-01"},
+    )
+    notebook_module = _register_fake_notebook_module(monkeypatch)
+    notebook_module.add = lambda: 1
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    response = client.post("/old_add", json={})
+
+    assert response.status_code == 410
+    assert response.json() == {"detail": "'/old_add' has been removed (sunset 2000-01-01)."}
+    assert response.headers["Deprecation"] == "true"
+    assert response.headers["Sunset"] == "Sat, 01 Jan 2000 00:00:00 GMT"
+    assert response.headers["X-Deprecation-Reason"] == "Use add. sunset: 2000-01-01"
+    # Hidden from the published schema -- it's not a callable endpoint.
+    assert "/old_add" not in namespace["app"].openapi()["paths"]
+
+
+def test_no_retired_endpoints_means_no_extra_routes(monkeypatch):
+    code = generate_fastapi_code([{"name": "add", "args": [], "return_type": "int"}])
+
+    assert "_retired_endpoint_" not in code
+
+
+def _retired_client(monkeypatch):
+    code = generate_fastapi_code(
+        [{"name": "add", "args": [], "return_type": "int"}],
+        retired_endpoints={"old_add": "Use add. sunset: 2000-01-01"},
+    )
+    notebook_module = _register_fake_notebook_module(monkeypatch)
+    notebook_module.add = lambda: 1
+    monkeypatch.setenv("NOTEBOOK_API_KEY", "test-key")
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    return TestClient(namespace["app"], headers={"X-API-Key": "test-key"})
+
+
+def test_retired_endpoints_are_tracked_by_get_deprecations(monkeypatch):
+    """Confirmed missing before this feature: a retired (410 tombstone)
+    endpoint was invisible to GET /deprecations and every counter, so an
+    operator couldn't see who kept calling it after its removal."""
+    client = _retired_client(monkeypatch)
+    for _ in range(2):
+        response = client.post("/old_add", json={}, headers={"User-Agent": "legacy/1"})
+
+    # Still the tombstone's own, more specific answer.
+    assert response.status_code == 410
+    assert "has been removed" in response.json()["detail"]
+    assert response.headers["Sunset"] == "Sat, 01 Jan 2000 00:00:00 GMT"
+
+    entry = client.get("/deprecations").json()["endpoints"][0]
+    assert entry["path"] == "/old_add"
+    assert (entry["retired"], entry["rejected"]) == (True, True)
+    assert (entry["calls"], entry["rejections"]) == (2, 2)
+    assert entry["callers"] == {"legacy/1": 2}
+    assert entry["sunset"] == "2000-01-01"
+    assert client.get("/metrics").json()["deprecated_endpoint_rejections"] == {"/old_add": 2}
+
+
+def test_retired_endpoints_name_is_reserved():
+    from backend.generator.api_generator import RESERVED_INFRASTRUCTURE_NAMES
+
+    assert "_RETIRED_ENDPOINTS" in RESERVED_INFRASTRUCTURE_NAMES
+
+
+def _request_timeout_client(monkeypatch, timeout, impl, is_async=False):
+    code = generate_fastapi_code(
+        [{"name": "slow", "args": [], "return_type": "int", "is_async": is_async}]
+    )
+    notebook_module = _register_fake_notebook_module(monkeypatch)
+    notebook_module.slow = impl
+    monkeypatch.setenv("NOTEBOOK_API_KEY", "test-key")
+    if timeout is None:
+        monkeypatch.delenv("NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS", raising=False)
+    else:
+        monkeypatch.setenv("NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS", str(timeout))
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    return TestClient(namespace["app"], headers={"X-API-Key": "test-key"})
+
+
+def test_request_timeout_answers_504_for_a_hung_sync_endpoint(monkeypatch):
+    """Confirmed missing before this feature: a synchronous endpoint whose
+    notebook function hung held its request open forever -- only
+    background tasks had NOTEBOOK_API_TASK_EXECUTION_TIMEOUT_SECONDS."""
+    import time as time_module
+
+    client = _request_timeout_client(monkeypatch, 1, lambda: time_module.sleep(3) or 1)
+
+    started = time_module.monotonic()
+    response = client.post("/slow", json={})
+    elapsed = time_module.monotonic() - started
+
+    assert response.status_code == 504
+    assert "NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS (1s)" in response.json()["detail"]
+    assert elapsed < 2.5
+
+
+def test_request_timeout_lets_a_fast_call_through(monkeypatch):
+    client = _request_timeout_client(monkeypatch, 5, lambda: 7)
+
+    response = client.post("/slow", json={})
+
+    assert response.status_code == 200
+    assert response.json() == {"result": 7}
+
+
+def test_request_timeout_is_off_by_default(monkeypatch):
+    import time as time_module
+
+    client = _request_timeout_client(monkeypatch, None, lambda: time_module.sleep(1.2) or 3)
+
+    response = client.post("/slow", json={})
+
+    assert response.status_code == 200
+    assert response.json() == {"result": 3}
+
+
+def test_request_timeout_applies_to_async_notebook_functions_too(monkeypatch):
+    import asyncio
+
+    async def slow():
+        await asyncio.sleep(3)
+        return 1
+
+    client = _request_timeout_client(monkeypatch, 1, slow, is_async=True)
+
+    response = client.post("/slow", json={})
+
+    assert response.status_code == 504
+
+
+def test_request_timeout_names_are_reserved():
+    from backend.generator.api_generator import RESERVED_INFRASTRUCTURE_NAMES
+
+    assert "REQUEST_TIMEOUT_SECONDS" in RESERVED_INFRASTRUCTURE_NAMES
+    assert "_call_notebook_function" in RESERVED_INFRASTRUCTURE_NAMES

@@ -1,6 +1,7 @@
 import difflib
 import json
 import os
+import sys
 from collections import Counter
 from pathlib import Path
 from urllib.parse import quote, urlsplit
@@ -31,6 +32,7 @@ from backend.parser.ast_parser import (
 )
 
 from backend.generator.api_generator import (
+    _deprecation_sunset_date,
     resolve_deprecation,
     resolve_is_background,
     RESERVED_INFRASTRUCTURE_NAMES,
@@ -226,9 +228,76 @@ def _endpoint_metadata(functions, background_overrides=None, deprecated_override
             "deprecated": resolve_deprecation(
                 func["name"], deprecated_overrides
             )[0],
+            # The directive's own "sunset: YYYY-MM-DD" (None when not
+            # deprecated or no valid date) -- the same date the compiled
+            # app sends as its Sunset header, available here before
+            # compiling, so a dashboard/CI consumer of this preview needn't
+            # re-parse the free-text reason itself.
+            "sunset": _endpoint_sunset(func["name"], deprecated_overrides),
         }
         for func in functions
     ]
+
+
+def past_sunset_functions(deprecated_functions, today=None):
+    """{name: sunset} for each entry of `deprecated_functions`
+    ({name: reason_or_None}, inspect_notebook_data's own field) whose
+    "sunset: YYYY-MM-DD" is `today` (UTC, by default) or earlier -- a
+    deprecated function still defined past the removal date it promised.
+    """
+    from datetime import datetime, timezone
+
+    today = today or datetime.now(timezone.utc).date().isoformat()
+    past = {}
+    for name, reason in (deprecated_functions or {}).items():
+        sunset = _deprecation_sunset_date(reason)
+        if sunset and sunset <= today:
+            past[name] = sunset
+    return past
+
+
+def apply_drop_past_sunset(notebook_path, only, exclude):
+    """(only, exclude) adjusted to leave out every deprecated function in
+    `notebook_path` whose own "sunset: YYYY-MM-DD" is today (UTC) or
+    earlier -- `compile`/`deploy`/`serve`/`watch --drop-past-sunset`, so a rebuild actually
+    carries out the removal the Sunset header promised. Folded into
+    `exclude`, or removed from `only` when that was given instead (the two
+    are mutually exclusive); an `only` left empty is a ValueError rather
+    than silently compiling everything. The dropped names are reported on
+    stderr, so --json's stdout stays machine-parseable.
+    """
+    dropped = sorted(past_sunset_functions(
+        inspect_notebook_data(notebook_path=notebook_path)["deprecated_functions"]
+    ))
+    if not dropped:
+        return only, exclude
+    if only:
+        only = [name for name in only if name not in dropped]
+        if not only:
+            raise ValueError(
+                "Every --only function is past its sunset date, so "
+                "--drop-past-sunset left nothing to compile."
+            )
+    else:
+        exclude = sorted(set(exclude or []) | set(dropped))
+    print(
+        f"Dropping {len(dropped)} function(s) past their sunset date: "
+        f"{', '.join(dropped)}",
+        file=sys.stderr,
+    )
+    return only, exclude
+
+
+def _endpoint_sunset(func_name, deprecated_overrides):
+    is_deprecated, reason = resolve_deprecation(func_name, deprecated_overrides)
+    return _deprecation_sunset_date(reason) if is_deprecated else None
+
+
+def _deprecated_route_suffix(is_deprecated, sunset):
+    """"  [deprecated]" / "  [deprecated, sunset YYYY-MM-DD]" / ""."""
+    if not is_deprecated:
+        return ""
+    return f"  [deprecated, sunset {sunset}]" if sunset else "  [deprecated]"
 
 
 def _reserved_name_conflicts(functions):
@@ -476,10 +545,9 @@ def inspect_notebook(notebook_path, output_dir="generated"):
             if _is_background_function(func["name"], background_overrides)
             else ""
         )
-        route_suffix += (
-            "  [deprecated]"
-            if resolve_deprecation(func["name"], deprecated_overrides)[0]
-            else ""
+        route_suffix += _deprecated_route_suffix(
+            resolve_deprecation(func["name"], deprecated_overrides)[0],
+            _endpoint_sunset(func["name"], deprecated_overrides),
         )
 
         print(
@@ -726,13 +794,19 @@ def print_compile_summary(notebook_path, output_dir="generated", only=None, excl
     is_deprecated_by_path = {
         endpoint["path"]: endpoint["deprecated"] for endpoint in data["endpoints"]
     }
+    # .get(): an older dashboard's response has no "sunset" at all.
+    sunset_by_path = {
+        endpoint["path"]: endpoint.get("sunset") for endpoint in data["endpoints"]
+    }
 
     print(f"\nGenerated {len(functions)} endpoint(s):")
 
     for func in functions:
         name = func["name"]
         suffix = "  [background]" if is_async_by_path.get(f"/{name}") else ""
-        suffix += "  [deprecated]" if is_deprecated_by_path.get(f"/{name}") else ""
+        suffix += _deprecated_route_suffix(
+            is_deprecated_by_path.get(f"/{name}"), sunset_by_path.get(f"/{name}"),
+        )
         print(f"  POST /{name}{suffix}")
 
     if data["dependencies"]:
@@ -919,7 +993,22 @@ def _function_signature_key(func):
         func.get("is_async", False),
         func.get("is_background", False),
         func.get("is_deprecated", False),
+        # A deprecated function's own "sunset: YYYY-MM-DD" (the date the
+        # compiled app sends as its Sunset header and publishes as
+        # "x-notebook-to-api-sunset") -- adding, moving or dropping it is
+        # a change to the endpoint's promised lifetime callers plan
+        # around, which otherwise vanished from the diff entirely when
+        # the function's code was untouched.
+        _function_sunset(func),
     )
+
+
+def _function_sunset(func):
+    """`func`'s own sunset date (YYYY-MM-DD), or None when it isn't
+    deprecated or its reason names no valid date."""
+    if not func.get("is_deprecated", False):
+        return None
+    return _deprecation_sunset_date(func.get("deprecation_reason"))
 
 
 def diff_notebook_functions(old_notebook_path, new_notebook_path):
@@ -1167,9 +1256,25 @@ def classify_notebook_diff(diff):
     """
     breaking_changes = []
     newly_deprecated = []
+    sunset_changed = []
     no_longer_deprecated = []
 
+    # A removed function that was deprecated with a "sunset: YYYY-MM-DD"
+    # that has already arrived (UTC) is the removal its own Sunset header
+    # announced -- reported under "planned_removals", not as a breaking
+    # change, so --fail-on-breaking doesn't block exactly the change the
+    # deprecation promised. Removed before its date, or never deprecated
+    # with one, it's still breaking.
+    from datetime import datetime as _datetime, timezone as _timezone
+
+    today = _datetime.now(_timezone.utc).date().isoformat()
+    planned_removals = []
+
     for func in diff["removed"]:
+        removal_sunset = _function_sunset(func)
+        if removal_sunset and removal_sunset <= today:
+            planned_removals.append({"name": func["name"], "sunset": removal_sunset})
+            continue
         breaking_changes.append({
             "type": "removed_endpoint",
             "name": func["name"],
@@ -1285,11 +1390,29 @@ def classify_notebook_diff(diff):
         elif old_is_deprecated and not new_is_deprecated:
             no_longer_deprecated.append({"name": name})
 
+        # Both versions deprecated, but the promised removal date moved
+        # (or was added/dropped) -- "earlier" is the one direction that
+        # can catch a caller out, so it's called out explicitly.
+        old_sunset = _function_sunset(entry["old"])
+        new_sunset = _function_sunset(entry["new"])
+
+        if old_is_deprecated and new_is_deprecated and old_sunset != new_sunset:
+            sunset_changed.append({
+                "name": name,
+                "old_sunset": old_sunset,
+                "new_sunset": new_sunset,
+                "moved_earlier": bool(
+                    old_sunset and new_sunset and new_sunset < old_sunset
+                ),
+            })
+
     return {
         "compatible": not breaking_changes,
         "breaking_changes": breaking_changes,
         "newly_deprecated": newly_deprecated,
         "no_longer_deprecated": no_longer_deprecated,
+        "sunset_changed": sunset_changed,
+        "planned_removals": planned_removals,
     }
 
 
@@ -1428,6 +1551,28 @@ def print_notebook_diff(diff):
         )
         for entry in diff["no_longer_deprecated"]:
             print(f"  POST /{entry['name']}")
+
+    if diff.get("planned_removals"):
+        print(
+            f"\n{len(diff['planned_removals'])} endpoint(s) removed on or "
+            "after their announced sunset date (not breaking):"
+        )
+        for entry in diff["planned_removals"]:
+            print(f"  POST /{entry['name']} (sunset {entry['sunset']})")
+
+    if diff.get("sunset_changed"):
+        print(
+            f"\n{len(diff['sunset_changed'])} deprecated endpoint(s) with a "
+            "changed sunset date:"
+        )
+        for entry in diff["sunset_changed"]:
+            marker = "  ! " if entry.get("moved_earlier") else "  "
+            print(
+                f"{marker}POST /{entry['name']}: "
+                f"{entry.get('old_sunset') or 'none'} -> "
+                f"{entry.get('new_sunset') or 'none'}"
+                + (" (moved earlier)" if entry.get("moved_earlier") else "")
+            )
 
 # The generated app's own default API key (see write_app_config /
 # verify_api_key in generator/api_generator.py: `API_KEYS` defaults to
@@ -1636,6 +1781,19 @@ def generate_curl_commands(
         commands.append(command)
 
     return commands
+
+
+_POSTMAN_DEPRECATION_CHECK_SCRIPT = [
+    'const deprecation = (pm.response.headers.get("Deprecation") || "").trim().toLowerCase();',
+    'if (deprecation && deprecation !== "false") {',
+    '    const reason = pm.response.headers.get("X-Deprecation-Reason");',
+    '    const sunset = pm.response.headers.get("Sunset");',
+    '    const note = `DEPRECATED: ${pm.request.url.getPath()}`'
+    ' + (reason ? ` -- ${reason}` : "") + (sunset ? ` (sunset: ${sunset})` : "");',
+    '    console.warn(note);',
+    '    pm.test(note, function () {});',
+    '}',
+]
 
 
 def generate_postman_collection(
@@ -1972,5 +2130,22 @@ def generate_postman_collection(
             ),
         },
         "variable": collection_variables,
+        # Collection-level, so it runs after every request in the
+        # collection (Postman and Newman alike): the compiled app marks
+        # each response from a deprecated endpoint with Deprecation /
+        # X-Deprecation-Reason / Sunset headers, and previously nothing
+        # in this collection looked at them -- the per-request
+        # "[DEPRECATED]" name only reflects deprecations known when the
+        # collection was generated, not ones added to the app since. A
+        # passing, clearly-named pm.test makes it show up in Postman's
+        # own Test Results and in a `newman run` report without failing
+        # the run; console.warn puts it in the Postman console too.
+        "event": [{
+            "listen": "test",
+            "script": {
+                "type": "text/javascript",
+                "exec": _POSTMAN_DEPRECATION_CHECK_SCRIPT,
+            },
+        }],
         "item": items,
     }

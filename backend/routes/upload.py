@@ -58,6 +58,7 @@ from backend.compiler import (
 )
 from backend.generator.api_generator import (
     GENERATED_APP_ENV_VARS,
+    _deprecation_sunset_date,
     ReservedFunctionNameError,
     generate_fastapi_code,
 )
@@ -73,6 +74,8 @@ from backend.generator.kubernetes_generator import (
     kubernetes_manifest_content,
 )
 from backend.inspector import (
+    apply_drop_past_sunset,
+    past_sunset_functions,
     EXCLUDED_GENERATED_DIR_NAMES,
     EXCLUDED_GENERATED_FILE_NAMES,
     _extract_notebook_functions,
@@ -14003,6 +14006,13 @@ def validate_notebook_endpoint(
         "skipped_functions": skipped_functions,
         "duplicate_functions": duplicate_functions,
         "requirements_conflict": requirements_conflict,
+        # Informational, never part of "status" -- the same fields GET
+        # /api/validate-all already reports per notebook, which this
+        # single-notebook check previously lacked.
+        "deprecated_functions": inspection["deprecated_functions"],
+        "past_sunset_functions": past_sunset_functions(
+            inspection["deprecated_functions"]
+        ),
     }
 
 
@@ -14013,6 +14023,7 @@ def validate_all_notebooks(
     modified_after: str = None, modified_before: str = None,
     limit: int = None, offset: int = 0,
     format: str = "json", checksums: bool = False, status: str = None,
+    sunset_within_days: int = None,
 ):
     """Run the identical pass/warn/fail check POST /api/validate already
     performs for one notebook, across every notebook already uploaded to
@@ -14243,6 +14254,30 @@ def validate_all_notebooks(
     warn_count = 0
     fail_count = 0
     deprecated_notebook_count = 0
+    # A deprecated function whose own "sunset: YYYY-MM-DD" (the date the
+    # compiled app sends as its RFC 8594 Sunset header) is today or
+    # earlier, but which is still in the notebook -- a promised removal
+    # that was missed. Detectable here from source alone, before any
+    # compiled app is even running (unlike `app-deprecations
+    # --fail-if-past-sunset`, which needs a live deployment). UTC, the
+    # same timezone the Sunset header itself is expressed in.
+    past_sunset_notebook_count = 0
+    today_utc = datetime.now(timezone.utc).date().isoformat()
+
+    # ?sunset_within_days=N: deprecated functions whose sunset date is
+    # still ahead but within the next N days (inclusive) -- the removals
+    # coming due soon, so they can be scheduled before they turn into
+    # past_sunset_functions above. Omitted entirely unless asked for.
+    if sunset_within_days is not None and sunset_within_days < 0:
+        raise HTTPException(
+            status_code=400,
+            detail="sunset_within_days must be zero or a positive number of days.",
+        )
+    upcoming_sunset_notebook_count = 0
+    upcoming_cutoff = (
+        (datetime.now(timezone.utc).date() + timedelta(days=sunset_within_days)).isoformat()
+        if sunset_within_days is not None else None
+    )
 
     for entry in sorted(upload_root.iterdir()):
 
@@ -14356,6 +14391,24 @@ def validate_all_notebooks(
         if deprecated_functions:
             deprecated_notebook_count += 1
 
+        past_sunset_functions = {}
+        for name, reason in deprecated_functions.items():
+            sunset = _deprecation_sunset_date(reason)
+            if sunset and sunset <= today_utc:
+                past_sunset_functions[name] = sunset
+
+        if past_sunset_functions:
+            past_sunset_notebook_count += 1
+
+        upcoming_sunset_functions = {}
+        if upcoming_cutoff is not None:
+            for name, reason in deprecated_functions.items():
+                sunset = _deprecation_sunset_date(reason)
+                if sunset and today_utc < sunset <= upcoming_cutoff:
+                    upcoming_sunset_functions[name] = sunset
+            if upcoming_sunset_functions:
+                upcoming_sunset_notebook_count += 1
+
         result = {
             "filename": entry.name,
             "status": status,
@@ -14364,8 +14417,11 @@ def validate_all_notebooks(
             "duplicate_functions": duplicate_functions,
             "requirements_conflict": requirements_conflict,
             "deprecated_functions": deprecated_functions,
+            "past_sunset_functions": past_sunset_functions,
             "detail": None,
         }
+        if upcoming_cutoff is not None:
+            result["upcoming_sunset_functions"] = upcoming_sunset_functions
         if checksums:
             result["sha256"] = entry_sha256
         results.append(result)
@@ -14434,6 +14490,11 @@ def validate_all_notebooks(
         "warn_count": warn_count,
         "fail_count": fail_count,
         "deprecated_notebook_count": deprecated_notebook_count,
+        "past_sunset_notebook_count": past_sunset_notebook_count,
+        **(
+            {"upcoming_sunset_notebook_count": upcoming_sunset_notebook_count}
+            if upcoming_cutoff is not None else {}
+        ),
     }
 
 
@@ -14672,6 +14733,10 @@ def app_preview_endpoint(data: dict):
 
     only = data.get("only")
     exclude = data.get("exclude")
+    # "drop_past_sunset": preview exactly what POST /api/compile would
+    # produce with its own identical option -- see
+    # _drop_past_sunset_selection.
+    drop_past_sunset = bool(data.get("drop_past_sunset", False))
     version_id = data.get("version_id")
     expected_sha256 = data.get("expected_sha256")
 
@@ -14707,6 +14772,10 @@ def app_preview_endpoint(data: dict):
     try:
 
         notebook = load_notebook(str(full_path))
+
+        only, exclude, dropped_past_sunset = _drop_past_sunset_selection(
+            str(full_path), only, exclude, drop_past_sunset,
+        )
 
         code_cells = [
             cell for cell in extract_code_cells(notebook)
@@ -14787,6 +14856,7 @@ def app_preview_endpoint(data: dict):
         "status": "success",
         "notebook": notebook_path,
         "version_id": version_id,
+        "dropped_past_sunset": dropped_past_sunset,
         "package_name": package_name,
         "app_code": app_code,
     }
@@ -14852,6 +14922,10 @@ def readme_preview_endpoint(data: dict):
 
     only = data.get("only")
     exclude = data.get("exclude")
+    # "drop_past_sunset": preview exactly what POST /api/compile would
+    # produce with its own identical option -- see
+    # _drop_past_sunset_selection.
+    drop_past_sunset = bool(data.get("drop_past_sunset", False))
     version_id = data.get("version_id")
     expected_sha256 = data.get("expected_sha256")
 
@@ -14887,6 +14961,10 @@ def readme_preview_endpoint(data: dict):
     try:
 
         notebook = load_notebook(str(full_path))
+
+        only, exclude, dropped_past_sunset = _drop_past_sunset_selection(
+            str(full_path), only, exclude, drop_past_sunset,
+        )
 
         code_cells = [
             cell for cell in extract_code_cells(notebook)
@@ -14973,9 +15051,25 @@ def readme_preview_endpoint(data: dict):
         "status": "success",
         "notebook": notebook_path,
         "version_id": version_id,
+        "dropped_past_sunset": dropped_past_sunset,
         "package_name": package_name,
         "readme": readme,
     }
+
+
+def _drop_past_sunset_selection(notebook_path, only, exclude, drop_past_sunset):
+    """(only, exclude, dropped) for a preview route's own
+    "drop_past_sunset" -- apply_drop_past_sunset (backend/inspector.py),
+    the same selection `compile`/`deploy --drop-past-sunset` use, plus the
+    names it dropped so the response can say so. A ValueError (an "only"
+    list it would leave empty) propagates to the caller's own 400."""
+    if not drop_past_sunset:
+        return only, exclude, []
+    dropped = sorted(past_sunset_functions(
+        inspect_notebook_data(notebook_path=notebook_path)["deprecated_functions"]
+    ))
+    only, exclude = apply_drop_past_sunset(notebook_path, only, exclude)
+    return only, exclude, dropped
 
 
 @router.post("/curl-preview")
@@ -15058,6 +15152,10 @@ def curl_preview_endpoint(data: dict):
     version_id = data.get("version_id")
     only = data.get("only")
     exclude = data.get("exclude")
+    # "drop_past_sunset": leave out every deprecated function past its own
+    # sunset date -- matching an app compiled with it (POST /api/compile's
+    # own identical option) -- see _drop_past_sunset_selection.
+    drop_past_sunset = bool(data.get("drop_past_sunset", False))
     callback_url = data.get("callback_url")
     expected_sha256 = data.get("expected_sha256")
 
@@ -15137,6 +15235,9 @@ def curl_preview_endpoint(data: dict):
 
         with COMPILE_LOCK:
 
+            only, exclude, dropped_past_sunset = _drop_past_sunset_selection(
+                str(full_path), only, exclude, drop_past_sunset,
+            )
             commands = generate_curl_commands(
                 str(full_path), host=host, port=port, api_key=api_key,
                 only=only, exclude=exclude, callback_url=callback_url,
@@ -15153,6 +15254,7 @@ def curl_preview_endpoint(data: dict):
         "status": "success",
         "notebook": notebook_path,
         "version_id": version_id,
+        "dropped_past_sunset": dropped_past_sunset,
         "commands": commands,
     }
 
@@ -15200,6 +15302,10 @@ def postman_preview_endpoint(data: dict):
     version_id = data.get("version_id")
     only = data.get("only")
     exclude = data.get("exclude")
+    # "drop_past_sunset": leave out every deprecated function past its own
+    # sunset date -- matching an app compiled with it (POST /api/compile's
+    # own identical option) -- see _drop_past_sunset_selection.
+    drop_past_sunset = bool(data.get("drop_past_sunset", False))
     callback_url = data.get("callback_url")
     expected_sha256 = data.get("expected_sha256")
 
@@ -15287,6 +15393,9 @@ def postman_preview_endpoint(data: dict):
 
         with COMPILE_LOCK:
 
+            only, exclude, dropped_past_sunset = _drop_past_sunset_selection(
+                str(full_path), only, exclude, drop_past_sunset,
+            )
             collection = generate_postman_collection(
                 str(full_path), host=host, port=port, api_key=api_key,
                 only=only, exclude=exclude, collection_name=collection_name,
@@ -15304,6 +15413,7 @@ def postman_preview_endpoint(data: dict):
         "status": "success",
         "notebook": notebook_path,
         "version_id": version_id,
+        "dropped_past_sunset": dropped_past_sunset,
         "collection": collection,
     }
 
@@ -15688,6 +15798,10 @@ def openapi_preview_endpoint(data: dict):
 
     only = data.get("only")
     exclude = data.get("exclude")
+    # "drop_past_sunset": preview exactly what POST /api/compile would
+    # produce with its own identical option -- see
+    # _drop_past_sunset_selection.
+    drop_past_sunset = bool(data.get("drop_past_sunset", False))
     version_id = data.get("version_id")
 
     for field_name, field_value in (("only", only), ("exclude", exclude)):
@@ -15740,6 +15854,10 @@ def openapi_preview_endpoint(data: dict):
     try:
 
         notebook = load_notebook(str(full_path))
+
+        only, exclude, dropped_past_sunset = _drop_past_sunset_selection(
+            str(full_path), only, exclude, drop_past_sunset,
+        )
 
         code_cells = [
             cell for cell in extract_code_cells(notebook)
@@ -15862,6 +15980,7 @@ def openapi_preview_endpoint(data: dict):
         "status": "success",
         "notebook": notebook_path,
         "version_id": version_id,
+        "dropped_past_sunset": dropped_past_sunset,
         "package_name": package_name,
         "format": export_format,
     }
@@ -15948,6 +16067,11 @@ def compile_notebook_endpoint(
     exclude = data.get("exclude")
     version_id = data.get("version_id")
     smoke_test = bool(data.get("smoke_test", False))
+    # "drop_past_sunset": the same `compile --drop-past-sunset` the CLI
+    # already offers locally -- leave out every deprecated function whose
+    # own "sunset: YYYY-MM-DD" is today (UTC) or earlier, so a dashboard
+    # rebuild actually carries out the removal the Sunset header promised.
+    drop_past_sunset = bool(data.get("drop_past_sunset", False))
     expected_sha256 = data.get("expected_sha256")
 
     if version_id is not None and not isinstance(version_id, str):
@@ -16028,6 +16152,31 @@ def compile_notebook_endpoint(
             str(content_path)
         )
 
+        # Folded into "exclude" -- or, when "only" was given instead (the
+        # two are mutually exclusive above), removed from "only" -- before
+        # compile_notebook ever sees either list.
+        dropped_past_sunset = []
+        if drop_past_sunset:
+            dropped_past_sunset = sorted(past_sunset_functions(
+                inspect_notebook_data(notebook_path=str(content_path))[
+                    "deprecated_functions"
+                ]
+            ))
+        if dropped_past_sunset:
+            if only:
+                only = [name for name in only if name not in dropped_past_sunset]
+                if not only:
+                    # ValueError, not HTTPException: this runs inside the
+                    # try below, whose `except ValueError` already maps to
+                    # a 400 (a bare HTTPException would hit the catch-all
+                    # `except Exception` and surface as a 500).
+                    raise ValueError(
+                        "Every function in \"only\" is past its sunset "
+                        "date, so drop_past_sunset left nothing to compile."
+                    )
+            else:
+                exclude = sorted(set(exclude or []) | set(dropped_past_sunset))
+
         compile_notebook(
             str(content_path),
             GENERATED_DIR,
@@ -16100,6 +16249,9 @@ def compile_notebook_endpoint(
             "version_id": version_id,
             "only": only,
             "exclude": exclude,
+            # Which of "exclude" drop_past_sunset added (vs. the caller's own
+            # names) -- otherwise indistinguishable in this record.
+            "dropped_past_sunset": dropped_past_sunset,
             "endpoint_count": len(data["endpoints"]),
             "dependency_count": len(data["dependencies"]),
             "skipped_function_count": len(data["skipped_functions"]),
@@ -16109,6 +16261,7 @@ def compile_notebook_endpoint(
             "status": "success",
             "notebook": notebook_path,
             "version_id": version_id,
+            "dropped_past_sunset": dropped_past_sunset,
             "functions": data["functions"],
             "endpoints": data["endpoints"],
             "skipped_functions": data["skipped_functions"],
@@ -17869,7 +18022,7 @@ def compile_history_endpoint(
         writer.writerow([
             "compiled_at", "notebook_filename", "source_notebook_sha256",
             "only", "exclude", "endpoint_count", "dependency_count",
-            "skipped_function_count",
+            "skipped_function_count", "dropped_past_sunset",
         ])
 
         for entry in entries:
@@ -17883,6 +18036,8 @@ def compile_history_endpoint(
                 entry.get("endpoint_count"),
                 entry.get("dependency_count"),
                 entry.get("skipped_function_count"),
+                # .get(): entries recorded before this field existed.
+                ";".join(entry.get("dropped_past_sunset") or []),
             ])
 
         return StreamingResponse(

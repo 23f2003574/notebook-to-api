@@ -16868,7 +16868,7 @@ def test_inspect_notebook_version_reports_functions_and_dependencies_for_that_sn
     assert [f["name"] for f in body["functions"]] == ["add"]
     assert any(dep.startswith("pandas") for dep in body["dependencies"])
     assert body["endpoints"] == [
-        {"path": "/add", "method": "POST", "is_async": False, "deprecated": False}
+        {"path": "/add", "method": "POST", "is_async": False, "deprecated": False, "sunset": None}
     ]
     assert body["reserved_name_conflicts"] == []
     assert body["skipped_functions"] == []
@@ -22044,7 +22044,7 @@ def test_upload_inspect_compile_still_works_for_a_legitimate_notebook():
     )
     assert compile_resp.status_code == 200
     assert compile_resp.json()["endpoints"] == [
-        {"path": "/add", "method": "POST", "is_async": False, "deprecated": False}
+        {"path": "/add", "method": "POST", "is_async": False, "deprecated": False, "sunset": None}
     ]
 
 
@@ -22082,10 +22082,10 @@ def test_compile_endpoints_flag_background_functions_as_async():
 
     endpoints = {e["path"]: e for e in compile_resp.json()["endpoints"]}
 
-    assert endpoints["/add"] == {"path": "/add", "method": "POST", "is_async": False, "deprecated": False}
+    assert endpoints["/add"] == {"path": "/add", "method": "POST", "is_async": False, "deprecated": False, "sunset": None}
     assert endpoints["/train_model"] == {
         "path": "/train_model", "method": "POST", "is_async": True,
-        "deprecated": False,
+        "deprecated": False, "sunset": None,
     }
 
 
@@ -23431,6 +23431,8 @@ def test_validate_reports_pass_for_a_clean_notebook():
         "skipped_functions": [],
         "duplicate_functions": [],
         "requirements_conflict": None,
+        "deprecated_functions": {},
+        "past_sunset_functions": {},
     }
 
 
@@ -24713,6 +24715,7 @@ def test_validate_all_reports_zero_when_nothing_uploaded():
         "warn_count": 0,
         "fail_count": 0,
         "deprecated_notebook_count": 0,
+        "past_sunset_notebook_count": 0,
     }
 
 
@@ -25770,7 +25773,7 @@ def test_openapi_preview_matches_an_actual_compile_with_a_deprecated_directive()
     )
     assert compile_resp.status_code == 200
     assert compile_resp.json()["endpoints"] == [
-        {"path": "/greet", "method": "POST", "is_async": False, "deprecated": True}
+        {"path": "/greet", "method": "POST", "is_async": False, "deprecated": True, "sunset": None}
     ]
 
     export_resp = client.post("/api/export-openapi", json={"format": "json"})
@@ -27580,6 +27583,9 @@ def test_env_vars_preview_requires_no_notebook_and_needs_no_body():
         "NOTEBOOK_API_WEBHOOK_RETRY_BACKOFF_SECONDS",
         "NOTEBOOK_API_PUBLIC_URL",
         "NOTEBOOK_API_DISABLE_DOCS",
+        "NOTEBOOK_API_REJECT_DEPRECATED",
+        "NOTEBOOK_API_ENFORCE_SUNSET",
+        "NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS",
         "NOTEBOOK_API_JSON_LOGS",
     }
     assert env_vars["NOTEBOOK_API_KEY"]["default"] == "notebook-to-api-dev-key"
@@ -27696,10 +27702,10 @@ def test_inspect_reports_endpoints_and_flags_background_ones_before_compiling():
 
     endpoints = {e["path"]: e for e in inspect_resp.json()["endpoints"]}
 
-    assert endpoints["/add"] == {"path": "/add", "method": "POST", "is_async": False, "deprecated": False}
+    assert endpoints["/add"] == {"path": "/add", "method": "POST", "is_async": False, "deprecated": False, "sunset": None}
     assert endpoints["/train_model"] == {
         "path": "/train_model", "method": "POST", "is_async": True,
-        "deprecated": False,
+        "deprecated": False, "sunset": None,
     }
 
 
@@ -30335,10 +30341,12 @@ def test_compile_history_csv_format_returns_a_csv_response(tmp_path, monkeypatch
     rows = resp.text.strip().split("\r\n")
     assert rows[0] == (
         "compiled_at,notebook_filename,source_notebook_sha256,only,exclude,"
-        "endpoint_count,dependency_count,skipped_function_count"
+        "endpoint_count,dependency_count,skipped_function_count,"
+        "dropped_past_sunset"
     )
-    # "only" is a semicolon-joined cell, not one CSV column per function.
-    assert rows[1] == "2024-01-01T00:00:00+00:00,nb.ipynb,aaa,add;subtract,,2,0,0"
+    # "only" is a semicolon-joined cell, not one CSV column per function;
+    # an entry recorded before "dropped_past_sunset" existed gets "".
+    assert rows[1] == "2024-01-01T00:00:00+00:00,nb.ipynb,aaa,add;subtract,,2,0,0,"
     assert len(rows) == 2
 
 
@@ -34128,3 +34136,288 @@ def test_delete_all_notebooks_rejects_an_invalid_modified_before():
     )
 
     assert resp.status_code == 400
+
+
+def test_validate_all_reports_deprecated_functions_past_their_sunset():
+    """Confirmed missing before this feature: a deprecated function whose
+    own "sunset: YYYY-MM-DD" had already passed -- a missed removal -- was
+    only discoverable against a running compiled app, never from source."""
+
+    client.delete("/api/notebooks?confirm=true")
+
+    content = _notebook_bytes(
+        "# notebook-to-api: deprecated: use add_v2. sunset: 2000-01-01\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "# notebook-to-api: deprecated: sunset: 2999-01-01\n"
+        "def sub(a: int, b: int) -> int:\n    return a - b\n\n"
+        "# notebook-to-api: deprecated\n"
+        "def mul(a: int, b: int) -> int:\n    return a * b\n"
+    )
+    clean = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    for filename, body in (
+        ("validate_all_sunset_a.ipynb", content),
+        ("validate_all_sunset_b.ipynb", clean),
+    ):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(body), "application/json")},
+        )
+
+    resp = client.get("/api/validate-all")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["past_sunset_notebook_count"] == 1
+    by_filename = {r["filename"]: r for r in body["results"]}
+    assert by_filename["validate_all_sunset_a.ipynb"]["past_sunset_functions"] == {
+        "add": "2000-01-01"
+    }
+    assert by_filename["validate_all_sunset_b.ipynb"]["past_sunset_functions"] == {}
+
+
+def _upload_sunset_notebook(filename, days_from_today_by_name):
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+    today = _dt.now(_tz.utc).date()
+    source = ""
+    for name, days in days_from_today_by_name.items():
+        sunset = (today + _td(days=days)).isoformat()
+        source += (
+            f"# notebook-to-api: deprecated: sunset: {sunset}\n"
+            f"def {name}(a: int) -> int:\n    return a\n\n"
+        )
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(_notebook_bytes(source)), "application/json")},
+    )
+    return {name: (today + _td(days=d)).isoformat()
+            for name, d in days_from_today_by_name.items()}
+
+
+def test_validate_all_sunset_within_days_lists_upcoming_removals():
+    """Confirmed missing before this feature: validate-all only flagged a
+    sunset once it had already passed -- nothing surfaced removals coming
+    due soon, while there was still time to schedule them."""
+    client.delete("/api/notebooks?confirm=true")
+    dates = _upload_sunset_notebook(
+        "validate_all_upcoming.ipynb",
+        {"soon": 5, "edge": 30, "later": 31, "gone": -1, "today": 0},
+    )
+
+    body = client.get("/api/validate-all", params={"sunset_within_days": 30}).json()
+
+    result = body["results"][0]
+    assert result["upcoming_sunset_functions"] == {
+        "soon": dates["soon"], "edge": dates["edge"],
+    }
+    # Already due (today or earlier) is past, not upcoming.
+    assert set(result["past_sunset_functions"]) == {"gone", "today"}
+    assert body["upcoming_sunset_notebook_count"] == 1
+
+
+def test_validate_all_omits_upcoming_sunsets_unless_asked():
+    client.delete("/api/notebooks?confirm=true")
+    _upload_sunset_notebook("validate_all_upcoming_off.ipynb", {"soon": 5})
+
+    body = client.get("/api/validate-all").json()
+
+    assert "upcoming_sunset_functions" not in body["results"][0]
+    assert "upcoming_sunset_notebook_count" not in body
+
+
+def test_validate_all_rejects_a_negative_sunset_within_days():
+    resp = client.get("/api/validate-all", params={"sunset_within_days": -1})
+
+    assert resp.status_code == 400
+    assert "sunset_within_days" in resp.json()["detail"]
+
+
+def test_validate_reports_deprecated_and_past_sunset_functions():
+    """Confirmed missing before this feature: POST /api/validate said
+    nothing about deprecations, unlike GET /api/validate-all."""
+    client.delete("/api/notebooks?confirm=true")
+    content = _notebook_bytes(
+        "# notebook-to-api: deprecated: use v2. sunset: 2000-01-01\n"
+        "def old_add(a: int) -> int:\n    return a\n\n"
+        "# notebook-to-api: deprecated: sunset: 2999-01-01\n"
+        "def later(a: int) -> int:\n    return a\n"
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("validate_sunset.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    body = client.post("/api/validate", json={"notebook_path": "validate_sunset.ipynb"}).json()
+
+    assert body["status"] == "pass"
+    assert body["deprecated_functions"] == {
+        "old_add": "use v2. sunset: 2000-01-01", "later": "sunset: 2999-01-01",
+    }
+    assert body["past_sunset_functions"] == {"old_add": "2000-01-01"}
+
+
+def _upload_sunset_mix(filename):
+    content = _notebook_bytes(
+        "# notebook-to-api: deprecated: sunset: 2000-01-01\n"
+        "def old_add(a: int) -> int:\n    return a\n\n"
+        "# notebook-to-api: deprecated: sunset: 2999-01-01\n"
+        "def later(a: int) -> int:\n    return a\n\n"
+        "def add(a: int) -> int:\n    return a\n"
+    )
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(content), "application/json")},
+    )
+
+
+def test_compile_drop_past_sunset_leaves_out_functions_past_their_sunset():
+    """Confirmed missing before this feature: POST /api/compile had no
+    equivalent of `compile --drop-past-sunset`."""
+    _upload_sunset_mix("compile_drop_sunset.ipynb")
+
+    resp = client.post("/api/compile", json={
+        "notebook_path": "compile_drop_sunset.ipynb", "drop_past_sunset": True,
+    })
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["dropped_past_sunset"] == ["old_add"]
+    assert sorted(func["name"] for func in body["functions"]) == ["add", "later"]
+
+
+def test_compile_without_drop_past_sunset_reports_nothing_dropped():
+    _upload_sunset_mix("compile_keep_sunset.ipynb")
+
+    body = client.post(
+        "/api/compile", json={"notebook_path": "compile_keep_sunset.ipynb"}
+    ).json()
+
+    assert body["dropped_past_sunset"] == []
+    assert "old_add" in {func["name"] for func in body["functions"]}
+
+
+def test_compile_drop_past_sunset_trims_only_instead_of_conflicting_with_it():
+    _upload_sunset_mix("compile_only_sunset.ipynb")
+
+    body = client.post("/api/compile", json={
+        "notebook_path": "compile_only_sunset.ipynb",
+        "only": ["old_add", "add"], "drop_past_sunset": True,
+    }).json()
+
+    assert body["dropped_past_sunset"] == ["old_add"]
+    assert [func["name"] for func in body["functions"]] == ["add"]
+
+
+def test_compile_drop_past_sunset_rejects_an_only_list_left_empty():
+    _upload_sunset_mix("compile_only_empty_sunset.ipynb")
+
+    resp = client.post("/api/compile", json={
+        "notebook_path": "compile_only_empty_sunset.ipynb",
+        "only": ["old_add"], "drop_past_sunset": True,
+    })
+
+    assert resp.status_code == 400
+    assert "past its sunset date" in resp.json()["detail"]
+
+
+def test_curl_preview_drop_past_sunset_leaves_out_their_commands():
+    """Confirmed missing before this feature: POST /api/curl-preview and
+    /api/postman-preview had no "drop_past_sunset", so they kept previewing
+    requests a POST /api/compile with it no longer serves."""
+    _upload_sunset_mix("curl_preview_sunset.ipynb")
+
+    body = client.post("/api/curl-preview", json={
+        "notebook_path": "curl_preview_sunset.ipynb", "drop_past_sunset": True,
+    }).json()
+
+    assert body["dropped_past_sunset"] == ["old_add"]
+    joined = "\n".join(body["commands"])
+    assert "/old_add" not in joined and "/later" in joined
+
+
+def test_postman_preview_drop_past_sunset_leaves_out_their_requests():
+    _upload_sunset_mix("postman_preview_sunset.ipynb")
+
+    body = client.post("/api/postman-preview", json={
+        "notebook_path": "postman_preview_sunset.ipynb", "drop_past_sunset": True,
+    }).json()
+
+    assert body["dropped_past_sunset"] == ["old_add"]
+    names = [item["name"] for item in body["collection"]["item"]]
+    assert not any("old_add" in name for name in names)
+
+
+def test_previews_without_drop_past_sunset_report_nothing_dropped():
+    _upload_sunset_mix("preview_keep_sunset.ipynb")
+
+    body = client.post(
+        "/api/curl-preview", json={"notebook_path": "preview_keep_sunset.ipynb"}
+    ).json()
+
+    assert body["dropped_past_sunset"] == []
+    assert "/old_add" in "\n".join(body["commands"])
+
+
+def test_postman_preview_drop_past_sunset_rejects_an_only_list_left_empty():
+    _upload_sunset_mix("postman_preview_empty_sunset.ipynb")
+
+    resp = client.post("/api/postman-preview", json={
+        "notebook_path": "postman_preview_empty_sunset.ipynb",
+        "only": ["old_add"], "drop_past_sunset": True,
+    })
+
+    assert resp.status_code == 400
+    assert "left nothing to compile" in resp.json()["detail"]
+
+
+@pytest.mark.parametrize("route", ["/api/app-preview", "/api/readme-preview", "/api/openapi-preview"])
+def test_previews_drop_past_sunset_leave_those_functions_out(route):
+    """Confirmed missing before this feature: app/readme/openapi previews
+    had no "drop_past_sunset", so they couldn't preview what POST
+    /api/compile with it would actually build."""
+    filename = "preview_drop_" + route.rsplit("/", 1)[1].replace("-", "_") + ".ipynb"
+    _upload_sunset_mix(filename)
+
+    kept = client.post(route, json={"notebook_path": filename})
+    dropped = client.post(route, json={"notebook_path": filename, "drop_past_sunset": True})
+
+    assert kept.status_code == 200 and dropped.status_code == 200, dropped.text
+    assert kept.json()["dropped_past_sunset"] == []
+    assert "old_add" in json.dumps(kept.json())
+    body = dropped.json()
+    assert body.pop("dropped_past_sunset") == ["old_add"]
+    assert "old_add" not in json.dumps(body)
+    assert "later" in json.dumps(body)
+
+
+@pytest.mark.parametrize("route", ["/api/app-preview", "/api/readme-preview", "/api/openapi-preview"])
+def test_previews_drop_past_sunset_reject_an_only_list_left_empty(route):
+    filename = "preview_empty_" + route.rsplit("/", 1)[1].replace("-", "_") + ".ipynb"
+    _upload_sunset_mix(filename)
+
+    resp = client.post(route, json={
+        "notebook_path": filename, "only": ["old_add"], "drop_past_sunset": True,
+    })
+
+    assert resp.status_code == 400
+    assert "left nothing to compile" in resp.json()["detail"]
+
+
+def test_compile_history_records_which_functions_drop_past_sunset_removed():
+    """Confirmed missing before this feature: a compile-history entry only
+    kept the final "exclude" -- no way to tell which of those names
+    drop_past_sunset added rather than the caller."""
+    _upload_sunset_mix("history_drop_sunset.ipynb")
+    client.post("/api/compile", json={
+        "notebook_path": "history_drop_sunset.ipynb",
+        "drop_past_sunset": True,
+    })
+
+    entry = client.get("/api/compile/history").json()["entries"][0]
+    csv_rows = client.get("/api/compile/history", params={"format": "csv"}).text.strip().split("\r\n")
+
+    assert entry["notebook_filename"] == "history_drop_sunset.ipynb"
+    assert entry["dropped_past_sunset"] == ["old_add"]
+    assert entry["exclude"] == ["old_add"]
+    assert csv_rows[1].endswith(",old_add")

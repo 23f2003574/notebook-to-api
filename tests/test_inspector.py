@@ -214,11 +214,11 @@ def test_inspect_notebook_data_reports_endpoints_and_flags_background_ones(tmp_p
     endpoints = {e["path"]: e for e in data["endpoints"]}
 
     assert endpoints["/add"] == {
-        "path": "/add", "method": "POST", "is_async": False, "deprecated": False
+        "path": "/add", "method": "POST", "is_async": False, "deprecated": False, "sunset": None
     }
     assert endpoints["/train_model"] == {
         "path": "/train_model", "method": "POST", "is_async": True,
-        "deprecated": False,
+        "deprecated": False, "sunset": None,
     }
 
 
@@ -1585,6 +1585,8 @@ def test_classify_notebook_diff_deprecated_only_change_is_not_breaking(tmp_path)
         "breaking_changes": [],
         "newly_deprecated": [{"name": "add", "reason": None}],
         "no_longer_deprecated": [],
+        "sunset_changed": [],
+        "planned_removals": [],
     }
 
 
@@ -1665,6 +1667,8 @@ def test_print_notebook_diff_prints_newly_deprecated(capsys):
         "compatible": True, "breaking_changes": [],
         "newly_deprecated": [{"name": "add", "reason": "use add_v2 instead"}],
         "no_longer_deprecated": [],
+        "sunset_changed": [],
+        "planned_removals": [],
     })
 
     output = capsys.readouterr().out
@@ -1802,6 +1806,8 @@ def test_classify_notebook_diff_added_function_is_not_breaking(tmp_path):
         "breaking_changes": [],
         "newly_deprecated": [],
         "no_longer_deprecated": [],
+        "sunset_changed": [],
+        "planned_removals": [],
     }
 
 
@@ -1850,6 +1856,8 @@ def test_classify_notebook_diff_new_optional_parameter_is_not_breaking(tmp_path)
         "breaking_changes": [],
         "newly_deprecated": [],
         "no_longer_deprecated": [],
+        "sunset_changed": [],
+        "planned_removals": [],
     }
 
 
@@ -2076,6 +2084,8 @@ def test_classify_notebook_diff_gaining_a_return_type_annotation_is_not_breaking
         "breaking_changes": [],
         "newly_deprecated": [],
         "no_longer_deprecated": [],
+        "sunset_changed": [],
+        "planned_removals": [],
     }
 
 
@@ -2100,6 +2110,8 @@ def test_classify_notebook_diff_losing_a_return_type_annotation_is_not_breaking(
         "breaking_changes": [],
         "newly_deprecated": [],
         "no_longer_deprecated": [],
+        "sunset_changed": [],
+        "planned_removals": [],
     }
 
 
@@ -2125,6 +2137,8 @@ def test_classify_notebook_diff_async_only_change_is_not_breaking(tmp_path):
         "breaking_changes": [],
         "newly_deprecated": [],
         "no_longer_deprecated": [],
+        "sunset_changed": [],
+        "planned_removals": [],
     }
 
 
@@ -2233,6 +2247,8 @@ def test_classify_notebook_diff_no_changes_is_compatible(tmp_path):
         "breaking_changes": [],
         "newly_deprecated": [],
         "no_longer_deprecated": [],
+        "sunset_changed": [],
+        "planned_removals": [],
     }
 
 
@@ -3203,3 +3219,255 @@ def test_generate_postman_collection_flags_a_deprecated_background_function(tmp_
     description = items_by_name["[DEPRECATED] train_model"]["request"]["description"]
     assert description.startswith("**Deprecated.** use train_v2 instead\n\n")
     assert "task_id" in description
+
+
+def _classify_deprecation_directives(tmp_path, old_directive, new_directive):
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    body = "def add(a: int, b: int) -> int:\n    return a + b\n"
+    _write_notebook(old_path, old_directive + body)
+    _write_notebook(new_path, new_directive + body)
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+    return diff, classify_notebook_diff(diff)
+
+
+def test_classify_notebook_diff_reports_a_sunset_date_moved_earlier(tmp_path):
+    """Confirmed missing before this feature: changing only a deprecated
+    function's own sunset date touched nothing _function_signature_key
+    compared, so the diff reported the function as unchanged."""
+    diff, classification = _classify_deprecation_directives(
+        tmp_path,
+        "# notebook-to-api: deprecated: sunset: 2026-06-01\n",
+        "# notebook-to-api: deprecated: sunset: 2026-01-01\n",
+    )
+
+    assert [entry["name"] for entry in diff["changed"]] == ["add"]
+    assert classification["compatible"] is True
+    assert classification["newly_deprecated"] == []
+    assert classification["sunset_changed"] == [{
+        "name": "add", "old_sunset": "2026-06-01", "new_sunset": "2026-01-01",
+        "moved_earlier": True,
+    }]
+
+
+def test_classify_notebook_diff_reports_a_sunset_added_or_postponed(tmp_path):
+    _, added = _classify_deprecation_directives(
+        tmp_path,
+        "# notebook-to-api: deprecated\n",
+        "# notebook-to-api: deprecated: sunset: 2026-01-01\n",
+    )
+    _, postponed = _classify_deprecation_directives(
+        tmp_path,
+        "# notebook-to-api: deprecated: sunset: 2026-01-01\n",
+        "# notebook-to-api: deprecated: sunset: 2027-01-01\n",
+    )
+
+    assert added["sunset_changed"] == [{
+        "name": "add", "old_sunset": None, "new_sunset": "2026-01-01",
+        "moved_earlier": False,
+    }]
+    assert postponed["sunset_changed"][0]["moved_earlier"] is False
+
+
+def test_classify_notebook_diff_newly_deprecated_with_sunset_is_not_sunset_changed(
+    tmp_path,
+):
+    _, classification = _classify_deprecation_directives(
+        tmp_path, "", "# notebook-to-api: deprecated: sunset: 2026-01-01\n",
+    )
+
+    assert classification["newly_deprecated"] == [
+        {"name": "add", "reason": "sunset: 2026-01-01"}
+    ]
+    assert classification["sunset_changed"] == []
+
+
+def test_diff_ignores_a_reason_edit_that_keeps_the_same_sunset(tmp_path):
+    diff, classification = _classify_deprecation_directives(
+        tmp_path,
+        "# notebook-to-api: deprecated: use v2. sunset: 2026-01-01\n",
+        "# notebook-to-api: deprecated: use add_v2. sunset: 2026-01-01\n",
+    )
+
+    assert diff["changed"] == []
+    assert classification["sunset_changed"] == []
+
+
+def test_print_notebook_diff_prints_sunset_changes(capsys):
+    print_notebook_diff({
+        "added": [], "removed": [], "changed": [{"name": "add"}], "unchanged": [],
+        "compatible": True, "breaking_changes": [],
+        "newly_deprecated": [], "no_longer_deprecated": [],
+        "sunset_changed": [
+            {"name": "add", "old_sunset": "2026-06-01",
+             "new_sunset": "2026-01-01", "moved_earlier": True},
+            {"name": "sub", "old_sunset": None,
+             "new_sunset": "2027-01-01", "moved_earlier": False},
+        ],
+    })
+
+    output = capsys.readouterr().out
+    assert "2 deprecated endpoint(s) with a changed sunset date:" in output
+    assert "! POST /add: 2026-06-01 -> 2026-01-01 (moved earlier)" in output
+    assert "POST /sub: none -> 2027-01-01" in output
+
+
+def test_inspect_notebook_data_endpoints_report_each_deprecated_functions_sunset(
+    tmp_path,
+):
+    """Confirmed missing before this feature: an endpoint's metadata only
+    said "deprecated": true -- its sunset date was buried in the free-text
+    reason, invisible to anything consuming this preview structurally."""
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "# notebook-to-api: deprecated: use v2. sunset: 2026-01-15\n"
+        "def old_add(a: int) -> int:\n    return a\n\n"
+        "# notebook-to-api: deprecated: sunset: 2026-13-40\n"
+        "def bad_date(a: int) -> int:\n    return a\n\n"
+        "def add(a: int) -> int:\n    return a\n",
+    )
+
+    data = inspect_notebook_data(str(notebook_path))
+    endpoints = {entry["path"]: entry for entry in data["endpoints"]}
+
+    assert endpoints["/old_add"]["sunset"] == "2026-01-15"
+    assert endpoints["/bad_date"]["deprecated"] is True
+    assert endpoints["/bad_date"]["sunset"] is None
+    assert endpoints["/add"]["sunset"] is None
+
+
+def test_inspect_notebook_prints_the_sunset_date_next_to_deprecated(
+    tmp_path, capsys
+):
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(
+        notebook_path,
+        "# notebook-to-api: deprecated: sunset: 2026-01-15\n"
+        "def old_add(a: int) -> int:\n    return a\n\n"
+        "# notebook-to-api: deprecated\n"
+        "def older(a: int) -> int:\n    return a\n",
+    )
+
+    inspect_notebook(str(notebook_path), output_dir=str(tmp_path / "out"))
+
+    output = capsys.readouterr().out
+    assert "[deprecated, sunset 2026-01-15]" in output
+    assert "older" in output and "[deprecated]" in output
+
+
+def test_generate_postman_collection_has_a_collection_level_deprecation_check(
+    tmp_path,
+):
+    """Confirmed missing before this feature: nothing in the generated
+    collection read the compiled app's Deprecation/Sunset headers -- only
+    deprecations known at generation time were marked, by item name."""
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    collection = generate_postman_collection(str(notebook_path))
+
+    events = collection["event"]
+    assert [event["listen"] for event in events] == ["test"]
+    assert any("Deprecation" in line for line in events[0]["script"]["exec"])
+
+
+def _run_postman_deprecation_script(tmp_path, headers):
+    import shutil
+    import subprocess
+
+    if shutil.which("node") is None:
+        pytest.skip("requires Node.js to execute the Postman test script")
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(notebook_path, "def add(a: int) -> int:\n    return a\n")
+    script = "\n".join(
+        generate_postman_collection(str(notebook_path))["event"][0]["script"]["exec"]
+    )
+    runner = tmp_path / "run.js"
+    runner.write_text(
+        "const headers = " + json.dumps(headers) + ";\n"
+        "const tests = [], warnings = [];\n"
+        "const pm = {\n"
+        "  response: {headers: {get: (k) => headers[k]}},\n"
+        "  request: {url: {getPath: () => '/add'}},\n"
+        "  test: (name) => tests.push(name),\n"
+        "};\n"
+        "console.warn = (m) => warnings.push(m);\n"
+        + script
+        + "\nconsole.log(JSON.stringify({tests, warnings}));\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(["node", str(runner)], capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+def test_postman_deprecation_script_reports_a_deprecated_response(tmp_path):
+    result = _run_postman_deprecation_script(tmp_path, {
+        "Deprecation": "true", "X-Deprecation-Reason": "Use add_v2.",
+        "Sunset": "Thu, 31 Dec 2099 00:00:00 GMT",
+    })
+
+    note = "DEPRECATED: /add -- Use add_v2. (sunset: Thu, 31 Dec 2099 00:00:00 GMT)"
+    assert result == {"tests": [note], "warnings": [note]}
+
+
+def test_postman_deprecation_script_is_silent_for_a_normal_response(tmp_path):
+    for headers in ({}, {"Deprecation": "false"}):
+        assert _run_postman_deprecation_script(tmp_path, headers) == {
+            "tests": [], "warnings": [],
+        }
+
+
+def _classify_removal(tmp_path, old_directive):
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    keep = "def add(a: int) -> int:\n    return a\n"
+    _write_notebook(old_path, keep + "\n" + old_directive + "def old_add(a: int) -> int:\n    return a\n")
+    _write_notebook(new_path, keep)
+    return classify_notebook_diff(diff_notebook_functions(str(old_path), str(new_path)))
+
+
+def test_classify_notebook_diff_removal_after_sunset_is_a_planned_removal(tmp_path):
+    """Confirmed wrong before this feature: removing a deprecated endpoint
+    on or after its own announced sunset date -- the removal the Sunset
+    header promised -- was reported as a breaking change, so
+    --fail-on-breaking blocked exactly the planned change."""
+    classification = _classify_removal(
+        tmp_path, "# notebook-to-api: deprecated: sunset: 2000-01-01\n"
+    )
+
+    assert classification["compatible"] is True
+    assert classification["breaking_changes"] == []
+    assert classification["planned_removals"] == [
+        {"name": "old_add", "sunset": "2000-01-01"}
+    ]
+
+
+@pytest.mark.parametrize("directive", [
+    "",  # never deprecated
+    "# notebook-to-api: deprecated\n",  # deprecated, no sunset
+    "# notebook-to-api: deprecated: sunset: 2999-01-01\n",  # sunset not reached
+])
+def test_classify_notebook_diff_other_removals_stay_breaking(tmp_path, directive):
+    classification = _classify_removal(tmp_path, directive)
+
+    assert classification["compatible"] is False
+    assert [change["type"] for change in classification["breaking_changes"]] == [
+        "removed_endpoint"
+    ]
+    assert classification["planned_removals"] == []
+
+
+def test_print_notebook_diff_prints_planned_removals(capsys):
+    print_notebook_diff({
+        "added": [], "removed": [{"name": "old_add"}], "changed": [], "unchanged": [],
+        "compatible": True, "breaking_changes": [],
+        "newly_deprecated": [], "no_longer_deprecated": [], "sunset_changed": [],
+        "planned_removals": [{"name": "old_add", "sunset": "2000-01-01"}],
+    })
+
+    output = capsys.readouterr().out
+    assert "1 endpoint(s) removed on or after their announced sunset date (not breaking):" in output
+    assert "POST /old_add (sunset 2000-01-01)" in output

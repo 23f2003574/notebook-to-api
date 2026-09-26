@@ -1055,7 +1055,7 @@ def test_compile_command_json_flag_emits_machine_readable_output(tmp_path):
     assert data["dependencies"] == []
     assert data["reserved_name_conflicts"] == []
     assert data["endpoints"] == [
-        {"path": "/add", "method": "POST", "is_async": False, "deprecated": False}
+        {"path": "/add", "method": "POST", "is_async": False, "deprecated": False, "sunset": None}
     ]
     assert data["skipped_functions"] == []
 
@@ -1096,7 +1096,7 @@ def test_compile_command_json_flag_reports_a_background_endpoint(tmp_path):
     assert proc.returncode == 0, proc.stdout + proc.stderr
     data = json.loads(proc.stdout)
     assert data["endpoints"] == [
-        {"path": "/train_model", "method": "POST", "is_async": True, "deprecated": False}
+        {"path": "/train_model", "method": "POST", "is_async": True, "deprecated": False, "sunset": None}
     ]
 
 
@@ -20524,7 +20524,7 @@ def test_versions_diff_command_json_flag_emits_machine_readable_output(
     assert data == {
         "added": [], "removed": [], "changed": [], "unchanged": ["add"],
         "compatible": True, "breaking_changes": [],
-        "newly_deprecated": [], "no_longer_deprecated": [],
+        "newly_deprecated": [], "no_longer_deprecated": [], "sunset_changed": [], "planned_removals": [],
     }
 
 
@@ -25259,6 +25259,8 @@ def test_app_status_command_prints_health_ready_info_and_config(
             "json_logs_enabled": False,
         }),
     ]
+    # An app compiled before GET /deprecations existed answers 404.
+    handler.responses.append(_json_response(404, {"detail": "Not Found"}))
 
     workdir = tmp_path / "workdir"
     workdir.mkdir()
@@ -25278,7 +25280,7 @@ def test_app_status_command_prints_health_ready_info_and_config(
     assert "rate limit: 60 requests/minute per key" in proc.stdout
     assert "allowed origins: *" in proc.stdout
     assert "docs: enabled" in proc.stdout
-    assert handler.requests == ["/health", "/ready", "/info", "/config"]
+    assert handler.requests == ["/health", "/ready", "/info", "/config", "/deprecations"]
 
 
 def test_app_status_command_reports_disabled_limits_plainly(tmp_path, fake_dashboard):
@@ -25305,6 +25307,8 @@ def test_app_status_command_reports_disabled_limits_plainly(tmp_path, fake_dashb
             "disable_docs": True,
         }),
     ]
+    # An app compiled before GET /deprecations existed answers 404.
+    handler.responses.append(_json_response(404, {"detail": "Not Found"}))
 
     workdir = tmp_path / "workdir"
     workdir.mkdir()
@@ -25338,6 +25342,8 @@ def test_app_status_command_json_flag_emits_the_combined_raw_response(
         _json_response(200, info),
         _json_response(200, config),
     ]
+    # An app compiled before GET /deprecations existed answers 404.
+    handler.responses.append(_json_response(404, {"detail": "Not Found"}))
 
     workdir = tmp_path / "workdir"
     workdir.mkdir()
@@ -25350,6 +25356,7 @@ def test_app_status_command_json_flag_emits_the_combined_raw_response(
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert json.loads(proc.stdout) == {
         "health": health, "ready": ready, "info": info, "config": config,
+        "deprecations": None,
     }
 
 
@@ -27491,3 +27498,1219 @@ def test_app_tasks_reset_command_prompt_warns_about_processing_tasks(
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "still processing" in proc.stdout
+
+
+_SAMPLE_DEPRECATIONS = {
+    "rejecting": False,
+    "endpoints": [
+        {"path": "/old_add", "reason": "Use add.", "calls": 3},
+        {"path": "/old_sub", "reason": None, "calls": 0},
+    ],
+}
+
+
+def _run_app_deprecations(tmp_path, fake_dashboard, body, *extra, status=200):
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [_json_response(status, body)]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    proc = _run_cli(
+        ["app-deprecations", "--host", host, "--port", str(port), *extra],
+        cwd=workdir,
+    )
+    return proc, handler
+
+
+def test_app_deprecations_prints_each_endpoint_with_reason_and_calls(
+    tmp_path, fake_dashboard
+):
+    """Confirmed missing before this feature: no CLI command read a running
+    compiled app's own GET /deprecations."""
+    proc, handler = _run_app_deprecations(
+        tmp_path, fake_dashboard, _SAMPLE_DEPRECATIONS
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/deprecations"]
+    assert "2 deprecated endpoint(s):" in proc.stdout
+    assert "/old_add  calls=3  (Use add.)" in proc.stdout
+    assert "/old_sub  calls=0\n" in proc.stdout
+
+
+def test_app_deprecations_json_prints_the_response_verbatim(
+    tmp_path, fake_dashboard
+):
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, _SAMPLE_DEPRECATIONS, "--json"
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == _SAMPLE_DEPRECATIONS
+
+
+def test_app_deprecations_fail_if_called_exits_1_when_any_is_still_called(
+    tmp_path, fake_dashboard
+):
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, _SAMPLE_DEPRECATIONS, "--fail-if-called"
+    )
+
+    assert proc.returncode == 1
+    assert "still being called: /old_add" in proc.stderr
+
+
+def test_app_deprecations_fail_if_called_passes_when_nothing_is_called(
+    tmp_path, fake_dashboard
+):
+    body = {
+        "rejecting": True,
+        "endpoints": [{"path": "/old_add", "reason": None, "calls": 0}],
+    }
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, body, "--fail-if-called"
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "REJECTED with 410" in proc.stdout
+
+
+def test_app_deprecations_reports_none_when_nothing_is_deprecated(
+    tmp_path, fake_dashboard
+):
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, {"rejecting": False, "endpoints": []}
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.strip() == "No deprecated endpoints."
+
+
+def test_app_deprecations_404_explains_the_app_needs_recompiling(
+    tmp_path, fake_dashboard
+):
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, {"detail": "Not Found"}, status=404
+    )
+
+    assert proc.returncode != 0
+    assert "recompile" in proc.stdout + proc.stderr
+
+
+def test_app_deprecations_prints_each_endpoints_sunset_date(
+    tmp_path, fake_dashboard
+):
+    body = {
+        "rejecting": False,
+        "endpoints": [
+            {"path": "/old_add", "reason": "Use add.", "calls": 0,
+             "sunset": "2099-01-01"},
+        ],
+    }
+    proc, _ = _run_app_deprecations(tmp_path, fake_dashboard, body)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "/old_add  calls=0  sunset=2099-01-01  (Use add.)" in proc.stdout
+
+
+def test_app_deprecations_fail_if_past_sunset_exits_1_for_a_missed_removal(
+    tmp_path, fake_dashboard
+):
+    """Confirmed missing before this feature: nothing checked that an
+    endpoint whose sunset date had passed was actually removed."""
+    body = {
+        "rejecting": False,
+        "endpoints": [
+            {"path": "/old_add", "reason": None, "calls": 0,
+             "sunset": "2000-01-01"},
+            {"path": "/old_sub", "reason": None, "calls": 0,
+             "sunset": "2099-01-01"},
+        ],
+    }
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, body, "--fail-if-past-sunset"
+    )
+
+    assert proc.returncode == 1
+    assert "past their sunset date: /old_add (2000-01-01)" in proc.stderr
+    assert "/old_sub (" not in proc.stderr
+
+
+def test_app_deprecations_fail_if_past_sunset_passes_for_future_or_missing(
+    tmp_path, fake_dashboard
+):
+    body = {
+        "rejecting": False,
+        "endpoints": [
+            {"path": "/a", "reason": None, "calls": 5, "sunset": "2099-01-01"},
+            {"path": "/b", "reason": None, "calls": 5, "sunset": None},
+            {"path": "/c", "reason": None, "calls": 5},
+            {"path": "/d", "reason": None, "calls": 5, "sunset": "garbage"},
+        ],
+    }
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, body, "--fail-if-past-sunset"
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def _validate_all_past_sunset_response(past_sunset_count):
+    return _json_response(200, {
+        "status": "success",
+        "results": [
+            {
+                "filename": "old.ipynb", "status": "pass",
+                "reserved_name_conflicts": [], "skipped_functions": [],
+                "duplicate_functions": [], "requirements_conflict": None,
+                "deprecated_functions": {"add": "sunset: 2000-01-01"},
+                "past_sunset_functions": (
+                    {"add": "2000-01-01"} if past_sunset_count else {}
+                ),
+                "detail": None,
+            },
+        ],
+        "pass_count": 1, "warn_count": 0, "fail_count": 0,
+        "deprecated_notebook_count": 1,
+        "past_sunset_notebook_count": past_sunset_count,
+    })
+
+
+def test_validate_all_command_prints_past_sunset_functions_and_summary(
+    tmp_path, fake_dashboard
+):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_validate_all_past_sunset_response(1)]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["validate-all", "--dashboard-url", dashboard_url], cwd=workdir)
+
+    # Reported, but not fatal without --fail-on-past-sunset.
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "past sunset: add (sunset 2000-01-01)" in proc.stdout
+    assert (
+        "1 notebook(s) still define a deprecated function past its sunset date"
+        in proc.stdout
+    )
+
+
+def test_validate_all_command_fail_on_past_sunset_exits_1(tmp_path, fake_dashboard):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_validate_all_past_sunset_response(1)]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["validate-all", "--dashboard-url", dashboard_url, "--fail-on-past-sunset"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 1
+
+
+def test_validate_all_command_fail_on_past_sunset_passes_when_none(
+    tmp_path, fake_dashboard
+):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_validate_all_past_sunset_response(0)]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["validate-all", "--dashboard-url", dashboard_url, "--fail-on-past-sunset"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "past sunset" not in proc.stdout
+
+
+def _diff_sunset_directives(workdir, old_directive, new_directive):
+    body = "def add(a: int, b: int) -> int:\n    return a + b\n"
+    old_path = workdir / "old.ipynb"
+    new_path = workdir / "new.ipynb"
+    _write_notebook_with_function(old_path, old_directive + body)
+    _write_notebook_with_function(new_path, new_directive + body)
+    return old_path, new_path
+
+
+def test_diff_command_fail_on_sunset_moved_earlier_exits_1(tmp_path):
+    """Confirmed missing before this feature: classify_notebook_diff's own
+    "sunset_changed"/"moved_earlier" had no CLI flag reading it -- a CI
+    job had no way to block a PR that pulls a removal date forward."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    old_path, new_path = _diff_sunset_directives(
+        workdir,
+        "# notebook-to-api: deprecated: sunset: 2026-06-01\n",
+        "# notebook-to-api: deprecated: sunset: 2026-01-01\n",
+    )
+
+    proc = _run_cli(
+        ["diff", str(old_path), str(new_path), "--fail-on-sunset-moved-earlier"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 1
+    assert "POST /add: 2026-06-01 -> 2026-01-01 (moved earlier)" in proc.stdout
+
+
+def test_diff_command_sunset_moved_earlier_without_the_flag_exits_0(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    old_path, new_path = _diff_sunset_directives(
+        workdir,
+        "# notebook-to-api: deprecated: sunset: 2026-06-01\n",
+        "# notebook-to-api: deprecated: sunset: 2026-01-01\n",
+    )
+
+    proc = _run_cli(
+        ["diff", str(old_path), str(new_path), "--fail-on-deprecation"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_diff_command_fail_on_sunset_moved_earlier_ignores_a_postponement(
+    tmp_path,
+):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    old_path, new_path = _diff_sunset_directives(
+        workdir,
+        "# notebook-to-api: deprecated: sunset: 2026-01-01\n",
+        "# notebook-to-api: deprecated: sunset: 2027-01-01\n",
+    )
+
+    proc = _run_cli(
+        ["diff", str(old_path), str(new_path), "--fail-on-sunset-moved-earlier"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "2026-01-01 -> 2027-01-01" in proc.stdout
+
+
+def test_remote_diff_command_fail_on_sunset_moved_earlier_exits_1(
+    tmp_path, fake_dashboard
+):
+    dashboard_url, handler = fake_dashboard
+    body = "def add(a: int, b: int) -> int:\n    return a + b\n"
+    handler.responses = [
+        _raw_response(200, _notebook_bytes_with_function(
+            "# notebook-to-api: deprecated: sunset: 2026-06-01\n" + body
+        ))
+    ]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    _write_notebook_with_function(
+        workdir / "nb.ipynb",
+        "# notebook-to-api: deprecated: sunset: 2026-01-01\n" + body,
+    )
+
+    proc = _run_cli(
+        ["remote-diff", "nb.ipynb", "--dashboard-url", dashboard_url,
+         "--fail-on-sunset-moved-earlier"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 1
+
+
+def test_every_diff_command_accepts_fail_on_sunset_moved_earlier():
+    for command in (
+        ["diff"], ["remote-diff"], ["diff-notebooks"],
+        ["versions", "diff"], ["versions", "compare"],
+    ):
+        proc = _run_cli([*command, "--help"], cwd=Path.cwd())
+        assert proc.returncode == 0, proc.stderr
+        assert "--fail-on-sunset-moved-earlier" in proc.stdout, command
+
+
+def test_app_deprecations_marks_endpoints_the_app_is_rejecting(
+    tmp_path, fake_dashboard
+):
+    body = {
+        "rejecting": False, "enforcing_sunset": True,
+        "endpoints": [
+            {"path": "/old_add", "reason": None, "calls": 0,
+             "sunset": "2000-01-01", "rejected": True},
+            {"path": "/old_sub", "reason": None, "calls": 0,
+             "sunset": "2999-01-01", "rejected": False},
+        ],
+    }
+    proc, _ = _run_app_deprecations(tmp_path, fake_dashboard, body)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "/old_add  calls=0  sunset=2000-01-01  REJECTED (410)" in proc.stdout
+    assert "/old_sub  calls=0  sunset=2999-01-01\n" in proc.stdout
+
+
+def test_validate_all_command_sunset_within_days_prints_upcoming_and_forwards_it(
+    tmp_path, fake_dashboard
+):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_json_response(200, {
+        "status": "success",
+        "results": [{
+            "filename": "old.ipynb", "status": "pass",
+            "reserved_name_conflicts": [], "skipped_functions": [],
+            "duplicate_functions": [], "requirements_conflict": None,
+            "deprecated_functions": {"add": "sunset: 2099-01-01"},
+            "past_sunset_functions": {},
+            "upcoming_sunset_functions": {"add": "2099-01-01"},
+            "detail": None,
+        }],
+        "pass_count": 1, "warn_count": 0, "fail_count": 0,
+        "deprecated_notebook_count": 1, "past_sunset_notebook_count": 0,
+        "upcoming_sunset_notebook_count": 1,
+    })]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["validate-all", "--dashboard-url", dashboard_url,
+         "--sunset-within-days", "30"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "sunset_within_days=30" in handler.requests[0]
+    assert "upcoming sunset: add (sunset 2099-01-01)" in proc.stdout
+    assert (
+        "1 notebook(s) have a deprecated function reaching its sunset date "
+        "within 30 day(s)" in proc.stdout
+    )
+
+
+def test_app_deprecations_fail_if_past_sunset_ignores_endpoints_already_rejected(
+    tmp_path, fake_dashboard
+):
+    """Confirmed wrong before this fix: under NOTEBOOK_API_ENFORCE_SUNSET
+    an endpoint past its sunset already answers 410 -- the removal has
+    effectively happened -- yet --fail-if-past-sunset still failed on it."""
+    body = {
+        "rejecting": False, "enforcing_sunset": True,
+        "endpoints": [
+            {"path": "/old_add", "reason": None, "calls": 3,
+             "sunset": "2000-01-01", "rejected": True},
+        ],
+    }
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, body, "--fail-if-past-sunset"
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_app_deprecations_fail_if_past_sunset_still_fails_when_not_rejected(
+    tmp_path, fake_dashboard
+):
+    body = {
+        "rejecting": False, "enforcing_sunset": False,
+        "endpoints": [
+            {"path": "/old_add", "reason": None, "calls": 0,
+             "sunset": "2000-01-01", "rejected": False},
+            {"path": "/old_sub", "reason": None, "calls": 0,
+             "sunset": "2000-01-01", "rejected": True},
+        ],
+    }
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, body, "--fail-if-past-sunset"
+    )
+
+    assert proc.returncode == 1
+    assert "past their sunset date: /old_add (2000-01-01)" in proc.stderr
+    assert "/old_sub" not in proc.stderr
+
+
+def _run_app_call_with_headers(tmp_path, fake_dashboard, status, body, headers, *extra):
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [_json_response(status, body)]
+    handler.response_headers = [headers]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+    return _run_cli(
+        ["app-call", str(notebook_path), "add", "--host", host, "--port", str(port),
+         *extra],
+        cwd=workdir,
+    )
+
+
+def test_app_call_warns_on_stderr_when_the_endpoint_is_deprecated(
+    tmp_path, fake_dashboard
+):
+    """Confirmed missing before this feature: app-call never read the
+    compiled app's own Deprecation/X-Deprecation-Reason/Sunset headers."""
+    proc = _run_app_call_with_headers(
+        tmp_path, fake_dashboard, 200, {"result": 3},
+        {"Deprecation": "true", "X-Deprecation-Reason": "Use add_v2.",
+         "Sunset": "Thu, 31 Dec 2099 00:00:00 GMT"},
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Result: 3" in proc.stdout
+    assert (
+        "Warning: POST /add is deprecated. Use add_v2. "
+        "(sunset: Thu, 31 Dec 2099 00:00:00 GMT)" in proc.stderr
+    )
+
+
+def test_app_call_json_output_stays_clean_when_deprecated(tmp_path, fake_dashboard):
+    proc = _run_app_call_with_headers(
+        tmp_path, fake_dashboard, 200, {"result": 3},
+        {"Deprecation": "true"}, "--json",
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == {"result": 3}
+    assert "is deprecated." in proc.stderr
+
+
+def test_app_call_fail_on_deprecated_exits_1_after_printing_the_result(
+    tmp_path, fake_dashboard
+):
+    proc = _run_app_call_with_headers(
+        tmp_path, fake_dashboard, 200, {"result": 3},
+        {"Deprecation": "true"}, "--fail-on-deprecated",
+    )
+
+    assert proc.returncode == 1
+    assert "Result: 3" in proc.stdout
+
+
+def test_app_call_fail_on_deprecated_passes_for_a_normal_endpoint(
+    tmp_path, fake_dashboard
+):
+    proc = _run_app_call_with_headers(
+        tmp_path, fake_dashboard, 200, {"result": 3}, {}, "--fail-on-deprecated",
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "deprecated" not in proc.stderr
+
+
+def test_app_call_reports_a_retired_endpoint_clearly(tmp_path, fake_dashboard):
+    proc = _run_app_call_with_headers(
+        tmp_path, fake_dashboard, 410, {"detail": "gone"},
+        {"Deprecation": "true", "X-Deprecation-Reason": "Use add_v2."},
+    )
+
+    assert proc.returncode != 0
+    assert "POST /add has been retired (410 Gone). Use add_v2." in (
+        proc.stdout + proc.stderr
+    )
+
+
+def _app_status_base_responses():
+    return [
+        _json_response(200, {"status": "healthy"}),
+        _json_response(200, {"status": "ready", "tasks_registered": 0}),
+        _json_response(200, {
+            "service": "svc", "version": "0.1.0", "status": "running",
+            "endpoints": ["/add"], "endpoint_count": 1,
+            "background_endpoint_count": 0,
+            "authentication": {"enabled": True, "type": "api_key"},
+        }),
+        _json_response(200, {
+            "max_request_body_bytes": 1, "task_ttl_seconds": 1,
+            "max_pending_tasks": 1, "task_execution_timeout_seconds": None,
+            "webhook_timeout_seconds": 1, "webhook_signing_enabled": False,
+            "webhook_max_retries": 0, "webhook_retry_backoff_seconds": 0.5,
+            "rate_limit_per_minute": 0, "allowed_origins": ["*"],
+            "disable_docs": False,
+        }),
+    ]
+
+
+def _run_app_status(tmp_path, fake_dashboard, deprecations_response, *extra):
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = _app_status_base_responses() + [deprecations_response]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    return _run_cli(
+        ["app-status", "--host", host, "--port", str(port), *extra], cwd=workdir
+    ), handler
+
+
+def test_app_status_command_lists_deprecated_endpoints(tmp_path, fake_dashboard):
+    """Confirmed missing before this feature: app-status never read the
+    app's own GET /deprecations, so an operator checking a deployment's
+    health got no hint it was serving (or already rejecting) deprecated
+    endpoints."""
+    proc, handler = _run_app_status(tmp_path, fake_dashboard, _json_response(200, {
+        "rejecting": False, "enforcing_sunset": True,
+        "endpoints": [
+            {"path": "/old_add", "reason": None, "calls": 4,
+             "sunset": "2000-01-01", "rejected": True},
+            {"path": "/old_sub", "reason": None, "calls": 1,
+             "sunset": None, "rejected": False},
+        ],
+    }))
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests[-1] == "/deprecations"
+    assert "Deprecated endpoints: 2 (1 answering 410)" in proc.stdout
+    assert "/old_add  calls=4  sunset=2000-01-01  REJECTED (410)" in proc.stdout
+    assert "/old_sub  calls=1\n" in proc.stdout
+
+
+def test_app_status_command_omits_deprecations_when_none(tmp_path, fake_dashboard):
+    proc, _ = _run_app_status(tmp_path, fake_dashboard, _json_response(200, {
+        "rejecting": False, "enforcing_sunset": False, "endpoints": [],
+    }))
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Deprecated endpoints" not in proc.stdout
+
+
+def test_app_status_command_tolerates_an_app_without_get_deprecations(
+    tmp_path, fake_dashboard
+):
+    proc, _ = _run_app_status(
+        tmp_path, fake_dashboard, _json_response(404, {"detail": "Not Found"}),
+        "--json",
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout)["deprecations"] is None
+
+
+def test_app_status_command_still_fails_on_a_non_404_deprecations_error(
+    tmp_path, fake_dashboard
+):
+    proc, _ = _run_app_status(
+        tmp_path, fake_dashboard, _json_response(500, {"detail": "boom"}),
+    )
+
+    assert proc.returncode != 0
+    assert "(500)" in proc.stdout + proc.stderr
+
+
+def _watch_app_deprecations(tmp_path, fake_dashboard, *extra):
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [_json_response(200, _SAMPLE_DEPRECATIONS) for _ in range(50)]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(PROJECT_ROOT)
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "backend.cli", "app-deprecations",
+         "--host", host, "--port", str(port), "--watch", "--interval", "0.05",
+         *extra],
+        cwd=str(workdir), env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    time.sleep(2.5)
+    proc.send_signal(signal.SIGINT)
+    stdout, stderr = proc.communicate(timeout=10)
+    return proc, stdout, stderr
+
+
+def test_app_deprecations_watch_polls_repeatedly_and_stops_cleanly(
+    tmp_path, fake_dashboard
+):
+    """Confirmed missing before this feature: app-deprecations could only
+    take one snapshot -- no way to watch call counts move live during a
+    brownout, unlike app-metrics/app-status --watch."""
+    proc, stdout, stderr = _watch_app_deprecations(tmp_path, fake_dashboard)
+
+    assert proc.returncode == 0, stdout + stderr
+    assert stdout.count("2 deprecated endpoint(s):") >= 2
+    assert stdout.count("---") >= 4
+    assert "Stopped watching." in stdout
+
+
+def test_app_deprecations_watch_json_emits_one_object_per_line(
+    tmp_path, fake_dashboard
+):
+    proc, stdout, stderr = _watch_app_deprecations(tmp_path, fake_dashboard, "--json")
+
+    assert proc.returncode == 0, stdout + stderr
+    objects = [json.loads(line) for line in stdout.splitlines() if line.startswith("{")]
+    assert len(objects) >= 2
+    assert all("timestamp" in obj and obj["endpoints"] for obj in objects)
+
+
+def test_app_deprecations_watch_refuses_the_fail_gates(tmp_path, fake_dashboard):
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, _SAMPLE_DEPRECATIONS, "--watch", "--fail-if-called"
+    )
+
+    assert proc.returncode != 0
+    assert "--watch cannot be combined" in proc.stdout + proc.stderr
+
+
+def test_app_deprecations_and_app_status_show_rejected_call_counts(
+    tmp_path, fake_dashboard
+):
+    body = {
+        "rejecting": False, "enforcing_sunset": True,
+        "endpoints": [
+            {"path": "/old_add", "reason": None, "calls": 5, "rejections": 3,
+             "sunset": "2000-01-01", "rejected": True},
+            {"path": "/old_sub", "reason": None, "calls": 2, "rejections": 0,
+             "sunset": None, "rejected": False},
+        ],
+    }
+    proc, _ = _run_app_deprecations(tmp_path, fake_dashboard, body)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "/old_add  calls=5 (rejected=3)  sunset=2000-01-01  REJECTED (410)" in proc.stdout
+    assert "/old_sub  calls=2\n" in proc.stdout
+
+
+def test_app_status_shows_rejected_call_counts(tmp_path, fake_dashboard):
+    proc, _ = _run_app_status(tmp_path, fake_dashboard, _json_response(200, {
+        "rejecting": True, "enforcing_sunset": False,
+        "endpoints": [{"path": "/old_add", "reason": None, "calls": 4,
+                       "rejections": 4, "sunset": None, "rejected": True}],
+    }))
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "/old_add  calls=4 (rejected=4)  REJECTED (410)" in proc.stdout
+
+
+_DEPRECATIONS_WITH_CALLERS = {
+    "rejecting": False, "enforcing_sunset": False,
+    "endpoints": [{
+        "path": "/old_add", "reason": None, "calls": 9, "rejections": 0,
+        "sunset": None, "rejected": False,
+        "callers": {"billing-cron/2": 5, "mobile/1": 3, "(none)": 1},
+    }],
+}
+
+
+def test_app_deprecations_lists_each_endpoints_top_callers(tmp_path, fake_dashboard):
+    """Confirmed missing before this feature: GET /deprecations' own
+    per-User-Agent "callers" breakdown never reached the CLI summary."""
+    proc, _ = _run_app_deprecations(tmp_path, fake_dashboard, _DEPRECATIONS_WITH_CALLERS)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (
+        "      caller: billing-cron/2  calls=5\n"
+        "      caller: mobile/1  calls=3\n"
+        "      caller: (none)  calls=1\n"
+    ) in proc.stdout
+
+
+def test_app_deprecations_top_callers_limits_and_summarizes_the_rest(
+    tmp_path, fake_dashboard
+):
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, _DEPRECATIONS_WITH_CALLERS, "--top-callers", "1"
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "caller: billing-cron/2  calls=5" in proc.stdout
+    assert "mobile/1" not in proc.stdout
+    assert "... and 2 more caller(s) (see --json)" in proc.stdout
+
+
+def test_app_deprecations_top_callers_zero_hides_them(tmp_path, fake_dashboard):
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, _DEPRECATIONS_WITH_CALLERS, "--top-callers", "0"
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "caller:" not in proc.stdout and "more caller" not in proc.stdout
+
+
+def test_app_deprecations_rejects_negative_top_callers(tmp_path, fake_dashboard):
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, _DEPRECATIONS_WITH_CALLERS, "--top-callers", "-1"
+    )
+
+    assert proc.returncode != 0
+    assert "--top-callers" in proc.stdout + proc.stderr
+
+
+def test_app_deprecations_reset_posts_to_the_reset_endpoint(tmp_path, fake_dashboard):
+    """Confirmed missing before this feature: the compiled app's own POST
+    /deprecations/reset had no CLI counterpart."""
+    proc, handler = _run_app_deprecations(
+        tmp_path, fake_dashboard, {"reset": ["/old_add", "/old_sub"]},
+        "--reset", "--api-key", "secret",
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/deprecations/reset"]
+    assert handler.request_headers[0].get("X-API-Key") == "secret"
+    assert "Reset deprecation counters for 2 endpoint(s): /old_add, /old_sub" in proc.stdout
+
+
+def test_app_deprecations_reset_reports_a_rejected_key(tmp_path, fake_dashboard):
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, {"detail": "Invalid or missing API key"},
+        "--reset", status=401,
+    )
+
+    assert proc.returncode != 0
+    assert "App rejected the reset (401)" in proc.stdout + proc.stderr
+
+
+def test_app_deprecations_reset_explains_an_older_app(tmp_path, fake_dashboard):
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, {"detail": "Not Found"}, "--reset", status=404,
+    )
+
+    assert proc.returncode != 0
+    assert "recompile it to use --reset" in proc.stdout + proc.stderr
+
+
+def test_app_deprecations_reset_refuses_read_only_flags(tmp_path, fake_dashboard):
+    proc, handler = _run_app_deprecations(
+        tmp_path, fake_dashboard, {"reset": []}, "--reset", "--fail-if-called",
+    )
+
+    assert proc.returncode != 0
+    assert "--reset cannot be combined" in proc.stdout + proc.stderr
+    assert handler.requests == []
+
+
+def test_app_deprecations_prints_the_counting_window(tmp_path, fake_dashboard):
+    body = dict(_DEPRECATIONS_WITH_CALLERS, counting_since="2026-09-01T00:00:00Z")
+    proc, _ = _run_app_deprecations(tmp_path, fake_dashboard, body)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "  (counts since 2026-09-01T00:00:00Z)\n" in proc.stdout
+
+
+def _write_past_sunset_notebook(workdir):
+    path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        path,
+        "# notebook-to-api: deprecated: use v2. sunset: 2000-01-01\n"
+        "def old_add(a: int) -> int:\n    return a\n",
+    )
+    return path
+
+
+def test_validate_command_reports_deprecated_and_past_sunset_functions(tmp_path):
+    """Confirmed missing before this feature: local `validate` said nothing
+    about deprecations or missed removals."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path = _write_past_sunset_notebook(workdir)
+
+    proc = _run_cli(["validate", str(path)], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ⓘ Deprecated: old_add -- use v2. sunset: 2000-01-01" in proc.stdout
+    assert "⚠ Past sunset: old_add (sunset 2000-01-01) -- still defined" in proc.stdout
+
+
+def test_validate_command_fail_on_past_sunset_exits_1(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path = _write_past_sunset_notebook(workdir)
+
+    proc = _run_cli(["validate", str(path), "--fail-on-past-sunset"], cwd=workdir)
+
+    assert proc.returncode == 1
+    assert "✗ Past sunset: old_add" in proc.stdout
+
+
+def test_validate_command_json_includes_deprecation_fields(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path = _write_past_sunset_notebook(workdir)
+
+    proc = _run_cli(["validate", str(path), "--json"], cwd=workdir)
+
+    data = json.loads(proc.stdout)
+    assert data["past_sunset_functions"] == {"old_add": "2000-01-01"}
+    assert data["deprecated_functions"] == {"old_add": "use v2. sunset: 2000-01-01"}
+
+
+def test_remote_validate_command_fail_on_past_sunset_exits_1(tmp_path, fake_dashboard):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_json_response(200, {
+        "status": "pass", "notebook": "nb.ipynb", "version_id": None,
+        "reserved_name_conflicts": [], "skipped_functions": [],
+        "duplicate_functions": [], "requirements_conflict": None,
+        "deprecated_functions": {"old_add": None},
+        "past_sunset_functions": {"old_add": "2000-01-01"},
+    })]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-validate", "nb.ipynb", "--dashboard-url", dashboard_url,
+         "--fail-on-past-sunset"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 1
+    assert "✗ Past sunset: old_add (sunset 2000-01-01)" in proc.stdout
+
+
+def test_past_sunset_functions_helper():
+    from backend.inspector import past_sunset_functions
+
+    assert past_sunset_functions({}) == {}
+    assert past_sunset_functions(None) == {}
+    assert past_sunset_functions(
+        {"a": "sunset: 2026-01-01", "b": "sunset: 2026-01-02", "c": None,
+         "d": "sunset: 2026-13-01"},
+        today="2026-01-01",
+    ) == {"a": "2026-01-01"}
+
+
+def _write_sunset_mix_notebook(workdir):
+    path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        path,
+        "# notebook-to-api: deprecated: sunset: 2000-01-01\n"
+        "def old_add(a: int) -> int:\n    return a\n\n"
+        "# notebook-to-api: deprecated: sunset: 2999-01-01\n"
+        "def later(a: int) -> int:\n    return a\n\n"
+        "def add(a: int) -> int:\n    return a\n",
+    )
+    return path
+
+
+def test_compile_drop_past_sunset_leaves_out_functions_past_their_sunset(tmp_path):
+    """Confirmed missing before this feature: a function whose promised
+    removal date had passed kept being compiled into every rebuild unless
+    someone deleted it (or remembered --exclude) by hand."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path = _write_sunset_mix_notebook(workdir)
+
+    proc = _run_cli(
+        ["compile", str(path), "--output", str(workdir / "out"),
+         "--drop-past-sunset", "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Dropping 1 function(s) past their sunset date: old_add" in proc.stderr
+    data = json.loads(proc.stdout)
+    assert sorted(func["name"] for func in data["functions"]) == ["add", "later"]
+    app_source = (workdir / "out" / "app.py").read_text(encoding="utf-8")
+    assert '@app.post("/old_add", summary=' not in app_source
+    assert '@app.post("/later"' in app_source
+
+
+def test_compile_without_drop_past_sunset_keeps_every_function(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path = _write_sunset_mix_notebook(workdir)
+
+    proc = _run_cli(
+        ["compile", str(path), "--output", str(workdir / "out"), "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Dropping" not in proc.stderr
+    assert '@app.post("/old_add"' in (workdir / "out" / "app.py").read_text(encoding="utf-8")
+
+
+def test_compile_drop_past_sunset_combines_with_exclude(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path = _write_sunset_mix_notebook(workdir)
+
+    proc = _run_cli(
+        ["compile", str(path), "--output", str(workdir / "out"),
+         "--drop-past-sunset", "--exclude", "later", "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert [func["name"] for func in json.loads(proc.stdout)["functions"]] == ["add"]
+
+
+def test_compile_drop_past_sunset_is_a_no_op_when_nothing_has_passed(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path = workdir / "nb.ipynb"
+    _write_notebook_with_function(path, "def add(a: int) -> int:\n    return a\n")
+
+    proc = _run_cli(
+        ["compile", str(path), "--output", str(workdir / "out"), "--drop-past-sunset"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Dropping" not in proc.stderr
+
+
+def test_remote_compile_drop_past_sunset_forwards_the_flag_and_reports_drops(
+    tmp_path, fake_dashboard
+):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_json_response(200, {
+        "status": "success", "notebook": "nb.ipynb", "version_id": None,
+        "dropped_past_sunset": ["old_add"],
+        "functions": [], "endpoints": [], "skipped_functions": [],
+        "dependencies": [],
+    })]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-compile", "nb.ipynb", "--dashboard-url", dashboard_url,
+         "--drop-past-sunset"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0])["drop_past_sunset"] is True
+    assert "Dropped 1 function(s) past their sunset date: old_add" in proc.stdout
+
+
+def test_export_curl_drop_past_sunset_leaves_out_their_requests(tmp_path):
+    """Confirmed missing before this feature: export-curl kept emitting
+    requests for endpoints a `compile --drop-past-sunset` build no longer
+    serves."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path = _write_sunset_mix_notebook(workdir)
+
+    proc = _run_cli(
+        ["export-curl", str(path), "--output", "requests.sh", "--drop-past-sunset"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Dropping 1 function(s) past their sunset date: old_add" in proc.stderr
+    script = (workdir / "requests.sh").read_text(encoding="utf-8")
+    assert "/old_add" not in script
+    assert "/later" in script and "/add" in script
+
+
+def test_export_curl_without_drop_past_sunset_keeps_every_request(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path = _write_sunset_mix_notebook(workdir)
+
+    proc = _run_cli(["export-curl", str(path), "--output", "requests.sh"], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "/old_add" in (workdir / "requests.sh").read_text(encoding="utf-8")
+
+
+def test_export_postman_drop_past_sunset_leaves_out_their_requests(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path = _write_sunset_mix_notebook(workdir)
+
+    proc = _run_cli(
+        ["export-postman", str(path), "--output", "c.json", "--drop-past-sunset"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    collection = json.loads((workdir / "c.json").read_text(encoding="utf-8"))
+    names = [item["name"] for item in collection["item"]]
+    assert not any("old_add" in name for name in names)
+    assert any("later" in name for name in names)
+
+
+def test_export_postman_drop_past_sunset_refuses_an_only_list_it_would_empty(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path = _write_sunset_mix_notebook(workdir)
+
+    proc = _run_cli(
+        ["export-postman", str(path), "--output", "c.json",
+         "--only", "old_add", "--drop-past-sunset"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode != 0
+    assert "left nothing to compile" in proc.stdout + proc.stderr
+    assert not (workdir / "c.json").exists()
+
+
+def test_curl_preview_command_forwards_drop_past_sunset(tmp_path, fake_dashboard):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_json_response(200, {
+        "status": "success", "notebook": "nb.ipynb", "version_id": None,
+        "dropped_past_sunset": ["old_add"], "commands": ["curl ..."],
+    })]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["curl-preview", "nb.ipynb", "--dashboard-url", dashboard_url,
+         "--drop-past-sunset"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0])["drop_past_sunset"] is True
+
+
+def test_remote_curl_drop_past_sunset_applies_to_the_downloaded_notebook(
+    tmp_path, fake_dashboard
+):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_raw_response(200, _notebook_bytes_with_function(
+        "# notebook-to-api: deprecated: sunset: 2000-01-01\n"
+        "def old_add(a: int) -> int:\n    return a\n\n"
+        "def add(a: int) -> int:\n    return a\n"
+    ))]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-curl", "nb.ipynb", "--dashboard-url", dashboard_url,
+         "--output", "requests.sh", "--drop-past-sunset"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    script = (workdir / "requests.sh").read_text(encoding="utf-8")
+    assert "/old_add" not in script and "/add" in script
+
+
+@pytest.mark.parametrize("command", ["app-preview", "readme-preview", "openapi-preview"])
+def test_preview_commands_forward_drop_past_sunset(command, tmp_path, fake_dashboard):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_json_response(200, {
+        "status": "success", "notebook": "nb.ipynb", "version_id": None,
+        "dropped_past_sunset": ["old_add"], "code": "", "readme": "", "schema": {},
+    })]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    _run_cli(
+        [command, "nb.ipynb", "--dashboard-url", dashboard_url, "--drop-past-sunset"],
+        cwd=workdir,
+    )
+
+    assert json.loads(handler.bodies[0])["drop_past_sunset"] is True
+
+
+def test_compile_history_command_shows_functions_dropped_past_sunset(
+    tmp_path, fake_dashboard
+):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_json_response(200, {
+        "status": "success", "entry_count": 2,
+        "entries": [
+            {"compiled_at": "2026-09-27T10:00:00+00:00",
+             "notebook_filename": "nb.ipynb", "endpoint_count": 1,
+             "dropped_past_sunset": ["old_add", "old_sub"]},
+            {"compiled_at": "2026-09-26T10:00:00+00:00",
+             "notebook_filename": "nb.ipynb", "endpoint_count": 3},
+        ],
+    })]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["compile-history", "--dashboard-url", dashboard_url], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (
+        "nb.ipynb  (1 endpoint(s))  dropped past sunset: old_add, old_sub"
+        in proc.stdout
+    )
+    assert "nb.ipynb  (3 endpoint(s))\n" in proc.stdout
+
+
+def test_diff_command_fail_on_breaking_passes_a_removal_after_its_sunset(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    old_path = workdir / "old.ipynb"
+    new_path = workdir / "new.ipynb"
+    keep = "def add(a: int) -> int:\n    return a\n"
+    _write_notebook_with_function(
+        old_path,
+        keep + "\n# notebook-to-api: deprecated: sunset: 2000-01-01\n"
+        "def old_add(a: int) -> int:\n    return a\n",
+    )
+    _write_notebook_with_function(new_path, keep)
+
+    proc = _run_cli(
+        ["diff", str(old_path), str(new_path), "--fail-on-breaking"], cwd=workdir
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "POST /old_add (sunset 2000-01-01)" in proc.stdout
+
+
+def test_compile_drop_past_sunset_leaves_a_410_tombstone_not_a_404(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path = _write_sunset_mix_notebook(workdir)
+
+    proc = _run_cli(
+        ["compile", str(path), "--output", str(workdir / "out"), "--drop-past-sunset"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    app_source = (workdir / "out" / "app.py").read_text(encoding="utf-8")
+    assert "def _retired_endpoint_old_add():" in app_source
+    assert "status_code=410" in app_source
+    # A plain --exclude of a function that isn't past its sunset is not
+    # tombstoned -- it's simply not part of this build.
+    assert "_retired_endpoint_later" not in app_source
+
+
+def test_compile_exclude_of_a_non_deprecated_function_leaves_no_tombstone(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path = _write_sunset_mix_notebook(workdir)
+
+    proc = _run_cli(
+        ["compile", str(path), "--output", str(workdir / "out"), "--exclude", "add"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "_retired_endpoint_" not in (workdir / "out" / "app.py").read_text(encoding="utf-8")
+
+
+_DEPRECATIONS_WITH_RETIRED = {
+    "rejecting": False, "enforcing_sunset": False,
+    "endpoints": [
+        {"path": "/gone", "reason": None, "calls": 2, "rejections": 2,
+         "sunset": "2000-01-01", "rejected": True, "retired": True},
+        {"path": "/brownout", "reason": None, "calls": 1, "rejections": 1,
+         "sunset": None, "rejected": True, "retired": False},
+        {"path": "/live", "reason": None, "calls": 0, "rejections": 0,
+         "sunset": None, "rejected": False, "retired": False},
+    ],
+}
+
+
+def test_app_deprecations_marks_retired_endpoints_distinctly(tmp_path, fake_dashboard):
+    """Confirmed missing before this feature: a retired (removed, 410
+    tombstone) endpoint printed the same "REJECTED (410)" as one a
+    brownout is only temporarily turning away."""
+    proc, _ = _run_app_deprecations(tmp_path, fake_dashboard, _DEPRECATIONS_WITH_RETIRED)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "/gone  calls=2 (rejected=2)  sunset=2000-01-01  RETIRED (removed, 410)" in proc.stdout
+    assert "/brownout  calls=1 (rejected=1)  REJECTED (410)" in proc.stdout
+    assert "/live  calls=0\n" in proc.stdout
+
+
+def test_app_status_counts_retired_endpoints(tmp_path, fake_dashboard):
+    proc, _ = _run_app_status(
+        tmp_path, fake_dashboard, _json_response(200, _DEPRECATIONS_WITH_RETIRED)
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Deprecated endpoints: 3 (2 answering 410, 1 retired)" in proc.stdout
+    assert "RETIRED (removed, 410)" in proc.stdout
+
+
+def test_deprecation_state_marker_for_an_older_app_without_retired():
+    from backend.cli import _deprecation_state_marker
+
+    assert _deprecation_state_marker({"rejected": True}) == "  REJECTED (410)"
+    assert _deprecation_state_marker({}) == ""

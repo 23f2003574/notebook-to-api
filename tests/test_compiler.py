@@ -2904,7 +2904,7 @@ def test_compile_notebook_sync_directive_overrides_a_long_running_keyword_match(
     generated_app = (output_dir / "app.py").read_text(encoding="utf-8")
     readme = (output_dir / "README.md").read_text(encoding="utf-8")
 
-    assert "async def regenerate_token" not in generated_app
+    assert "_call_notebook_function(functools.partial(notebook_module.regenerate_token" in generated_app
     # The endpoint itself must be the plain synchronous shape -- no
     # task_id/BackgroundTasks wiring anywhere near its own definition.
     endpoint_source = generated_app.split("def regenerate_token", 1)[1]
@@ -3049,7 +3049,7 @@ def test_compiler_pipeline_generates_awaitable_endpoint_for_async_function(
     ast.parse(generated_app)
 
     assert "async def fetch_data(" in generated_app
-    assert "await notebook_module.fetch_data(" in generated_app
+    assert "functools.partial(notebook_module.fetch_data, " in generated_app
 
 
 def test_compiler_pipeline_calls_keyword_only_args_by_keyword(tmp_path):
@@ -3081,7 +3081,7 @@ def test_compiler_pipeline_calls_keyword_only_args_by_keyword(tmp_path):
 
     ast.parse(generated_app)
 
-    assert "notebook_module.score(req.data, epochs=req.epochs)" in generated_app
+    assert "functools.partial(notebook_module.score, req.data, epochs=req.epochs)" in generated_app
 
 
 def test_compiler_pipeline_positional_only_args_work_end_to_end(tmp_path):
@@ -3113,7 +3113,7 @@ def test_compiler_pipeline_positional_only_args_work_end_to_end(tmp_path):
 
     ast.parse(generated_app)
 
-    assert "notebook_module.combine(req.a, req.b, req.c)" in generated_app
+    assert "functools.partial(notebook_module.combine, req.a, req.b, req.c)" in generated_app
 
 
 def test_compiler_pipeline_zero_argument_function_compiles_end_to_end(tmp_path):
