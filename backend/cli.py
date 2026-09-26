@@ -2476,6 +2476,10 @@ def _dispatch_core_command(args):
             entry.get("moved_earlier") for entry in diff.get("sunset_changed", [])
         ):
             sys.exit(1)
+        if args.fail_on_timeout_tightened and any(
+            entry.get("tightened") for entry in diff.get("timeout_changed", [])
+        ):
+            sys.exit(1)
     elif args.command == "upload":
         # Imported here, not at module scope, the same deferred-import
         # convention export-openapi/export-sdk's own dynamic imports
@@ -6937,6 +6941,10 @@ def _dispatch_core_command(args):
                 entry.get("moved_earlier") for entry in diff.get("sunset_changed", [])
             ):
                 sys.exit(1)
+            if args.fail_on_timeout_tightened and any(
+                entry.get("tightened") for entry in diff.get("timeout_changed", [])
+            ):
+                sys.exit(1)
 
         elif args.versions_command == "compare":
 
@@ -6994,6 +7002,10 @@ def _dispatch_core_command(args):
                 sys.exit(1)
             if args.fail_on_sunset_moved_earlier and any(
                 entry.get("moved_earlier") for entry in data.get("sunset_changed", [])
+            ):
+                sys.exit(1)
+            if args.fail_on_timeout_tightened and any(
+                entry.get("tightened") for entry in data.get("timeout_changed", [])
             ):
                 sys.exit(1)
 
@@ -7431,6 +7443,10 @@ def _dispatch_core_command(args):
             entry.get("moved_earlier") for entry in diff.get("sunset_changed", [])
         ):
             sys.exit(1)
+        if args.fail_on_timeout_tightened and any(
+            entry.get("tightened") for entry in diff.get("timeout_changed", [])
+        ):
+            sys.exit(1)
     elif args.command == "diff-notebooks":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -7492,6 +7508,10 @@ def _dispatch_core_command(args):
             sys.exit(1)
         if args.fail_on_sunset_moved_earlier and any(
             entry.get("moved_earlier") for entry in data.get("sunset_changed", [])
+        ):
+            sys.exit(1)
+        if args.fail_on_timeout_tightened and any(
+            entry.get("tightened") for entry in data.get("timeout_changed", [])
         ):
             sys.exit(1)
     elif args.command == "remote-curl":
@@ -10039,6 +10059,18 @@ def main():
             "added, removed, or flipped) -- after printing the report. "
             "Purely additive changes (a new endpoint, a new parameter with "
             "a default) never trigger this."
+        )
+    )
+    diff_parser.add_argument(
+        "--fail-on-timeout-tightened",
+        action="store_true",
+        dest="fail_on_timeout_tightened",
+        help=(
+            "Exit with status 1 if the diff's own \"timeout_changed\" has "
+            "any entry with \"tightened\" -- a \"# notebook-to-api: "
+            "timeout N\" directive added or lowered, which can start "
+            "answering 504 to calls that used to succeed. Loosening or "
+            "removing a timeout never fails it."
         )
     )
     diff_parser.add_argument(
@@ -15555,6 +15587,18 @@ def main():
         )
     )
     versions_diff_parser.add_argument(
+        "--fail-on-timeout-tightened",
+        action="store_true",
+        dest="fail_on_timeout_tightened",
+        help=(
+            "Exit with status 1 if the diff's own \"timeout_changed\" has "
+            "any entry with \"tightened\" -- a \"# notebook-to-api: "
+            "timeout N\" directive added or lowered, which can start "
+            "answering 504 to calls that used to succeed. Loosening or "
+            "removing a timeout never fails it."
+        )
+    )
+    versions_diff_parser.add_argument(
         "--fail-on-sunset-moved-earlier",
         action="store_true",
         dest="fail_on_sunset_moved_earlier",
@@ -15643,6 +15687,18 @@ def main():
             "Exit with status 1 if GET .../versions/{version_id}/diff's "
             "own \"compatible\" field is false -- see `diff --fail-on-"
             "breaking`'s own help for exactly what counts as breaking."
+        )
+    )
+    versions_compare_parser.add_argument(
+        "--fail-on-timeout-tightened",
+        action="store_true",
+        dest="fail_on_timeout_tightened",
+        help=(
+            "Exit with status 1 if the diff's own \"timeout_changed\" has "
+            "any entry with \"tightened\" -- a \"# notebook-to-api: "
+            "timeout N\" directive added or lowered, which can start "
+            "answering 504 to calls that used to succeed. Loosening or "
+            "removing a timeout never fails it."
         )
     )
     versions_compare_parser.add_argument(
@@ -15856,6 +15912,18 @@ def main():
         )
     )
     remote_diff_parser.add_argument(
+        "--fail-on-timeout-tightened",
+        action="store_true",
+        dest="fail_on_timeout_tightened",
+        help=(
+            "Exit with status 1 if the diff's own \"timeout_changed\" has "
+            "any entry with \"tightened\" -- a \"# notebook-to-api: "
+            "timeout N\" directive added or lowered, which can start "
+            "answering 504 to calls that used to succeed. Loosening or "
+            "removing a timeout never fails it."
+        )
+    )
+    remote_diff_parser.add_argument(
         "--fail-on-sunset-moved-earlier",
         action="store_true",
         dest="fail_on_sunset_moved_earlier",
@@ -15983,6 +16051,18 @@ def main():
             "Exit with status 1 if GET /api/notebooks/diff's own "
             "\"compatible\" field is false -- see `diff --fail-on-"
             "breaking`'s own help for exactly what counts as breaking."
+        )
+    )
+    diff_notebooks_parser.add_argument(
+        "--fail-on-timeout-tightened",
+        action="store_true",
+        dest="fail_on_timeout_tightened",
+        help=(
+            "Exit with status 1 if the diff's own \"timeout_changed\" has "
+            "any entry with \"tightened\" -- a \"# notebook-to-api: "
+            "timeout N\" directive added or lowered, which can start "
+            "answering 504 to calls that used to succeed. Loosening or "
+            "removing a timeout never fails it."
         )
     )
     diff_notebooks_parser.add_argument(

@@ -28791,3 +28791,65 @@ def test_remote_validate_command_warns_about_an_ignored_timeout_directive(
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "⚠ Ignored timeout directive: train_model is a background endpoint" in proc.stdout
+
+
+def _diff_timeout_directives(workdir, old_directive, new_directive):
+    body = "def report(a: int) -> int:\n    return a\n"
+    old_path = workdir / "old.ipynb"
+    new_path = workdir / "new.ipynb"
+    _write_notebook_with_function(old_path, old_directive + body)
+    _write_notebook_with_function(new_path, new_directive + body)
+    return old_path, new_path
+
+
+def test_diff_command_fail_on_timeout_tightened_exits_1(tmp_path):
+    """Confirmed missing before this feature: classify_notebook_diff's own
+    "timeout_changed"/"tightened" had no CLI flag reading it."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    old_path, new_path = _diff_timeout_directives(
+        workdir, "# notebook-to-api: timeout 60\n", "# notebook-to-api: timeout 10\n",
+    )
+
+    proc = _run_cli(
+        ["diff", str(old_path), str(new_path), "--fail-on-timeout-tightened"], cwd=workdir,
+    )
+
+    assert proc.returncode == 1
+    assert "POST /report: 60s -> 10s (tightened)" in proc.stdout
+
+
+def test_diff_command_fail_on_timeout_tightened_ignores_a_loosened_timeout(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    old_path, new_path = _diff_timeout_directives(
+        workdir, "# notebook-to-api: timeout 10\n", "# notebook-to-api: timeout 60\n",
+    )
+
+    proc = _run_cli(
+        ["diff", str(old_path), str(new_path), "--fail-on-timeout-tightened"], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_diff_command_tightened_timeout_without_the_flag_exits_0(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    old_path, new_path = _diff_timeout_directives(
+        workdir, "", "# notebook-to-api: timeout 5\n",
+    )
+
+    proc = _run_cli(["diff", str(old_path), str(new_path)], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_every_diff_command_accepts_fail_on_timeout_tightened():
+    for command in (
+        ["diff"], ["remote-diff"], ["diff-notebooks"],
+        ["versions", "diff"], ["versions", "compare"],
+    ):
+        proc = _run_cli([*command, "--help"], cwd=Path.cwd())
+        assert proc.returncode == 0, proc.stderr
+        assert "--fail-on-timeout-tightened" in proc.stdout, command
