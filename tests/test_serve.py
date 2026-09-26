@@ -1536,3 +1536,118 @@ def test_notebook_change_handler_reports_compilation_errors_without_raising(tmp_
 
     captured = capsys.readouterr()
     assert "boom" in captured.out
+
+
+def _write_sunset_notebook(path, source):
+    import json as _json
+
+    path.write_text(_json.dumps({
+        "cells": [{"cell_type": "code", "execution_count": None, "metadata": {},
+                   "outputs": [], "source": source}],
+        "metadata": {}, "nbformat": 4, "nbformat_minor": 5,
+    }), encoding="utf-8")
+
+
+def _recompile_once(tmp_path, monkeypatch, source, **handler_kwargs):
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_sunset_notebook(notebook_path, source)
+    calls = []
+    monkeypatch.setattr(
+        serve_module, "compile_notebook",
+        lambda nb, out, only=None, exclude=None: calls.append((only, exclude)),
+    )
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
+    handler = serve_module.NotebookChangeHandler(
+        str(notebook_path), str(tmp_path / "generated"), **handler_kwargs,
+    )
+    handler.last_compile_time = 0
+    handler.on_modified(type("Event", (), {"src_path": str(notebook_path)})())
+    return notebook_path, handler, calls
+
+
+_PAST_SUNSET_SOURCE = (
+    "# notebook-to-api: deprecated: sunset: 2000-01-01\n"
+    "def old_add(a: int) -> int:\n    return a\n\n"
+    "def add(a: int) -> int:\n    return a\n"
+)
+
+
+def test_change_handler_drop_past_sunset_excludes_them_on_every_recompile(
+    tmp_path, monkeypatch
+):
+    """Confirmed missing before this feature: serve/watch had no
+    --drop-past-sunset, and nothing re-read sunset dates on each rebuild."""
+    notebook_path, handler, calls = _recompile_once(
+        tmp_path, monkeypatch, _PAST_SUNSET_SOURCE, drop_past_sunset=True,
+    )
+    assert calls == [(None, ["old_add"])]
+
+    # A later save deprecating another function past its sunset is picked
+    # up on the next rebuild -- not frozen at whatever startup saw.
+    _write_sunset_notebook(
+        notebook_path,
+        _PAST_SUNSET_SOURCE.replace(
+            "def add(", "# notebook-to-api: deprecated: sunset: 2001-01-01\ndef add("
+        ),
+    )
+    handler.last_compile_time = 0
+    handler.on_modified(type("Event", (), {"src_path": str(notebook_path)})())
+
+    assert calls[-1] == (None, ["add", "old_add"])
+
+
+def test_change_handler_without_drop_past_sunset_keeps_the_callers_selection(
+    tmp_path, monkeypatch
+):
+    _, _, calls = _recompile_once(
+        tmp_path, monkeypatch, _PAST_SUNSET_SOURCE, exclude=["x"],
+    )
+
+    assert calls == [(None, ["x"])]
+
+
+def test_change_handler_drop_past_sunset_reports_an_emptied_only_as_a_compile_error(
+    tmp_path, monkeypatch, capsys
+):
+    _, _, calls = _recompile_once(
+        tmp_path, monkeypatch, _PAST_SUNSET_SOURCE,
+        only=["old_add"], drop_past_sunset=True,
+    )
+
+    assert calls == []
+    assert "left nothing to compile" in capsys.readouterr().out
+
+
+def test_watch_notebook_initial_compile_honors_drop_past_sunset(tmp_path, monkeypatch):
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_sunset_notebook(notebook_path, _PAST_SUNSET_SOURCE)
+    calls = []
+    monkeypatch.setattr(
+        serve_module, "compile_notebook",
+        lambda nb, out, only=None, exclude=None: calls.append((only, exclude)),
+    )
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
+
+    class _StopImmediately:
+        def schedule(self, *a, **k):
+            pass
+
+        def start(self):
+            raise KeyboardInterrupt
+
+        def stop(self):
+            pass
+
+        def join(self, *a, **k):
+            pass
+
+    monkeypatch.setattr(serve_module, "Observer", _StopImmediately)
+
+    try:
+        serve_module.watch_notebook(
+            str(notebook_path), str(tmp_path / "generated"), drop_past_sunset=True,
+        )
+    except KeyboardInterrupt:
+        pass
+
+    assert calls[0] == (None, ["old_add"])

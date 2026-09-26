@@ -32,6 +32,7 @@ from backend.parser.ast_parser import is_parseable_python
 from backend.parser.notebook_parser import extract_code_cells, load_notebook
 # Import inspector for analysis
 from backend.inspector import (
+    apply_drop_past_sunset,
     past_sunset_functions,
     DEFAULT_DEV_API_KEY,
     classify_notebook_diff,
@@ -788,38 +789,6 @@ def _add_callback_url_argument(parser):
             "matching the generated app's own identical restriction."
         )
     )
-
-
-def _apply_drop_past_sunset(notebook_path, only, exclude):
-    """(only, exclude) adjusted to leave out every deprecated function in
-    `notebook_path` whose own "sunset: YYYY-MM-DD" is today (UTC) or
-    earlier -- `compile`/`deploy --drop-past-sunset`, so a rebuild actually
-    carries out the removal the Sunset header promised. Folded into
-    `exclude`, or removed from `only` when that was given instead (the two
-    are mutually exclusive); an `only` left empty is a ValueError rather
-    than silently compiling everything. The dropped names are reported on
-    stderr, so --json's stdout stays machine-parseable.
-    """
-    dropped = sorted(past_sunset_functions(
-        inspect_notebook_data(notebook_path=notebook_path)["deprecated_functions"]
-    ))
-    if not dropped:
-        return only, exclude
-    if only:
-        only = [name for name in only if name not in dropped]
-        if not only:
-            raise ValueError(
-                "Every --only function is past its sunset date, so "
-                "--drop-past-sunset left nothing to compile."
-            )
-    else:
-        exclude = sorted(set(exclude or []) | set(dropped))
-    print(
-        f"Dropping {len(dropped)} function(s) past their sunset date: "
-        f"{', '.join(dropped)}",
-        file=sys.stderr,
-    )
-    return only, exclude
 
 
 def _parse_comma_separated_names(value):
@@ -1803,7 +1772,7 @@ def _dispatch_core_command(args):
         exclude = _parse_comma_separated_names(args.exclude)
         # --drop-past-sunset: see _apply_drop_past_sunset.
         if args.drop_past_sunset:
-            only, exclude = _apply_drop_past_sunset(args.notebook, only, exclude)
+            only, exclude = apply_drop_past_sunset(args.notebook, only, exclude)
         if args.json_output:
             # compile_notebook (backend/compiler.py) unconditionally prints
             # its own progress lines ("Starting compilation for: ...",
@@ -2260,6 +2229,7 @@ def _dispatch_core_command(args):
             args.notebook, args.output, args.port, args.host,
             only=only, exclude=exclude, debounce_seconds=args.debounce_seconds,
             on_change=args.on_change,
+            drop_past_sunset=args.drop_past_sunset,
         )
     elif args.command == "watch":
         if args.debounce_seconds < 0:
@@ -2269,6 +2239,7 @@ def _dispatch_core_command(args):
         watch_notebook(
             args.notebook, args.output, only=only, exclude=exclude,
             debounce_seconds=args.debounce_seconds, on_change=args.on_change,
+            drop_past_sunset=args.drop_past_sunset,
         )
     elif args.command == "deploy":
         output_dir = Path(args.output)
@@ -2279,7 +2250,7 @@ def _dispatch_core_command(args):
         # this builds is what actually ships, so it's where a missed
         # removal matters most.
         if args.drop_past_sunset:
-            only, exclude = _apply_drop_past_sunset(args.notebook, only, exclude)
+            only, exclude = apply_drop_past_sunset(args.notebook, only, exclude)
         tag = args.tag or f"{output_dir.name.lower()}:latest"
         # `docker build`'s own default target platform is whatever the
         # local Docker daemon's host architecture is -- correct for a
@@ -9763,6 +9734,18 @@ def main():
     serve_parser = subparsers.add_parser("serve", help="Serve notebook as live API with hot recompilation.")
     serve_parser.add_argument("notebook", help="Path to the notebook file.")
     serve_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Leave out every deprecated function whose \"sunset: "
+            "YYYY-MM-DD\" date is today (UTC) or earlier -- re-checked on "
+            "every recompile, so a long session that crosses a sunset date "
+            "drops that endpoint at its next rebuild. See `compile "
+            "--drop-past-sunset`."
+        )
+    )
+    serve_parser.add_argument(
         "--output",
         default="generated",
         help="Output directory where the FastAPI app will be written."
@@ -9792,6 +9775,18 @@ def main():
         help="Recompile a notebook on every save, without running a live API server."
     )
     watch_parser.add_argument("notebook", help="Path to the notebook file.")
+    watch_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Leave out every deprecated function whose \"sunset: "
+            "YYYY-MM-DD\" date is today (UTC) or earlier -- re-checked on "
+            "every recompile, so a long session that crosses a sunset date "
+            "drops that endpoint at its next rebuild. See `compile "
+            "--drop-past-sunset`."
+        )
+    )
     watch_parser.add_argument(
         "--output",
         default="generated",
