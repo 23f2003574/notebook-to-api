@@ -1769,6 +1769,23 @@ def _dispatch_core_command(args):
         output_dir.mkdir(parents=True, exist_ok=True)
         only = _parse_comma_separated_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
+        # --drop-past-sunset: leave out every deprecated function whose own
+        # "sunset: YYYY-MM-DD" is today (UTC) or earlier, by folding it into
+        # --exclude -- so a routine rebuild actually carries out the removal
+        # the Sunset header promised, instead of someone having to delete
+        # the function from the notebook (or remember --exclude) by hand.
+        # Reported on stderr so --json's stdout stays machine-parseable.
+        if args.drop_past_sunset:
+            dropped = sorted(past_sunset_functions(
+                inspect_notebook_data(notebook_path=args.notebook)["deprecated_functions"]
+            ))
+            if dropped:
+                exclude = sorted(set(exclude or []) | set(dropped))
+                print(
+                    f"Dropping {len(dropped)} function(s) past their sunset "
+                    f"date: {', '.join(dropped)}",
+                    file=sys.stderr,
+                )
         if args.json_output:
             # compile_notebook (backend/compiler.py) unconditionally prints
             # its own progress lines ("Starting compilation for: ...",
@@ -9296,6 +9313,18 @@ def main():
     # compile command
     compile_parser = subparsers.add_parser("compile", help="Compile a notebook to FastAPI app.")
     compile_parser.add_argument("notebook", help="Path to the notebook file.")
+    compile_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Leave out of the compiled app every deprecated function whose "
+            "\"sunset: YYYY-MM-DD\" date is today (UTC) or earlier -- as if "
+            "each were passed to --exclude -- so a rebuild actually removes "
+            "endpoints whose promised removal date has arrived. The dropped "
+            "names are listed on stderr."
+        )
+    )
     compile_parser.add_argument(
         "--output",
         default="generated",

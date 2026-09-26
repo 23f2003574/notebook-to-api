@@ -28362,3 +28362,84 @@ def test_past_sunset_functions_helper():
          "d": "sunset: 2026-13-01"},
         today="2026-01-01",
     ) == {"a": "2026-01-01"}
+
+
+def _write_sunset_mix_notebook(workdir):
+    path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        path,
+        "# notebook-to-api: deprecated: sunset: 2000-01-01\n"
+        "def old_add(a: int) -> int:\n    return a\n\n"
+        "# notebook-to-api: deprecated: sunset: 2999-01-01\n"
+        "def later(a: int) -> int:\n    return a\n\n"
+        "def add(a: int) -> int:\n    return a\n",
+    )
+    return path
+
+
+def test_compile_drop_past_sunset_leaves_out_functions_past_their_sunset(tmp_path):
+    """Confirmed missing before this feature: a function whose promised
+    removal date had passed kept being compiled into every rebuild unless
+    someone deleted it (or remembered --exclude) by hand."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path = _write_sunset_mix_notebook(workdir)
+
+    proc = _run_cli(
+        ["compile", str(path), "--output", str(workdir / "out"),
+         "--drop-past-sunset", "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Dropping 1 function(s) past their sunset date: old_add" in proc.stderr
+    data = json.loads(proc.stdout)
+    assert sorted(func["name"] for func in data["functions"]) == ["add", "later"]
+    app_source = (workdir / "out" / "app.py").read_text(encoding="utf-8")
+    assert '@app.post("/old_add"' not in app_source
+    assert '@app.post("/later"' in app_source
+
+
+def test_compile_without_drop_past_sunset_keeps_every_function(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path = _write_sunset_mix_notebook(workdir)
+
+    proc = _run_cli(
+        ["compile", str(path), "--output", str(workdir / "out"), "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Dropping" not in proc.stderr
+    assert '@app.post("/old_add"' in (workdir / "out" / "app.py").read_text(encoding="utf-8")
+
+
+def test_compile_drop_past_sunset_combines_with_exclude(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path = _write_sunset_mix_notebook(workdir)
+
+    proc = _run_cli(
+        ["compile", str(path), "--output", str(workdir / "out"),
+         "--drop-past-sunset", "--exclude", "later", "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert [func["name"] for func in json.loads(proc.stdout)["functions"]] == ["add"]
+
+
+def test_compile_drop_past_sunset_is_a_no_op_when_nothing_has_passed(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path = workdir / "nb.ipynb"
+    _write_notebook_with_function(path, "def add(a: int) -> int:\n    return a\n")
+
+    proc = _run_cli(
+        ["compile", str(path), "--output", str(workdir / "out"), "--drop-past-sunset"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Dropping" not in proc.stderr
