@@ -88,6 +88,8 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # Read by name from inside _add_deprecation_headers on every request,
     # the same exposure JSON_REQUEST_LOGS has for _log_request_json.
     "REJECT_DEPRECATED_ENDPOINTS",
+    "ENFORCE_DEPRECATION_SUNSET",
+    "_sunset_has_passed",
     # Read by name from inside _add_deprecation_headers and deprecations().
     "_DEPRECATION_SUNSETS",
     # Assigned this compile's own real content hash once, at module load
@@ -577,6 +579,21 @@ GENERATED_APP_ENV_VARS = [
             "\"deprecated_endpoint_calls\", so an operator can watch who "
             "is still calling during the brownout. Endpoints that are not "
             "deprecated are never affected."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_ENFORCE_SUNSET",
+        "default": "false",
+        "description": (
+            "Set to \"true\" to make each deprecated endpoint whose "
+            "directive names a sunset date (\"sunset: YYYY-MM-DD\") "
+            "answer 410 Gone automatically from that date on (UTC), "
+            "exactly as NOTEBOOK_API_REJECT_DEPRECATED would -- so the "
+            "removal date a caller was promised via the Sunset header "
+            "actually takes effect without anyone having to flip a switch "
+            "or recompile on the day. Deprecated endpoints without a "
+            "sunset date, and every non-deprecated endpoint, are never "
+            "affected."
         ),
     },
     {
@@ -1291,11 +1308,31 @@ def generate_fastapi_code(
         f'"{_generated_app_env_var_default("NOTEBOOK_API_REJECT_DEPRECATED")}"'
         ').strip().lower() in ("true", "1", "yes", "on")'
     )
+    # NOTEBOOK_API_ENFORCE_SUNSET (see GENERATED_APP_ENV_VARS): the
+    # date-driven counterpart of the brownout switch above. Compared as
+    # ISO date strings against today's UTC date on every request, so a
+    # long-running process starts rejecting at midnight UTC on the day
+    # itself, with no restart needed.
+    lines.append(
+        'ENFORCE_DEPRECATION_SUNSET = os.getenv('
+        '"NOTEBOOK_API_ENFORCE_SUNSET", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_ENFORCE_SUNSET")}"'
+        ').strip().lower() in ("true", "1", "yes", "on")'
+    )
+    lines.append("def _sunset_has_passed(path):")
+    lines.append("    sunset = _DEPRECATION_SUNSETS.get(path)")
+    lines.append("    return bool(sunset) and (")
+    lines.append(
+        "        time.strftime('%Y-%m-%d', time.gmtime()) >= sunset[0]"
+    )
+    lines.append("    )")
+    lines.append("")
     lines.append("@app.middleware('http')")
     lines.append("async def _add_deprecation_headers(request, call_next):")
     lines.append(
-        "    if REJECT_DEPRECATED_ENDPOINTS and "
-        "request.url.path in _DEPRECATED_ENDPOINTS:"
+        "    if request.url.path in _DEPRECATED_ENDPOINTS and ("
+        "REJECT_DEPRECATED_ENDPOINTS or ("
+        "ENFORCE_DEPRECATION_SUNSET and _sunset_has_passed(request.url.path))):"
     )
     lines.append("        response = JSONResponse(")
     lines.append("            status_code=410,")

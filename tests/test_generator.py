@@ -76,6 +76,7 @@ def test_generated_app_env_vars_default_matches_the_actual_generated_code():
         "NOTEBOOK_API_PUBLIC_URL",
         "NOTEBOOK_API_DISABLE_DOCS",
         "NOTEBOOK_API_REJECT_DEPRECATED",
+        "NOTEBOOK_API_ENFORCE_SUNSET",
         "NOTEBOOK_API_JSON_LOGS",
     }
 
@@ -7227,7 +7228,11 @@ def test_generate_readme_writes_exactly_what_readme_content_returns(tmp_path):
     )
 
 def _deprecation_test_client(monkeypatch, deprecated_overrides,
-                             reject_deprecated=None):
+                             reject_deprecated=None, enforce_sunset=None):
+    if enforce_sunset is None:
+        monkeypatch.delenv("NOTEBOOK_API_ENFORCE_SUNSET", raising=False)
+    else:
+        monkeypatch.setenv("NOTEBOOK_API_ENFORCE_SUNSET", enforce_sunset)
     if reject_deprecated is None:
         monkeypatch.delenv("NOTEBOOK_API_REJECT_DEPRECATED", raising=False)
     else:
@@ -7604,3 +7609,51 @@ def test_background_endpoint_openapi_operation_carries_sunset_extension_too(
     operation = namespace["app"].openapi()["paths"]["/train_model"]["post"]
 
     assert operation["x-notebook-to-api-sunset"] == "2026-01-15"
+
+
+def test_enforce_sunset_rejects_a_deprecated_endpoint_past_its_sunset(monkeypatch):
+    """Confirmed missing before this feature: a Sunset date was only ever
+    advisory -- the endpoint kept serving after it unless someone flipped
+    NOTEBOOK_API_REJECT_DEPRECATED (or recompiled) on the day."""
+    client = _deprecation_test_client(
+        monkeypatch, {"old_add": "sunset: 2000-01-01"}, enforce_sunset="true"
+    )
+
+    response = client.post("/old_add", json={})
+
+    assert response.status_code == 410
+    assert response.headers["Sunset"] == "Sat, 01 Jan 2000 00:00:00 GMT"
+    assert client.post("/add", json={}).status_code == 200
+
+
+def test_enforce_sunset_still_serves_before_the_sunset_date(monkeypatch):
+    client = _deprecation_test_client(
+        monkeypatch, {"old_add": "sunset: 2999-01-01"}, enforce_sunset="true"
+    )
+
+    assert client.post("/old_add", json={}).status_code == 200
+
+
+def test_enforce_sunset_ignores_deprecations_without_a_sunset(monkeypatch):
+    client = _deprecation_test_client(
+        monkeypatch, {"old_add": "Use add."}, enforce_sunset="true"
+    )
+
+    assert client.post("/old_add", json={}).status_code == 200
+
+
+def test_past_sunset_is_still_served_when_enforce_sunset_is_off(monkeypatch):
+    for value in (None, "false"):
+        client = _deprecation_test_client(
+            monkeypatch, {"old_add": "sunset: 2000-01-01"}, enforce_sunset=value
+        )
+        response = client.post("/old_add", json={})
+        assert response.status_code == 200
+        assert response.headers["Deprecation"] == "true"
+
+
+def test_enforce_sunset_backing_names_are_reserved():
+    from backend.generator.api_generator import RESERVED_INFRASTRUCTURE_NAMES
+
+    assert "ENFORCE_DEPRECATION_SUNSET" in RESERVED_INFRASTRUCTURE_NAMES
+    assert "_sunset_has_passed" in RESERVED_INFRASTRUCTURE_NAMES
