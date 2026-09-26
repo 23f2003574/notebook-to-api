@@ -28747,3 +28747,47 @@ def test_app_status_request_timeout_unknown_for_an_older_app(tmp_path, fake_dash
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "request timeout: unknown (app predates this setting)" in proc.stdout
+
+
+def test_validate_command_warns_about_an_ignored_timeout_directive(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        path,
+        "# notebook-to-api: timeout 30\n"
+        "def report(a: int) -> int:\n    return a\n\n"
+        "# notebook-to-api: timeout 10\n"
+        "def train_model(a: int) -> int:\n    return a\n",
+    )
+
+    proc = _run_cli(["validate", str(path)], cwd=workdir)
+    json_proc = _run_cli(["validate", str(path), "--json"], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "⚠ Ignored timeout directive: train_model is a background endpoint" in proc.stdout
+    assert "report is a background" not in proc.stdout
+    data = json.loads(json_proc.stdout)
+    assert data["timeout_overrides"] == {"report": 30, "train_model": 10}
+    assert data["ignored_timeout_directives"] == ["train_model"]
+
+
+def test_remote_validate_command_warns_about_an_ignored_timeout_directive(
+    tmp_path, fake_dashboard
+):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_json_response(200, {
+        "status": "pass", "notebook": "nb.ipynb", "version_id": None,
+        "reserved_name_conflicts": [], "skipped_functions": [],
+        "duplicate_functions": [], "requirements_conflict": None,
+        "deprecated_functions": {}, "past_sunset_functions": {},
+        "timeout_overrides": {"train_model": 10},
+        "ignored_timeout_directives": ["train_model"],
+    })]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["remote-validate", "nb.ipynb", "--dashboard-url", dashboard_url], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "⚠ Ignored timeout directive: train_model is a background endpoint" in proc.stdout

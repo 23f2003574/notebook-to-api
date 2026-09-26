@@ -14014,6 +14014,10 @@ def validate_notebook_endpoint(
         "past_sunset_functions": past_sunset_functions(
             inspection["deprecated_functions"]
         ),
+        # Informational too: timeout directives, and the ones that have no
+        # effect (on a background function) -- see inspect_notebook_data.
+        "timeout_overrides": inspection["timeout_overrides"],
+        "ignored_timeout_directives": inspection["ignored_timeout_directives"],
     }
 
 

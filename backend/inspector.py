@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 from backend.compiler import (
+    _extract_timeout_overrides,
     COMPILE_METADATA_FILENAME,
     _extract_background_overrides,
     _extract_deprecated_functions,
@@ -695,6 +696,9 @@ def inspect_notebook_data(
     # succeeded silently or failed on it.
     apt_packages = _extract_explicit_apt_packages(code_cells)
 
+    timeout_overrides = _extract_timeout_overrides(code_cells)
+    endpoint_names = {func["name"] for func in all_functions}
+
     return {
         "functions": all_functions,
         "dependencies": _third_party_dependencies(all_imports),
@@ -724,6 +728,22 @@ def inspect_notebook_data(
             for name, reason in sorted(deprecated_overrides.items())
             if name not in private_function_names
         },
+        # Every "# notebook-to-api: timeout N" directive on a function
+        # that becomes an endpoint -- and, separately, the ones that do
+        # nothing: the directive only bounds a *synchronous* endpoint's
+        # request (NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS); on a background
+        # function it's silently ignored, since background tasks are bound
+        # by NOTEBOOK_API_TASK_EXECUTION_TIMEOUT_SECONDS instead.
+        "timeout_overrides": {
+            name: seconds
+            for name, seconds in sorted(timeout_overrides.items())
+            if name in endpoint_names
+        },
+        "ignored_timeout_directives": sorted(
+            name for name in timeout_overrides
+            if name in endpoint_names
+            and _is_background_function(name, background_overrides)
+        ),
         # The complementary "# notebook-to-api: exclude <import-name>"
         # directive's own effect, surfaced the same way "private_functions"
         # already surfaces "# notebook-to-api: private"'s -- before this,

@@ -23433,6 +23433,8 @@ def test_validate_reports_pass_for_a_clean_notebook():
         "requirements_conflict": None,
         "deprecated_functions": {},
         "past_sunset_functions": {},
+        "timeout_overrides": {},
+        "ignored_timeout_directives": [],
     }
 
 
@@ -34421,3 +34423,25 @@ def test_compile_history_records_which_functions_drop_past_sunset_removed():
     assert entry["dropped_past_sunset"] == ["old_add"]
     assert entry["exclude"] == ["old_add"]
     assert csv_rows[1].endswith(",old_add")
+
+
+def test_validate_reports_timeout_directives_and_flags_ignored_ones():
+    """Confirmed missing before this feature: a timeout directive on a
+    background function silently did nothing, and nothing said so."""
+    client.delete("/api/notebooks?confirm=true")
+    content = _notebook_bytes(
+        "# notebook-to-api: timeout 30\n"
+        "def report(a: int) -> int:\n    return a\n\n"
+        "# notebook-to-api: timeout 10\n"
+        "def train_model(a: int) -> int:\n    return a\n"
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("validate_timeouts.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    body = client.post("/api/validate", json={"notebook_path": "validate_timeouts.ipynb"}).json()
+
+    assert body["status"] == "pass"
+    assert body["timeout_overrides"] == {"report": 30, "train_model": 10}
+    assert body["ignored_timeout_directives"] == ["train_model"]
