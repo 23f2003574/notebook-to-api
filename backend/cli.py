@@ -369,7 +369,7 @@ _CORE_COMMANDS = frozenset({
     "remote-curl", "remote-postman", "app-preview", "readme-preview", "dockerfile-preview", "docker-compose-preview", "env-example-preview", "env-vars-preview",
     "postman-preview", "k8s-preview", "openapi-preview", "verify-webhook",
     "app-metrics", "app-call", "app-tasks", "app-status", "app-auth",
-    "app-deprecations", "app-cache-clear",
+    "app-deprecations", "app-cache-clear", "app-directives",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -8636,6 +8636,93 @@ def _dispatch_core_command(args):
                     time.sleep(args.interval)
             except KeyboardInterrupt:
                 print("\nStopped watching.")
+    elif args.command == "app-directives":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        # One per-endpoint view of the "rate-limit N" / "cache N"
+        # directives in force (GET /config) joined with how they're
+        # behaving (GET /metrics: 429s, cache hits/misses) -- otherwise
+        # an operator has to cross-reference two JSON documents by hand
+        # to tell whether a quota bites or a cache TTL pays off.
+        app_url = f"http://{args.host}:{args.port}"
+        headers = {"X-API-Key": args.api_key}
+
+        def _app_json(path):
+            try:
+                response = httpx.get(
+                    f"{app_url}{path}", headers=headers, timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise RuntimeError(
+                    f"Could not reach the compiled app at {app_url}: {exc}. "
+                    "Is it running? (see `serve`, or `docker compose up`)"
+                )
+            if response.status_code >= 400:
+                raise RuntimeError(
+                    f"App rejected GET {path} ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+            return response.json()
+
+        config = _app_json("/config")
+        if "endpoint_rate_limits" not in config and "endpoint_cache_ttls" not in config:
+            raise RuntimeError(
+                f"The compiled app at {app_url} doesn't report its "
+                "rate-limit/cache directives -- it was compiled by an older "
+                "notebook-to-api; recompile it to use app-directives."
+            )
+        metrics = _app_json("/metrics")
+        rate_limits = config.get("endpoint_rate_limits") or {}
+        cache_ttls = config.get("endpoint_cache_ttls") or {}
+        rate_limited = metrics.get("rate_limited_by_endpoint") or {}
+        hits = metrics.get("cache_hits_by_endpoint") or {}
+        misses = metrics.get("cache_misses_by_endpoint") or {}
+
+        report = {}
+        for path in sorted(set(rate_limits) | set(cache_ttls)):
+            entry = {}
+            if path in rate_limits:
+                entry["rate_limit_per_minute"] = rate_limits[path]
+                entry["rate_limited"] = rate_limited.get(path, 0)
+            if path in cache_ttls:
+                path_hits, path_misses = hits.get(path, 0), misses.get(path, 0)
+                total = path_hits + path_misses
+                entry["cache_ttl_seconds"] = cache_ttls[path]
+                entry["cache_hits"] = path_hits
+                entry["cache_misses"] = path_misses
+                entry["cache_hit_ratio"] = (
+                    round(path_hits / total, 4) if total else None
+                )
+            report[path] = entry
+
+        if args.json_output:
+            print(json.dumps(report, indent=2))
+        elif not report:
+            print("No endpoint has a rate-limit or cache directive.")
+        else:
+            for path, entry in report.items():
+                print(path)
+                if "rate_limit_per_minute" in entry:
+                    print(
+                        f"  rate limit: {entry['rate_limit_per_minute']}/min per "
+                        f"API key, {entry['rate_limited']} call(s) rejected (429)"
+                    )
+                if "cache_ttl_seconds" in entry:
+                    ratio = entry["cache_hit_ratio"]
+                    print(
+                        f"  cache: {entry['cache_ttl_seconds']}s TTL, "
+                        f"{entry['cache_hits']} hit(s) / {entry['cache_misses']} "
+                        "miss(es)"
+                        + (f" ({ratio:.0%} hit rate)" if ratio is not None else " (no calls yet)")
+                    )
+
+        if args.fail_if_rate_limited and any(
+            entry.get("rate_limited") for entry in report.values()
+        ):
+            sys.exit(1)
+
     elif args.command == "app-cache-clear":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -17400,6 +17487,28 @@ def main():
     # its reason and live call count), the operator-side view the
     # Deprecation header, /metrics counters and the
     # NOTEBOOK_API_REJECT_DEPRECATED brownout all feed.
+    app_directives_parser = subparsers.add_parser(
+        "app-directives",
+        help=(
+            "Show each endpoint's rate-limit and cache directives with how "
+            "they're behaving (429s, cache hit rate), from a compiled app's "
+            "GET /config and GET /metrics."
+        )
+    )
+    _add_app_host_port_arguments(app_directives_parser)
+    app_directives_parser.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+        help="Print the per-endpoint report as JSON.",
+    )
+    app_directives_parser.add_argument(
+        "--fail-if-rate-limited",
+        dest="fail_if_rate_limited",
+        action="store_true",
+        help="Exit 1 if any endpoint has rejected a call with its rate limit (a CI/cron gate).",
+    )
+
     app_cache_clear_parser = subparsers.add_parser(
         "app-cache-clear",
         help=(

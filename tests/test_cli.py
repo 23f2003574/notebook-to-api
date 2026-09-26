@@ -29159,3 +29159,93 @@ def test_app_cache_clear_explains_an_older_app(tmp_path, fake_dashboard):
 
     assert proc.returncode != 0
     assert "recompile it to use app-cache-clear" in proc.stdout + proc.stderr
+
+
+_DIRECTIVES_CONFIG = {
+    "endpoint_rate_limits": {"/lookup": 5, "/train_model": 2},
+    "endpoint_cache_ttls": {"/lookup": 30, "/report": 60},
+}
+_DIRECTIVES_METRICS = {
+    "rate_limited_by_endpoint": {"/lookup": 3},
+    "cache_hits_by_endpoint": {"/lookup": 3},
+    "cache_misses_by_endpoint": {"/lookup": 1},
+}
+
+
+def _run_app_directives(tmp_path, fake_dashboard, responses, *extra):
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = responses
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    proc = _run_cli(
+        ["app-directives", "--host", host, "--port", str(port), *extra], cwd=workdir,
+    )
+    return proc, handler
+
+
+def test_app_directives_joins_config_and_metrics_per_endpoint(tmp_path, fake_dashboard):
+    """Confirmed missing before this feature: seeing whether a rate limit
+    bites or a cache pays off meant cross-referencing /config and /metrics."""
+    proc, handler = _run_app_directives(
+        tmp_path, fake_dashboard,
+        [_json_response(200, _DIRECTIVES_CONFIG), _json_response(200, _DIRECTIVES_METRICS)],
+        "--api-key", "secret",
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/config", "/metrics"]
+    assert handler.request_headers[1].get("X-API-Key") == "secret"
+    assert (
+        "/lookup\n  rate limit: 5/min per API key, 3 call(s) rejected (429)\n"
+        "  cache: 30s TTL, 3 hit(s) / 1 miss(es) (75% hit rate)\n"
+    ) in proc.stdout
+    assert "/report\n  cache: 60s TTL, 0 hit(s) / 0 miss(es) (no calls yet)\n" in proc.stdout
+    assert "/train_model\n  rate limit: 2/min per API key, 0 call(s) rejected (429)\n" in proc.stdout
+
+
+def test_app_directives_json_and_fail_if_rate_limited(tmp_path, fake_dashboard):
+    proc, _ = _run_app_directives(
+        tmp_path, fake_dashboard,
+        [_json_response(200, _DIRECTIVES_CONFIG), _json_response(200, _DIRECTIVES_METRICS)],
+        "--json", "--fail-if-rate-limited",
+    )
+
+    assert proc.returncode == 1
+    report = json.loads(proc.stdout)
+    assert report["/lookup"] == {
+        "rate_limit_per_minute": 5, "rate_limited": 3, "cache_ttl_seconds": 30,
+        "cache_hits": 3, "cache_misses": 1, "cache_hit_ratio": 0.75,
+    }
+    assert report["/report"]["cache_hit_ratio"] is None
+
+
+def test_app_directives_passes_the_gate_when_nothing_was_rejected(tmp_path, fake_dashboard):
+    proc, _ = _run_app_directives(
+        tmp_path, fake_dashboard,
+        [_json_response(200, {"endpoint_rate_limits": {"/a": 1}, "endpoint_cache_ttls": {}}),
+         _json_response(200, {})],
+        "--fail-if-rate-limited",
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_app_directives_reports_no_directives(tmp_path, fake_dashboard):
+    proc, _ = _run_app_directives(
+        tmp_path, fake_dashboard,
+        [_json_response(200, {"endpoint_rate_limits": {}, "endpoint_cache_ttls": {}}),
+         _json_response(200, {})],
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No endpoint has a rate-limit or cache directive." in proc.stdout
+
+
+def test_app_directives_explains_an_older_app(tmp_path, fake_dashboard):
+    proc, _ = _run_app_directives(
+        tmp_path, fake_dashboard, [_json_response(200, {"task_ttl_seconds": 3600})],
+    )
+
+    assert proc.returncode != 0
+    assert "recompile it to use app-directives" in proc.stdout + proc.stderr
