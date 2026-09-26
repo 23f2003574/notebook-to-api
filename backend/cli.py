@@ -369,7 +369,7 @@ _CORE_COMMANDS = frozenset({
     "remote-curl", "remote-postman", "app-preview", "readme-preview", "dockerfile-preview", "docker-compose-preview", "env-example-preview", "env-vars-preview",
     "postman-preview", "k8s-preview", "openapi-preview", "verify-webhook",
     "app-metrics", "app-call", "app-tasks", "app-status", "app-auth",
-    "app-deprecations",
+    "app-deprecations", "app-cache-clear",
 })
 
 # Exception types raised by real, expected failure conditions in the core
@@ -8636,6 +8636,50 @@ def _dispatch_core_command(args):
                     time.sleep(args.interval)
             except KeyboardInterrupt:
                 print("\nStopped watching.")
+    elif args.command == "app-cache-clear":
+        # See `upload` above for why this is imported here rather than at
+        # module scope.
+        import httpx
+
+        # DELETE /cache: purge results cached by "# notebook-to-api: cache N"
+        # endpoints (all, or --endpoint's only) -- e.g. right after the
+        # data a cached function reads was refreshed, instead of waiting
+        # out the TTL or restarting the app.
+        app_url = f"http://{args.host}:{args.port}"
+        params = {"endpoint": args.endpoint} if args.endpoint else None
+        try:
+            response = httpx.delete(
+                f"{app_url}/cache", params=params,
+                headers={"X-API-Key": args.api_key}, timeout=args.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise RuntimeError(
+                f"Could not reach the compiled app at {app_url}: {exc}. Is "
+                "it running? (see `serve`, or `docker compose up`)"
+            )
+        if response.status_code in (404, 405):
+            raise RuntimeError(
+                f"The compiled app at {app_url} has no DELETE /cache -- it "
+                "was compiled by an older notebook-to-api; recompile it to "
+                "use app-cache-clear."
+            )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"App rejected the cache clear ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+        data = response.json()
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+            scope = (
+                f"/{args.endpoint.lstrip('/')}" if args.endpoint else "all endpoints"
+            )
+            print(
+                f"Cleared {data.get('cleared', 0)} cached response(s) for "
+                f"{scope}; {data.get('remaining_entries', 0)} remain."
+            )
+
     elif args.command == "app-deprecations":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -17356,6 +17400,26 @@ def main():
     # its reason and live call count), the operator-side view the
     # Deprecation header, /metrics counters and the
     # NOTEBOOK_API_REJECT_DEPRECATED brownout all feed.
+    app_cache_clear_parser = subparsers.add_parser(
+        "app-cache-clear",
+        help=(
+            "Purge a compiled app's response cache (functions marked "
+            "\"# notebook-to-api: cache N\") via its DELETE /cache."
+        )
+    )
+    _add_app_host_port_arguments(app_cache_clear_parser)
+    app_cache_clear_parser.add_argument(
+        "--endpoint",
+        default=None,
+        help="Only clear this endpoint's cached results (e.g. predict or /predict).",
+    )
+    app_cache_clear_parser.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+        help="Print the app's raw {\"cleared\", \"remaining_entries\"} response as JSON.",
+    )
+
     app_deprecations_parser = subparsers.add_parser(
         "app-deprecations",
         help=(

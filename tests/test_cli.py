@@ -29104,3 +29104,58 @@ def test_app_call_without_no_cache_sends_no_cache_control(tmp_path, fake_dashboa
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert handler.request_headers[-1].get("Cache-Control") is None
+
+
+def _run_app_cache_clear(tmp_path, fake_dashboard, body, *extra, status=200):
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [_json_response(status, body)]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    proc = _run_cli(
+        ["app-cache-clear", "--host", host, "--port", str(port), *extra], cwd=workdir,
+    )
+    return proc, handler
+
+
+def test_app_cache_clear_purges_every_endpoint(tmp_path, fake_dashboard):
+    """Confirmed missing before this feature: the compiled app's own
+    DELETE /cache had no CLI counterpart."""
+    proc, handler = _run_app_cache_clear(
+        tmp_path, fake_dashboard, {"cleared": 4, "remaining_entries": 0},
+        "--api-key", "secret",
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/cache"]
+    assert handler.request_headers[0].get("X-API-Key") == "secret"
+    assert "Cleared 4 cached response(s) for all endpoints; 0 remain." in proc.stdout
+
+
+def test_app_cache_clear_scopes_to_one_endpoint_and_prints_json(tmp_path, fake_dashboard):
+    proc, handler = _run_app_cache_clear(
+        tmp_path, fake_dashboard, {"cleared": 1, "remaining_entries": 2},
+        "--endpoint", "predict", "--json",
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/cache?endpoint=predict"]
+    assert json.loads(proc.stdout) == {"cleared": 1, "remaining_entries": 2}
+
+
+def test_app_cache_clear_reports_a_rejected_key(tmp_path, fake_dashboard):
+    proc, _ = _run_app_cache_clear(
+        tmp_path, fake_dashboard, {"detail": "Invalid API key"}, status=401,
+    )
+
+    assert proc.returncode != 0
+    assert "App rejected the cache clear (401)" in proc.stdout + proc.stderr
+
+
+def test_app_cache_clear_explains_an_older_app(tmp_path, fake_dashboard):
+    proc, _ = _run_app_cache_clear(
+        tmp_path, fake_dashboard, {"detail": "Method Not Allowed"}, status=405,
+    )
+
+    assert proc.returncode != 0
+    assert "recompile it to use app-cache-clear" in proc.stdout + proc.stderr
