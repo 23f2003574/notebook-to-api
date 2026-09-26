@@ -28,6 +28,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "_ENDPOINT_RATE_LIMIT_WINDOWS", "_enforce_endpoint_rate_limit",
     "_ENDPOINT_RATE_LIMITED", "_RESPONSE_CACHE", "_RESPONSE_CACHE_LOCK",
     "_RESPONSE_CACHE_MAX_ENTRIES", "_cache_lookup", "_cache_store",
+    "_RESPONSE_CACHE_HITS", "_RESPONSE_CACHE_MISSES", "clear_response_cache",
     # Read by name from inside _evict_expired_tasks' own body -- the
     # identical "referenced by name inside a helper every background
     # endpoint's own submission calls first" exposure already documented
@@ -2067,6 +2068,10 @@ def generate_fastapi_code(
     lines.append("_RESPONSE_CACHE = {}")
     lines.append("_RESPONSE_CACHE_LOCK = threading.Lock()")
     lines.append("_RESPONSE_CACHE_MAX_ENTRIES = 1024")
+    # Per-endpoint hit/miss counters, reported by GET /metrics and
+    # /metrics/prometheus so an operator can tell whether a TTL is paying off.
+    lines.append("_RESPONSE_CACHE_HITS = {}")
+    lines.append("_RESPONSE_CACHE_MISSES = {}")
     lines.append("")
     lines.append("def _cache_lookup(key):")
     lines.append("    with _RESPONSE_CACHE_LOCK:")
@@ -2740,6 +2745,26 @@ def generate_fastapi_code(
     lines.append("    }")
 
     lines.append("")
+    # Until now a cached result could only be dropped by waiting out its
+    # TTL or restarting the process -- no way to purge stale answers
+    # after, say, a notebook's underlying data file was updated.
+    lines.append("@app.delete('/cache')")
+    lines.append(
+        "def clear_response_cache(endpoint: Optional[str] = None, "
+        "_: None = Depends(verify_api_key)):"
+    )
+    lines.append("    if endpoint is not None and not endpoint.startswith('/'):")
+    lines.append("        endpoint = '/' + endpoint")
+    lines.append("    with _RESPONSE_CACHE_LOCK:")
+    lines.append("        keys = [")
+    lines.append("            key for key in _RESPONSE_CACHE")
+    lines.append("            if endpoint is None or key[0] == endpoint")
+    lines.append("        ]")
+    lines.append("        for key in keys:")
+    lines.append("            _RESPONSE_CACHE.pop(key, None)")
+    lines.append("        remaining = len(_RESPONSE_CACHE)")
+    lines.append("    return {'cleared': len(keys), 'remaining_entries': remaining}")
+    lines.append("")
     lines.append("@app.post('/tasks/cleanup')")
     lines.append("def cleanup_tasks(_: None = Depends(verify_api_key)):")
 
@@ -2926,6 +2951,12 @@ def generate_fastapi_code(
     )
     lines.append(
         "        'rate_limited_by_endpoint': dict(sorted(_ENDPOINT_RATE_LIMITED.items())),"
+    )
+    lines.append(
+        "        'cache_hits_by_endpoint': dict(sorted(_RESPONSE_CACHE_HITS.items())),"
+    )
+    lines.append(
+        "        'cache_misses_by_endpoint': dict(sorted(_RESPONSE_CACHE_MISSES.items())),"
     )
     lines.append(
         "        'task_timeouts_by_endpoint': "
@@ -3139,6 +3170,19 @@ def generate_fastapi_code(
         "            body += f'notebook_api_request_timeouts_total"
         "{{path=\"{path}\"}} {count}\\n'"
     )
+    for counter, metric, help_text in (
+        ("_RESPONSE_CACHE_HITS", "notebook_api_cache_hits_total",
+         "Total number of requests answered from a cache directive response cache, by endpoint."),
+        ("_RESPONSE_CACHE_MISSES", "notebook_api_cache_misses_total",
+         "Total number of cache-directive requests that ran the notebook function, by endpoint."),
+    ):
+        lines.append(f"    if {counter}:")
+        lines.append(f"        body += '# HELP {metric} {help_text}\\n# TYPE {metric} counter\\n'")
+        lines.append(f"        for path, count in sorted({counter}.items()):")
+        lines.append(
+            f"            body += f'{metric}"
+            "{{path=\"{path}\"}} {count}\\n'"
+        )
     lines.append("    if _ENDPOINT_RATE_LIMITED:")
     lines.append(
         "        body += ('# HELP notebook_api_endpoint_rate_limited_total Total "
@@ -4588,6 +4632,11 @@ def generate_fastapi_code(
             # The global NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS is a runtime
             # env var, unknown here, so only a directive's value appears.
             endpoint_timeout = (timeout_overrides or {}).get(func_name)
+            endpoint_cache_ttl = (cache_overrides or {}).get(func_name)
+            cache_extra = (
+                f'"x-notebook-to-api-cache-ttl-seconds": {int(endpoint_cache_ttl)}, '
+                if endpoint_cache_ttl else ""
+            )
             timeout_extra = (
                 f'"x-notebook-to-api-timeout-seconds": {endpoint_timeout}, '
                 if endpoint_timeout is not None else ""
@@ -4630,7 +4679,7 @@ def generate_fastapi_code(
                 # deliberately {} too (see sync_responses above), so
                 # generate_typescript_sdk has no other way to learn what
                 # "result" actually contains.
-                f'openapi_extra={{{sunset_extra}{timeout_extra}{rate_limit_extra}"x-notebook-to-api-category": "{category}", "x-notebook-to-api-return-type": {repr(return_type)}, "security": [{{"ApiKeyAuth": []}}]}}, '
+                f'openapi_extra={{{sunset_extra}{timeout_extra}{rate_limit_extra}{cache_extra}"x-notebook-to-api-category": "{category}", "x-notebook-to-api-return-type": {repr(return_type)}, "security": [{{"ApiKeyAuth": []}}]}}, '
                 f'responses={repr(sync_responses)})'
             )
             is_async = func.get("is_async", False)
@@ -4639,7 +4688,6 @@ def generate_fastapi_code(
             # NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS and -- for a plain
             # `def` -- runs it on the same worker threadpool FastAPI would
             # have used for a `def` endpoint anyway.
-            endpoint_cache_ttl = (cache_overrides or {}).get(func_name)
             cache_param = (
                 '_cache_control: Optional[str] = Header(None, alias="Cache-Control"), '
                 if endpoint_cache_ttl else ""
@@ -4660,6 +4708,10 @@ def generate_fastapi_code(
                     "else _cache_lookup(_cache_key)"
                 )
                 lines.append("    if _cached is not None:")
+                lines.append(
+                    f"        _RESPONSE_CACHE_HITS['/{func_name}'] = "
+                    f"_RESPONSE_CACHE_HITS.get('/{func_name}', 0) + 1"
+                )
                 lines.append("        return JSONResponse(")
                 lines.append("            content={'result': _cached[1]},")
                 lines.append(
@@ -4746,6 +4798,10 @@ def generate_fastapi_code(
             lines.append("        )")
             if endpoint_cache_ttl:
                 lines.append(f"    _cache_store(_cache_key, result, {int(endpoint_cache_ttl)})")
+                lines.append(
+                    f"    _RESPONSE_CACHE_MISSES['/{func_name}'] = "
+                    f"_RESPONSE_CACHE_MISSES.get('/{func_name}', 0) + 1"
+                )
                 lines.append(
                     "    return JSONResponse(content={'result': result}, "
                     "headers={'X-Cache': 'MISS'})"

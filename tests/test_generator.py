@@ -1097,6 +1097,8 @@ def test_generated_app_exposes_get_metrics_as_json(monkeypatch):
         "deprecated_endpoint_rejections": {},
         "request_timeouts_by_endpoint": {},
         "rate_limited_by_endpoint": {},
+        "cache_hits_by_endpoint": {},
+        "cache_misses_by_endpoint": {},
         "task_timeouts_by_endpoint": {},
     }
 
@@ -8723,3 +8725,56 @@ def test_no_cache_directive_leaves_endpoints_uncached(monkeypatch):
 
     assert "X-Cache" not in first.headers
     assert first.json() != second.json()
+
+
+def test_delete_cache_purges_one_endpoint_or_everything(monkeypatch):
+    """Confirmed missing before this feature: a cached result could only
+    be dropped by waiting out its TTL or restarting the process."""
+    calls = []
+    client, namespace = _response_cache_client(
+        monkeypatch, {"lookup": 60, "plain": 60}, calls
+    )
+    client.post("/lookup", json={"x": 1})
+    client.post("/lookup", json={"x": 2})
+    client.post("/plain", json={})
+
+    assert client.delete("/cache", params={"endpoint": "lookup"}).json() == {
+        "cleared": 2, "remaining_entries": 1,
+    }
+    assert client.post("/lookup", json={"x": 1}).headers["X-Cache"] == "MISS"
+    assert client.post("/plain", json={}).headers["X-Cache"] == "HIT"
+
+    assert client.delete("/cache").json() == {"cleared": 2, "remaining_entries": 0}
+    assert namespace["_RESPONSE_CACHE"] == {}
+
+
+def test_delete_cache_requires_an_api_key(monkeypatch):
+    client, _ = _response_cache_client(monkeypatch, {"lookup": 60}, [])
+
+    assert client.delete("/cache", headers={"X-API-Key": "bad"}).status_code == 401
+
+
+def test_cache_hits_and_misses_are_counted_in_metrics(monkeypatch):
+    calls = []
+    client, _ = _response_cache_client(monkeypatch, {"lookup": 60}, calls)
+    assert "cache_hits_total" not in client.get("/metrics/prometheus").text
+
+    for x in (1, 1, 1, 2):
+        client.post("/lookup", json={"x": x})
+
+    metrics = client.get("/metrics").json()
+    assert metrics["cache_hits_by_endpoint"] == {"/lookup": 2}
+    assert metrics["cache_misses_by_endpoint"] == {"/lookup": 2}
+    text = client.get("/metrics/prometheus").text
+    assert "# TYPE notebook_api_cache_hits_total counter" in text
+    assert 'notebook_api_cache_hits_total{path="/lookup"} 2' in text
+    assert 'notebook_api_cache_misses_total{path="/lookup"} 2' in text
+
+
+def test_cache_ttl_is_published_in_openapi(monkeypatch):
+    client, _ = _response_cache_client(monkeypatch, {"lookup": 45}, [])
+
+    paths = client.get("/openapi.json").json()["paths"]
+
+    assert paths["/lookup"]["post"]["x-notebook-to-api-cache-ttl-seconds"] == 45
+    assert "x-notebook-to-api-cache-ttl-seconds" not in paths["/plain"]["post"]
