@@ -20524,7 +20524,7 @@ def test_versions_diff_command_json_flag_emits_machine_readable_output(
     assert data == {
         "added": [], "removed": [], "changed": [], "unchanged": ["add"],
         "compatible": True, "breaking_changes": [],
-        "newly_deprecated": [], "no_longer_deprecated": [], "sunset_changed": [],
+        "newly_deprecated": [], "no_longer_deprecated": [], "sunset_changed": [], "planned_removals": [],
     }
 
 
@@ -28618,3 +28618,24 @@ def test_compile_history_command_shows_functions_dropped_past_sunset(
         in proc.stdout
     )
     assert "nb.ipynb  (3 endpoint(s))\n" in proc.stdout
+
+
+def test_diff_command_fail_on_breaking_passes_a_removal_after_its_sunset(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    old_path = workdir / "old.ipynb"
+    new_path = workdir / "new.ipynb"
+    keep = "def add(a: int) -> int:\n    return a\n"
+    _write_notebook_with_function(
+        old_path,
+        keep + "\n# notebook-to-api: deprecated: sunset: 2000-01-01\n"
+        "def old_add(a: int) -> int:\n    return a\n",
+    )
+    _write_notebook_with_function(new_path, keep)
+
+    proc = _run_cli(
+        ["diff", str(old_path), str(new_path), "--fail-on-breaking"], cwd=workdir
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "POST /old_add (sunset 2000-01-01)" in proc.stdout
