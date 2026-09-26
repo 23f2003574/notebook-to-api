@@ -6,7 +6,16 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 from backend.compiler import compile_notebook, package_name_for_output_dir
-from backend.inspector import print_compile_summary
+from backend.inspector import apply_drop_past_sunset, print_compile_summary
+
+
+def _effective_selection(notebook_path, only, exclude, drop_past_sunset):
+    """(only, exclude) to actually compile with -- the caller's own
+    --only/--exclude, adjusted by apply_drop_past_sunset when
+    --drop-past-sunset is on (re-read from the notebook every call)."""
+    if not drop_past_sunset:
+        return only, exclude
+    return apply_drop_past_sunset(notebook_path, only, exclude)
 
 
 def run_on_change_hook(on_change):
@@ -96,7 +105,7 @@ class NotebookChangeHandler(FileSystemEventHandler):
 
     def __init__(
         self, notebook_path, output_dir, only=None, exclude=None,
-        debounce_seconds=1.0, on_change=None,
+        debounce_seconds=1.0, on_change=None, drop_past_sunset=False,
     ):
         """debounce_seconds (default 1.0, previously hardcoded to exactly
         this value with no way to change it) is how long
@@ -125,6 +134,10 @@ class NotebookChangeHandler(FileSystemEventHandler):
         self.output_dir = output_dir
         self.only = only
         self.exclude = exclude
+        # Re-evaluated on every recompile (see _effective_selection), not
+        # once at startup: a long-running serve/watch session can cross a
+        # function's sunset date, and a save can add or move one.
+        self.drop_past_sunset = drop_past_sunset
         self.debounce_seconds = debounce_seconds
         self.on_change = on_change
         self.last_compile_time = time.time()
@@ -201,14 +214,18 @@ class NotebookChangeHandler(FileSystemEventHandler):
             print("\n🔄 Notebook changed. Recompiling API...")
 
             try:
+                only, exclude = _effective_selection(
+                    self.notebook_path, self.only, self.exclude,
+                    self.drop_past_sunset,
+                )
                 compile_notebook(
                     self.notebook_path, self.output_dir,
-                    only=self.only, exclude=self.exclude,
+                    only=only, exclude=exclude,
                 )
                 print("✅ Recompilation complete.")
                 print_compile_summary(
                     self.notebook_path, self.output_dir,
-                    only=self.only, exclude=self.exclude,
+                    only=only, exclude=exclude,
                 )
                 if self.on_change:
                     run_on_change_hook(self.on_change)
@@ -218,7 +235,7 @@ class NotebookChangeHandler(FileSystemEventHandler):
 
 def serve_notebook(
     notebook_path, output_dir="generated", port=8000, host="0.0.0.0",
-    only=None, exclude=None, debounce_seconds=1.0, on_change=None,
+    only=None, exclude=None, debounce_seconds=1.0, on_change=None, drop_past_sunset=False,
 ):
     """
     Serve a notebook as a live API with hot recompilation.
@@ -268,9 +285,16 @@ def serve_notebook(
 
     # Initial compilation
     print("📝 Initial compilation...")
-    compile_notebook(notebook_path, output_dir, only=only, exclude=exclude)
+    initial_only, initial_exclude = _effective_selection(
+        notebook_path, only, exclude, drop_past_sunset,
+    )
+    compile_notebook(
+        notebook_path, output_dir, only=initial_only, exclude=initial_exclude,
+    )
     print("✅ Initial compilation complete.")
-    print_compile_summary(notebook_path, output_dir, only=only, exclude=exclude)
+    print_compile_summary(
+        notebook_path, output_dir, only=initial_only, exclude=initial_exclude,
+    )
     if on_change:
         run_on_change_hook(on_change)
 
@@ -279,6 +303,7 @@ def serve_notebook(
     handler = NotebookChangeHandler(
         notebook_path, output_dir, only=only, exclude=exclude,
         debounce_seconds=debounce_seconds, on_change=on_change,
+        drop_past_sunset=drop_past_sunset,
     )
 
     # Watch the directory containing the notebook
@@ -435,7 +460,7 @@ def serve_notebook(
 
 def watch_notebook(
     notebook_path, output_dir="generated", only=None, exclude=None,
-    debounce_seconds=1.0, on_change=None,
+    debounce_seconds=1.0, on_change=None, drop_past_sunset=False,
 ):
     """Compile a notebook once, then keep recompiling it on every save --
     without also starting a live API server the way `serve` does.
@@ -470,9 +495,16 @@ def watch_notebook(
     """
 
     print("📝 Initial compilation...")
-    compile_notebook(notebook_path, output_dir, only=only, exclude=exclude)
+    initial_only, initial_exclude = _effective_selection(
+        notebook_path, only, exclude, drop_past_sunset,
+    )
+    compile_notebook(
+        notebook_path, output_dir, only=initial_only, exclude=initial_exclude,
+    )
     print("✅ Initial compilation complete.")
-    print_compile_summary(notebook_path, output_dir, only=only, exclude=exclude)
+    print_compile_summary(
+        notebook_path, output_dir, only=initial_only, exclude=initial_exclude,
+    )
     if on_change:
         run_on_change_hook(on_change)
 
@@ -480,6 +512,7 @@ def watch_notebook(
     handler = NotebookChangeHandler(
         notebook_path, output_dir, only=only, exclude=exclude,
         debounce_seconds=debounce_seconds, on_change=on_change,
+        drop_past_sunset=drop_past_sunset,
     )
 
     notebook_dir = Path(notebook_path).parent.resolve()

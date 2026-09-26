@@ -1,6 +1,7 @@
 import difflib
 import json
 import os
+import sys
 from collections import Counter
 from pathlib import Path
 from urllib.parse import quote, urlsplit
@@ -253,6 +254,38 @@ def past_sunset_functions(deprecated_functions, today=None):
         if sunset and sunset <= today:
             past[name] = sunset
     return past
+
+
+def apply_drop_past_sunset(notebook_path, only, exclude):
+    """(only, exclude) adjusted to leave out every deprecated function in
+    `notebook_path` whose own "sunset: YYYY-MM-DD" is today (UTC) or
+    earlier -- `compile`/`deploy`/`serve`/`watch --drop-past-sunset`, so a rebuild actually
+    carries out the removal the Sunset header promised. Folded into
+    `exclude`, or removed from `only` when that was given instead (the two
+    are mutually exclusive); an `only` left empty is a ValueError rather
+    than silently compiling everything. The dropped names are reported on
+    stderr, so --json's stdout stays machine-parseable.
+    """
+    dropped = sorted(past_sunset_functions(
+        inspect_notebook_data(notebook_path=notebook_path)["deprecated_functions"]
+    ))
+    if not dropped:
+        return only, exclude
+    if only:
+        only = [name for name in only if name not in dropped]
+        if not only:
+            raise ValueError(
+                "Every --only function is past its sunset date, so "
+                "--drop-past-sunset left nothing to compile."
+            )
+    else:
+        exclude = sorted(set(exclude or []) | set(dropped))
+    print(
+        f"Dropping {len(dropped)} function(s) past their sunset date: "
+        f"{', '.join(dropped)}",
+        file=sys.stderr,
+    )
+    return only, exclude
 
 
 def _endpoint_sunset(func_name, deprecated_overrides):
