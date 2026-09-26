@@ -1506,9 +1506,15 @@ def generate_python_sdk(
     lines.append(
         "                if attempt >= self.max_retries or ("
     )
+    # A 504 carrying X-Notebook-API-Timeout is the app's own request
+    # timeout (its "# notebook-to-api: timeout N" or
+    # NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS), not a transient gateway error
+    # -- retrying just re-runs the same slow call, so it's raised at once.
     lines.append(
-        "                    response is not None and "
-        "status_code not in self._TRANSIENT_STATUS_CODES"
+        "                    response is not None and ("
+        "status_code not in self._TRANSIENT_STATUS_CODES or "
+        "str((getattr(response, 'headers', None) or {}).get("
+        "'X-Notebook-API-Timeout') or '').lower() == 'true')"
     )
     lines.append("                ):")
     lines.append("                    raise")
@@ -2428,6 +2434,11 @@ def generate_typescript_sdk(
     lines.append(
         "          NotebookAPIClient.TRANSIENT_STATUSES.has(response.status) "
         "&&"
+    )
+    # See the Python client's identical X-Notebook-API-Timeout check.
+    lines.append(
+        "          (response as any).headers?.get?.(\"X-Notebook-API-Timeout\") "
+        "!== \"true\" &&"
     )
     lines.append("          attempt < this.maxRetries")
     lines.append("        ) {")

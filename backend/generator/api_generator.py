@@ -1194,7 +1194,8 @@ def generate_fastapi_code(
         "expose_headers=["
         "'X-RateLimit-Limit', 'X-RateLimit-Remaining', "
         "'X-RateLimit-Reset', 'Retry-After', "
-        "'Deprecation', 'X-Deprecation-Reason', 'Sunset'"
+        "'Deprecation', 'X-Deprecation-Reason', 'Sunset', "
+        "'X-Notebook-API-Timeout'"
         "]"
         ")"
     )
@@ -4475,6 +4476,12 @@ def generate_fastapi_code(
                 f"            detail=f\"'{func_name}' did not finish within "
                 f"{timeout_label}.\","
             )
+            # Marks this 504 as the app's own request timeout -- a
+            # deterministic "this call takes too long", not the transient
+            # gateway hiccup a 504 usually is -- so a client's retry logic
+            # (both generated SDKs retry 504) knows retrying would just
+            # re-run the same slow notebook function, side effects and all.
+            lines.append("            headers={'X-Notebook-API-Timeout': 'true'},")
             lines.append("        )")
             lines.append("    except Exception as e:")
             lines.append("        raise HTTPException(")

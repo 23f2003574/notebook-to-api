@@ -678,7 +678,8 @@ def test_generated_app_cors_exposes_the_rate_limit_headers_to_cross_origin_js():
     assert (
         "expose_headers=['X-RateLimit-Limit', 'X-RateLimit-Remaining', "
         "'X-RateLimit-Reset', 'Retry-After', "
-        "'Deprecation', 'X-Deprecation-Reason', 'Sunset']"
+        "'Deprecation', 'X-Deprecation-Reason', 'Sunset', "
+        "'X-Notebook-API-Timeout']"
         in code
     )
 
@@ -8213,3 +8214,16 @@ def test_endpoint_timeouts_name_is_reserved():
     from backend.generator.api_generator import RESERVED_INFRASTRUCTURE_NAMES
 
     assert "_ENDPOINT_TIMEOUTS" in RESERVED_INFRASTRUCTURE_NAMES
+
+
+def test_request_timeout_504_carries_the_timeout_marker_header(monkeypatch):
+    """A 504 from the app's own request timeout is marked, so clients can
+    tell it from a transient gateway 504 and not retry it."""
+    import time as time_module
+
+    client = _request_timeout_client(monkeypatch, 1, lambda: time_module.sleep(2) or 1)
+
+    response = client.post("/slow", json={})
+
+    assert response.status_code == 504
+    assert response.headers["X-Notebook-API-Timeout"] == "true"

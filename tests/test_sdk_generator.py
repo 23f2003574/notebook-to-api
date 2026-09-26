@@ -7216,3 +7216,95 @@ def test_typescript_sdk_request_uses_the_longer_of_the_two_timeouts(tmp_path):
     proc = subprocess.run(["node", str(runner_path)], capture_output=True, text=True, timeout=30)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert json.loads(proc.stdout.strip().splitlines()[-1]) == [125000]
+
+
+def _python_client_counting_calls(tmp_path, monkeypatch, headers):
+    schema_path = _write_schema(tmp_path, {"/report": {"post": {"operationId": "report"}}})
+    output_path = tmp_path / "client.py"
+    generate_python_sdk(str(schema_path), str(output_path))
+    source = output_path.read_text(encoding="utf-8")
+
+    class FakeHTTPError(Exception):
+        def __init__(self, *args, response=None):
+            super().__init__(*args)
+            self.response = response
+
+    calls = []
+
+    class FakeResponse:
+        url = "http://localhost:8000/report"
+        status_code = 504
+
+        def __init__(self):
+            self.headers = headers
+
+        def raise_for_status(self):
+            raise FakeHTTPError("504 error", response=self)
+
+    def fake_post(*a, **k):
+        calls.append(1)
+        return FakeResponse()
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.HTTPError = FakeHTTPError
+    fake_requests.post = fake_post
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+    namespace = {}
+    exec(compile(source, str(output_path), "exec"), namespace)
+    client = namespace["NotebookAPIClient"]("http://localhost:8000", max_retries=2)
+    client._retry_delay = lambda response, attempt: 0
+    return client, calls, FakeHTTPError
+
+
+def test_python_sdk_does_not_retry_the_apps_own_request_timeout(tmp_path, monkeypatch):
+    """Confirmed wrong before this feature: every 504 was retried as
+    transient -- including the app's own request timeout, re-running the
+    same slow notebook function (and its side effects) max_retries times."""
+    client, calls, http_error = _python_client_counting_calls(
+        tmp_path, monkeypatch, {"X-Notebook-API-Timeout": "true"}
+    )
+
+    with pytest.raises(http_error):
+        client.report({})
+
+    assert len(calls) == 1
+
+
+def test_python_sdk_still_retries_a_plain_gateway_504(tmp_path, monkeypatch):
+    client, calls, http_error = _python_client_counting_calls(tmp_path, monkeypatch, {})
+
+    with pytest.raises(http_error):
+        client.report({})
+
+    assert len(calls) == 3
+
+
+@_needs_node
+def test_typescript_sdk_does_not_retry_the_apps_own_request_timeout(tmp_path):
+    schema_path = _write_schema(tmp_path, {"/report": {"post": {"operationId": "report"}}})
+    client_path = tmp_path / "client.ts"
+    generate_typescript_sdk(str(schema_path), str(client_path))
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        const counts = {{}};
+        for (const marked of [true, false]) {{
+          let calls = 0;
+          globalThis.fetch = async () => {{
+            calls++;
+            return {{ ok: false, status: 504,
+                     headers: new Headers(marked ? {{ "X-Notebook-API-Timeout": "true" }} : {{}}),
+                     json: async () => ({{}}) }};
+          }};
+          const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+          const client = new NotebookAPIClient("http://localhost:8000", {{ maxRetries: 2, backoffFactor: 0 }});
+          try {{ await client.report({{}}); }} catch (e) {{}}
+          counts[marked ? "marked" : "plain"] = calls;
+        }}
+        console.log(JSON.stringify(counts));
+        """,
+        encoding="utf-8",
+    )
+    proc = subprocess.run(["node", str(runner_path)], capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout.strip().splitlines()[-1]) == {"marked": 1, "plain": 3}
