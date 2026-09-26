@@ -8659,6 +8659,31 @@ def _dispatch_core_command(args):
                 "it running? (see `serve`, or `docker compose up`)"
             )
 
+        # The compiled app marks every response from a deprecated endpoint
+        # with `Deprecation: true` (plus X-Deprecation-Reason/Sunset), but
+        # this command -- often the very thing a smoke test or cron job
+        # uses to hit it -- never read them, so an operator calling a
+        # soon-to-be-removed endpoint got no hint at all. Warned on stderr
+        # so --json output on stdout stays machine-parseable.
+        deprecation = (response.headers.get("Deprecation") or "").strip().lower()
+        is_deprecated = bool(deprecation) and deprecation != "false"
+        if is_deprecated:
+            reason = response.headers.get("X-Deprecation-Reason")
+            sunset = response.headers.get("Sunset")
+            deprecation_note = (
+                (f" {reason}" if reason else "")
+                + (f" (sunset: {sunset})" if sunset else "")
+            )
+            if response.status_code == 410:
+                raise RuntimeError(
+                    f"POST /{args.function} has been retired (410 Gone)."
+                    f"{deprecation_note}"
+                )
+            print(
+                f"Warning: POST /{args.function} is deprecated.{deprecation_note}",
+                file=sys.stderr,
+            )
+
         if response.status_code >= 400:
 
             raise RuntimeError(
@@ -8721,6 +8746,10 @@ def _dispatch_core_command(args):
                 print(f"Task {result.get('status')}: {result.get('error')}")
         else:
             print(f"Result: {result.get('result')!r}")
+
+        # After the result is printed, so a CI smoke test still sees it.
+        if args.fail_on_deprecated and is_deprecated:
+            sys.exit(1)
     elif args.command == "app-tasks":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -16802,6 +16831,18 @@ def main():
             "Call one of a notebook's own compiled endpoints on a "
             "deployed app directly (POST /<function>), rather than only "
             "previewing what that call would look like."
+        )
+    )
+    app_call_parser.add_argument(
+        "--fail-on-deprecated",
+        action="store_true",
+        dest="fail_on_deprecated",
+        help=(
+            "Exit with status 1 (after printing the result) if the app "
+            "marks the called endpoint deprecated via its Deprecation "
+            "response header -- a smoke test's way to catch a still-used "
+            "endpoint slated for removal. The warning itself is always "
+            "printed to stderr either way."
         )
     )
     app_call_parser.add_argument(
