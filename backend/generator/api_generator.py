@@ -23,6 +23,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "MAX_PENDING_TASKS", "WEBHOOK_TIMEOUT_SECONDS", "WEBHOOK_SECRET",
     "WEBHOOK_MAX_RETRIES", "WEBHOOK_RETRY_BACKOFF_SECONDS",
     "TASK_EXECUTION_TIMEOUT_SECONDS",
+    "REQUEST_TIMEOUT_SECONDS", "_call_notebook_function",
     # Read by name from inside _evict_expired_tasks' own body -- the
     # identical "referenced by name inside a helper every background
     # endpoint's own submission calls first" exposure already documented
@@ -441,6 +442,19 @@ GENERATED_APP_ENV_VARS = [
             "Maximum number of background tasks pending at once -- a "
             "new one submitted while at this limit is rejected with 503 "
             "until some already-tracked tasks are evicted."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS",
+        "default": "0",
+        "description": (
+            "Maximum seconds a synchronous endpoint's notebook function "
+            "may run before the request is answered 504 Gateway Timeout "
+            "-- the same bound NOTEBOOK_API_TASK_EXECUTION_TIMEOUT_SECONDS "
+            "puts on background tasks. Without it, a hung notebook "
+            "function holds its request (and a worker thread) open "
+            "forever. The abandoned call itself still finishes in the "
+            "background. 0 (the default) disables this entirely."
         ),
     },
     {
@@ -1744,6 +1758,24 @@ def generate_fastapi_code(
         f'"{_generated_app_env_var_default("NOTEBOOK_API_TASK_EXECUTION_TIMEOUT_SECONDS")}"'
         '))'
     )
+    # The synchronous-endpoint counterpart of TASK_EXECUTION_TIMEOUT_SECONDS
+    # (see GENERATED_APP_ENV_VARS): a hung notebook function behind a
+    # plain endpoint used to hold its request -- and a worker thread --
+    # open forever. Same "0 means off" convention, and the same
+    # abandon_on_cancel caveat: the caller gets a prompt 504, while the
+    # orphaned thread itself still runs to completion in the background.
+    lines.append(
+        'REQUEST_TIMEOUT_SECONDS = int(os.getenv('
+        '"NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS")}"'
+        '))'
+    )
+    lines.append("async def _call_notebook_function(call, is_async=False):")
+    lines.append("    with anyio.fail_after(REQUEST_TIMEOUT_SECONDS or None):")
+    lines.append("        if is_async:")
+    lines.append("            return await call()")
+    lines.append("        return await anyio.to_thread.run_sync(call, abandon_on_cancel=True)")
+    lines.append("")
     # Bounds _deliver_task_webhook's own single delivery attempt below --
     # a caller-supplied ?callback_url= pointing at a slow or unresponsive
     # endpoint must never be allowed to tie up a worker thread (and, by
@@ -4323,9 +4355,12 @@ def generate_fastapi_code(
                 f'responses={repr(sync_responses)})'
             )
             is_async = func.get("is_async", False)
-            def_keyword = "async def" if is_async else "def"
-            call_prefix = "await " if is_async else ""
-            lines.append(f"{def_keyword} {func_name}(req: {model_name}, _: None = Depends(verify_api_key)):")
+            # Always `async def` now: the notebook function itself is run
+            # through _call_notebook_function (below), which applies
+            # NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS and -- for a plain
+            # `def` -- runs it on the same worker threadpool FastAPI would
+            # have used for a `def` endpoint anyway.
+            lines.append(f"async def {func_name}(req: {model_name}, _: None = Depends(verify_api_key)):")
             # _run_background_task already wraps a background function's own
             # call the same way (reporting the task "failed" with str(e)
             # instead of leaving it stuck "processing" forever), but a
@@ -4339,9 +4374,22 @@ def generate_fastapi_code(
             # deliberately raises one (e.g. HTTPException(404, ...)) is
             # already choosing its own status code and message on purpose.
             lines.append("    try:")
-            lines.append(f"        result = {call_prefix}notebook_module.{func_name}({call_args})")
+            lines.append(
+                f"        result = await _call_notebook_function("
+                f"functools.partial(notebook_module.{func_name}, {call_args}), "
+                f"is_async={is_async})"
+            )
             lines.append("    except HTTPException:")
             lines.append("        raise")
+            lines.append("    except TimeoutError:")
+            lines.append("        raise HTTPException(")
+            lines.append("            status_code=504,")
+            lines.append(
+                f"            detail=f\"'{func_name}' did not finish within "
+                "NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS "
+                "({REQUEST_TIMEOUT_SECONDS}s).\","
+            )
+            lines.append("        )")
             lines.append("    except Exception as e:")
             lines.append("        raise HTTPException(")
             lines.append("            status_code=500,")

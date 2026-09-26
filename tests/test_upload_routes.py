@@ -27585,6 +27585,7 @@ def test_env_vars_preview_requires_no_notebook_and_needs_no_body():
         "NOTEBOOK_API_DISABLE_DOCS",
         "NOTEBOOK_API_REJECT_DEPRECATED",
         "NOTEBOOK_API_ENFORCE_SUNSET",
+        "NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS",
         "NOTEBOOK_API_JSON_LOGS",
     }
     assert env_vars["NOTEBOOK_API_KEY"]["default"] == "notebook-to-api-dev-key"
