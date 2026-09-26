@@ -28672,3 +28672,45 @@ def test_compile_exclude_of_a_non_deprecated_function_leaves_no_tombstone(tmp_pa
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "_retired_endpoint_" not in (workdir / "out" / "app.py").read_text(encoding="utf-8")
+
+
+_DEPRECATIONS_WITH_RETIRED = {
+    "rejecting": False, "enforcing_sunset": False,
+    "endpoints": [
+        {"path": "/gone", "reason": None, "calls": 2, "rejections": 2,
+         "sunset": "2000-01-01", "rejected": True, "retired": True},
+        {"path": "/brownout", "reason": None, "calls": 1, "rejections": 1,
+         "sunset": None, "rejected": True, "retired": False},
+        {"path": "/live", "reason": None, "calls": 0, "rejections": 0,
+         "sunset": None, "rejected": False, "retired": False},
+    ],
+}
+
+
+def test_app_deprecations_marks_retired_endpoints_distinctly(tmp_path, fake_dashboard):
+    """Confirmed missing before this feature: a retired (removed, 410
+    tombstone) endpoint printed the same "REJECTED (410)" as one a
+    brownout is only temporarily turning away."""
+    proc, _ = _run_app_deprecations(tmp_path, fake_dashboard, _DEPRECATIONS_WITH_RETIRED)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "/gone  calls=2 (rejected=2)  sunset=2000-01-01  RETIRED (removed, 410)" in proc.stdout
+    assert "/brownout  calls=1 (rejected=1)  REJECTED (410)" in proc.stdout
+    assert "/live  calls=0\n" in proc.stdout
+
+
+def test_app_status_counts_retired_endpoints(tmp_path, fake_dashboard):
+    proc, _ = _run_app_status(
+        tmp_path, fake_dashboard, _json_response(200, _DEPRECATIONS_WITH_RETIRED)
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Deprecated endpoints: 3 (2 answering 410, 1 retired)" in proc.stdout
+    assert "RETIRED (removed, 410)" in proc.stdout
+
+
+def test_deprecation_state_marker_for_an_older_app_without_retired():
+    from backend.cli import _deprecation_state_marker
+
+    assert _deprecation_state_marker({"rejected": True}) == "  REJECTED (410)"
+    assert _deprecation_state_marker({}) == ""

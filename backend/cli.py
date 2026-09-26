@@ -791,6 +791,21 @@ def _add_callback_url_argument(parser):
     )
 
 
+def _deprecation_state_marker(entry):
+    """The suffix `app-status`/`app-deprecations` print for one GET
+    /deprecations entry: "RETIRED (removed, 410)" for a tombstone a
+    past-sunset compile left behind (its own "retired") -- permanent until
+    the endpoint is added back -- vs "REJECTED (410)" for one a brownout or
+    enforced sunset is turning away while it still exists and can be
+    switched back on. An older app that never reports "retired" gets the
+    old REJECTED marker unchanged."""
+    if entry.get("retired"):
+        return "  RETIRED (removed, 410)"
+    if entry.get("rejected"):
+        return "  REJECTED (410)"
+    return ""
+
+
 def _parse_comma_separated_names(value):
     """Parse a `--only`/`--exclude` argparse value ("add,subtract", or
     None) into a list of names, or None if nothing was given.
@@ -8396,16 +8411,19 @@ def _dispatch_core_command(args):
             deprecated_endpoints = (deprecations or {}).get("endpoints") or []
             if deprecated_endpoints:
                 rejected = [e for e in deprecated_endpoints if e.get("rejected")]
+                retired = [e for e in deprecated_endpoints if e.get("retired")]
                 print(
                     f"\nDeprecated endpoints: {len(deprecated_endpoints)}"
-                    + (f" ({len(rejected)} answering 410)" if rejected else "")
+                    + (f" ({len(rejected)} answering 410" if rejected else "")
+                    + (f", {len(retired)} retired" if rejected and retired else "")
+                    + (")" if rejected else "")
                 )
                 for entry in deprecated_endpoints:
                     print(
                         f"  {entry.get('path')}  calls={entry.get('calls', 0)}"
                         + (f" (rejected={entry['rejections']})" if entry.get("rejections") else "")
                         + (f"  sunset={entry['sunset']}" if entry.get("sunset") else "")
-                        + ("  REJECTED (410)" if entry.get("rejected") else "")
+                        + _deprecation_state_marker(entry)
                     )
 
         if not args.watch:
@@ -8670,7 +8688,7 @@ def _dispatch_core_command(args):
                         f"  {entry.get('path')}  calls={entry.get('calls', 0)}"
                         + (f" (rejected={entry['rejections']})" if entry.get("rejections") else "")
                         + (f"  sunset={sunset}" if sunset else "")
-                        + ("  REJECTED (410)" if entry.get("rejected") else "")
+                        + _deprecation_state_marker(entry)
                         + (f"  ({reason})" if reason else "")
                     )
                     # GET /deprecations' own "callers" (calls per
