@@ -14733,6 +14733,10 @@ def app_preview_endpoint(data: dict):
 
     only = data.get("only")
     exclude = data.get("exclude")
+    # "drop_past_sunset": preview exactly what POST /api/compile would
+    # produce with its own identical option -- see
+    # _drop_past_sunset_selection.
+    drop_past_sunset = bool(data.get("drop_past_sunset", False))
     version_id = data.get("version_id")
     expected_sha256 = data.get("expected_sha256")
 
@@ -14768,6 +14772,10 @@ def app_preview_endpoint(data: dict):
     try:
 
         notebook = load_notebook(str(full_path))
+
+        only, exclude, dropped_past_sunset = _drop_past_sunset_selection(
+            str(full_path), only, exclude, drop_past_sunset,
+        )
 
         code_cells = [
             cell for cell in extract_code_cells(notebook)
@@ -14848,6 +14856,7 @@ def app_preview_endpoint(data: dict):
         "status": "success",
         "notebook": notebook_path,
         "version_id": version_id,
+        "dropped_past_sunset": dropped_past_sunset,
         "package_name": package_name,
         "app_code": app_code,
     }
@@ -14913,6 +14922,10 @@ def readme_preview_endpoint(data: dict):
 
     only = data.get("only")
     exclude = data.get("exclude")
+    # "drop_past_sunset": preview exactly what POST /api/compile would
+    # produce with its own identical option -- see
+    # _drop_past_sunset_selection.
+    drop_past_sunset = bool(data.get("drop_past_sunset", False))
     version_id = data.get("version_id")
     expected_sha256 = data.get("expected_sha256")
 
@@ -14948,6 +14961,10 @@ def readme_preview_endpoint(data: dict):
     try:
 
         notebook = load_notebook(str(full_path))
+
+        only, exclude, dropped_past_sunset = _drop_past_sunset_selection(
+            str(full_path), only, exclude, drop_past_sunset,
+        )
 
         code_cells = [
             cell for cell in extract_code_cells(notebook)
@@ -15034,6 +15051,7 @@ def readme_preview_endpoint(data: dict):
         "status": "success",
         "notebook": notebook_path,
         "version_id": version_id,
+        "dropped_past_sunset": dropped_past_sunset,
         "package_name": package_name,
         "readme": readme,
     }
@@ -15780,6 +15798,10 @@ def openapi_preview_endpoint(data: dict):
 
     only = data.get("only")
     exclude = data.get("exclude")
+    # "drop_past_sunset": preview exactly what POST /api/compile would
+    # produce with its own identical option -- see
+    # _drop_past_sunset_selection.
+    drop_past_sunset = bool(data.get("drop_past_sunset", False))
     version_id = data.get("version_id")
 
     for field_name, field_value in (("only", only), ("exclude", exclude)):
@@ -15832,6 +15854,10 @@ def openapi_preview_endpoint(data: dict):
     try:
 
         notebook = load_notebook(str(full_path))
+
+        only, exclude, dropped_past_sunset = _drop_past_sunset_selection(
+            str(full_path), only, exclude, drop_past_sunset,
+        )
 
         code_cells = [
             cell for cell in extract_code_cells(notebook)
@@ -15954,6 +15980,7 @@ def openapi_preview_endpoint(data: dict):
         "status": "success",
         "notebook": notebook_path,
         "version_id": version_id,
+        "dropped_past_sunset": dropped_past_sunset,
         "package_name": package_name,
         "format": export_format,
     }

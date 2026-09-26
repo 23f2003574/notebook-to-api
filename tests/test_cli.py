@@ -28573,3 +28573,21 @@ def test_remote_curl_drop_past_sunset_applies_to_the_downloaded_notebook(
     assert proc.returncode == 0, proc.stdout + proc.stderr
     script = (workdir / "requests.sh").read_text(encoding="utf-8")
     assert "/old_add" not in script and "/add" in script
+
+
+@pytest.mark.parametrize("command", ["app-preview", "readme-preview", "openapi-preview"])
+def test_preview_commands_forward_drop_past_sunset(command, tmp_path, fake_dashboard):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_json_response(200, {
+        "status": "success", "notebook": "nb.ipynb", "version_id": None,
+        "dropped_past_sunset": ["old_add"], "code": "", "readme": "", "schema": {},
+    })]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    _run_cli(
+        [command, "nb.ipynb", "--dashboard-url", dashboard_url, "--drop-past-sunset"],
+        cwd=workdir,
+    )
+
+    assert json.loads(handler.bodies[0])["drop_past_sunset"] is True
