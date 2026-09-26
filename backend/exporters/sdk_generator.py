@@ -1745,10 +1745,23 @@ def generate_python_sdk(
     lines.append("            timeout=self.timeout,")
     lines.append("        ))")
     lines.append("")
-    lines.append("    def delete_failed_tasks(self) -> dict:")
-    lines.append('        """Delete every task with status \'failed\'."""')
+    lines.append("    def delete_failed_tasks(self, timed_out: bool = None) -> dict:")
+    lines.append(
+        '        """Delete every task with status \'failed\' -- or, with '
+        'timed_out=True/False,'
+    )
+    lines.append(
+        "        only those that did / didn't fail by exceeding their "
+        'execution timeout."""'
+    )
     lines.append("        return self._request(lambda: requests.delete(")
     lines.append('            f"{self.base_url}/tasks/failed",')
+    # The app's own ?timed_out= -- only sent when given, so a plain call
+    # is byte-for-byte the request it always was.
+    lines.append(
+        '            **({"params": {"timed_out": "true" if timed_out else "false"}}'
+        ' if timed_out is not None else {}),'
+    )
     lines.append('            headers={"X-API-Key": self.api_key},')
     lines.append("            timeout=self.timeout,")
     lines.append("        ))")
@@ -2787,10 +2800,15 @@ def generate_typescript_sdk(
     lines.append("    }));")
     lines.append("  }")
     lines.append("")
-    lines.append("  async deleteFailedTasks(): Promise<any> {")
+    # See the Python client's identical delete_failed_tasks(timed_out=...).
+    lines.append("  async deleteFailedTasks(timedOut?: boolean): Promise<any> {")
     lines.append(
-        '    return this.requestWithRetry("/tasks/failed", () => '
-        "fetch(`${this.baseUrl}/tasks/failed`, {"
+        '    const path = timedOut === undefined ? "/tasks/failed" : '
+        '`/tasks/failed?timed_out=${timedOut}`;'
+    )
+    lines.append(
+        "    return this.requestWithRetry(path, () => "
+        "fetch(`${this.baseUrl}${path}`, {"
     )
     lines.append('      method: "DELETE",')
     lines.append("      headers: {")

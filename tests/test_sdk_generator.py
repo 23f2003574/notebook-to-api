@@ -1414,7 +1414,7 @@ def test_generate_python_sdk_includes_task_management_helpers(tmp_path):
     ) in source
     assert "def delete_task(self, task_id: str) -> dict:" in source
     assert "def delete_completed_tasks(self) -> dict:" in source
-    assert "def delete_failed_tasks(self) -> dict:" in source
+    assert "def delete_failed_tasks(self, timed_out: bool = None) -> dict:" in source
 
 
 def test_generate_python_sdk_list_tasks_sends_correct_request(tmp_path, monkeypatch):
@@ -3544,7 +3544,7 @@ def test_generate_typescript_sdk_includes_task_management_helpers(tmp_path):
     ) in source
     assert "async deleteTask(taskId: string): Promise<any> {" in source
     assert "async deleteCompletedTasks(): Promise<any> {" in source
-    assert "async deleteFailedTasks(): Promise<any> {" in source
+    assert "async deleteFailedTasks(timedOut?: boolean): Promise<any> {" in source
 
 
 @pytest.mark.skipif(
@@ -7478,4 +7478,71 @@ def test_typescript_sdk_list_tasks_can_filter_by_timed_out(tmp_path):
     assert json.loads(proc.stdout.strip().splitlines()[-1]) == [
         "http://localhost:8000/tasks?timed_out=true",
         "http://localhost:8000/tasks",
+    ]
+
+
+def test_python_sdk_delete_failed_tasks_can_target_timed_out_ones(tmp_path, monkeypatch):
+    """Confirmed missing before this feature: the app's own DELETE
+    /tasks/failed?timed_out= had no way through either generated client."""
+    schema_path = _write_schema(tmp_path, {"/add": {"post": {"operationId": "add"}}})
+    output_path = tmp_path / "client.py"
+    generate_python_sdk(str(schema_path), str(output_path))
+    source = output_path.read_text(encoding="utf-8")
+    ast.parse(source)
+    seen = []
+
+    class FakeResponse:
+        headers = {}
+        url = "http://localhost:8000/tasks/failed"
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"deleted": 0}
+
+    def fake_delete(url, **kwargs):
+        seen.append(kwargs.get("params"))
+        return FakeResponse()
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.delete = fake_delete
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+    namespace = {}
+    exec(compile(source, str(output_path), "exec"), namespace)
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+
+    client.delete_failed_tasks()
+    client.delete_failed_tasks(timed_out=True)
+    client.delete_failed_tasks(timed_out=False)
+
+    assert seen == [None, {"timed_out": "true"}, {"timed_out": "false"}]
+
+
+@_needs_node
+def test_typescript_sdk_delete_failed_tasks_can_target_timed_out_ones(tmp_path):
+    schema_path = _write_schema(tmp_path, {"/add": {"post": {"operationId": "add"}}})
+    client_path = tmp_path / "client.ts"
+    generate_typescript_sdk(str(schema_path), str(client_path))
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        const urls = [];
+        globalThis.fetch = async (url) => {{
+          urls.push(url);
+          return {{ ok: true, status: 200, headers: new Headers(), json: async () => ({{}}) }};
+        }};
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+        await client.deleteFailedTasks();
+        await client.deleteFailedTasks(true);
+        console.log(JSON.stringify(urls));
+        """,
+        encoding="utf-8",
+    )
+    proc = subprocess.run(["node", str(runner_path)], capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout.strip().splitlines()[-1]) == [
+        "http://localhost:8000/tasks/failed",
+        "http://localhost:8000/tasks/failed?timed_out=true",
     ]
