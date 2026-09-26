@@ -28443,3 +28443,27 @@ def test_compile_drop_past_sunset_is_a_no_op_when_nothing_has_passed(tmp_path):
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "Dropping" not in proc.stderr
+
+
+def test_remote_compile_drop_past_sunset_forwards_the_flag_and_reports_drops(
+    tmp_path, fake_dashboard
+):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_json_response(200, {
+        "status": "success", "notebook": "nb.ipynb", "version_id": None,
+        "dropped_past_sunset": ["old_add"],
+        "functions": [], "endpoints": [], "skipped_functions": [],
+        "dependencies": [],
+    })]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-compile", "nb.ipynb", "--dashboard-url", dashboard_url,
+         "--drop-past-sunset"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0])["drop_past_sunset"] is True
+    assert "Dropped 1 function(s) past their sunset date: old_add" in proc.stdout

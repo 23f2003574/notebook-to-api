@@ -34252,3 +34252,67 @@ def test_validate_reports_deprecated_and_past_sunset_functions():
         "old_add": "use v2. sunset: 2000-01-01", "later": "sunset: 2999-01-01",
     }
     assert body["past_sunset_functions"] == {"old_add": "2000-01-01"}
+
+
+def _upload_sunset_mix(filename):
+    content = _notebook_bytes(
+        "# notebook-to-api: deprecated: sunset: 2000-01-01\n"
+        "def old_add(a: int) -> int:\n    return a\n\n"
+        "# notebook-to-api: deprecated: sunset: 2999-01-01\n"
+        "def later(a: int) -> int:\n    return a\n\n"
+        "def add(a: int) -> int:\n    return a\n"
+    )
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(content), "application/json")},
+    )
+
+
+def test_compile_drop_past_sunset_leaves_out_functions_past_their_sunset():
+    """Confirmed missing before this feature: POST /api/compile had no
+    equivalent of `compile --drop-past-sunset`."""
+    _upload_sunset_mix("compile_drop_sunset.ipynb")
+
+    resp = client.post("/api/compile", json={
+        "notebook_path": "compile_drop_sunset.ipynb", "drop_past_sunset": True,
+    })
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["dropped_past_sunset"] == ["old_add"]
+    assert sorted(func["name"] for func in body["functions"]) == ["add", "later"]
+
+
+def test_compile_without_drop_past_sunset_reports_nothing_dropped():
+    _upload_sunset_mix("compile_keep_sunset.ipynb")
+
+    body = client.post(
+        "/api/compile", json={"notebook_path": "compile_keep_sunset.ipynb"}
+    ).json()
+
+    assert body["dropped_past_sunset"] == []
+    assert "old_add" in {func["name"] for func in body["functions"]}
+
+
+def test_compile_drop_past_sunset_trims_only_instead_of_conflicting_with_it():
+    _upload_sunset_mix("compile_only_sunset.ipynb")
+
+    body = client.post("/api/compile", json={
+        "notebook_path": "compile_only_sunset.ipynb",
+        "only": ["old_add", "add"], "drop_past_sunset": True,
+    }).json()
+
+    assert body["dropped_past_sunset"] == ["old_add"]
+    assert [func["name"] for func in body["functions"]] == ["add"]
+
+
+def test_compile_drop_past_sunset_rejects_an_only_list_left_empty():
+    _upload_sunset_mix("compile_only_empty_sunset.ipynb")
+
+    resp = client.post("/api/compile", json={
+        "notebook_path": "compile_only_empty_sunset.ipynb",
+        "only": ["old_add"], "drop_past_sunset": True,
+    })
+
+    assert resp.status_code == 400
+    assert "past its sunset date" in resp.json()["detail"]
