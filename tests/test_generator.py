@@ -8530,3 +8530,65 @@ def test_delete_failed_tasks_without_the_filter_still_purges_all(monkeypatch):
     client.post("/train_model", json={})
 
     assert client.delete("/tasks/failed").json()["deleted"] == 2
+
+
+def _endpoint_rate_limit_client(monkeypatch, overrides):
+    code = generate_fastapi_code(
+        [
+            {"name": "limited", "args": [], "return_type": "int"},
+            {"name": "free", "args": [], "return_type": "int"},
+            {"name": "train_model", "args": [], "return_type": "int"},
+        ],
+        rate_limit_overrides=overrides,
+    )
+    notebook_module = _register_fake_notebook_module(monkeypatch)
+    notebook_module.limited = lambda: 1
+    notebook_module.free = lambda: 2
+    notebook_module.train_model = lambda: 3
+    monkeypatch.setenv("NOTEBOOK_API_KEY", "key-a,key-b")
+    monkeypatch.delenv("NOTEBOOK_API_RATE_LIMIT_PER_MINUTE", raising=False)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    return TestClient(namespace["app"])
+
+
+def test_rate_limit_directive_throttles_only_that_endpoint_per_key(monkeypatch):
+    """Confirmed missing before this feature: the only rate limit was the
+    global per-key NOTEBOOK_API_RATE_LIMIT_PER_MINUTE shared by every endpoint."""
+    client = _endpoint_rate_limit_client(monkeypatch, {"limited": 2})
+    a = {"X-API-Key": "key-a"}
+
+    assert [client.post("/limited", json={}, headers=a).status_code for _ in range(2)] == [200, 200]
+    blocked = client.post("/limited", json={}, headers=a)
+
+    assert blocked.status_code == 429
+    assert "Rate limit exceeded for /limited: 2 requests per 60s" in blocked.json()["detail"]
+    assert int(blocked.headers["Retry-After"]) >= 1
+    assert blocked.headers["X-RateLimit-Limit"] == "2"
+    assert blocked.headers["X-RateLimit-Remaining"] == "0"
+    assert client.post("/free", json={}, headers=a).status_code == 200
+    assert client.post("/limited", json={}, headers={"X-API-Key": "key-b"}).status_code == 200
+
+
+def test_rate_limit_directive_applies_to_background_endpoints(monkeypatch):
+    client = _endpoint_rate_limit_client(monkeypatch, {"train_model": 1})
+    a = {"X-API-Key": "key-a"}
+
+    assert client.post("/train_model", json={}, headers=a).status_code == 200
+    assert client.post("/train_model", json={}, headers=a).status_code == 429
+
+
+def test_rate_limit_directive_does_not_count_rejected_keys(monkeypatch):
+    client = _endpoint_rate_limit_client(monkeypatch, {"limited": 1})
+
+    assert client.post("/limited", json={}, headers={"X-API-Key": "wrong"}).status_code == 401
+    assert client.post("/limited", json={}, headers={"X-API-Key": "key-a"}).status_code == 200
+
+
+def test_no_rate_limit_directive_leaves_endpoint_signature_unchanged():
+    code = generate_fastapi_code([{"name": "free", "args": [], "return_type": "int"}])
+
+    assert "_rl_api_key" not in code

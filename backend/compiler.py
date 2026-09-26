@@ -893,6 +893,39 @@ TIMEOUT_DIRECTIVE_PATTERN = re.compile(
 )
 
 
+# "# notebook-to-api: rate-limit <N>" directly above a function's own def
+# (optionally above other "# notebook-to-api:" directives) -- at most N
+# calls per minute per API key to that one endpoint, on top of the global
+# NOTEBOOK_API_RATE_LIMIT_PER_MINUTE.
+RATE_LIMIT_DIRECTIVE_PATTERN = re.compile(
+    r"^[ \t]*#\s*notebook-to-api:\s*rate-limit\s+(?P<limit>\d+)\s*$"
+    r"(?:\n[ \t]*(?:#\s*notebook-to-api:[^\n]*)?)*"
+    r"\n[ \t]*(?:async\s+)?def\s+(?P<name>[A-Za-z_]\w*)\s*\(",
+    re.MULTILINE,
+)
+
+
+def _extract_rate_limit_overrides(code_cells):
+    """{function_name: calls_per_minute} for every function marked
+    "# notebook-to-api: rate-limit N" with N > 0 (see
+    RATE_LIMIT_DIRECTIVE_PATTERN). Before this, the only throttle was the
+    global per-key NOTEBOOK_API_RATE_LIMIT_PER_MINUTE shared by every
+    endpoint -- an expensive one (a model fit, a report) couldn't be held
+    to a few calls a minute without throttling every cheap one just as
+    hard. "rate-limit 0" is ignored rather than meaning "no calls ever".
+    The last directive seen for a function wins.
+    """
+    overrides = {}
+    for cell in code_cells:
+        for match in RATE_LIMIT_DIRECTIVE_PATTERN.finditer(cell):
+            limit = int(match.group("limit"))
+            if limit > 0:
+                overrides[match.group("name")] = limit
+            else:
+                overrides.pop(match.group("name"), None)
+    return overrides
+
+
 def _extract_timeout_overrides(code_cells):
     """{function_name: seconds} for every function `code_cells` marks
     "# notebook-to-api: timeout <seconds>" (see TIMEOUT_DIRECTIVE_PATTERN).
@@ -1755,6 +1788,7 @@ def compile_notebook_to_api(
             deprecated_overrides=deprecated_overrides,
             retired_endpoints=retired_endpoints,
             timeout_overrides=_extract_timeout_overrides(code_cells),
+            rate_limit_overrides=_extract_rate_limit_overrides(code_cells),
         )
 
         # generate_fastapi_code succeeding means this compile is now

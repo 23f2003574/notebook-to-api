@@ -25,6 +25,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "TASK_EXECUTION_TIMEOUT_SECONDS",
     "REQUEST_TIMEOUT_SECONDS", "_call_notebook_function", "_REQUEST_TIMEOUTS",
     "_ENDPOINT_TIMEOUTS", "_TASK_TIMEOUTS", "_TASK_TIMEOUT_FAILURES",
+    "_ENDPOINT_RATE_LIMIT_WINDOWS", "_enforce_endpoint_rate_limit",
     # Read by name from inside _evict_expired_tasks' own body -- the
     # identical "referenced by name inside a helper every background
     # endpoint's own submission calls first" exposure already documented
@@ -941,6 +942,7 @@ def generate_fastapi_code(
     functions, package_name="generated", source_notebook_sha256=None,
     notebook_to_api_version="1.0.0", background_overrides=None,
     deprecated_overrides=None, retired_endpoints=None, timeout_overrides=None,
+    rate_limit_overrides=None,
 ):
     """Generate FastAPI app code for the given functions.
 
@@ -2022,6 +2024,33 @@ def generate_fastapi_code(
     lines.append("    ]")
     lines.append("    for key in stale_idempotency_keys:")
     lines.append("        IDEMPOTENCY_KEYS.pop(key, None)")
+    lines.append("")
+    # Per-endpoint quota from a "# notebook-to-api: rate-limit N"
+    # directive: N calls per 60s per API key, on top of (never instead
+    # of) the global RATE_LIMIT_PER_MINUTE above -- so one expensive
+    # endpoint can be throttled without starving every cheap one.
+    lines.append("_ENDPOINT_RATE_LIMIT_WINDOWS = {}")
+    lines.append("")
+    lines.append("def _enforce_endpoint_rate_limit(path, api_key, limit):")
+    lines.append("    now = time.time()")
+    lines.append("    with _RATE_LIMIT_LOCK:")
+    lines.append("        window_start, count = _ENDPOINT_RATE_LIMIT_WINDOWS.get((path, api_key), (now, 0))")
+    lines.append("        if now - window_start >= 60:")
+    lines.append("            window_start, count = now, 0")
+    lines.append("        count += 1")
+    lines.append("        _ENDPOINT_RATE_LIMIT_WINDOWS[(path, api_key)] = (window_start, count)")
+    lines.append("    if count > limit:")
+    lines.append("        reset_at = int(window_start + 60)")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=429,")
+    lines.append("            detail=f'Rate limit exceeded for {path}: {limit} requests per 60s per API key',")
+    lines.append("            headers={")
+    lines.append("                'Retry-After': str(max(1, reset_at - int(now))),")
+    lines.append("                'X-RateLimit-Limit': str(limit),")
+    lines.append("                'X-RateLimit-Remaining': '0',")
+    lines.append("                'X-RateLimit-Reset': str(reset_at),")
+    lines.append("            },")
+    lines.append("        )")
     lines.append("")
     lines.append("def verify_api_key(response: Response, x_api_key: str = Header(None)):")
     lines.append("    # hmac.compare_digest instead of != : a plain string")
@@ -4000,6 +4029,17 @@ def generate_fastapi_code(
     for func in functions:
         func_name = func["name"]
         operation_id = func_name
+        endpoint_rate_limit = (rate_limit_overrides or {}).get(func_name)
+        rate_limit_param = (
+            '_rl_api_key: Optional[str] = Header(None, alias="X-API-Key"), '
+            if endpoint_rate_limit else ""
+        )
+        # Runs after Depends(verify_api_key), so only an authenticated
+        # key ever consumes this endpoint's own quota.
+        rate_limit_lines = (
+            [f"    _enforce_endpoint_rate_limit('/{func_name}', _rl_api_key, {int(endpoint_rate_limit)})"]
+            if endpoint_rate_limit else []
+        )
         tag = "General"
         if "train" in func_name.lower():
             tag = "Training"
@@ -4233,8 +4273,10 @@ def generate_fastapi_code(
                 "BackgroundTasks, callback_url: Optional[str] = None, "
                 "idempotency_key: Optional[str] = "
                 'Header(None, alias="Idempotency-Key"), '
+                f"{rate_limit_param}"
                 "_: None = Depends(verify_api_key)):"
             )
+            lines.extend(rate_limit_lines)
             # A caller opting into webhook delivery (rather than polling
             # get_task/wait_for_task) supplies this per-request, not via a
             # server-side operator setting -- so, unlike every other limit
@@ -4541,7 +4583,8 @@ def generate_fastapi_code(
             # NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS and -- for a plain
             # `def` -- runs it on the same worker threadpool FastAPI would
             # have used for a `def` endpoint anyway.
-            lines.append(f"async def {func_name}(req: {model_name}, _: None = Depends(verify_api_key)):")
+            lines.append(f"async def {func_name}(req: {model_name}, {rate_limit_param}_: None = Depends(verify_api_key)):")
+            lines.extend(rate_limit_lines)
             # _run_background_task already wraps a background function's own
             # call the same way (reporting the task "failed" with str(e)
             # instead of leaving it stuck "processing" forever), but a

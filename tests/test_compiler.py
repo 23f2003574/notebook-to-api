@@ -8346,3 +8346,15 @@ def test_compile_applies_the_timeout_directive_to_that_endpoint_only(tmp_path):
     app_source = (tmp_path / "generated" / "app.py").read_text(encoding="utf-8")
     assert "functools.partial(notebook_module.slow, req.a), is_async=False, timeout=7)" in app_source
     assert "functools.partial(notebook_module.fast, req.a), is_async=False)" in app_source
+
+
+def test_extract_rate_limit_overrides_reads_stacked_directives_and_ignores_zero():
+    from backend.compiler import _extract_rate_limit_overrides
+
+    cells = [
+        "# notebook-to-api: rate-limit 5\n# notebook-to-api: timeout 3\ndef predict(x):\n    return x\n",
+        "# notebook-to-api: rate-limit 0\nasync def train():\n    return 1\n",
+        "def free():\n    return 2\n",
+    ]
+
+    assert _extract_rate_limit_overrides(cells) == {"predict": 5}
