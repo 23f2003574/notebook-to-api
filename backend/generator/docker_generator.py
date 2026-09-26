@@ -377,7 +377,7 @@ def generate_env_example(output_path="generated/.env.example", env_vars=None):
 def readme_content(
     package_name="generated", functions=None, env_vars=None,
     background_overrides=None, deprecated_overrides=None,
-    timeout_overrides=None,
+    timeout_overrides=None, rate_limit_overrides=None, cache_overrides=None,
 ):
     """The exact README.md text generate_readme (below) writes to disk,
     as a pure string -- no filesystem access at all. See
@@ -540,6 +540,23 @@ def readme_content(
                 else " -- exempt from `NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS`"
             )
 
+        # "# notebook-to-api: rate-limit N" applies to both kinds of
+        # endpoint; "cache N" only to a synchronous one (the generated
+        # background endpoint never consults the response cache).
+        endpoint_rate_limit = (rate_limit_overrides or {}).get(func["name"])
+        if endpoint_rate_limit:
+            suffix += (
+                f" -- limited to {endpoint_rate_limit} calls per minute per "
+                "API key (`429` with `Retry-After` beyond that)"
+            )
+        endpoint_cache_ttl = (cache_overrides or {}).get(func["name"])
+        if endpoint_cache_ttl and not is_background:
+            suffix += (
+                f" -- identical requests are answered from a {endpoint_cache_ttl}s "
+                "response cache (`X-Cache: HIT`; send `Cache-Control: no-cache` "
+                "to force a fresh call)"
+            )
+
         endpoint_lines.append(f"- `POST /{func['name']}`{suffix}")
 
     # Only when something is actually deprecated: how the compiled app
@@ -662,6 +679,7 @@ def generate_readme(
     output_path="generated/README.md", package_name="generated",
     functions=None, env_vars=None, background_overrides=None,
     deprecated_overrides=None, timeout_overrides=None,
+    rate_limit_overrides=None, cache_overrides=None,
 ):
     """Write a README.md for the compiled app at `output_path`, alongside
     the Dockerfile/.dockerignore/docker-compose.yml/.env.example
@@ -675,6 +693,7 @@ def generate_readme(
             readme_content(
                 package_name, functions, env_vars, background_overrides,
                 deprecated_overrides, timeout_overrides,
+                rate_limit_overrides, cache_overrides,
             )
         )
 

@@ -8817,3 +8817,25 @@ def test_get_config_reports_empty_rate_limits_and_cache_ttls_by_default(monkeypa
 
     assert config["endpoint_rate_limits"] == {}
     assert config["endpoint_cache_ttls"] == {}
+
+
+def test_readme_content_notes_each_endpoints_rate_limit_and_cache():
+    """Confirmed missing before this feature: the README said nothing about
+    an endpoint's "rate-limit N" or "cache N" directive."""
+    from backend.generator.docker_generator import readme_content
+
+    content = readme_content(
+        functions=[{"name": "lookup"}, {"name": "add"}, {"name": "train_model"}],
+        rate_limit_overrides={"lookup": 5, "train_model": 2},
+        cache_overrides={"lookup": 30, "train_model": 60},
+    )
+
+    assert (
+        "- `POST /lookup` -- limited to 5 calls per minute per API key "
+        "(`429` with `Retry-After` beyond that) -- identical requests are "
+        "answered from a 30s response cache" in content
+    )
+    assert "- `POST /add`\n" in content
+    assert "limited to 2 calls per minute" in content
+    # The cache directive doesn't apply to a background endpoint.
+    assert "60s response cache" not in content

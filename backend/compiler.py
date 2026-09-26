@@ -1922,6 +1922,8 @@ def compile_notebook_to_api(
                 background_overrides=background_overrides,
                 deprecated_overrides=deprecated_overrides,
                 timeout_overrides=_extract_timeout_overrides(code_cells),
+                rate_limit_overrides=_extract_rate_limit_overrides(code_cells),
+                cache_overrides=_extract_cache_overrides(code_cells),
             )
 
             write_compile_metadata(

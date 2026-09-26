@@ -34459,3 +34459,22 @@ def test_readme_preview_and_compile_readme_note_endpoint_timeouts():
     ).json()
 
     assert "answers `504` if it runs longer than 30s" in json.dumps(body)
+
+
+def test_readme_preview_notes_rate_limit_and_cache_directives():
+    client.delete("/api/notebooks?confirm=true")
+    content = _notebook_bytes(
+        "# notebook-to-api: rate-limit 4\n# notebook-to-api: cache 20\n"
+        "def lookup(a: int) -> int:\n    return a\n"
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("readme_rl.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    body = json.dumps(client.post(
+        "/api/readme-preview", json={"notebook_path": "readme_rl.ipynb"}
+    ).json())
+
+    assert "limited to 4 calls per minute per API key" in body
+    assert "20s response cache" in body
