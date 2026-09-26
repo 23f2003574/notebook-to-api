@@ -377,6 +377,7 @@ def generate_env_example(output_path="generated/.env.example", env_vars=None):
 def readme_content(
     package_name="generated", functions=None, env_vars=None,
     background_overrides=None, deprecated_overrides=None,
+    timeout_overrides=None,
 ):
     """The exact README.md text generate_readme (below) writes to disk,
     as a pure string -- no filesystem access at all. See
@@ -521,6 +522,18 @@ def readme_content(
                 f" {deprecation_reason}" if deprecation_reason else ""
             )
 
+        # `timeout_overrides` (optional) is _extract_timeout_overrides' own
+        # {function_name: seconds} -- only meaningful on a synchronous
+        # endpoint (the directive is ignored on a background one, see
+        # inspect_notebook_data's "ignored_timeout_directives").
+        endpoint_timeout = (timeout_overrides or {}).get(func["name"])
+        if endpoint_timeout is not None and not is_background:
+            suffix += (
+                f" -- answers `504` if it runs longer than {endpoint_timeout}s"
+                if endpoint_timeout
+                else " -- exempt from `NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS`"
+            )
+
         endpoint_lines.append(f"- `POST /{func['name']}`{suffix}")
 
     # Only when something is actually deprecated: how the compiled app
@@ -642,7 +655,7 @@ see `.env.example` for a ready-to-copy file.
 def generate_readme(
     output_path="generated/README.md", package_name="generated",
     functions=None, env_vars=None, background_overrides=None,
-    deprecated_overrides=None,
+    deprecated_overrides=None, timeout_overrides=None,
 ):
     """Write a README.md for the compiled app at `output_path`, alongside
     the Dockerfile/.dockerignore/docker-compose.yml/.env.example
@@ -655,7 +668,7 @@ def generate_readme(
         f.write(
             readme_content(
                 package_name, functions, env_vars, background_overrides,
-                deprecated_overrides,
+                deprecated_overrides, timeout_overrides,
             )
         )
 

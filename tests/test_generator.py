@@ -8164,3 +8164,22 @@ def test_timeout_directive_is_published_in_the_openapi_schema(monkeypatch):
     assert "504" not in exempt["responses"]
     assert "x-notebook-to-api-timeout-seconds" not in plain
     assert "504" not in plain["responses"]
+
+
+def test_readme_content_notes_each_endpoints_own_timeout():
+    """Confirmed missing before this feature: the README marked background
+    and deprecated endpoints but said nothing about an endpoint's own
+    timeout directive -- the one behavior a caller must plan around."""
+    from backend.generator.docker_generator import readme_content
+
+    content = readme_content(
+        functions=[{"name": "report"}, {"name": "exempt"}, {"name": "add"},
+                   {"name": "train_model"}],
+        timeout_overrides={"report": 30, "exempt": 0, "train_model": 10},
+    )
+
+    assert "- `POST /report` -- answers `504` if it runs longer than 30s" in content
+    assert "- `POST /exempt` -- exempt from `NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS`" in content
+    assert "- `POST /add`\n" in content
+    # Ignored on a background endpoint, so not advertised there.
+    assert "longer than 10s" not in content

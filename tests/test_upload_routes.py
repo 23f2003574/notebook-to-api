@@ -34445,3 +34445,20 @@ def test_validate_reports_timeout_directives_and_flags_ignored_ones():
     assert body["status"] == "pass"
     assert body["timeout_overrides"] == {"report": 30, "train_model": 10}
     assert body["ignored_timeout_directives"] == ["train_model"]
+
+
+def test_readme_preview_and_compile_readme_note_endpoint_timeouts():
+    client.delete("/api/notebooks?confirm=true")
+    content = _notebook_bytes(
+        "# notebook-to-api: timeout 30\ndef report(a: int) -> int:\n    return a\n"
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("readme_timeout.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    body = client.post(
+        "/api/readme-preview", json={"notebook_path": "readme_timeout.ipynb"}
+    ).json()
+
+    assert "answers `504` if it runs longer than 30s" in json.dumps(body)

@@ -15024,6 +15024,7 @@ def readme_preview_endpoint(data: dict):
             package_name, functions, GENERATED_APP_ENV_VARS,
             background_overrides=background_overrides,
             deprecated_overrides=deprecated_overrides,
+            timeout_overrides=_extract_timeout_overrides(code_cells),
         )
 
     except ReservedFunctionNameError as e:

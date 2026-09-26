@@ -1859,6 +1859,7 @@ def compile_notebook_to_api(
                 readme_path, package_name, functions, GENERATED_APP_ENV_VARS,
                 background_overrides=background_overrides,
                 deprecated_overrides=deprecated_overrides,
+                timeout_overrides=_extract_timeout_overrides(code_cells),
             )
 
             write_compile_metadata(
