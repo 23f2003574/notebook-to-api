@@ -8320,6 +8320,7 @@ def _dispatch_core_command(args):
                 for entry in deprecated_endpoints:
                     print(
                         f"  {entry.get('path')}  calls={entry.get('calls', 0)}"
+                        + (f" (rejected={entry['rejections']})" if entry.get("rejections") else "")
                         + (f"  sunset={entry['sunset']}" if entry.get("sunset") else "")
                         + ("  REJECTED (410)" if entry.get("rejected") else "")
                     )
@@ -8532,6 +8533,7 @@ def _dispatch_core_command(args):
                     sunset = entry.get("sunset")
                     print(
                         f"  {entry.get('path')}  calls={entry.get('calls', 0)}"
+                        + (f" (rejected={entry['rejections']})" if entry.get("rejections") else "")
                         + (f"  sunset={sunset}" if sunset else "")
                         + ("  REJECTED (410)" if entry.get("rejected") else "")
                         + (f"  ({reason})" if reason else "")

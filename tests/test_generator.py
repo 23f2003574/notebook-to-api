@@ -7443,7 +7443,7 @@ def test_get_deprecations_lists_each_deprecated_endpoint_with_reason_and_calls(
     assert response.json() == {
         "rejecting": False,
         "enforcing_sunset": False,
-        "endpoints": [{"path": "/old_add", "reason": "Use add.", "calls": 1, "sunset": None, "rejected": False}],
+        "endpoints": [{"path": "/old_add", "reason": "Use add.", "calls": 1, "rejections": 0, "sunset": None, "rejected": False}],
     }
 
 
@@ -7455,7 +7455,7 @@ def test_get_deprecations_reports_rejecting_and_reason_none(monkeypatch):
     assert client.get("/deprecations").json() == {
         "rejecting": True,
         "enforcing_sunset": False,
-        "endpoints": [{"path": "/old_add", "reason": None, "calls": 0, "sunset": None, "rejected": True}],
+        "endpoints": [{"path": "/old_add", "reason": None, "calls": 0, "rejections": 0, "sunset": None, "rejected": True}],
     }
 
 
@@ -7725,3 +7725,28 @@ def test_deprecated_endpoint_rejections_counter_name_is_reserved():
     from backend.generator.api_generator import RESERVED_INFRASTRUCTURE_NAMES
 
     assert "_DEPRECATED_ENDPOINT_REJECTIONS" in RESERVED_INFRASTRUCTURE_NAMES
+
+
+def test_get_deprecations_reports_each_endpoints_rejection_count(monkeypatch):
+    """Confirmed missing before this feature: GET /deprecations said
+    whether an endpoint is rejecting now, but not how many calls it has
+    already turned away -- only /metrics carried that count."""
+    client = _deprecation_test_client(
+        monkeypatch,
+        {"old_add": "sunset: 2000-01-01", "add": "sunset: 2999-01-01"},
+        enforce_sunset="true",
+    )
+    client.post("/old_add", json={})
+    client.post("/old_add", json={})
+    client.post("/add", json={})
+
+    by_path = {
+        entry["path"]: entry for entry in client.get("/deprecations").json()["endpoints"]
+    }
+
+    assert (by_path["/old_add"]["calls"], by_path["/old_add"]["rejections"]) == (2, 2)
+    assert (by_path["/add"]["calls"], by_path["/add"]["rejections"]) == (1, 0)
+    # Agrees with /metrics' own per-path counter.
+    assert client.get("/metrics").json()["deprecated_endpoint_rejections"] == {
+        "/old_add": 2, "/add": 0,
+    }

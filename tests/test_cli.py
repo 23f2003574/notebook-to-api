@@ -28146,3 +28146,33 @@ def test_app_deprecations_watch_refuses_the_fail_gates(tmp_path, fake_dashboard)
 
     assert proc.returncode != 0
     assert "--watch cannot be combined" in proc.stdout + proc.stderr
+
+
+def test_app_deprecations_and_app_status_show_rejected_call_counts(
+    tmp_path, fake_dashboard
+):
+    body = {
+        "rejecting": False, "enforcing_sunset": True,
+        "endpoints": [
+            {"path": "/old_add", "reason": None, "calls": 5, "rejections": 3,
+             "sunset": "2000-01-01", "rejected": True},
+            {"path": "/old_sub", "reason": None, "calls": 2, "rejections": 0,
+             "sunset": None, "rejected": False},
+        ],
+    }
+    proc, _ = _run_app_deprecations(tmp_path, fake_dashboard, body)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "/old_add  calls=5 (rejected=3)  sunset=2000-01-01  REJECTED (410)" in proc.stdout
+    assert "/old_sub  calls=2\n" in proc.stdout
+
+
+def test_app_status_shows_rejected_call_counts(tmp_path, fake_dashboard):
+    proc, _ = _run_app_status(tmp_path, fake_dashboard, _json_response(200, {
+        "rejecting": True, "enforcing_sunset": False,
+        "endpoints": [{"path": "/old_add", "reason": None, "calls": 4,
+                       "rejections": 4, "sunset": None, "rejected": True}],
+    }))
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "/old_add  calls=4 (rejected=4)  REJECTED (410)" in proc.stdout
