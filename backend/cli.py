@@ -8969,6 +8969,21 @@ def _dispatch_core_command(args):
                 file=sys.stderr,
             )
 
+        # A 504 carrying X-Notebook-API-Timeout is the app's own request
+        # timeout (the function's "# notebook-to-api: timeout N" or
+        # NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS) -- a deterministic "this
+        # call runs too long", reported as such rather than as a generic
+        # rejection that reads like a broken or overloaded server.
+        if (
+            response.status_code == 504
+            and (response.headers.get("X-Notebook-API-Timeout") or "").lower() == "true"
+        ):
+            raise RuntimeError(
+                f"POST /{args.function} exceeded the app's request timeout: "
+                f"{_extract_dashboard_error_detail(response)} Retrying won't "
+                "help -- raise the timeout, or make it a background endpoint."
+            )
+
         if response.status_code >= 400:
 
             raise RuntimeError(

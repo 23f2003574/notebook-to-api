@@ -28863,3 +28863,30 @@ def test_app_status_lists_each_endpoints_own_timeout(tmp_path, fake_dashboard):
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "  request timeout: disabled\n    /report: 30s\n    /exempt: exempt (no timeout)\n" in proc.stdout
+
+
+def test_app_call_reports_the_apps_own_request_timeout_clearly(tmp_path, fake_dashboard):
+    """Confirmed missing before this feature: the app's own request-timeout
+    504 surfaced as a generic "App rejected the call (504)"."""
+    proc = _run_app_call_with_headers(
+        tmp_path, fake_dashboard, 504,
+        {"detail": "'add' did not finish within its own timeout directive (5s)."},
+        {"X-Notebook-API-Timeout": "true"},
+    )
+
+    assert proc.returncode != 0
+    output = proc.stdout + proc.stderr
+    assert "POST /add exceeded the app's request timeout" in output
+    assert "timeout directive (5s)" in output
+    assert "Retrying won't help" in output
+
+
+def test_app_call_plain_504_is_still_a_generic_rejection(tmp_path, fake_dashboard):
+    proc = _run_app_call_with_headers(
+        tmp_path, fake_dashboard, 504, {"detail": "Gateway Timeout"}, {},
+    )
+
+    assert proc.returncode != 0
+    output = proc.stdout + proc.stderr
+    assert "App rejected the call (504)" in output
+    assert "request timeout" not in output
