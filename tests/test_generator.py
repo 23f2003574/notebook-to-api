@@ -831,7 +831,7 @@ def test_generated_app_configures_a_json_request_log_middleware_registered_outer
     )
     assert "async def _log_request_json(request, call_next):" in code
     assert "if JSON_REQUEST_LOGS:" in code
-    assert "print(json.dumps({" in code
+    assert "print(json.dumps(entry), flush=True)" in code
     assert "'request_id': response.headers.get('X-Request-ID')," in code
     assert "'method': request.method," in code
     assert "'path': request.url.path," in code
@@ -917,6 +917,8 @@ def test_json_request_logs_emit_a_structured_line_matching_the_response_headers(
     assert log_entry["status_code"] == 200 == resp.status_code
     assert log_entry["duration_ms"] == float(resp.headers["X-Process-Time-Ms"])
     assert isinstance(log_entry["timestamp"], float)
+    assert log_entry["deprecated"] is False
+    assert "client_ip" not in log_entry and "user_agent" not in log_entry
 
 
 def test_json_request_logs_accepts_common_truthy_spellings(monkeypatch, capsys):
@@ -7750,3 +7752,46 @@ def test_get_deprecations_reports_each_endpoints_rejection_count(monkeypatch):
     assert client.get("/metrics").json()["deprecated_endpoint_rejections"] == {
         "/old_add": 2, "/add": 0,
     }
+
+
+def test_json_request_log_identifies_callers_of_a_deprecated_endpoint(
+    monkeypatch, capsys
+):
+    """Confirmed missing before this feature: the call counters said how
+    many calls a deprecated endpoint still got, but nothing recorded who
+    was making them -- the one thing needed to get them to migrate."""
+    monkeypatch.setenv("NOTEBOOK_API_JSON_LOGS", "true")
+    client = _deprecation_test_client(monkeypatch, {"old_add": "Use add."})
+    capsys.readouterr()
+
+    client.post("/old_add", json={}, headers={"User-Agent": "billing-cron/2.1"})
+    client.post("/add", json={})
+
+    entries = [
+        json.loads(line) for line in capsys.readouterr().out.splitlines()
+        if line.startswith("{")
+    ]
+    by_path = {entry["path"]: entry for entry in entries}
+    assert by_path["/old_add"]["deprecated"] is True
+    assert by_path["/old_add"]["user_agent"] == "billing-cron/2.1"
+    assert by_path["/old_add"]["client_ip"] == "testclient"
+    assert by_path["/add"]["deprecated"] is False
+    assert "client_ip" not in by_path["/add"]
+
+
+def test_json_request_log_marks_a_rejected_deprecated_call_too(monkeypatch, capsys):
+    monkeypatch.setenv("NOTEBOOK_API_JSON_LOGS", "true")
+    client = _deprecation_test_client(
+        monkeypatch, {"old_add": None}, reject_deprecated="true"
+    )
+    capsys.readouterr()
+
+    client.post("/old_add", json={}, headers={"User-Agent": "legacy-app"})
+
+    entry = next(
+        json.loads(line) for line in capsys.readouterr().out.splitlines()
+        if line.startswith("{")
+    )
+    assert entry["status_code"] == 410
+    assert entry["deprecated"] is True
+    assert entry["user_agent"] == "legacy-app"
