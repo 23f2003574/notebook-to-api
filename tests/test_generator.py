@@ -1094,6 +1094,7 @@ def test_generated_app_exposes_get_metrics_as_json(monkeypatch):
         "webhook_redeliveries_by_outcome": {"delivered": 0, "failed": 0},
         "deprecated_endpoint_calls": {},
         "deprecated_endpoint_rejections": {},
+        "request_timeouts_by_endpoint": {},
     }
 
 
@@ -8063,3 +8064,28 @@ def test_generated_app_get_config_reports_request_timeout_seconds(
     )
 
     assert client.get("/config").json()["request_timeout_seconds"] == expected
+
+
+def test_metrics_count_request_timeouts_per_endpoint(monkeypatch):
+    """Confirmed missing before this feature: a 504 from
+    NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS only bumped the generic 5xx
+    counter -- nothing said which endpoint kept hitting the limit."""
+    import time as time_module
+
+    client = _request_timeout_client(monkeypatch, 1, lambda: time_module.sleep(2) or 1)
+    assert client.get("/metrics").json()["request_timeouts_by_endpoint"] == {}
+    assert "request_timeouts_total" not in client.get("/metrics/prometheus").text
+
+    client.post("/slow", json={})
+    client.post("/slow", json={})
+
+    assert client.get("/metrics").json()["request_timeouts_by_endpoint"] == {"/slow": 2}
+    text = client.get("/metrics/prometheus").text
+    assert "# TYPE notebook_api_request_timeouts_total counter" in text
+    assert 'notebook_api_request_timeouts_total{path="/slow"} 2' in text
+
+
+def test_request_timeouts_counter_name_is_reserved():
+    from backend.generator.api_generator import RESERVED_INFRASTRUCTURE_NAMES
+
+    assert "_REQUEST_TIMEOUTS" in RESERVED_INFRASTRUCTURE_NAMES

@@ -23,7 +23,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "MAX_PENDING_TASKS", "WEBHOOK_TIMEOUT_SECONDS", "WEBHOOK_SECRET",
     "WEBHOOK_MAX_RETRIES", "WEBHOOK_RETRY_BACKOFF_SECONDS",
     "TASK_EXECUTION_TIMEOUT_SECONDS",
-    "REQUEST_TIMEOUT_SECONDS", "_call_notebook_function",
+    "REQUEST_TIMEOUT_SECONDS", "_call_notebook_function", "_REQUEST_TIMEOUTS",
     # Read by name from inside _evict_expired_tasks' own body -- the
     # identical "referenced by name inside a helper every background
     # endpoint's own submission calls first" exposure already documented
@@ -1770,6 +1770,11 @@ def generate_fastapi_code(
         f'"{_generated_app_env_var_default("NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS")}"'
         '))'
     )
+    # Per-endpoint count of requests answered 504 by the timeout above,
+    # reported by GET /metrics and /metrics/prometheus -- the generic
+    # 5xx status-class counter can't say *which* endpoint keeps hitting
+    # the limit (the one to optimize, or to move to a background task).
+    lines.append("_REQUEST_TIMEOUTS = {}")
     lines.append("async def _call_notebook_function(call, is_async=False):")
     lines.append("    with anyio.fail_after(REQUEST_TIMEOUT_SECONDS or None):")
     lines.append("        if is_async:")
@@ -2811,6 +2816,9 @@ def generate_fastapi_code(
         "        'deprecated_endpoint_rejections': "
         "dict(_DEPRECATED_ENDPOINT_REJECTIONS),"
     )
+    lines.append(
+        "        'request_timeouts_by_endpoint': dict(sorted(_REQUEST_TIMEOUTS.items())),"
+    )
     lines.append("    }")
 
     # GET /metrics above has served this dashboard-shaped JSON summary
@@ -3001,6 +3009,22 @@ def generate_fastapi_code(
     )
     lines.append(
         "            body += f'notebook_api_deprecated_endpoint_rejections_total"
+        "{{path=\"{path}\"}} {count}\\n'"
+    )
+    # Only endpoints that have actually timed out appear (a counter
+    # created on first timeout), with HELP/TYPE emitted once any has.
+    lines.append("    if _REQUEST_TIMEOUTS:")
+    lines.append(
+        "        body += ('# HELP notebook_api_request_timeouts_total Total "
+        "number of requests answered 504 by NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS, "
+        "by endpoint.\\n'"
+    )
+    lines.append(
+        "                 '# TYPE notebook_api_request_timeouts_total counter\\n')"
+    )
+    lines.append("        for path, count in sorted(_REQUEST_TIMEOUTS.items()):")
+    lines.append(
+        "            body += f'notebook_api_request_timeouts_total"
         "{{path=\"{path}\"}} {count}\\n'"
     )
     # The Prometheus text exposition format's own registered media type --
@@ -4389,6 +4413,10 @@ def generate_fastapi_code(
             lines.append("    except HTTPException:")
             lines.append("        raise")
             lines.append("    except TimeoutError:")
+            lines.append(
+                f"        _REQUEST_TIMEOUTS['/{func_name}'] = "
+                f"_REQUEST_TIMEOUTS.get('/{func_name}', 0) + 1"
+            )
             lines.append("        raise HTTPException(")
             lines.append("            status_code=504,")
             lines.append(
