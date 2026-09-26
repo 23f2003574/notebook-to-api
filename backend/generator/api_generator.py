@@ -85,6 +85,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # name would rebind it to a function object and break every request.
     "_DEPRECATED_ENDPOINTS",
     "_DEPRECATED_ENDPOINT_CALLS",
+    "_DEPRECATED_ENDPOINT_REJECTIONS",
     # Read by name from inside _add_deprecation_headers on every request,
     # the same exposure JSON_REQUEST_LOGS has for _log_request_json.
     "REJECT_DEPRECATED_ENDPOINTS",
@@ -1297,6 +1298,14 @@ def generate_fastapi_code(
         "_DEPRECATED_ENDPOINT_CALLS = "
         "{path: 0 for path in _DEPRECATED_ENDPOINTS}"
     )
+    # The subset of those calls answered 410 (brownout or enforced
+    # sunset) rather than served -- during a brownout, the callers that
+    # would actually break on removal, as distinct from ones still being
+    # served normally.
+    lines.append(
+        "_DEPRECATED_ENDPOINT_REJECTIONS = "
+        "{path: 0 for path in _DEPRECATED_ENDPOINTS}"
+    )
     lines.append("")
     # NOTEBOOK_API_REJECT_DEPRECATED (see GENERATED_APP_ENV_VARS): a
     # brownout switch answering 410 Gone for deprecated paths before
@@ -1342,6 +1351,7 @@ def generate_fastapi_code(
     lines.append(
         "    if _deprecated_endpoint_is_rejected(request.url.path):"
     )
+    lines.append("        _DEPRECATED_ENDPOINT_REJECTIONS[request.url.path] += 1")
     lines.append("        response = JSONResponse(")
     lines.append("            status_code=410,")
     lines.append(
@@ -2641,6 +2651,10 @@ def generate_fastapi_code(
     lines.append(
         "        'deprecated_endpoint_calls': dict(_DEPRECATED_ENDPOINT_CALLS),"
     )
+    lines.append(
+        "        'deprecated_endpoint_rejections': "
+        "dict(_DEPRECATED_ENDPOINT_REJECTIONS),"
+    )
     lines.append("    }")
 
     # GET /metrics above has served this dashboard-shaped JSON summary
@@ -2815,6 +2829,22 @@ def generate_fastapi_code(
     )
     lines.append(
         "            body += f'notebook_api_deprecated_endpoint_calls_total"
+        "{{path=\"{path}\"}} {count}\\n'"
+    )
+    lines.append(
+        "        body += ('# HELP notebook_api_deprecated_endpoint_rejections_total "
+        "Total number of requests to each deprecated endpoint answered 410 "
+        "Gone instead of being served.\\n'"
+    )
+    lines.append(
+        "                 '# TYPE notebook_api_deprecated_endpoint_rejections_total "
+        "counter\\n')"
+    )
+    lines.append(
+        "        for path, count in sorted(_DEPRECATED_ENDPOINT_REJECTIONS.items()):"
+    )
+    lines.append(
+        "            body += f'notebook_api_deprecated_endpoint_rejections_total"
         "{{path=\"{path}\"}} {count}\\n'"
     )
     # The Prometheus text exposition format's own registered media type --
