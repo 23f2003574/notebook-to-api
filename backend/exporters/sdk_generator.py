@@ -1795,7 +1795,7 @@ def generate_python_sdk(
     # hand-building the exact same requests.post call
     # redeliver_task_webhook above already demonstrates this client knows
     # how to make.
-    lines.append("    def retry_task(self, task_id: str) -> dict:")
+    lines.append("    def retry_task(self, task_id: str, force: bool = False) -> dict:")
     lines.append(
         '        """Re-run a failed task\'s own underlying function with '
         "its original"
@@ -1823,6 +1823,9 @@ def generate_python_sdk(
     lines.append(
         '            f"{self.base_url}/tasks/{task_id}/retry",'
     )
+    # force=True -> ?force=true: retry even a task that failed by exceeding
+    # its execution timeout, which the app otherwise refuses with 409.
+    lines.append('            **({"params": {"force": "true"}} if force else {}),')
     lines.append('            headers={"X-API-Key": self.api_key},')
     lines.append("            timeout=self.timeout,")
     lines.append("        ))")
@@ -2814,8 +2817,11 @@ def generate_typescript_sdk(
     # recorded outcome, which redeliverTaskWebhook above already covers)
     # via POST /tasks/{task_id}/retry for several commits now, but neither
     # generated client ever gained a method to call it.
-    lines.append("  async retryTask(taskId: string): Promise<any> {")
-    lines.append('    const path = `/tasks/${taskId}/retry`;')
+    # See the Python client's identical retry_task(force=...).
+    lines.append("  async retryTask(taskId: string, force: boolean = false): Promise<any> {")
+    lines.append(
+        '    const path = `/tasks/${taskId}/retry${force ? "?force=true" : ""}`;'
+    )
     lines.append(
         "    return this.requestWithRetry(path, () => fetch(`${this.baseUrl}${path}`, {"
     )

@@ -1858,7 +1858,7 @@ def test_generate_python_sdk_retry_task_name_takes_priority_over_a_colliding_pat
     source = output_path.read_text(encoding="utf-8")
 
     ast.parse(source)
-    assert "def retry_task(self, task_id: str) -> dict:" in source
+    assert "def retry_task(self, task_id: str, force: bool = False) -> dict:" in source
     assert (
         "def retry_task_2(self, payload: "
         "RetryTask2Request) -> RetryTask2Response:"
@@ -7338,3 +7338,72 @@ def test_sdk_wait_methods_default_to_outlasting_a_task_timeout(tmp_path):
     assert "timeout: float = 60.0)" in fit_def
     assert "{ timeoutMs: 305000, ...options }" in ts_source
     assert ts_source.count("...options }") == 1
+
+
+def test_python_sdk_retry_task_can_force_a_timed_out_task(tmp_path, monkeypatch):
+    """Confirmed missing before this feature: the app's own ?force=true on
+    POST /tasks/{task_id}/retry (needed to retry a timed-out task) had no
+    way through either generated client."""
+    schema_path = _write_schema(tmp_path, {"/add": {"post": {"operationId": "add"}}})
+    output_path = tmp_path / "client.py"
+    generate_python_sdk(str(schema_path), str(output_path))
+    source = output_path.read_text(encoding="utf-8")
+    calls = []
+
+    class FakeResponse:
+        headers = {}
+        url = "http://localhost:8000/tasks/t1/retry"
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"task_id": "t2"}
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs.get("params")))
+        return FakeResponse()
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.post = fake_post
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+    namespace = {}
+    exec(compile(source, str(output_path), "exec"), namespace)
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+
+    client.retry_task("t1")
+    client.retry_task("t1", force=True)
+
+    assert calls == [
+        ("http://localhost:8000/tasks/t1/retry", None),
+        ("http://localhost:8000/tasks/t1/retry", {"force": "true"}),
+    ]
+
+
+@_needs_node
+def test_typescript_sdk_retry_task_can_force_a_timed_out_task(tmp_path):
+    schema_path = _write_schema(tmp_path, {"/add": {"post": {"operationId": "add"}}})
+    client_path = tmp_path / "client.ts"
+    generate_typescript_sdk(str(schema_path), str(client_path))
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        const urls = [];
+        globalThis.fetch = async (url) => {{
+          urls.push(url);
+          return {{ ok: true, status: 200, headers: new Headers(), json: async () => ({{}}) }};
+        }};
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+        await client.retryTask("t1");
+        await client.retryTask("t1", true);
+        console.log(JSON.stringify(urls));
+        """,
+        encoding="utf-8",
+    )
+    proc = subprocess.run(["node", str(runner_path)], capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout.strip().splitlines()[-1]) == [
+        "http://localhost:8000/tasks/t1/retry",
+        "http://localhost:8000/tasks/t1/retry?force=true",
+    ]
