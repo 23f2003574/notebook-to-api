@@ -27917,3 +27917,84 @@ def test_app_deprecations_fail_if_past_sunset_still_fails_when_not_rejected(
     assert proc.returncode == 1
     assert "past their sunset date: /old_add (2000-01-01)" in proc.stderr
     assert "/old_sub" not in proc.stderr
+
+
+def _run_app_call_with_headers(tmp_path, fake_dashboard, status, body, headers, *extra):
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [_json_response(status, body)]
+    handler.response_headers = [headers]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+    return _run_cli(
+        ["app-call", str(notebook_path), "add", "--host", host, "--port", str(port),
+         *extra],
+        cwd=workdir,
+    )
+
+
+def test_app_call_warns_on_stderr_when_the_endpoint_is_deprecated(
+    tmp_path, fake_dashboard
+):
+    """Confirmed missing before this feature: app-call never read the
+    compiled app's own Deprecation/X-Deprecation-Reason/Sunset headers."""
+    proc = _run_app_call_with_headers(
+        tmp_path, fake_dashboard, 200, {"result": 3},
+        {"Deprecation": "true", "X-Deprecation-Reason": "Use add_v2.",
+         "Sunset": "Thu, 31 Dec 2099 00:00:00 GMT"},
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Result: 3" in proc.stdout
+    assert (
+        "Warning: POST /add is deprecated. Use add_v2. "
+        "(sunset: Thu, 31 Dec 2099 00:00:00 GMT)" in proc.stderr
+    )
+
+
+def test_app_call_json_output_stays_clean_when_deprecated(tmp_path, fake_dashboard):
+    proc = _run_app_call_with_headers(
+        tmp_path, fake_dashboard, 200, {"result": 3},
+        {"Deprecation": "true"}, "--json",
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout) == {"result": 3}
+    assert "is deprecated." in proc.stderr
+
+
+def test_app_call_fail_on_deprecated_exits_1_after_printing_the_result(
+    tmp_path, fake_dashboard
+):
+    proc = _run_app_call_with_headers(
+        tmp_path, fake_dashboard, 200, {"result": 3},
+        {"Deprecation": "true"}, "--fail-on-deprecated",
+    )
+
+    assert proc.returncode == 1
+    assert "Result: 3" in proc.stdout
+
+
+def test_app_call_fail_on_deprecated_passes_for_a_normal_endpoint(
+    tmp_path, fake_dashboard
+):
+    proc = _run_app_call_with_headers(
+        tmp_path, fake_dashboard, 200, {"result": 3}, {}, "--fail-on-deprecated",
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "deprecated" not in proc.stderr
+
+
+def test_app_call_reports_a_retired_endpoint_clearly(tmp_path, fake_dashboard):
+    proc = _run_app_call_with_headers(
+        tmp_path, fake_dashboard, 410, {"detail": "gone"},
+        {"Deprecation": "true", "X-Deprecation-Reason": "Use add_v2."},
+    )
+
+    assert proc.returncode != 0
+    assert "POST /add has been retired (410 Gone). Use add_v2." in (
+        proc.stdout + proc.stderr
+    )
