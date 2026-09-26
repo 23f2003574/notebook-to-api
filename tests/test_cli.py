@@ -28467,3 +28467,67 @@ def test_remote_compile_drop_past_sunset_forwards_the_flag_and_reports_drops(
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert json.loads(handler.bodies[0])["drop_past_sunset"] is True
     assert "Dropped 1 function(s) past their sunset date: old_add" in proc.stdout
+
+
+def test_export_curl_drop_past_sunset_leaves_out_their_requests(tmp_path):
+    """Confirmed missing before this feature: export-curl kept emitting
+    requests for endpoints a `compile --drop-past-sunset` build no longer
+    serves."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path = _write_sunset_mix_notebook(workdir)
+
+    proc = _run_cli(
+        ["export-curl", str(path), "--output", "requests.sh", "--drop-past-sunset"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Dropping 1 function(s) past their sunset date: old_add" in proc.stderr
+    script = (workdir / "requests.sh").read_text(encoding="utf-8")
+    assert "/old_add" not in script
+    assert "/later" in script and "/add" in script
+
+
+def test_export_curl_without_drop_past_sunset_keeps_every_request(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path = _write_sunset_mix_notebook(workdir)
+
+    proc = _run_cli(["export-curl", str(path), "--output", "requests.sh"], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "/old_add" in (workdir / "requests.sh").read_text(encoding="utf-8")
+
+
+def test_export_postman_drop_past_sunset_leaves_out_their_requests(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path = _write_sunset_mix_notebook(workdir)
+
+    proc = _run_cli(
+        ["export-postman", str(path), "--output", "c.json", "--drop-past-sunset"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    collection = json.loads((workdir / "c.json").read_text(encoding="utf-8"))
+    names = [item["name"] for item in collection["item"]]
+    assert not any("old_add" in name for name in names)
+    assert any("later" in name for name in names)
+
+
+def test_export_postman_drop_past_sunset_refuses_an_only_list_it_would_empty(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path = _write_sunset_mix_notebook(workdir)
+
+    proc = _run_cli(
+        ["export-postman", str(path), "--output", "c.json",
+         "--only", "old_add", "--drop-past-sunset"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode != 0
+    assert "left nothing to compile" in proc.stdout + proc.stderr
+    assert not (workdir / "c.json").exists()
