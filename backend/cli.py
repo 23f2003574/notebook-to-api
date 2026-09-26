@@ -8498,6 +8498,51 @@ def _dispatch_core_command(args):
 
         app_url = f"http://{args.host}:{args.port}"
 
+        # --reset: POST /deprecations/reset -- zero the app's own call,
+        # rejection and caller counters to start a fresh measurement
+        # (e.g. right after contacting the callers this command listed),
+        # instead of restarting the app. A one-shot state change, so it
+        # can't be mixed with --watch or the read-only --fail-* gates.
+        if args.reset:
+            if args.watch or args.fail_if_called or args.fail_if_past_sunset:
+                raise ValueError(
+                    "--reset cannot be combined with --watch, "
+                    "--fail-if-called or --fail-if-past-sunset."
+                )
+            try:
+                response = httpx.post(
+                    f"{app_url}/deprecations/reset",
+                    headers={"X-API-Key": args.api_key}, timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise RuntimeError(
+                    f"Could not reach the compiled app at {app_url}: "
+                    f"{exc}. Is it running? (see `serve`, or `docker "
+                    "compose up`)"
+                )
+            if response.status_code == 404:
+                raise RuntimeError(
+                    f"The compiled app at {app_url} has no POST "
+                    "/deprecations/reset -- it was compiled by an older "
+                    "notebook-to-api; recompile it to use --reset."
+                )
+            if response.status_code >= 400:
+                raise RuntimeError(
+                    f"App rejected the reset ({response.status_code}): "
+                    f"{_extract_dashboard_error_detail(response)}"
+                )
+            data = response.json()
+            if args.json_output:
+                print(json.dumps(data, indent=2))
+            else:
+                reset_paths = data.get("reset", [])
+                print(
+                    f"Reset deprecation counters for {len(reset_paths)} "
+                    "endpoint(s)"
+                    + (f": {', '.join(reset_paths)}" if reset_paths else ".")
+                )
+            return
+
         def _fetch_deprecations():
             try:
                 response = httpx.get(f"{app_url}/deprecations", timeout=args.timeout)
@@ -16865,6 +16910,26 @@ def main():
         action="store_true",
         dest="json_output",
         help="Print GET /deprecations' own JSON response verbatim instead of a summary."
+    )
+    app_deprecations_parser.add_argument(
+        "--reset",
+        action="store_true",
+        help=(
+            "Zero the app's own deprecation counters (calls, rejections, "
+            "callers) via POST /deprecations/reset instead of reading them "
+            "-- start a fresh measurement, e.g. right after contacting the "
+            "callers this command listed. Requires --api-key."
+        )
+    )
+    app_deprecations_parser.add_argument(
+        "--api-key",
+        default=_default_app_api_key(),
+        dest="api_key",
+        help=(
+            "X-API-Key sent with --reset (default: $NOTEBOOK_API_KEY if set, "
+            "else the generated app's own default dev key). Reading GET "
+            "/deprecations needs no key."
+        )
     )
     app_deprecations_parser.add_argument(
         "--top-callers",

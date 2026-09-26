@@ -28230,3 +28230,46 @@ def test_app_deprecations_rejects_negative_top_callers(tmp_path, fake_dashboard)
 
     assert proc.returncode != 0
     assert "--top-callers" in proc.stdout + proc.stderr
+
+
+def test_app_deprecations_reset_posts_to_the_reset_endpoint(tmp_path, fake_dashboard):
+    """Confirmed missing before this feature: the compiled app's own POST
+    /deprecations/reset had no CLI counterpart."""
+    proc, handler = _run_app_deprecations(
+        tmp_path, fake_dashboard, {"reset": ["/old_add", "/old_sub"]},
+        "--reset", "--api-key", "secret",
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/deprecations/reset"]
+    assert handler.request_headers[0].get("X-API-Key") == "secret"
+    assert "Reset deprecation counters for 2 endpoint(s): /old_add, /old_sub" in proc.stdout
+
+
+def test_app_deprecations_reset_reports_a_rejected_key(tmp_path, fake_dashboard):
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, {"detail": "Invalid or missing API key"},
+        "--reset", status=401,
+    )
+
+    assert proc.returncode != 0
+    assert "App rejected the reset (401)" in proc.stdout + proc.stderr
+
+
+def test_app_deprecations_reset_explains_an_older_app(tmp_path, fake_dashboard):
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, {"detail": "Not Found"}, "--reset", status=404,
+    )
+
+    assert proc.returncode != 0
+    assert "recompile it to use --reset" in proc.stdout + proc.stderr
+
+
+def test_app_deprecations_reset_refuses_read_only_flags(tmp_path, fake_dashboard):
+    proc, handler = _run_app_deprecations(
+        tmp_path, fake_dashboard, {"reset": []}, "--reset", "--fail-if-called",
+    )
+
+    assert proc.returncode != 0
+    assert "--reset cannot be combined" in proc.stdout + proc.stderr
+    assert handler.requests == []
