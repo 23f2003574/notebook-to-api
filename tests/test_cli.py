@@ -29058,3 +29058,49 @@ def test_app_status_omits_rate_limits_and_cache_when_none_are_set(tmp_path, fake
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "per-endpoint rate limits:" not in proc.stdout
     assert "response cache:" not in proc.stdout
+
+
+def test_app_call_reports_a_rate_limit_with_its_retry_after(tmp_path, fake_dashboard):
+    """Confirmed missing before this feature: a 429 surfaced as a generic
+    "App rejected the call (429)" with no hint of when to retry."""
+    proc = _run_app_call_with_headers(
+        tmp_path, fake_dashboard, 429,
+        {"detail": "Rate limit exceeded for /add: 2 requests per 60s per API key"},
+        {"Retry-After": "17", "X-RateLimit-Limit": "2"},
+    )
+
+    assert proc.returncode != 0
+    output = proc.stdout + proc.stderr
+    assert "POST /add was rate limited (429)" in output
+    assert "Limit: 2 requests per window." in output
+    assert "Retry after 17s." in output
+
+
+def test_app_call_notes_a_cache_hit_on_stderr(tmp_path, fake_dashboard):
+    proc = _run_app_call_with_headers(
+        tmp_path, fake_dashboard, 200, {"result": 3}, {"X-Cache": "HIT", "Age": "4"},
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "served from the app's response cache (age 4s)" in proc.stderr
+    assert "--no-cache" in proc.stderr
+    assert "response cache" not in proc.stdout
+
+
+def test_app_call_no_cache_sends_cache_control(tmp_path, fake_dashboard):
+    app_url, handler = fake_dashboard
+    proc = _run_app_call_with_headers(
+        tmp_path, fake_dashboard, 200, {"result": 3}, {"X-Cache": "MISS"}, "--no-cache",
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.request_headers[-1].get("Cache-Control") == "no-cache"
+    assert "response cache" not in proc.stderr
+
+
+def test_app_call_without_no_cache_sends_no_cache_control(tmp_path, fake_dashboard):
+    app_url, handler = fake_dashboard
+    proc = _run_app_call_with_headers(tmp_path, fake_dashboard, 200, {"result": 3}, {})
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.request_headers[-1].get("Cache-Control") is None

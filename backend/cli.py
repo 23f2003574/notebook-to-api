@@ -8901,6 +8901,11 @@ def _dispatch_core_command(args):
 
         app_url = f"http://{args.host}:{args.port}"
         headers = {"X-API-Key": args.api_key}
+        # --no-cache: bypass a "# notebook-to-api: cache N" endpoint's
+        # response cache so the function really runs (a harmless no-op
+        # header for an uncached endpoint).
+        if getattr(args, "no_cache", False):
+            headers["Cache-Control"] = "no-cache"
 
         call_params = {}
 
@@ -8974,6 +8979,33 @@ def _dispatch_core_command(args):
                 f"POST /{args.function} exceeded the app's request timeout: "
                 f"{_extract_dashboard_error_detail(response)} Retrying won't "
                 "help -- raise the timeout, or make it a background endpoint."
+            )
+
+        # A 429 is the app's own quota (its global
+        # NOTEBOOK_API_RATE_LIMIT_PER_MINUTE or this function's
+        # "# notebook-to-api: rate-limit N") -- say when to retry, from
+        # Retry-After, instead of a generic rejection.
+        if response.status_code == 429:
+            retry_after = response.headers.get("Retry-After")
+            limit = response.headers.get("X-RateLimit-Limit")
+            raise RuntimeError(
+                f"POST /{args.function} was rate limited (429): "
+                f"{_extract_dashboard_error_detail(response)}"
+                + (f" Limit: {limit} requests per window." if limit else "")
+                + (f" Retry after {retry_after}s." if retry_after else "")
+            )
+
+        # X-Cache: HIT means the app answered from its response cache
+        # without running the function -- noted on stderr (stdout stays
+        # parseable) so a smoke test isn't misled into thinking it ran.
+        if (response.headers.get("X-Cache") or "").upper() == "HIT":
+            age = response.headers.get("Age")
+            print(
+                f"Note: POST /{args.function} was served from the app's "
+                "response cache"
+                + (f" (age {age}s)" if age else "")
+                + "; pass --no-cache to force a fresh call.",
+                file=sys.stderr,
             )
 
         if response.status_code >= 400:
@@ -17518,6 +17550,16 @@ def main():
         type=float,
         default=10.0,
         help="Seconds to wait for the initial response before giving up (default: 10)."
+    )
+    app_call_parser.add_argument(
+        "--no-cache",
+        dest="no_cache",
+        action="store_true",
+        help=(
+            "Send Cache-Control: no-cache so a function with a "
+            "\"# notebook-to-api: cache N\" directive really runs instead "
+            "of answering from the app's response cache."
+        ),
     )
     app_call_parser.add_argument(
         "--callback-url",
