@@ -16008,6 +16008,11 @@ def compile_notebook_endpoint(
     exclude = data.get("exclude")
     version_id = data.get("version_id")
     smoke_test = bool(data.get("smoke_test", False))
+    # "drop_past_sunset": the same `compile --drop-past-sunset` the CLI
+    # already offers locally -- leave out every deprecated function whose
+    # own "sunset: YYYY-MM-DD" is today (UTC) or earlier, so a dashboard
+    # rebuild actually carries out the removal the Sunset header promised.
+    drop_past_sunset = bool(data.get("drop_past_sunset", False))
     expected_sha256 = data.get("expected_sha256")
 
     if version_id is not None and not isinstance(version_id, str):
@@ -16087,6 +16092,31 @@ def compile_notebook_endpoint(
         load_notebook(
             str(content_path)
         )
+
+        # Folded into "exclude" -- or, when "only" was given instead (the
+        # two are mutually exclusive above), removed from "only" -- before
+        # compile_notebook ever sees either list.
+        dropped_past_sunset = []
+        if drop_past_sunset:
+            dropped_past_sunset = sorted(past_sunset_functions(
+                inspect_notebook_data(notebook_path=str(content_path))[
+                    "deprecated_functions"
+                ]
+            ))
+        if dropped_past_sunset:
+            if only:
+                only = [name for name in only if name not in dropped_past_sunset]
+                if not only:
+                    # ValueError, not HTTPException: this runs inside the
+                    # try below, whose `except ValueError` already maps to
+                    # a 400 (a bare HTTPException would hit the catch-all
+                    # `except Exception` and surface as a 500).
+                    raise ValueError(
+                        "Every function in \"only\" is past its sunset "
+                        "date, so drop_past_sunset left nothing to compile."
+                    )
+            else:
+                exclude = sorted(set(exclude or []) | set(dropped_past_sunset))
 
         compile_notebook(
             str(content_path),
@@ -16169,6 +16199,7 @@ def compile_notebook_endpoint(
             "status": "success",
             "notebook": notebook_path,
             "version_id": version_id,
+            "dropped_past_sunset": dropped_past_sunset,
             "functions": data["functions"],
             "endpoints": data["endpoints"],
             "skipped_functions": data["skipped_functions"],

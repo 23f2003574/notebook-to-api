@@ -5105,6 +5105,8 @@ def _dispatch_core_command(args):
             request_body["version_id"] = args.version_id
         if args.smoke_test:
             request_body["smoke_test"] = True
+        if args.drop_past_sunset:
+            request_body["drop_past_sunset"] = True
         if args.expected_sha256:
             request_body["expected_sha256"] = args.expected_sha256
 
@@ -5136,6 +5138,12 @@ def _dispatch_core_command(args):
                 else f"'{data.get('notebook', args.filename)}'"
             )
             print(f"Compiled {target} on {dashboard_url}")
+            dropped = data.get("dropped_past_sunset") or []
+            if dropped:
+                print(
+                    f"Dropped {len(dropped)} function(s) past their sunset "
+                    f"date: {', '.join(dropped)}"
+                )
 
             endpoints = data.get("endpoints", [])
 
@@ -13220,6 +13228,17 @@ def main():
     remote_compile_parser = subparsers.add_parser(
         "remote-compile",
         help="Compile a notebook already uploaded to a running dashboard instance, via its POST /api/compile."
+    )
+    remote_compile_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Leave out every deprecated function whose \"sunset: "
+            "YYYY-MM-DD\" date is today (UTC) or earlier, via POST "
+            "/api/compile's own \"drop_past_sunset\" -- the same as "
+            "`compile --drop-past-sunset`, run on the dashboard."
+        )
     )
     remote_compile_parser.add_argument(
         "filename",
