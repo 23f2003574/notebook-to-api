@@ -790,6 +790,38 @@ def _add_callback_url_argument(parser):
     )
 
 
+def _apply_drop_past_sunset(notebook_path, only, exclude):
+    """(only, exclude) adjusted to leave out every deprecated function in
+    `notebook_path` whose own "sunset: YYYY-MM-DD" is today (UTC) or
+    earlier -- `compile`/`deploy --drop-past-sunset`, so a rebuild actually
+    carries out the removal the Sunset header promised. Folded into
+    `exclude`, or removed from `only` when that was given instead (the two
+    are mutually exclusive); an `only` left empty is a ValueError rather
+    than silently compiling everything. The dropped names are reported on
+    stderr, so --json's stdout stays machine-parseable.
+    """
+    dropped = sorted(past_sunset_functions(
+        inspect_notebook_data(notebook_path=notebook_path)["deprecated_functions"]
+    ))
+    if not dropped:
+        return only, exclude
+    if only:
+        only = [name for name in only if name not in dropped]
+        if not only:
+            raise ValueError(
+                "Every --only function is past its sunset date, so "
+                "--drop-past-sunset left nothing to compile."
+            )
+    else:
+        exclude = sorted(set(exclude or []) | set(dropped))
+    print(
+        f"Dropping {len(dropped)} function(s) past their sunset date: "
+        f"{', '.join(dropped)}",
+        file=sys.stderr,
+    )
+    return only, exclude
+
+
 def _parse_comma_separated_names(value):
     """Parse a `--only`/`--exclude` argparse value ("add,subtract", or
     None) into a list of names, or None if nothing was given.
@@ -1769,23 +1801,9 @@ def _dispatch_core_command(args):
         output_dir.mkdir(parents=True, exist_ok=True)
         only = _parse_comma_separated_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
-        # --drop-past-sunset: leave out every deprecated function whose own
-        # "sunset: YYYY-MM-DD" is today (UTC) or earlier, by folding it into
-        # --exclude -- so a routine rebuild actually carries out the removal
-        # the Sunset header promised, instead of someone having to delete
-        # the function from the notebook (or remember --exclude) by hand.
-        # Reported on stderr so --json's stdout stays machine-parseable.
+        # --drop-past-sunset: see _apply_drop_past_sunset.
         if args.drop_past_sunset:
-            dropped = sorted(past_sunset_functions(
-                inspect_notebook_data(notebook_path=args.notebook)["deprecated_functions"]
-            ))
-            if dropped:
-                exclude = sorted(set(exclude or []) | set(dropped))
-                print(
-                    f"Dropping {len(dropped)} function(s) past their sunset "
-                    f"date: {', '.join(dropped)}",
-                    file=sys.stderr,
-                )
+            only, exclude = _apply_drop_past_sunset(args.notebook, only, exclude)
         if args.json_output:
             # compile_notebook (backend/compiler.py) unconditionally prints
             # its own progress lines ("Starting compilation for: ...",
@@ -2257,6 +2275,11 @@ def _dispatch_core_command(args):
         output_dir.mkdir(parents=True, exist_ok=True)
         only = _parse_comma_separated_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
+        # --drop-past-sunset: see _apply_drop_past_sunset -- the image
+        # this builds is what actually ships, so it's where a missed
+        # removal matters most.
+        if args.drop_past_sunset:
+            only, exclude = _apply_drop_past_sunset(args.notebook, only, exclude)
         tag = args.tag or f"{output_dir.name.lower()}:latest"
         # `docker build`'s own default target platform is whatever the
         # local Docker daemon's host architecture is -- correct for a
@@ -9783,6 +9806,17 @@ def main():
         "deploy", help="Compile a notebook and build a Docker image for the generated FastAPI app."
     )
     deploy_parser.add_argument("notebook", help="Path to the notebook file.")
+    deploy_parser.add_argument(
+        "--drop-past-sunset",
+        action="store_true",
+        dest="drop_past_sunset",
+        help=(
+            "Leave out of the compiled app (and so the built image) every "
+            "deprecated function whose \"sunset: YYYY-MM-DD\" date is "
+            "today (UTC) or earlier -- the same as `compile "
+            "--drop-past-sunset`. The dropped names are listed on stderr."
+        )
+    )
     deploy_parser.add_argument(
         "--output",
         default="generated",
