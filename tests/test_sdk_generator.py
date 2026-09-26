@@ -6951,3 +6951,62 @@ def test_python_sdk_other_status_with_deprecation_header_stays_http_error(
         client.old_add({})
 
     assert not isinstance(excinfo.value, namespace["EndpointRemovedError"])
+
+
+def _run_typescript_client_failing(tmp_path, status, headers):
+    schema_path = _write_schema(tmp_path, {"/old_add": {"post": {"operationId": "old_add"}}})
+    client_path = tmp_path / "client.ts"
+    generate_typescript_sdk(str(schema_path), str(client_path))
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        globalThis.fetch = async () => ({{
+          ok: false, status: {status}, headers: new Headers({json.dumps(headers)}),
+          json: async () => ({{}}),
+        }});
+        const mod = await import({json.dumps(str(client_path))});
+        const client = new mod.NotebookAPIClient("http://localhost:8000", {{ maxRetries: 0 }});
+        try {{
+          await client.old_add({{}});
+          console.log(JSON.stringify({{ threw: false }}));
+        }} catch (err) {{
+          console.log(JSON.stringify({{
+            removed: err instanceof mod.EndpointRemovedError,
+            isError: err instanceof Error,
+            status: err.status, message: err.message,
+            path: err.path ?? null, reason: err.reason ?? null, sunset: err.sunset ?? null,
+          }}));
+        }}
+        """,
+        encoding="utf-8",
+    )
+    proc = subprocess.run(["node", str(runner_path)], capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+@_needs_node
+def test_typescript_sdk_throws_endpoint_removed_error_on_a_deprecated_410(tmp_path):
+    """Confirmed missing before this feature: a retired (410) deprecated
+    endpoint surfaced from the TypeScript client as a generic Error."""
+    result = _run_typescript_client_failing(
+        tmp_path, 410,
+        {"Deprecation": "true", "X-Deprecation-Reason": "Use add.",
+         "Sunset": "Sat, 01 Jan 2000 00:00:00 GMT"},
+    )
+
+    assert result == {
+        "removed": True, "isError": True, "status": 410,
+        "message": "/old_add has been retired (410 Gone). Use add. "
+                   "(sunset: Sat, 01 Jan 2000 00:00:00 GMT)",
+        "path": "/old_add", "reason": "Use add.",
+        "sunset": "Sat, 01 Jan 2000 00:00:00 GMT",
+    }
+
+
+@_needs_node
+def test_typescript_sdk_plain_410_or_other_status_stays_a_generic_error(tmp_path):
+    for status, headers in ((410, {}), (400, {"Deprecation": "true"})):
+        result = _run_typescript_client_failing(tmp_path, status, headers)
+        assert result["removed"] is False
+        assert result["status"] == status
