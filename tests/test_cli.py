@@ -28995,3 +28995,47 @@ def test_app_tasks_purge_failed_forwards_timed_out(tmp_path, fake_dashboard):
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert handler.requests[0] == "/tasks/failed?timed_out=true"
+
+
+def _app_call_wait_with_final_task(tmp_path, fake_dashboard, final_task):
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {"task_id": "abc123", "status": "processing"}),
+        _json_response(200, final_task),
+    ]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path, "def process_data(x: int) -> int:\n    return x * 2\n",
+    )
+    return _run_cli(
+        ["app-call", str(notebook_path), "process_data", "--host", host,
+         "--port", str(port), "--data", '{"x": 21}', "--wait"],
+        cwd=workdir,
+    )
+
+
+def test_app_call_wait_explains_a_timed_out_task(tmp_path, fake_dashboard):
+    """Confirmed missing before this feature: a background task that failed
+    by exceeding its execution timeout printed like any other failure, with
+    no hint that retrying won't help or which limit to raise."""
+    proc = _app_call_wait_with_final_task(tmp_path, fake_dashboard, {
+        "status": "failed", "timed_out": True,
+        "error": "Task exceeded its 5s execution timeout",
+    })
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Task failed: Task exceeded its 5s execution timeout" in proc.stdout
+    assert "The task exceeded its execution timeout; retrying won't help" in proc.stdout
+    assert "NOTEBOOK_API_TASK_EXECUTION_TIMEOUT_SECONDS" in proc.stdout
+
+
+def test_app_call_wait_other_failures_get_no_timeout_hint(tmp_path, fake_dashboard):
+    proc = _app_call_wait_with_final_task(
+        tmp_path, fake_dashboard, {"status": "failed", "error": "boom"}
+    )
+
+    assert "Task failed: boom" in proc.stdout
+    assert "execution timeout" not in proc.stdout

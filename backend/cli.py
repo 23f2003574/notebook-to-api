@@ -9023,6 +9023,15 @@ def _dispatch_core_command(args):
                 print(f"Task completed: {result.get('result')!r}")
             else:
                 print(f"Task {result.get('status')}: {result.get('error')}")
+                # The app's own "timed_out" marker on the finished task --
+                # the background counterpart of the synchronous 504 message
+                # above: a deterministic "runs too long", not a flaky error.
+                if result.get("timed_out"):
+                    print(
+                        "The task exceeded its execution timeout; retrying "
+                        "won't help -- raise its \"# notebook-to-api: timeout "
+                        "N\" directive or NOTEBOOK_API_TASK_EXECUTION_TIMEOUT_SECONDS."
+                    )
         else:
             print(f"Result: {result.get('result')!r}")
 
