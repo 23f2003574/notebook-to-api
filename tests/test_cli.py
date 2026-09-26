@@ -29039,3 +29039,22 @@ def test_app_call_wait_other_failures_get_no_timeout_hint(tmp_path, fake_dashboa
 
     assert "Task failed: boom" in proc.stdout
     assert "execution timeout" not in proc.stdout
+
+
+def test_app_status_lists_each_endpoints_rate_limit_and_cache_ttl(tmp_path, fake_dashboard):
+    proc = _app_status_with_config(
+        tmp_path, fake_dashboard,
+        endpoint_rate_limits={"/lookup": 5}, endpoint_cache_ttls={"/lookup": 30},
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "  per-endpoint rate limits:\n    /lookup: 5 requests/min per API key\n" in proc.stdout
+    assert "  response cache:\n    /lookup: 30s TTL\n" in proc.stdout
+
+
+def test_app_status_omits_rate_limits_and_cache_when_none_are_set(tmp_path, fake_dashboard):
+    proc = _app_status_with_config(tmp_path, fake_dashboard)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "per-endpoint rate limits:" not in proc.stdout
+    assert "response cache:" not in proc.stdout

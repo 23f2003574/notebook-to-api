@@ -8422,6 +8422,19 @@ def _dispatch_core_command(args):
                     f"    {path}: "
                     + (f"{seconds}s" if seconds else "exempt (no timeout)")
                 )
+            # GET /config's "endpoint_rate_limits"/"endpoint_cache_ttls" --
+            # the "rate-limit N" and "cache N" directives in force. Omitted
+            # entirely when none are set (or the app predates them).
+            endpoint_rate_limits = config.get("endpoint_rate_limits") or {}
+            if endpoint_rate_limits:
+                print("  per-endpoint rate limits:")
+                for path, limit in endpoint_rate_limits.items():
+                    print(f"    {path}: {limit} requests/min per API key")
+            endpoint_cache_ttls = config.get("endpoint_cache_ttls") or {}
+            if endpoint_cache_ttls:
+                print("  response cache:")
+                for path, ttl in endpoint_cache_ttls.items():
+                    print(f"    {path}: {ttl}s TTL")
             print(f"  webhook timeout: {config.get('webhook_timeout_seconds')}s")
             print(
                 "  webhook signing: "

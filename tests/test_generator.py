@@ -8778,3 +8778,42 @@ def test_cache_ttl_is_published_in_openapi(monkeypatch):
 
     assert paths["/lookup"]["post"]["x-notebook-to-api-cache-ttl-seconds"] == 45
     assert "x-notebook-to-api-cache-ttl-seconds" not in paths["/plain"]["post"]
+
+
+def test_get_config_reports_each_endpoints_rate_limit_and_cache_ttl(monkeypatch):
+    """Confirmed missing before this feature: GET /config never reported
+    the "rate-limit N" / "cache N" directives in force."""
+    code = generate_fastapi_code(
+        [
+            {"name": "lookup", "args": [], "return_type": "int"},
+            {"name": "plain", "args": [], "return_type": "int"},
+            {"name": "train_model", "args": [], "return_type": "int"},
+        ],
+        rate_limit_overrides={"lookup": 5, "train_model": 2, "missing": 9},
+        cache_overrides={"lookup": 30, "train_model": 60},
+    )
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    config = TestClient(namespace["app"]).get("/config").json()
+
+    assert config["endpoint_rate_limits"] == {"/lookup": 5, "/train_model": 2}
+    # The cache directive doesn't apply to background endpoints.
+    assert config["endpoint_cache_ttls"] == {"/lookup": 30}
+
+
+def test_get_config_reports_empty_rate_limits_and_cache_ttls_by_default(monkeypatch):
+    code = generate_fastapi_code([{"name": "plain", "args": [], "return_type": "int"}])
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    config = TestClient(namespace["app"]).get("/config").json()
+
+    assert config["endpoint_rate_limits"] == {}
+    assert config["endpoint_cache_ttls"] == {}

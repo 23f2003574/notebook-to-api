@@ -29,6 +29,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "_ENDPOINT_RATE_LIMITED", "_RESPONSE_CACHE", "_RESPONSE_CACHE_LOCK",
     "_RESPONSE_CACHE_MAX_ENTRIES", "_cache_lookup", "_cache_store",
     "_RESPONSE_CACHE_HITS", "_RESPONSE_CACHE_MISSES", "clear_response_cache",
+    "_ENDPOINT_RATE_LIMITS", "_ENDPOINT_CACHE_TTLS",
     # Read by name from inside _evict_expired_tasks' own body -- the
     # identical "referenced by name inside a helper every background
     # endpoint's own submission calls first" exposure already documented
@@ -1794,6 +1795,24 @@ def generate_fastapi_code(
         if func["name"] in (timeout_overrides or {})
     }
     lines.append(f"_ENDPOINT_TIMEOUTS = {repr(dict(sorted(endpoint_timeouts.items())))}")
+    # {path: N} from "rate-limit N" / "cache N" directives, reported by
+    # GET /config the same way -- so an operator can see which quota or
+    # cache TTL is in force without the notebook source. The cache
+    # directive only applies to synchronous endpoints, so background
+    # ones are left out of _ENDPOINT_CACHE_TTLS.
+    endpoint_rate_limits = {
+        f"/{name}": int(limit)
+        for name, limit in (rate_limit_overrides or {}).items()
+        if any(func["name"] == name for func in functions)
+    }
+    endpoint_cache_ttls = {
+        f"/{name}": int(ttl)
+        for name, ttl in (cache_overrides or {}).items()
+        if any(func["name"] == name for func in functions)
+        and not resolve_is_background(name, background_overrides)
+    }
+    lines.append(f"_ENDPOINT_RATE_LIMITS = {repr(dict(sorted(endpoint_rate_limits.items())))}")
+    lines.append(f"_ENDPOINT_CACHE_TTLS = {repr(dict(sorted(endpoint_cache_ttls.items())))}")
     lines.append("async def _call_notebook_function(call, is_async=False, timeout=None):")
     lines.append("    limit = REQUEST_TIMEOUT_SECONDS if timeout is None else timeout")
     lines.append("    with anyio.fail_after(limit or None):")
@@ -2511,6 +2530,8 @@ def generate_fastapi_code(
         "        'request_timeout_seconds': REQUEST_TIMEOUT_SECONDS or None,"
     )
     lines.append("        'endpoint_timeouts': dict(_ENDPOINT_TIMEOUTS),")
+    lines.append("        'endpoint_rate_limits': dict(_ENDPOINT_RATE_LIMITS),")
+    lines.append("        'endpoint_cache_ttls': dict(_ENDPOINT_CACHE_TTLS),")
     lines.append("        'webhook_timeout_seconds': WEBHOOK_TIMEOUT_SECONDS,")
     lines.append("        'webhook_signing_enabled': bool(WEBHOOK_SECRET),")
     lines.append("        'webhook_max_retries': WEBHOOK_MAX_RETRIES,")
