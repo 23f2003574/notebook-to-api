@@ -929,11 +929,16 @@ def _extract_notebook_functions(notebook_path):
 
     background_overrides = _extract_background_overrides(code_cells)
     deprecated_overrides = _extract_deprecated_functions(code_cells)
+    timeout_overrides = _extract_timeout_overrides(code_cells)
 
     for func in functions:
         func["is_background"] = _is_background_function(
             func["name"], background_overrides
         )
+        # Its own "# notebook-to-api: timeout N" (None without one) -- so a
+        # timeout-only edit shows up as "changed" and in
+        # classify_notebook_diff's own "timeout_changed".
+        func["timeout_seconds"] = timeout_overrides.get(func["name"])
         func["is_deprecated"], func["deprecation_reason"] = resolve_deprecation(
             func["name"], deprecated_overrides
         )
@@ -1020,6 +1025,7 @@ def _function_signature_key(func):
         # around, which otherwise vanished from the diff entirely when
         # the function's code was untouched.
         _function_sunset(func),
+        func.get("timeout_seconds"),
     )
 
 
@@ -1277,6 +1283,7 @@ def classify_notebook_diff(diff):
     breaking_changes = []
     newly_deprecated = []
     sunset_changed = []
+    timeout_changed = []
     no_longer_deprecated = []
 
     # A removed function that was deprecated with a "sunset: YYYY-MM-DD"
@@ -1416,6 +1423,22 @@ def classify_notebook_diff(diff):
         old_sunset = _function_sunset(entry["old"])
         new_sunset = _function_sunset(entry["new"])
 
+        # A timeout directive added, removed or changed. "tightened" --
+        # the new limit is a real bound (> 0) and lower than before (or
+        # there was none) -- is the direction that can start answering 504
+        # to calls that used to succeed; loosening or removing it can't.
+        old_timeout = entry["old"].get("timeout_seconds")
+        new_timeout = entry["new"].get("timeout_seconds")
+        if old_timeout != new_timeout:
+            timeout_changed.append({
+                "name": name,
+                "old_timeout": old_timeout,
+                "new_timeout": new_timeout,
+                "tightened": bool(new_timeout) and (
+                    not old_timeout or new_timeout < old_timeout
+                ),
+            })
+
         if old_is_deprecated and new_is_deprecated and old_sunset != new_sunset:
             sunset_changed.append({
                 "name": name,
@@ -1433,6 +1456,7 @@ def classify_notebook_diff(diff):
         "no_longer_deprecated": no_longer_deprecated,
         "sunset_changed": sunset_changed,
         "planned_removals": planned_removals,
+        "timeout_changed": timeout_changed,
     }
 
 
@@ -1571,6 +1595,23 @@ def print_notebook_diff(diff):
         )
         for entry in diff["no_longer_deprecated"]:
             print(f"  POST /{entry['name']}")
+
+    if diff.get("timeout_changed"):
+        print(
+            f"\n{len(diff['timeout_changed'])} endpoint(s) with a changed "
+            "timeout directive:"
+        )
+        for entry in diff["timeout_changed"]:
+            def _label(value):
+                if value is None:
+                    return "none"
+                return "0 (exempt)" if value == 0 else f"{value}s"
+            marker = "  ! " if entry.get("tightened") else "  "
+            print(
+                f"{marker}POST /{entry['name']}: {_label(entry.get('old_timeout'))} -> "
+                f"{_label(entry.get('new_timeout'))}"
+                + (" (tightened)" if entry.get("tightened") else "")
+            )
 
     if diff.get("planned_removals"):
         print(

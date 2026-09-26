@@ -1587,6 +1587,7 @@ def test_classify_notebook_diff_deprecated_only_change_is_not_breaking(tmp_path)
         "no_longer_deprecated": [],
         "sunset_changed": [],
         "planned_removals": [],
+        "timeout_changed": [],
     }
 
 
@@ -1669,6 +1670,7 @@ def test_print_notebook_diff_prints_newly_deprecated(capsys):
         "no_longer_deprecated": [],
         "sunset_changed": [],
         "planned_removals": [],
+        "timeout_changed": [],
     })
 
     output = capsys.readouterr().out
@@ -1808,6 +1810,7 @@ def test_classify_notebook_diff_added_function_is_not_breaking(tmp_path):
         "no_longer_deprecated": [],
         "sunset_changed": [],
         "planned_removals": [],
+        "timeout_changed": [],
     }
 
 
@@ -1858,6 +1861,7 @@ def test_classify_notebook_diff_new_optional_parameter_is_not_breaking(tmp_path)
         "no_longer_deprecated": [],
         "sunset_changed": [],
         "planned_removals": [],
+        "timeout_changed": [],
     }
 
 
@@ -2086,6 +2090,7 @@ def test_classify_notebook_diff_gaining_a_return_type_annotation_is_not_breaking
         "no_longer_deprecated": [],
         "sunset_changed": [],
         "planned_removals": [],
+        "timeout_changed": [],
     }
 
 
@@ -2112,6 +2117,7 @@ def test_classify_notebook_diff_losing_a_return_type_annotation_is_not_breaking(
         "no_longer_deprecated": [],
         "sunset_changed": [],
         "planned_removals": [],
+        "timeout_changed": [],
     }
 
 
@@ -2139,6 +2145,7 @@ def test_classify_notebook_diff_async_only_change_is_not_breaking(tmp_path):
         "no_longer_deprecated": [],
         "sunset_changed": [],
         "planned_removals": [],
+        "timeout_changed": [],
     }
 
 
@@ -2249,6 +2256,7 @@ def test_classify_notebook_diff_no_changes_is_compatible(tmp_path):
         "no_longer_deprecated": [],
         "sunset_changed": [],
         "planned_removals": [],
+        "timeout_changed": [],
     }
 
 
@@ -3471,3 +3479,69 @@ def test_print_notebook_diff_prints_planned_removals(capsys):
     output = capsys.readouterr().out
     assert "1 endpoint(s) removed on or after their announced sunset date (not breaking):" in output
     assert "POST /old_add (sunset 2000-01-01)" in output
+
+
+def _classify_timeout_directives(tmp_path, old_directive, new_directive):
+    old_path = tmp_path / "old.ipynb"
+    new_path = tmp_path / "new.ipynb"
+    body = "def report(a: int) -> int:\n    return a\n"
+    _write_notebook(old_path, old_directive + body)
+    _write_notebook(new_path, new_directive + body)
+    diff = diff_notebook_functions(str(old_path), str(new_path))
+    return diff, classify_notebook_diff(diff)
+
+
+def test_classify_notebook_diff_reports_a_tightened_timeout(tmp_path):
+    """Confirmed missing before this feature: a timeout-only edit touched
+    nothing _function_signature_key compared -- the diff reported the
+    function unchanged even though calls could now start getting 504s."""
+    diff, classification = _classify_timeout_directives(
+        tmp_path,
+        "# notebook-to-api: timeout 60\n",
+        "# notebook-to-api: timeout 10\n",
+    )
+
+    assert [entry["name"] for entry in diff["changed"]] == ["report"]
+    assert classification["compatible"] is True
+    assert classification["timeout_changed"] == [{
+        "name": "report", "old_timeout": 60, "new_timeout": 10, "tightened": True,
+    }]
+
+
+@pytest.mark.parametrize("old, new, tightened", [
+    ("", "# notebook-to-api: timeout 30\n", True),        # newly bounded
+    ("# notebook-to-api: timeout 10\n", "# notebook-to-api: timeout 60\n", False),
+    ("# notebook-to-api: timeout 10\n", "", False),        # directive removed
+    ("# notebook-to-api: timeout 10\n", "# notebook-to-api: timeout 0\n", False),
+])
+def test_classify_notebook_diff_timeout_tightened_flag(tmp_path, old, new, tightened):
+    _, classification = _classify_timeout_directives(tmp_path, old, new)
+
+    assert classification["timeout_changed"][0]["tightened"] is tightened
+
+
+def test_classify_notebook_diff_no_timeout_change_reports_nothing(tmp_path):
+    diff, classification = _classify_timeout_directives(
+        tmp_path, "# notebook-to-api: timeout 30\n", "# notebook-to-api: timeout 30\n",
+    )
+
+    assert diff["changed"] == []
+    assert classification["timeout_changed"] == []
+
+
+def test_print_notebook_diff_prints_timeout_changes(capsys):
+    print_notebook_diff({
+        "added": [], "removed": [], "changed": [{"name": "report"}], "unchanged": [],
+        "compatible": True, "breaking_changes": [],
+        "newly_deprecated": [], "no_longer_deprecated": [], "sunset_changed": [],
+        "planned_removals": [],
+        "timeout_changed": [
+            {"name": "report", "old_timeout": 60, "new_timeout": 10, "tightened": True},
+            {"name": "fit", "old_timeout": None, "new_timeout": 0, "tightened": False},
+        ],
+    })
+
+    output = capsys.readouterr().out
+    assert "2 endpoint(s) with a changed timeout directive:" in output
+    assert "! POST /report: 60s -> 10s (tightened)" in output
+    assert "POST /fit: none -> 0 (exempt)" in output
