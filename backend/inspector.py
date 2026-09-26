@@ -1709,6 +1709,19 @@ def generate_curl_commands(
     return commands
 
 
+_POSTMAN_DEPRECATION_CHECK_SCRIPT = [
+    'const deprecation = (pm.response.headers.get("Deprecation") || "").trim().toLowerCase();',
+    'if (deprecation && deprecation !== "false") {',
+    '    const reason = pm.response.headers.get("X-Deprecation-Reason");',
+    '    const sunset = pm.response.headers.get("Sunset");',
+    '    const note = `DEPRECATED: ${pm.request.url.getPath()}`'
+    ' + (reason ? ` -- ${reason}` : "") + (sunset ? ` (sunset: ${sunset})` : "");',
+    '    console.warn(note);',
+    '    pm.test(note, function () {});',
+    '}',
+]
+
+
 def generate_postman_collection(
     notebook_path, host="localhost", port=8000, api_key=None,
     only=None, exclude=None, collection_name=None, callback_url=None,
@@ -2043,5 +2056,22 @@ def generate_postman_collection(
             ),
         },
         "variable": collection_variables,
+        # Collection-level, so it runs after every request in the
+        # collection (Postman and Newman alike): the compiled app marks
+        # each response from a deprecated endpoint with Deprecation /
+        # X-Deprecation-Reason / Sunset headers, and previously nothing
+        # in this collection looked at them -- the per-request
+        # "[DEPRECATED]" name only reflects deprecations known when the
+        # collection was generated, not ones added to the app since. A
+        # passing, clearly-named pm.test makes it show up in Postman's
+        # own Test Results and in a `newman run` report without failing
+        # the run; console.warn puts it in the Postman console too.
+        "event": [{
+            "listen": "test",
+            "script": {
+                "type": "text/javascript",
+                "exec": _POSTMAN_DEPRECATION_CHECK_SCRIPT,
+            },
+        }],
         "item": items,
     }

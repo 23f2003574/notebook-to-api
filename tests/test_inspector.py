@@ -3346,3 +3346,67 @@ def test_inspect_notebook_prints_the_sunset_date_next_to_deprecated(
     output = capsys.readouterr().out
     assert "[deprecated, sunset 2026-01-15]" in output
     assert "older" in output and "[deprecated]" in output
+
+
+def test_generate_postman_collection_has_a_collection_level_deprecation_check(
+    tmp_path,
+):
+    """Confirmed missing before this feature: nothing in the generated
+    collection read the compiled app's Deprecation/Sunset headers -- only
+    deprecations known at generation time were marked, by item name."""
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    collection = generate_postman_collection(str(notebook_path))
+
+    events = collection["event"]
+    assert [event["listen"] for event in events] == ["test"]
+    assert any("Deprecation" in line for line in events[0]["script"]["exec"])
+
+
+def _run_postman_deprecation_script(tmp_path, headers):
+    import shutil
+    import subprocess
+
+    if shutil.which("node") is None:
+        pytest.skip("requires Node.js to execute the Postman test script")
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(notebook_path, "def add(a: int) -> int:\n    return a\n")
+    script = "\n".join(
+        generate_postman_collection(str(notebook_path))["event"][0]["script"]["exec"]
+    )
+    runner = tmp_path / "run.js"
+    runner.write_text(
+        "const headers = " + json.dumps(headers) + ";\n"
+        "const tests = [], warnings = [];\n"
+        "const pm = {\n"
+        "  response: {headers: {get: (k) => headers[k]}},\n"
+        "  request: {url: {getPath: () => '/add'}},\n"
+        "  test: (name) => tests.push(name),\n"
+        "};\n"
+        "console.warn = (m) => warnings.push(m);\n"
+        + script
+        + "\nconsole.log(JSON.stringify({tests, warnings}));\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(["node", str(runner)], capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+def test_postman_deprecation_script_reports_a_deprecated_response(tmp_path):
+    result = _run_postman_deprecation_script(tmp_path, {
+        "Deprecation": "true", "X-Deprecation-Reason": "Use add_v2.",
+        "Sunset": "Thu, 31 Dec 2099 00:00:00 GMT",
+    })
+
+    note = "DEPRECATED: /add -- Use add_v2. (sunset: Thu, 31 Dec 2099 00:00:00 GMT)"
+    assert result == {"tests": [note], "warnings": [note]}
+
+
+def test_postman_deprecation_script_is_silent_for_a_normal_response(tmp_path):
+    for headers in ({}, {"Deprecation": "false"}):
+        assert _run_postman_deprecation_script(tmp_path, headers) == {
+            "tests": [], "warnings": [],
+        }
