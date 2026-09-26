@@ -1055,7 +1055,7 @@ def test_compile_command_json_flag_emits_machine_readable_output(tmp_path):
     assert data["dependencies"] == []
     assert data["reserved_name_conflicts"] == []
     assert data["endpoints"] == [
-        {"path": "/add", "method": "POST", "is_async": False, "deprecated": False}
+        {"path": "/add", "method": "POST", "is_async": False, "deprecated": False, "sunset": None}
     ]
     assert data["skipped_functions"] == []
 
@@ -1096,7 +1096,7 @@ def test_compile_command_json_flag_reports_a_background_endpoint(tmp_path):
     assert proc.returncode == 0, proc.stdout + proc.stderr
     data = json.loads(proc.stdout)
     assert data["endpoints"] == [
-        {"path": "/train_model", "method": "POST", "is_async": True, "deprecated": False}
+        {"path": "/train_model", "method": "POST", "is_async": True, "deprecated": False, "sunset": None}
     ]
 
 
