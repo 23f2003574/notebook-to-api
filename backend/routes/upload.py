@@ -74,6 +74,7 @@ from backend.generator.kubernetes_generator import (
     kubernetes_manifest_content,
 )
 from backend.inspector import (
+    past_sunset_functions,
     EXCLUDED_GENERATED_DIR_NAMES,
     EXCLUDED_GENERATED_FILE_NAMES,
     _extract_notebook_functions,
@@ -14004,6 +14005,13 @@ def validate_notebook_endpoint(
         "skipped_functions": skipped_functions,
         "duplicate_functions": duplicate_functions,
         "requirements_conflict": requirements_conflict,
+        # Informational, never part of "status" -- the same fields GET
+        # /api/validate-all already reports per notebook, which this
+        # single-notebook check previously lacked.
+        "deprecated_functions": inspection["deprecated_functions"],
+        "past_sunset_functions": past_sunset_functions(
+            inspection["deprecated_functions"]
+        ),
     }
 
 

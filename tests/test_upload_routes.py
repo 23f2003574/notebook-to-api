@@ -23431,6 +23431,8 @@ def test_validate_reports_pass_for_a_clean_notebook():
         "skipped_functions": [],
         "duplicate_functions": [],
         "requirements_conflict": None,
+        "deprecated_functions": {},
+        "past_sunset_functions": {},
     }
 
 
@@ -34226,3 +34228,27 @@ def test_validate_all_rejects_a_negative_sunset_within_days():
 
     assert resp.status_code == 400
     assert "sunset_within_days" in resp.json()["detail"]
+
+
+def test_validate_reports_deprecated_and_past_sunset_functions():
+    """Confirmed missing before this feature: POST /api/validate said
+    nothing about deprecations, unlike GET /api/validate-all."""
+    client.delete("/api/notebooks?confirm=true")
+    content = _notebook_bytes(
+        "# notebook-to-api: deprecated: use v2. sunset: 2000-01-01\n"
+        "def old_add(a: int) -> int:\n    return a\n\n"
+        "# notebook-to-api: deprecated: sunset: 2999-01-01\n"
+        "def later(a: int) -> int:\n    return a\n"
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("validate_sunset.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    body = client.post("/api/validate", json={"notebook_path": "validate_sunset.ipynb"}).json()
+
+    assert body["status"] == "pass"
+    assert body["deprecated_functions"] == {
+        "old_add": "use v2. sunset: 2000-01-01", "later": "sunset: 2999-01-01",
+    }
+    assert body["past_sunset_functions"] == {"old_add": "2000-01-01"}

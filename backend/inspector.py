@@ -238,6 +238,23 @@ def _endpoint_metadata(functions, background_overrides=None, deprecated_override
     ]
 
 
+def past_sunset_functions(deprecated_functions, today=None):
+    """{name: sunset} for each entry of `deprecated_functions`
+    ({name: reason_or_None}, inspect_notebook_data's own field) whose
+    "sunset: YYYY-MM-DD" is `today` (UTC, by default) or earlier -- a
+    deprecated function still defined past the removal date it promised.
+    """
+    from datetime import datetime, timezone
+
+    today = today or datetime.now(timezone.utc).date().isoformat()
+    past = {}
+    for name, reason in (deprecated_functions or {}).items():
+        sunset = _deprecation_sunset_date(reason)
+        if sunset and sunset <= today:
+            past[name] = sunset
+    return past
+
+
 def _endpoint_sunset(func_name, deprecated_overrides):
     is_deprecated, reason = resolve_deprecation(func_name, deprecated_overrides)
     return _deprecation_sunset_date(reason) if is_deprecated else None
