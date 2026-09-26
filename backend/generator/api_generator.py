@@ -1486,7 +1486,14 @@ def generate_fastapi_code(
     lines.append("async def _log_request_json(request, call_next):")
     lines.append("    response = await call_next(request)")
     lines.append("    if JSON_REQUEST_LOGS:")
-    lines.append("        print(json.dumps({")
+    # "deprecated" on every line lets a log pipeline filter to calls
+    # against endpoints marked "# notebook-to-api: deprecated"; for those
+    # (only), "client_ip"/"user_agent" say *who* is still calling -- the
+    # /metrics and GET /deprecations counters only say *how many*, which
+    # isn't enough to go tell a caller to migrate before removing it.
+    # Kept off every other line so ordinary access logs don't start
+    # recording caller IPs they never did before.
+    lines.append("        entry = {")
     lines.append("            'timestamp': time.time(),")
     lines.append(
         "            'request_id': response.headers.get('X-Request-ID'),"
@@ -1498,7 +1505,19 @@ def generate_fastapi_code(
         "            'duration_ms': float("
         "response.headers.get('X-Process-Time-Ms', '0')),"
     )
-    lines.append("        }), flush=True)")
+    lines.append(
+        "            'deprecated': request.url.path in _DEPRECATED_ENDPOINTS,"
+    )
+    lines.append("        }")
+    lines.append("        if entry['deprecated']:")
+    lines.append(
+        "            entry['client_ip'] = "
+        "request.client.host if request.client else None"
+    )
+    lines.append(
+        "            entry['user_agent'] = request.headers.get('User-Agent')"
+    )
+    lines.append("        print(json.dumps(entry), flush=True)")
     lines.append("    return response")
     lines.append("")
     # GET /metrics/GET /metrics/prometheus below already report this
