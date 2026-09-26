@@ -1367,7 +1367,7 @@ def test_deploy_drop_past_sunset_leaves_them_out_of_the_built_app(tmp_path):
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "Dropping 1 function(s) past their sunset date: old_add" in proc.stderr
     app_source = (workdir / "built_api" / "app.py").read_text(encoding="utf-8")
-    assert '@app.post("/old_add"' not in app_source
+    assert '@app.post("/old_add", summary=' not in app_source
     assert '@app.post("/add"' in app_source
 
 

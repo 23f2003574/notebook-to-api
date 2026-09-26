@@ -7893,3 +7893,37 @@ def test_deprecation_counters_since_name_is_reserved():
     from backend.generator.api_generator import RESERVED_INFRASTRUCTURE_NAMES
 
     assert "_DEPRECATION_COUNTERS_SINCE" in RESERVED_INFRASTRUCTURE_NAMES
+
+
+def test_retired_endpoint_answers_410_with_its_deprecation_headers(monkeypatch):
+    """Confirmed missing before this feature: a deprecated function left
+    out of a compile past its sunset (`--drop-past-sunset`) simply vanished,
+    so a caller still using it got a bare 404 -- indistinguishable from a
+    typo'd URL -- instead of 410 Gone."""
+    code = generate_fastapi_code(
+        [{"name": "add", "args": [], "return_type": "int"}],
+        retired_endpoints={"old_add": "Use add. sunset: 2000-01-01"},
+    )
+    notebook_module = _register_fake_notebook_module(monkeypatch)
+    notebook_module.add = lambda: 1
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    response = client.post("/old_add", json={})
+
+    assert response.status_code == 410
+    assert response.json() == {"detail": "'/old_add' has been removed (sunset 2000-01-01)."}
+    assert response.headers["Deprecation"] == "true"
+    assert response.headers["Sunset"] == "Sat, 01 Jan 2000 00:00:00 GMT"
+    assert response.headers["X-Deprecation-Reason"] == "Use add. sunset: 2000-01-01"
+    # Hidden from the published schema -- it's not a callable endpoint.
+    assert "/old_add" not in namespace["app"].openapi()["paths"]
+
+
+def test_no_retired_endpoints_means_no_extra_routes(monkeypatch):
+    code = generate_fastapi_code([{"name": "add", "args": [], "return_type": "int"}])
+
+    assert "_retired_endpoint_" not in code

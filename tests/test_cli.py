@@ -28396,7 +28396,7 @@ def test_compile_drop_past_sunset_leaves_out_functions_past_their_sunset(tmp_pat
     data = json.loads(proc.stdout)
     assert sorted(func["name"] for func in data["functions"]) == ["add", "later"]
     app_source = (workdir / "out" / "app.py").read_text(encoding="utf-8")
-    assert '@app.post("/old_add"' not in app_source
+    assert '@app.post("/old_add", summary=' not in app_source
     assert '@app.post("/later"' in app_source
 
 
@@ -28639,3 +28639,36 @@ def test_diff_command_fail_on_breaking_passes_a_removal_after_its_sunset(tmp_pat
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "POST /old_add (sunset 2000-01-01)" in proc.stdout
+
+
+def test_compile_drop_past_sunset_leaves_a_410_tombstone_not_a_404(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path = _write_sunset_mix_notebook(workdir)
+
+    proc = _run_cli(
+        ["compile", str(path), "--output", str(workdir / "out"), "--drop-past-sunset"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    app_source = (workdir / "out" / "app.py").read_text(encoding="utf-8")
+    assert "def _retired_endpoint_old_add():" in app_source
+    assert "status_code=410" in app_source
+    # A plain --exclude of a function that isn't past its sunset is not
+    # tombstoned -- it's simply not part of this build.
+    assert "_retired_endpoint_later" not in app_source
+
+
+def test_compile_exclude_of_a_non_deprecated_function_leaves_no_tombstone(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    path = _write_sunset_mix_notebook(workdir)
+
+    proc = _run_cli(
+        ["compile", str(path), "--output", str(workdir / "out"), "--exclude", "add"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "_retired_endpoint_" not in (workdir / "out" / "app.py").read_text(encoding="utf-8")

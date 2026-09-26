@@ -67,6 +67,7 @@ from backend.parser.ast_parser import (
 )
 
 from backend.generator.api_generator import (
+    _deprecation_sunset_date,
     GENERATED_APP_ENV_VARS,
     generate_fastapi_code,
     write_generated_api
@@ -1674,7 +1675,22 @@ def compile_notebook_to_api(
         # reported as its own clear error rather than silently changing
         # which (if any) reserved-name collision generate_fastapi_code
         # happens to hit first.
+        names_before_selection = {func["name"] for func in functions}
         functions = _filter_functions_by_name(functions, only, exclude)
+
+        # Deprecated functions left out of this compile whose own sunset
+        # date has arrived (e.g. `compile --drop-past-sunset`) -- kept as
+        # 410 Gone tombstones rather than vanishing into a bare 404; see
+        # generate_fastapi_code's own "retired_endpoints".
+        kept_names = {func["name"] for func in functions}
+        today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+        retired_endpoints = {}
+        for name in sorted(names_before_selection - kept_names):
+            if name not in deprecated_overrides:
+                continue
+            sunset = _deprecation_sunset_date(deprecated_overrides[name])
+            if sunset and sunset <= today:
+                retired_endpoints[name] = deprecated_overrides[name]
 
         # Generate the API code -- and let it raise (e.g.
         # ReservedFunctionNameError, generator/api_generator.py, for a
@@ -1707,6 +1723,7 @@ def compile_notebook_to_api(
             notebook_to_api_version=NOTEBOOK_TO_API_VERSION,
             background_overrides=background_overrides,
             deprecated_overrides=deprecated_overrides,
+            retired_endpoints=retired_endpoints,
         )
 
         # generate_fastapi_code succeeding means this compile is now
