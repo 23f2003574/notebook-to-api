@@ -3298,7 +3298,8 @@ def generate_fastapi_code(
     lines.append("@app.post('/tasks/{task_id}/retry')")
     lines.append(
         "async def retry_task(task_id: str, background_tasks: "
-        "BackgroundTasks, _: None = Depends(verify_api_key)):"
+        "BackgroundTasks, force: bool = False, "
+        "_: None = Depends(verify_api_key)):"
     )
 
     lines.append("    task = TASKS.get(task_id)")
@@ -3332,6 +3333,24 @@ def generate_fastapi_code(
     # never itself given its own '_replay') has no recorded inputs to
     # replay. Distinct from the 404/409 cases above: the task is real and
     # really did fail, there is simply nothing here to re-execute it with.
+    # A task that failed by exceeding its own execution timeout ("timed_out")
+    # will almost certainly time out again -- a retry just re-runs the same
+    # slow notebook function (and whatever side effects it has) for the
+    # full limit a second time. Refused with 409 unless the caller opts in
+    # with ?force=true (e.g. after raising the timeout, or knowing the
+    # slowness was transient); any other failure retries exactly as before.
+    lines.append("    if task.get('timed_out') and not force:")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=409,")
+    lines.append("            detail=(")
+    lines.append(
+        "                f'Task {task_id} failed by exceeding its execution "
+        "timeout; retrying would most likely time out again. Pass "
+        "?force=true to retry anyway.'"
+    )
+    lines.append("            ),")
+    lines.append("        )")
+    lines.append("")
     lines.append("    replay = task.get('_replay')")
     lines.append("    if replay is None:")
     lines.append("        raise HTTPException(")

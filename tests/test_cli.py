@@ -28890,3 +28890,20 @@ def test_app_tasks_list_forwards_timed_out(tmp_path, fake_dashboard):
     )
 
     assert "timed_out=true" in handler.requests[0]
+
+
+def test_app_tasks_retry_force_forwards_the_flag(tmp_path, fake_dashboard):
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [
+        _json_response(200, {"task_id": "new", "status": "processing", "retried_from": "old"}),
+        _json_response(200, {"task_id": "new2", "status": "processing", "retried_from": "old"}),
+    ]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    _run_cli(["app-tasks", "retry", "old", "--host", host, "--port", str(port), "--force"], cwd=workdir)
+    _run_cli(["app-tasks", "retry", "old", "--host", host, "--port", str(port)], cwd=workdir)
+
+    assert handler.requests[0] == "/tasks/old/retry?force=true"
+    assert handler.requests[1] == "/tasks/old/retry"

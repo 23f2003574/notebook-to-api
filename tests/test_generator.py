@@ -8433,3 +8433,37 @@ def test_list_tasks_filters_by_timed_out(monkeypatch):
     assert ids(timed_out) == {timed_out_id}
     assert ids(not_timed_out) == {ok_id}
     assert ids(everything) == {timed_out_id, ok_id}
+
+
+def test_retry_refuses_a_timed_out_task_unless_forced(monkeypatch):
+    """Confirmed missing before this feature: retrying a task that failed by
+    exceeding its execution timeout just re-ran the same slow function (and
+    its side effects) for the full limit again, with no warning."""
+    import time as time_module
+
+    def slow():
+        time_module.sleep(2)
+        return 1
+
+    client = _background_timeout_client(monkeypatch, {"train_model": 1}, slow)
+    task_id = client.post("/train_model", json={}).json()["task_id"]
+
+    refused = client.post(f"/tasks/{task_id}/retry")
+    forced = client.post(f"/tasks/{task_id}/retry", params={"force": "true"})
+
+    assert refused.status_code == 409
+    assert "?force=true" in refused.json()["detail"]
+    assert forced.status_code == 200, forced.text
+    assert forced.json()["task_id"] != task_id
+
+
+def test_retry_of_an_ordinary_failure_needs_no_force(monkeypatch):
+    def broken():
+        raise ValueError("boom")
+
+    client = _background_timeout_client(monkeypatch, {"train_model": 5}, broken)
+    task_id = client.post("/train_model", json={}).json()["task_id"]
+
+    response = client.post(f"/tasks/{task_id}/retry")
+
+    assert response.status_code == 200, response.text

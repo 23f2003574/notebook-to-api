@@ -9185,7 +9185,10 @@ def _dispatch_core_command(args):
 
         elif args.app_tasks_command == "retry":
 
-            data = _app_request("POST", f"/tasks/{args.task_id}/retry")
+            data = _app_request(
+                "POST", f"/tasks/{args.task_id}/retry",
+                params={"force": "true"} if args.force else None,
+            )
 
             if args.json_output:
                 print(json.dumps(data, indent=2))
@@ -17729,6 +17732,16 @@ def main():
         )
     )
     _add_app_host_port_arguments(app_tasks_retry_parser)
+    app_tasks_retry_parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Retry even a task that failed by exceeding its execution "
+            "timeout, which the app otherwise refuses (409) since the "
+            "retry would most likely time out again -- via POST "
+            "/tasks/{task_id}/retry's own ?force=true."
+        )
+    )
     app_tasks_retry_parser.add_argument(
         "--json",
         action="store_true",
