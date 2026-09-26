@@ -8050,3 +8050,16 @@ def test_request_timeout_names_are_reserved():
 
     assert "REQUEST_TIMEOUT_SECONDS" in RESERVED_INFRASTRUCTURE_NAMES
     assert "_call_notebook_function" in RESERVED_INFRASTRUCTURE_NAMES
+
+
+@pytest.mark.parametrize("value, expected", [("30", 30), ("0", None), (None, None)])
+def test_generated_app_get_config_reports_request_timeout_seconds(
+    monkeypatch, value, expected
+):
+    """Confirmed missing before this feature: GET /config reported every
+    other configured limit but not NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS."""
+    client = _request_timeout_client(
+        monkeypatch, None if value is None else int(value), lambda: 1
+    )
+
+    assert client.get("/config").json()["request_timeout_seconds"] == expected

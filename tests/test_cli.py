@@ -28714,3 +28714,36 @@ def test_deprecation_state_marker_for_an_older_app_without_retired():
 
     assert _deprecation_state_marker({"rejected": True}) == "  REJECTED (410)"
     assert _deprecation_state_marker({}) == ""
+
+
+def _app_status_with_config(tmp_path, fake_dashboard, **config_overrides):
+    responses = _app_status_base_responses()
+    config = json.loads(responses[3][1])
+    config.update(config_overrides)
+    responses[3] = _json_response(200, config)
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = responses + [_json_response(404, {"detail": "Not Found"})]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    return _run_cli(["app-status", "--host", host, "--port", str(port)], cwd=workdir)
+
+
+def test_app_status_shows_the_request_timeout(tmp_path, fake_dashboard):
+    proc = _app_status_with_config(tmp_path, fake_dashboard, request_timeout_seconds=30)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "  request timeout: 30s\n" in proc.stdout
+
+
+def test_app_status_shows_a_disabled_request_timeout(tmp_path, fake_dashboard):
+    proc = _app_status_with_config(tmp_path, fake_dashboard, request_timeout_seconds=None)
+
+    assert "  request timeout: disabled\n" in proc.stdout
+
+
+def test_app_status_request_timeout_unknown_for_an_older_app(tmp_path, fake_dashboard):
+    proc = _app_status_with_config(tmp_path, fake_dashboard)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "request timeout: unknown (app predates this setting)" in proc.stdout

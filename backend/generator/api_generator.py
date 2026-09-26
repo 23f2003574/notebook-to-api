@@ -2416,6 +2416,13 @@ def generate_fastapi_code(
         "        'task_execution_timeout_seconds': "
         "TASK_EXECUTION_TIMEOUT_SECONDS or None,"
     )
+    # NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS -- the synchronous-endpoint
+    # bound, reported the same "None when disabled" way as the
+    # background-task one just above, so a caller can tell which limit
+    # governs the call it's about to make without reading env vars.
+    lines.append(
+        "        'request_timeout_seconds': REQUEST_TIMEOUT_SECONDS or None,"
+    )
     lines.append("        'webhook_timeout_seconds': WEBHOOK_TIMEOUT_SECONDS,")
     lines.append("        'webhook_signing_enabled': bool(WEBHOOK_SECRET),")
     lines.append("        'webhook_max_retries': WEBHOOK_MAX_RETRIES,")

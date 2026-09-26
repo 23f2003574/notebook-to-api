@@ -8387,6 +8387,13 @@ def _dispatch_core_command(args):
             print(f"  max pending tasks: {config.get('max_pending_tasks')}")
             task_timeout = config.get('task_execution_timeout_seconds')
             print(f"  task execution timeout: {f'{task_timeout}s' if task_timeout else 'disabled'}")
+            # .get(): an app compiled before NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS
+            # existed doesn't report it -- shown as "unknown", not "disabled".
+            if "request_timeout_seconds" in config:
+                request_timeout = config["request_timeout_seconds"]
+                print(f"  request timeout: {f'{request_timeout}s' if request_timeout else 'disabled'}")
+            else:
+                print("  request timeout: unknown (app predates this setting)")
             print(f"  webhook timeout: {config.get('webhook_timeout_seconds')}s")
             print(
                 "  webhook signing: "
