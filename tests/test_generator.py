@@ -679,7 +679,9 @@ def test_generated_app_cors_exposes_the_rate_limit_headers_to_cross_origin_js():
         "expose_headers=['X-RateLimit-Limit', 'X-RateLimit-Remaining', "
         "'X-RateLimit-Reset', 'Retry-After', "
         "'Deprecation', 'X-Deprecation-Reason', 'Sunset', "
-        "'X-Notebook-API-Timeout']"
+        "'X-Notebook-API-Timeout', "
+        "'X-Endpoint-RateLimit-Limit', 'X-Endpoint-RateLimit-Remaining', "
+        "'X-Endpoint-RateLimit-Reset', 'X-Cache', 'Age']"
         in code
     )
 
@@ -8839,3 +8841,66 @@ def test_readme_content_notes_each_endpoints_rate_limit_and_cache():
     assert "limited to 2 calls per minute" in content
     # The cache directive doesn't apply to a background endpoint.
     assert "60s response cache" not in content
+
+
+def test_rate_limit_directive_reports_remaining_quota_on_allowed_calls(monkeypatch):
+    """Confirmed missing before this feature: a client only learned an
+    endpoint's own quota from the 429 -- allowed calls carried nothing."""
+    client = _endpoint_rate_limit_client(monkeypatch, {"limited": 3, "train_model": 2})
+    a = {"X-API-Key": "key-a"}
+
+    first = client.post("/limited", json={}, headers=a)
+    second = client.post("/limited", json={}, headers=a)
+    background = client.post("/train_model", json={}, headers=a)
+    free = client.post("/free", json={}, headers=a)
+
+    assert first.headers["X-Endpoint-RateLimit-Limit"] == "3"
+    assert first.headers["X-Endpoint-RateLimit-Remaining"] == "2"
+    assert second.headers["X-Endpoint-RateLimit-Remaining"] == "1"
+    assert int(second.headers["X-Endpoint-RateLimit-Reset"]) >= int(__import__("time").time())
+    assert background.headers["X-Endpoint-RateLimit-Remaining"] == "1"
+    assert "X-Endpoint-RateLimit-Limit" not in free.headers
+
+
+def test_rate_limit_quota_headers_survive_a_cached_response(monkeypatch):
+    code = generate_fastapi_code(
+        [{"name": "lookup", "args": [], "return_type": "int"}],
+        rate_limit_overrides={"lookup": 5},
+        cache_overrides={"lookup": 60},
+    )
+    notebook_module = _register_fake_notebook_module(monkeypatch)
+    notebook_module.lookup = lambda: 1
+    monkeypatch.setenv("NOTEBOOK_API_KEY", "k")
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"], headers={"X-API-Key": "k"})
+    client.post("/lookup", json={})
+    hit = client.post("/lookup", json={})
+
+    assert hit.headers["X-Cache"] == "HIT"
+    assert hit.headers["X-Endpoint-RateLimit-Remaining"] == "3"
+
+
+def test_cached_responses_keep_the_global_rate_limit_headers(monkeypatch):
+    code = generate_fastapi_code(
+        [{"name": "lookup", "args": [], "return_type": "int"}],
+        cache_overrides={"lookup": 60},
+    )
+    notebook_module = _register_fake_notebook_module(monkeypatch)
+    notebook_module.lookup = lambda: 1
+    monkeypatch.setenv("NOTEBOOK_API_KEY", "k")
+    monkeypatch.setenv("NOTEBOOK_API_RATE_LIMIT_PER_MINUTE", "10")
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"], headers={"X-API-Key": "k"})
+    miss = client.post("/lookup", json={})
+    hit = client.post("/lookup", json={})
+
+    assert miss.headers["X-RateLimit-Remaining"] == "9"
+    assert hit.headers["X-RateLimit-Remaining"] == "8"

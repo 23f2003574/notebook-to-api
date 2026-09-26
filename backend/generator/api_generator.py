@@ -29,7 +29,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "_ENDPOINT_RATE_LIMITED", "_RESPONSE_CACHE", "_RESPONSE_CACHE_LOCK",
     "_RESPONSE_CACHE_MAX_ENTRIES", "_cache_lookup", "_cache_store",
     "_RESPONSE_CACHE_HITS", "_RESPONSE_CACHE_MISSES", "clear_response_cache",
-    "_ENDPOINT_RATE_LIMITS", "_ENDPOINT_CACHE_TTLS",
+    "_ENDPOINT_RATE_LIMITS", "_ENDPOINT_CACHE_TTLS", "_with_quota_headers",
     # Read by name from inside _evict_expired_tasks' own body -- the
     # identical "referenced by name inside a helper every background
     # endpoint's own submission calls first" exposure already documented
@@ -1201,7 +1201,9 @@ def generate_fastapi_code(
         "'X-RateLimit-Limit', 'X-RateLimit-Remaining', "
         "'X-RateLimit-Reset', 'Retry-After', "
         "'Deprecation', 'X-Deprecation-Reason', 'Sunset', "
-        "'X-Notebook-API-Timeout'"
+        "'X-Notebook-API-Timeout', "
+        "'X-Endpoint-RateLimit-Limit', 'X-Endpoint-RateLimit-Remaining', "
+        "'X-Endpoint-RateLimit-Reset', 'X-Cache', 'Age'"
         "]"
         ")"
     )
@@ -2056,7 +2058,7 @@ def generate_fastapi_code(
     # and /metrics/prometheus so an operator can see which quota bites.
     lines.append("_ENDPOINT_RATE_LIMITED = {}")
     lines.append("")
-    lines.append("def _enforce_endpoint_rate_limit(path, api_key, limit):")
+    lines.append("def _enforce_endpoint_rate_limit(path, api_key, limit, response=None):")
     lines.append("    now = time.time()")
     lines.append("    with _RATE_LIMIT_LOCK:")
     lines.append("        window_start, count = _ENDPOINT_RATE_LIMIT_WINDOWS.get((path, api_key), (now, 0))")
@@ -2066,8 +2068,15 @@ def generate_fastapi_code(
     lines.append("        _ENDPOINT_RATE_LIMIT_WINDOWS[(path, api_key)] = (window_start, count)")
     lines.append("        if count > limit:")
     lines.append("            _ENDPOINT_RATE_LIMITED[path] = _ENDPOINT_RATE_LIMITED.get(path, 0) + 1")
+    lines.append("    reset_at = int(window_start + 60)")
+    # X-Endpoint-RateLimit-* on every allowed call: X-RateLimit-* already
+    # carries the *global* quota, so this endpoint's own tighter one needs
+    # distinct names -- otherwise a client only learns it at the 429.
+    lines.append("    if response is not None and count <= limit:")
+    lines.append("        response.headers['X-Endpoint-RateLimit-Limit'] = str(limit)")
+    lines.append("        response.headers['X-Endpoint-RateLimit-Remaining'] = str(limit - count)")
+    lines.append("        response.headers['X-Endpoint-RateLimit-Reset'] = str(reset_at)")
     lines.append("    if count > limit:")
-    lines.append("        reset_at = int(window_start + 60)")
     lines.append("        raise HTTPException(")
     lines.append("            status_code=429,")
     lines.append("            detail=f'Rate limit exceeded for {path}: {limit} requests per 60s per API key',")
@@ -2101,6 +2110,13 @@ def generate_fastapi_code(
     lines.append("            _RESPONSE_CACHE.pop(key, None)")
     lines.append("            return None")
     lines.append("        return entry")
+    lines.append("")
+    lines.append("def _with_quota_headers(response, source):")
+    lines.append("    if source is not None:")
+    lines.append("        for name, value in source.headers.items():")
+    lines.append("            if 'ratelimit' in name.lower():")
+    lines.append("                response.headers[name] = value")
+    lines.append("    return response")
     lines.append("")
     lines.append("def _cache_store(key, result, ttl):")
     lines.append("    with _RESPONSE_CACHE_LOCK:")
@@ -4147,12 +4163,13 @@ def generate_fastapi_code(
         endpoint_rate_limit = (rate_limit_overrides or {}).get(func_name)
         rate_limit_param = (
             '_rl_api_key: Optional[str] = Header(None, alias="X-API-Key"), '
+            "_rl_response: Response = None, "
             if endpoint_rate_limit else ""
         )
         # Runs after Depends(verify_api_key), so only an authenticated
         # key ever consumes this endpoint's own quota.
         rate_limit_lines = (
-            [f"    _enforce_endpoint_rate_limit('/{func_name}', _rl_api_key, {int(endpoint_rate_limit)})"]
+            [f"    _enforce_endpoint_rate_limit('/{func_name}', _rl_api_key, {int(endpoint_rate_limit)}, _rl_response)"]
             if endpoint_rate_limit else []
         )
         # Published in openapi.json so a client/SDK can pace itself
@@ -4711,6 +4728,12 @@ def generate_fastapi_code(
             # have used for a `def` endpoint anyway.
             cache_param = (
                 '_cache_control: Optional[str] = Header(None, alias="Cache-Control"), '
+                # One Response param only: FastAPI injects the per-request
+                # Response (where verify_api_key and the rate limiters write
+                # X-RateLimit-*) into a single name, and drops it when the
+                # endpoint returns its own JSONResponse -- _with_quota_headers
+                # copies those headers across.
+                + ("" if endpoint_rate_limit else "_rl_response: Response = None, ")
                 if endpoint_cache_ttl else ""
             )
             lines.append(f"async def {func_name}(req: {model_name}, {rate_limit_param}{cache_param}_: None = Depends(verify_api_key)):")
@@ -4733,13 +4756,13 @@ def generate_fastapi_code(
                     f"        _RESPONSE_CACHE_HITS['/{func_name}'] = "
                     f"_RESPONSE_CACHE_HITS.get('/{func_name}', 0) + 1"
                 )
-                lines.append("        return JSONResponse(")
+                lines.append("        return _with_quota_headers(JSONResponse(")
                 lines.append("            content={'result': _cached[1]},")
                 lines.append(
                     "            headers={'X-Cache': 'HIT', 'Age': "
                     f"str(max(0, int({int(endpoint_cache_ttl)} - (_cached[0] - time.time()))))}},"
                 )
-                lines.append("        )")
+                lines.append("        ), _rl_response)")
             # _run_background_task already wraps a background function's own
             # call the same way (reporting the task "failed" with str(e)
             # instead of leaving it stuck "processing" forever), but a
@@ -4824,8 +4847,8 @@ def generate_fastapi_code(
                     f"_RESPONSE_CACHE_MISSES.get('/{func_name}', 0) + 1"
                 )
                 lines.append(
-                    "    return JSONResponse(content={'result': result}, "
-                    "headers={'X-Cache': 'MISS'})"
+                    "    return _with_quota_headers(JSONResponse(content={'result': result}, "
+                    "headers={'X-Cache': 'MISS'}), _rl_response)"
                 )
             else:
                 lines.append("    return {\"result\": result}")
