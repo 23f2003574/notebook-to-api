@@ -23434,6 +23434,9 @@ def test_validate_reports_pass_for_a_clean_notebook():
         "deprecated_functions": {},
         "past_sunset_functions": {},
         "timeout_overrides": {},
+        "rate_limit_overrides": {},
+        "cache_overrides": {},
+        "ignored_cache_directives": [],
     }
 
 
@@ -34478,3 +34481,27 @@ def test_readme_preview_notes_rate_limit_and_cache_directives():
 
     assert "limited to 4 calls per minute per API key" in body
     assert "20s response cache" in body
+
+
+def test_validate_reports_rate_limit_and_cache_directives():
+    """Confirmed missing before this feature: validate never surfaced the
+    "rate-limit N" / "cache N" directives, nor a cache directive silently
+    ignored on a background endpoint."""
+    client.delete("/api/notebooks?confirm=true")
+    content = _notebook_bytes(
+        "# notebook-to-api: rate-limit 4\n# notebook-to-api: cache 20\n"
+        "def lookup(a: int) -> int:\n    return a\n\n"
+        "# notebook-to-api: cache 60\ndef train_model(a: int) -> int:\n    return a\n\n"
+        "# notebook-to-api: rate-limit 3\n# notebook-to-api: private\ndef helper():\n    return 1\n"
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("validate_rl.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    body = client.post("/api/validate", json={"notebook_path": "validate_rl.ipynb"}).json()
+
+    assert body["status"] == "pass"
+    assert body["rate_limit_overrides"] == {"lookup": 4}
+    assert body["cache_overrides"] == {"lookup": 20}
+    assert body["ignored_cache_directives"] == ["train_model"]

@@ -29249,3 +29249,27 @@ def test_app_directives_explains_an_older_app(tmp_path, fake_dashboard):
 
     assert proc.returncode != 0
     assert "recompile it to use app-directives" in proc.stdout + proc.stderr
+
+
+def test_validate_command_reports_rate_limit_and_cache_directives(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "# notebook-to-api: rate-limit 4\n# notebook-to-api: cache 20\n"
+        "def lookup(a: int) -> int:\n    return a\n\n"
+        "# notebook-to-api: cache 60\ndef train_model(a: int) -> int:\n    return a\n",
+    )
+
+    proc = _run_cli(["validate", str(notebook_path)], cwd=workdir)
+    json_proc = _run_cli(["validate", str(notebook_path), "--json"], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "⚠ Ignored cache directive: train_model is a background endpoint" in proc.stdout
+    assert "ⓘ Rate limit: lookup -- 4 calls/min per API key" in proc.stdout
+    assert "ⓘ Response cache: lookup -- 20s TTL" in proc.stdout
+    data = json.loads(json_proc.stdout)
+    assert data["rate_limit_overrides"] == {"lookup": 4}
+    assert data["cache_overrides"] == {"lookup": 20}
+    assert data["ignored_cache_directives"] == ["train_model"]

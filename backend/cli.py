@@ -1981,6 +1981,9 @@ def _dispatch_core_command(args):
                     "deprecated_functions": data["deprecated_functions"],
                     "past_sunset_functions": past_sunset,
                     "timeout_overrides": data["timeout_overrides"],
+                    "rate_limit_overrides": data["rate_limit_overrides"],
+                    "cache_overrides": data["cache_overrides"],
+                    "ignored_cache_directives": data["ignored_cache_directives"],
                 },
                 indent=2,
             ))
@@ -2013,6 +2016,16 @@ def _dispatch_core_command(args):
             for name, sunset in past_sunset.items():
                 marker = "✗" if args.fail_on_past_sunset else "⚠"
                 print(f"{marker} Past sunset: {name} (sunset {sunset}) -- still defined")
+            for name in data["ignored_cache_directives"]:
+                print(
+                    f"⚠ Ignored cache directive: {name} is a background "
+                    "endpoint -- its tasks are never answered from the "
+                    "response cache"
+                )
+            for name, limit in data["rate_limit_overrides"].items():
+                print(f"ⓘ Rate limit: {name} -- {limit} calls/min per API key")
+            for name, ttl in data["cache_overrides"].items():
+                print(f"ⓘ Response cache: {name} -- {ttl}s TTL")
 
             if status == "pass":
                 print("\n✓ No issues found.")

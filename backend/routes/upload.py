@@ -14019,6 +14019,9 @@ def validate_notebook_endpoint(
         # Informational too: every timeout directive -- see
         # inspect_notebook_data.
         "timeout_overrides": inspection["timeout_overrides"],
+        "rate_limit_overrides": inspection["rate_limit_overrides"],
+        "cache_overrides": inspection["cache_overrides"],
+        "ignored_cache_directives": inspection["ignored_cache_directives"],
     }
 
 

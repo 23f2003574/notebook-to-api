@@ -8,6 +8,8 @@ from urllib.parse import quote, urlsplit
 
 from backend.compiler import (
     _extract_timeout_overrides,
+    _extract_rate_limit_overrides,
+    _extract_cache_overrides,
     COMPILE_METADATA_FILENAME,
     _extract_background_overrides,
     _extract_deprecated_functions,
@@ -698,6 +700,9 @@ def inspect_notebook_data(
 
     timeout_overrides = _extract_timeout_overrides(code_cells)
     endpoint_names = {func["name"] for func in all_functions}
+    rate_limit_overrides = _extract_rate_limit_overrides(code_cells)
+    cache_overrides = _extract_cache_overrides(code_cells)
+    directive_endpoints = endpoint_names - set(private_function_names)
 
     return {
         "functions": all_functions,
@@ -736,6 +741,28 @@ def inspect_notebook_data(
             for name, seconds in sorted(timeout_overrides.items())
             if name in endpoint_names
         },
+        # "# notebook-to-api: rate-limit N" / "cache N" directives on real
+        # endpoints -- before this, nothing short of compiling and calling
+        # the app showed which quotas and cache TTLs a notebook declares.
+        "rate_limit_overrides": {
+            name: limit
+            for name, limit in sorted(rate_limit_overrides.items())
+            if name in directive_endpoints
+        },
+        "cache_overrides": {
+            name: ttl
+            for name, ttl in sorted(cache_overrides.items())
+            if name in directive_endpoints
+            and not resolve_is_background(name, background_overrides)
+        },
+        # A cache directive on a background endpoint compiles fine but is
+        # silently ignored (its task is never answered from the response
+        # cache) -- named here so validate can warn about it.
+        "ignored_cache_directives": sorted(
+            name for name in cache_overrides
+            if name in directive_endpoints
+            and resolve_is_background(name, background_overrides)
+        ),
         # The complementary "# notebook-to-api: exclude <import-name>"
         # directive's own effect, surfaced the same way "private_functions"
         # already surfaces "# notebook-to-api: private"'s -- before this,
