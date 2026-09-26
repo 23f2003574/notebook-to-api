@@ -26,6 +26,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "REQUEST_TIMEOUT_SECONDS", "_call_notebook_function", "_REQUEST_TIMEOUTS",
     "_ENDPOINT_TIMEOUTS", "_TASK_TIMEOUTS", "_TASK_TIMEOUT_FAILURES",
     "_ENDPOINT_RATE_LIMIT_WINDOWS", "_enforce_endpoint_rate_limit",
+    "_ENDPOINT_RATE_LIMITED",
     # Read by name from inside _evict_expired_tasks' own body -- the
     # identical "referenced by name inside a helper every background
     # endpoint's own submission calls first" exposure already documented
@@ -2030,6 +2031,9 @@ def generate_fastapi_code(
     # of) the global RATE_LIMIT_PER_MINUTE above -- so one expensive
     # endpoint can be throttled without starving every cheap one.
     lines.append("_ENDPOINT_RATE_LIMIT_WINDOWS = {}")
+    # 429s from those directives, by endpoint -- reported by GET /metrics
+    # and /metrics/prometheus so an operator can see which quota bites.
+    lines.append("_ENDPOINT_RATE_LIMITED = {}")
     lines.append("")
     lines.append("def _enforce_endpoint_rate_limit(path, api_key, limit):")
     lines.append("    now = time.time()")
@@ -2039,6 +2043,8 @@ def generate_fastapi_code(
     lines.append("            window_start, count = now, 0")
     lines.append("        count += 1")
     lines.append("        _ENDPOINT_RATE_LIMIT_WINDOWS[(path, api_key)] = (window_start, count)")
+    lines.append("        if count > limit:")
+    lines.append("            _ENDPOINT_RATE_LIMITED[path] = _ENDPOINT_RATE_LIMITED.get(path, 0) + 1")
     lines.append("    if count > limit:")
     lines.append("        reset_at = int(window_start + 60)")
     lines.append("        raise HTTPException(")
@@ -2892,6 +2898,9 @@ def generate_fastapi_code(
         "        'request_timeouts_by_endpoint': dict(sorted(_REQUEST_TIMEOUTS.items())),"
     )
     lines.append(
+        "        'rate_limited_by_endpoint': dict(sorted(_ENDPOINT_RATE_LIMITED.items())),"
+    )
+    lines.append(
         "        'task_timeouts_by_endpoint': "
         "dict(sorted(_TASK_TIMEOUT_FAILURES.items())),"
     )
@@ -3101,6 +3110,20 @@ def generate_fastapi_code(
     lines.append("        for path, count in sorted(_REQUEST_TIMEOUTS.items()):")
     lines.append(
         "            body += f'notebook_api_request_timeouts_total"
+        "{{path=\"{path}\"}} {count}\\n'"
+    )
+    lines.append("    if _ENDPOINT_RATE_LIMITED:")
+    lines.append(
+        "        body += ('# HELP notebook_api_endpoint_rate_limited_total Total "
+        "number of requests answered 429 by a per-endpoint rate-limit directive, "
+        "by endpoint.\\n'"
+    )
+    lines.append(
+        "                 '# TYPE notebook_api_endpoint_rate_limited_total counter\\n')"
+    )
+    lines.append("        for path, count in sorted(_ENDPOINT_RATE_LIMITED.items()):")
+    lines.append(
+        "            body += f'notebook_api_endpoint_rate_limited_total"
         "{{path=\"{path}\"}} {count}\\n'"
     )
     lines.append("    if _TASK_TIMEOUT_FAILURES:")
@@ -4040,6 +4063,12 @@ def generate_fastapi_code(
             [f"    _enforce_endpoint_rate_limit('/{func_name}', _rl_api_key, {int(endpoint_rate_limit)})"]
             if endpoint_rate_limit else []
         )
+        # Published in openapi.json so a client/SDK can pace itself
+        # instead of discovering the quota by hitting 429s.
+        rate_limit_extra = (
+            f'"x-notebook-to-api-rate-limit-per-minute": {int(endpoint_rate_limit)}, '
+            if endpoint_rate_limit else ""
+        )
         tag = "General"
         if "train" in func_name.lower():
             tag = "Training"
@@ -4265,7 +4294,7 @@ def generate_fastapi_code(
                 # nothing about the *eventual* result a real
                 # GET /tasks/{{task_id}} will carry is otherwise
                 # discoverable from this schema at all.
-                f'openapi_extra={{{sunset_extra}{task_timeout_extra}"x-notebook-to-api-category": "{category}", "x-notebook-to-api-async": True, "x-notebook-to-api-return-type": {repr(return_type)}, "security": [{{"ApiKeyAuth": []}}]}}, '
+                f'openapi_extra={{{sunset_extra}{task_timeout_extra}{rate_limit_extra}"x-notebook-to-api-category": "{category}", "x-notebook-to-api-async": True, "x-notebook-to-api-return-type": {repr(return_type)}, "security": [{{"ApiKeyAuth": []}}]}}, '
                 f'responses={repr(task_responses)})'
             )
             lines.append(
@@ -4574,7 +4603,7 @@ def generate_fastapi_code(
                 # deliberately {} too (see sync_responses above), so
                 # generate_typescript_sdk has no other way to learn what
                 # "result" actually contains.
-                f'openapi_extra={{{sunset_extra}{timeout_extra}"x-notebook-to-api-category": "{category}", "x-notebook-to-api-return-type": {repr(return_type)}, "security": [{{"ApiKeyAuth": []}}]}}, '
+                f'openapi_extra={{{sunset_extra}{timeout_extra}{rate_limit_extra}"x-notebook-to-api-category": "{category}", "x-notebook-to-api-return-type": {repr(return_type)}, "security": [{{"ApiKeyAuth": []}}]}}, '
                 f'responses={repr(sync_responses)})'
             )
             is_async = func.get("is_async", False)

@@ -1096,6 +1096,7 @@ def test_generated_app_exposes_get_metrics_as_json(monkeypatch):
         "deprecated_endpoint_calls": {},
         "deprecated_endpoint_rejections": {},
         "request_timeouts_by_endpoint": {},
+        "rate_limited_by_endpoint": {},
         "task_timeouts_by_endpoint": {},
     }
 
@@ -8592,3 +8593,30 @@ def test_no_rate_limit_directive_leaves_endpoint_signature_unchanged():
     code = generate_fastapi_code([{"name": "free", "args": [], "return_type": "int"}])
 
     assert "_rl_api_key" not in code
+
+
+def test_rate_limit_directive_rejections_are_counted_in_metrics(monkeypatch):
+    """Confirmed missing before this feature: a per-endpoint 429 was
+    counted nowhere, so an operator couldn't tell which quota was biting."""
+    client = _endpoint_rate_limit_client(monkeypatch, {"limited": 1})
+    a = {"X-API-Key": "key-a"}
+    assert client.get("/metrics", headers=a).json()["rate_limited_by_endpoint"] == {}
+    assert "endpoint_rate_limited_total" not in client.get("/metrics/prometheus", headers=a).text
+
+    for _ in range(3):
+        client.post("/limited", json={}, headers=a)
+
+    assert client.get("/metrics", headers=a).json()["rate_limited_by_endpoint"] == {"/limited": 2}
+    text = client.get("/metrics/prometheus", headers=a).text
+    assert "# TYPE notebook_api_endpoint_rate_limited_total counter" in text
+    assert 'notebook_api_endpoint_rate_limited_total{path="/limited"} 2' in text
+
+
+def test_rate_limit_directive_is_published_in_openapi(monkeypatch):
+    client = _endpoint_rate_limit_client(monkeypatch, {"limited": 7, "train_model": 3})
+
+    paths = client.get("/openapi.json").json()["paths"]
+
+    assert paths["/limited"]["post"]["x-notebook-to-api-rate-limit-per-minute"] == 7
+    assert paths["/train_model"]["post"]["x-notebook-to-api-rate-limit-per-minute"] == 3
+    assert "x-notebook-to-api-rate-limit-per-minute" not in paths["/free"]["post"]
