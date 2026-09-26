@@ -16249,6 +16249,9 @@ def compile_notebook_endpoint(
             "version_id": version_id,
             "only": only,
             "exclude": exclude,
+            # Which of "exclude" drop_past_sunset added (vs. the caller's own
+            # names) -- otherwise indistinguishable in this record.
+            "dropped_past_sunset": dropped_past_sunset,
             "endpoint_count": len(data["endpoints"]),
             "dependency_count": len(data["dependencies"]),
             "skipped_function_count": len(data["skipped_functions"]),
@@ -18019,7 +18022,7 @@ def compile_history_endpoint(
         writer.writerow([
             "compiled_at", "notebook_filename", "source_notebook_sha256",
             "only", "exclude", "endpoint_count", "dependency_count",
-            "skipped_function_count",
+            "skipped_function_count", "dropped_past_sunset",
         ])
 
         for entry in entries:
@@ -18033,6 +18036,8 @@ def compile_history_endpoint(
                 entry.get("endpoint_count"),
                 entry.get("dependency_count"),
                 entry.get("skipped_function_count"),
+                # .get(): entries recorded before this field existed.
+                ";".join(entry.get("dropped_past_sunset") or []),
             ])
 
         return StreamingResponse(

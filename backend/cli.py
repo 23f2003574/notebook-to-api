@@ -8044,9 +8044,14 @@ def _dispatch_core_command(args):
                     endpoint_count = entry.get("endpoint_count", 0)
                     notebook = entry.get("notebook_filename") or "(unknown notebook)"
 
+                    dropped = entry.get("dropped_past_sunset") or []
                     print(
                         f"{entry.get('compiled_at')}  {notebook}  "
                         f"({endpoint_count} endpoint(s))"
+                        + (
+                            f"  dropped past sunset: {', '.join(dropped)}"
+                            if dropped else ""
+                        )
                     )
 
                 print(f"\n{data.get('entry_count', len(entries))} compile(s) on {dashboard_url}")

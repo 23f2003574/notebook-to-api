@@ -30340,10 +30340,12 @@ def test_compile_history_csv_format_returns_a_csv_response(tmp_path, monkeypatch
     rows = resp.text.strip().split("\r\n")
     assert rows[0] == (
         "compiled_at,notebook_filename,source_notebook_sha256,only,exclude,"
-        "endpoint_count,dependency_count,skipped_function_count"
+        "endpoint_count,dependency_count,skipped_function_count,"
+        "dropped_past_sunset"
     )
-    # "only" is a semicolon-joined cell, not one CSV column per function.
-    assert rows[1] == "2024-01-01T00:00:00+00:00,nb.ipynb,aaa,add;subtract,,2,0,0"
+    # "only" is a semicolon-joined cell, not one CSV column per function;
+    # an entry recorded before "dropped_past_sunset" existed gets "".
+    assert rows[1] == "2024-01-01T00:00:00+00:00,nb.ipynb,aaa,add;subtract,,2,0,0,"
     assert len(rows) == 2
 
 
@@ -34399,3 +34401,22 @@ def test_previews_drop_past_sunset_reject_an_only_list_left_empty(route):
 
     assert resp.status_code == 400
     assert "left nothing to compile" in resp.json()["detail"]
+
+
+def test_compile_history_records_which_functions_drop_past_sunset_removed():
+    """Confirmed missing before this feature: a compile-history entry only
+    kept the final "exclude" -- no way to tell which of those names
+    drop_past_sunset added rather than the caller."""
+    _upload_sunset_mix("history_drop_sunset.ipynb")
+    client.post("/api/compile", json={
+        "notebook_path": "history_drop_sunset.ipynb",
+        "drop_past_sunset": True,
+    })
+
+    entry = client.get("/api/compile/history").json()["entries"][0]
+    csv_rows = client.get("/api/compile/history", params={"format": "csv"}).text.strip().split("\r\n")
+
+    assert entry["notebook_filename"] == "history_drop_sunset.ipynb"
+    assert entry["dropped_past_sunset"] == ["old_add"]
+    assert entry["exclude"] == ["old_add"]
+    assert csv_rows[1].endswith(",old_add")

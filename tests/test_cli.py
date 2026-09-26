@@ -28591,3 +28591,30 @@ def test_preview_commands_forward_drop_past_sunset(command, tmp_path, fake_dashb
     )
 
     assert json.loads(handler.bodies[0])["drop_past_sunset"] is True
+
+
+def test_compile_history_command_shows_functions_dropped_past_sunset(
+    tmp_path, fake_dashboard
+):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_json_response(200, {
+        "status": "success", "entry_count": 2,
+        "entries": [
+            {"compiled_at": "2026-09-27T10:00:00+00:00",
+             "notebook_filename": "nb.ipynb", "endpoint_count": 1,
+             "dropped_past_sunset": ["old_add", "old_sub"]},
+            {"compiled_at": "2026-09-26T10:00:00+00:00",
+             "notebook_filename": "nb.ipynb", "endpoint_count": 3},
+        ],
+    })]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["compile-history", "--dashboard-url", dashboard_url], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (
+        "nb.ipynb  (1 endpoint(s))  dropped past sunset: old_add, old_sub"
+        in proc.stdout
+    )
+    assert "nb.ipynb  (3 endpoint(s))\n" in proc.stdout
