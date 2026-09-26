@@ -7010,3 +7010,57 @@ def test_typescript_sdk_plain_410_or_other_status_stays_a_generic_error(tmp_path
         result = _run_typescript_client_failing(tmp_path, status, headers)
         assert result["removed"] is False
         assert result["status"] == status
+
+
+def test_python_sdk_runtime_deprecation_warning_includes_the_sunset_header(
+    tmp_path, monkeypatch
+):
+    """Confirmed missing before this feature: the runtime warning carried
+    X-Deprecation-Reason but dropped the Sunset header -- the date a
+    caller most needs to plan around."""
+    client = _python_client_with_response_headers(
+        tmp_path, monkeypatch,
+        {"/add": {"post": {"operationId": "add"}}},
+        {"Deprecation": "true", "X-Deprecation-Reason": "Use add_v2.",
+         "Sunset": "Thu, 31 Dec 2099 00:00:00 GMT"},
+    )
+
+    with pytest.warns(DeprecationWarning) as record:
+        client.add({})
+
+    assert str(record[0].message) == (
+        "The server reports that /add is deprecated. Use add_v2. "
+        "(sunset: Thu, 31 Dec 2099 00:00:00 GMT)"
+    )
+
+
+def test_python_sdk_runtime_warning_without_sunset_is_unchanged(
+    tmp_path, monkeypatch
+):
+    client = _python_client_with_response_headers(
+        tmp_path, monkeypatch,
+        {"/add": {"post": {"operationId": "add"}}},
+        {"Deprecation": "true"},
+    )
+
+    with pytest.warns(DeprecationWarning) as record:
+        client.add({})
+
+    assert str(record[0].message) == "The server reports that /add is deprecated."
+
+
+@_needs_node
+def test_typescript_sdk_runtime_deprecation_warning_includes_the_sunset_header(
+    tmp_path,
+):
+    warnings = _run_typescript_client_with_headers(
+        tmp_path,
+        {"/add": {"post": {"operationId": "add"}}},
+        {"Deprecation": "true", "Sunset": "Thu, 31 Dec 2099 00:00:00 GMT"},
+        "await client.add({});",
+    )
+
+    assert warnings == [
+        "The server reports that /add is deprecated. "
+        "(sunset: Thu, 31 Dec 2099 00:00:00 GMT)"
+    ]

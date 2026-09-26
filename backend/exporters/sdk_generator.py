@@ -1524,6 +1524,12 @@ def generate_python_sdk(
     lines.append("        message = f\"The server reports that {path or 'this endpoint'} is deprecated.\"")
     lines.append("        if reason:")
     lines.append("            message += f\" {reason}\"")
+    # The compiled app's own RFC 8594 Sunset header -- the one thing a
+    # caller most needs to plan the migration (when it stops working),
+    # which this warning previously dropped.
+    lines.append("        sunset = headers.get('Sunset')")
+    lines.append("        if sunset:")
+    lines.append("            message += f\" (sunset: {sunset})\"")
     lines.append("        warnings.warn(message, DeprecationWarning, stacklevel=4)")
     lines.append("")
     lines.append("    def get_task(self, task_id: str) -> dict:")
@@ -2449,9 +2455,11 @@ def generate_typescript_sdk(
     lines.append("    }")
     lines.append("    this.serverDeprecationsWarned.add(bare);")
     lines.append("    const reason = headers.get(\"X-Deprecation-Reason\");")
+    # See the Python client's identical Sunset addition.
+    lines.append("    const sunset = headers.get(\"Sunset\");")
     lines.append(
         "    console.warn(`The server reports that ${bare} is deprecated.` + "
-        "(reason ? ` ${reason}` : \"\"));"
+        "(reason ? ` ${reason}` : \"\") + (sunset ? ` (sunset: ${sunset})` : \"\"));"
     )
     lines.append("  }")
     lines.append("")
