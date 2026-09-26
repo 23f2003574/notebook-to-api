@@ -34316,3 +34316,53 @@ def test_compile_drop_past_sunset_rejects_an_only_list_left_empty():
 
     assert resp.status_code == 400
     assert "past its sunset date" in resp.json()["detail"]
+
+
+def test_curl_preview_drop_past_sunset_leaves_out_their_commands():
+    """Confirmed missing before this feature: POST /api/curl-preview and
+    /api/postman-preview had no "drop_past_sunset", so they kept previewing
+    requests a POST /api/compile with it no longer serves."""
+    _upload_sunset_mix("curl_preview_sunset.ipynb")
+
+    body = client.post("/api/curl-preview", json={
+        "notebook_path": "curl_preview_sunset.ipynb", "drop_past_sunset": True,
+    }).json()
+
+    assert body["dropped_past_sunset"] == ["old_add"]
+    joined = "\n".join(body["commands"])
+    assert "/old_add" not in joined and "/later" in joined
+
+
+def test_postman_preview_drop_past_sunset_leaves_out_their_requests():
+    _upload_sunset_mix("postman_preview_sunset.ipynb")
+
+    body = client.post("/api/postman-preview", json={
+        "notebook_path": "postman_preview_sunset.ipynb", "drop_past_sunset": True,
+    }).json()
+
+    assert body["dropped_past_sunset"] == ["old_add"]
+    names = [item["name"] for item in body["collection"]["item"]]
+    assert not any("old_add" in name for name in names)
+
+
+def test_previews_without_drop_past_sunset_report_nothing_dropped():
+    _upload_sunset_mix("preview_keep_sunset.ipynb")
+
+    body = client.post(
+        "/api/curl-preview", json={"notebook_path": "preview_keep_sunset.ipynb"}
+    ).json()
+
+    assert body["dropped_past_sunset"] == []
+    assert "/old_add" in "\n".join(body["commands"])
+
+
+def test_postman_preview_drop_past_sunset_rejects_an_only_list_left_empty():
+    _upload_sunset_mix("postman_preview_empty_sunset.ipynb")
+
+    resp = client.post("/api/postman-preview", json={
+        "notebook_path": "postman_preview_empty_sunset.ipynb",
+        "only": ["old_add"], "drop_past_sunset": True,
+    })
+
+    assert resp.status_code == 400
+    assert "left nothing to compile" in resp.json()["detail"]

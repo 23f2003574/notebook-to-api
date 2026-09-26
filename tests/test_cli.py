@@ -28531,3 +28531,45 @@ def test_export_postman_drop_past_sunset_refuses_an_only_list_it_would_empty(tmp
     assert proc.returncode != 0
     assert "left nothing to compile" in proc.stdout + proc.stderr
     assert not (workdir / "c.json").exists()
+
+
+def test_curl_preview_command_forwards_drop_past_sunset(tmp_path, fake_dashboard):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_json_response(200, {
+        "status": "success", "notebook": "nb.ipynb", "version_id": None,
+        "dropped_past_sunset": ["old_add"], "commands": ["curl ..."],
+    })]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["curl-preview", "nb.ipynb", "--dashboard-url", dashboard_url,
+         "--drop-past-sunset"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0])["drop_past_sunset"] is True
+
+
+def test_remote_curl_drop_past_sunset_applies_to_the_downloaded_notebook(
+    tmp_path, fake_dashboard
+):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_raw_response(200, _notebook_bytes_with_function(
+        "# notebook-to-api: deprecated: sunset: 2000-01-01\n"
+        "def old_add(a: int) -> int:\n    return a\n\n"
+        "def add(a: int) -> int:\n    return a\n"
+    ))]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-curl", "nb.ipynb", "--dashboard-url", dashboard_url,
+         "--output", "requests.sh", "--drop-past-sunset"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    script = (workdir / "requests.sh").read_text(encoding="utf-8")
+    assert "/old_add" not in script and "/add" in script
