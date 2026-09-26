@@ -3796,11 +3796,18 @@ def generate_fastapi_code(
     lines.append("        if task_id in TASKS:")
     lines.append("            TASKS[task_id][\"status\"] = \"failed\"")
     lines.append("            TASKS[task_id][\"error\"] = timeout_error")
+    # "timed_out": the machine-readable twin of a synchronous endpoint's
+    # X-Notebook-API-Timeout header -- a task failed by its own execution
+    # limit (deterministic: retrying re-runs the same slow call) vs one
+    # whose notebook function raised, without parsing the "error" text.
+    # Set only on a timeout; any other failure simply lacks it.
+    lines.append("            TASKS[task_id][\"timed_out\"] = True")
     lines.append("        if callback_url:")
     lines.append("            webhook_result = await anyio.to_thread.run_sync(")
     lines.append(
         "                _deliver_task_webhook, callback_url, "
-        "{\"task_id\": task_id, \"status\": \"failed\", \"error\": timeout_error}"
+        "{\"task_id\": task_id, \"status\": \"failed\", \"error\": timeout_error, "
+        "\"timed_out\": True}"
     )
     lines.append("            )")
     lines.append(

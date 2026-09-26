@@ -8339,3 +8339,70 @@ def test_task_timeout_failures_name_is_reserved():
     from backend.generator.api_generator import RESERVED_INFRASTRUCTURE_NAMES
 
     assert "_TASK_TIMEOUT_FAILURES" in RESERVED_INFRASTRUCTURE_NAMES
+
+
+def test_timed_out_background_task_is_marked_timed_out(monkeypatch):
+    """Confirmed missing before this feature: a task failed by its own
+    execution timeout was indistinguishable from one whose function raised,
+    short of parsing its "error" text."""
+    import time as time_module
+
+    def slow():
+        time_module.sleep(2)
+        return 1
+
+    client = _background_timeout_client(monkeypatch, {"train_model": 1}, slow)
+
+    task_id = client.post("/train_model", json={}).json()["task_id"]
+    task = client.get(f"/tasks/{task_id}").json()
+
+    assert task["status"] == "failed"
+    assert task["timed_out"] is True
+
+
+def test_a_task_that_raises_is_not_marked_timed_out(monkeypatch):
+    def broken():
+        raise ValueError("boom")
+
+    client = _background_timeout_client(monkeypatch, {"train_model": 5}, broken)
+
+    task_id = client.post("/train_model", json={}).json()["task_id"]
+    task = client.get(f"/tasks/{task_id}").json()
+
+    assert task["status"] == "failed"
+    assert "timed_out" not in task
+
+
+def test_timed_out_task_webhook_payload_says_so(monkeypatch):
+    import time as time_module
+
+    def slow():
+        time_module.sleep(2)
+        return 1
+
+    code = generate_fastapi_code(
+        [{"name": "train_model", "args": [], "return_type": "int"}],
+        timeout_overrides={"train_model": 1},
+    )
+    notebook_module = _register_fake_notebook_module(monkeypatch)
+    slow.__name__ = "train_model"
+    notebook_module.train_model = slow
+    monkeypatch.setenv("NOTEBOOK_API_KEY", "test-key")
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    delivered = []
+    namespace["_deliver_task_webhook"] = (
+        lambda url, payload: delivered.append(payload) or {"delivered": True}
+    )
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"], headers={"X-API-Key": "test-key"})
+    response = client.post(
+        "/train_model", json={}, params={"callback_url": "https://example.com/hook"}
+    )
+
+    assert response.status_code == 200, response.text
+    assert len(delivered) == 1
+    assert delivered[0]["status"] == "failed"
+    assert delivered[0]["timed_out"] is True
