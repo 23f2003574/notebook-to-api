@@ -7442,7 +7442,9 @@ def test_get_deprecations_lists_each_deprecated_endpoint_with_reason_and_calls(
     response = client.get("/deprecations", headers={"X-API-Key": ""})
 
     assert response.status_code == 200
-    assert response.json() == {
+    body = response.json()
+    assert isinstance(body.pop("counting_since"), str)
+    assert body == {
         "rejecting": False,
         "enforcing_sunset": False,
         "endpoints": [{"path": "/old_add", "reason": "Use add.", "calls": 1, "rejections": 0, "callers": {"testclient": 1}, "sunset": None, "rejected": False}],
@@ -7454,7 +7456,7 @@ def test_get_deprecations_reports_rejecting_and_reason_none(monkeypatch):
         monkeypatch, {"old_add": None}, reject_deprecated="true"
     )
 
-    assert client.get("/deprecations").json() == {
+    assert _without_counting_since(client.get("/deprecations").json()) == {
         "rejecting": True,
         "enforcing_sunset": False,
         "endpoints": [{"path": "/old_add", "reason": None, "calls": 0, "rejections": 0, "callers": {}, "sunset": None, "rejected": True}],
@@ -7464,7 +7466,7 @@ def test_get_deprecations_reports_rejecting_and_reason_none(monkeypatch):
 def test_get_deprecations_is_empty_when_nothing_is_deprecated(monkeypatch):
     client = _deprecation_test_client(monkeypatch, None)
 
-    assert client.get("/deprecations").json() == {
+    assert _without_counting_since(client.get("/deprecations").json()) == {
         "rejecting": False, "enforcing_sunset": False, "endpoints": [],
     }
 
@@ -7836,7 +7838,7 @@ def test_post_deprecations_reset_zeroes_every_deprecation_counter(monkeypatch):
     response = client.post("/deprecations/reset")
 
     assert response.status_code == 200
-    assert response.json() == {"reset": ["/old_add"]}
+    assert _without_counting_since(response.json()) == {"reset": ["/old_add"]}
     entry = client.get("/deprecations").json()["endpoints"][0]
     assert (entry["calls"], entry["rejections"], entry["callers"]) == (0, 0, {})
     metrics = client.get("/metrics").json()
@@ -7860,3 +7862,34 @@ def test_function_named_reset_deprecation_counters_is_reserved():
 
     with pytest.raises(ReservedFunctionNameError, match="reset_deprecation_counters"):
         generate_fastapi_code(functions)
+
+
+def _without_counting_since(body):
+    body = dict(body)
+    body.pop("counting_since")
+    return body
+
+
+def test_get_deprecations_reports_when_counting_started_and_reset_moves_it(
+    monkeypatch,
+):
+    """Confirmed missing before this feature: GET /deprecations' counts
+    had no time window -- "3 calls" could mean an hour or a month."""
+    import re
+    import time as time_module
+
+    client = _deprecation_test_client(monkeypatch, {"old_add": None})
+    since = client.get("/deprecations").json()["counting_since"]
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", since)
+
+    time_module.sleep(1.1)
+    reset = client.post("/deprecations/reset").json()
+
+    assert reset["counting_since"] > since
+    assert client.get("/deprecations").json()["counting_since"] == reset["counting_since"]
+
+
+def test_deprecation_counters_since_name_is_reserved():
+    from backend.generator.api_generator import RESERVED_INFRASTRUCTURE_NAMES
+
+    assert "_DEPRECATION_COUNTERS_SINCE" in RESERVED_INFRASTRUCTURE_NAMES

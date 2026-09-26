@@ -8576,6 +8576,10 @@ def _dispatch_core_command(args):
                        if data.get("rejecting") else "")
                     + ":"
                 )
+                # GET /deprecations' own "counting_since" -- the window the
+                # calls= counts below cover. Absent on older apps.
+                if data.get("counting_since"):
+                    print(f"  (counts since {data['counting_since']})")
                 for entry in endpoints:
                     reason = entry.get("reason")
                     sunset = entry.get("sunset")

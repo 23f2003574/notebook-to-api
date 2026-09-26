@@ -28273,3 +28273,11 @@ def test_app_deprecations_reset_refuses_read_only_flags(tmp_path, fake_dashboard
     assert proc.returncode != 0
     assert "--reset cannot be combined" in proc.stdout + proc.stderr
     assert handler.requests == []
+
+
+def test_app_deprecations_prints_the_counting_window(tmp_path, fake_dashboard):
+    body = dict(_DEPRECATIONS_WITH_CALLERS, counting_since="2026-09-01T00:00:00Z")
+    proc, _ = _run_app_deprecations(tmp_path, fake_dashboard, body)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "  (counts since 2026-09-01T00:00:00Z)\n" in proc.stdout
