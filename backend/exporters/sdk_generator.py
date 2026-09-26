@@ -2246,6 +2246,34 @@ def generate_typescript_sdk(
     lines.append("  backoffFactor?: number;")
     lines.append("}")
     lines.append("")
+    # The TypeScript counterpart of the Python client's own
+    # EndpointRemovedError: thrown by requestWithRetry (below) instead of
+    # a generic Error when a deprecated endpoint answers 410 Gone (the
+    # compiled app's brownout or enforced sunset), so a caller can
+    # `instanceof`-check for a retired endpoint and read why/when. Keeps
+    # the same `.status` every other thrown request error already carries.
+    lines.append("export class EndpointRemovedError extends Error {")
+    # Explicit fields rather than constructor parameter properties
+    # (`public path: string`) -- Node's own type-stripping, which runs
+    # this client directly, rejects parameter properties outright.
+    lines.append("  status = 410;")
+    lines.append("  path: string;")
+    lines.append("  reason: string | null;")
+    lines.append("  sunset: string | null;")
+    lines.append(
+        "  constructor(path: string, reason: string | null, sunset: string | null) {"
+    )
+    lines.append(
+        "    super(`${path} has been retired (410 Gone).` + "
+        "(reason ? ` ${reason}` : \"\") + (sunset ? ` (sunset: ${sunset})` : \"\"));"
+    )
+    lines.append('    this.name = "EndpointRemovedError";')
+    lines.append("    this.path = path;")
+    lines.append("    this.reason = reason;")
+    lines.append("    this.sunset = sunset;")
+    lines.append("  }")
+    lines.append("}")
+    lines.append("")
     lines.append("export class NotebookAPIClient {")
     lines.append("  private baseUrl: string;")
     lines.append("  private apiKey: string;")
@@ -2371,6 +2399,19 @@ def generate_typescript_sdk(
     # around getTask -- see its own docstring above -- so neither is
     # touched here, avoiding two independent retry loops nested inside
     # one another).
+    lines.append("        const gone: any = (response as any).headers;")
+    lines.append(
+        "        const deprecation = String(gone?.get?.(\"Deprecation\") ?? \"\")"
+        ".trim().toLowerCase();"
+    )
+    lines.append(
+        "        if (response.status === 410 && deprecation && deprecation !== \"false\") {"
+    )
+    lines.append(
+        "          throw new EndpointRemovedError(path.split(\"?\")[0], "
+        "gone.get(\"X-Deprecation-Reason\"), gone.get(\"Sunset\"));"
+    )
+    lines.append("        }")
     lines.append(
         "        const error: any = new Error(`Request to ${path} failed "
         "with status ${response.status}`);"
