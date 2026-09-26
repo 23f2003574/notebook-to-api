@@ -9086,6 +9086,8 @@ def _dispatch_core_command(args):
                 params["status"] = args.status
             if args.webhook_delivery_failed is not None:
                 params["webhook_delivery_failed"] = args.webhook_delivery_failed
+            if args.timed_out is not None:
+                params["timed_out"] = args.timed_out
             if args.limit is not None:
                 params["limit"] = args.limit
             if args.offset is not None:
@@ -17560,6 +17562,17 @@ def main():
         default=None,
         choices=["processing", "completed", "failed"],
         help="Only show tasks with this exact status, via GET /tasks' own ?status= query param."
+    )
+    app_tasks_list_parser.add_argument(
+        "--timed-out",
+        default=None,
+        dest="timed_out",
+        choices=["true", "false"],
+        help=(
+            "Only show tasks that did (\"true\") or didn't (\"false\") "
+            "fail by exceeding their execution timeout, via GET /tasks' "
+            "own ?timed_out= query param. Composes with --status."
+        )
     )
     app_tasks_list_parser.add_argument(
         "--webhook-delivery-failed",

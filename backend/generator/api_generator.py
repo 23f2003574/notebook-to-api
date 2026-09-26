@@ -2461,6 +2461,7 @@ def generate_fastapi_code(
     lines.append("def list_tasks(")
     lines.append("    status: Optional[str] = None,")
     lines.append("    webhook_delivery_failed: Optional[bool] = None,")
+    lines.append("    timed_out: Optional[bool] = None,")
     lines.append("    limit: int = Query(default=100, ge=1, le=1000),")
     lines.append("    offset: int = Query(default=0, ge=0),")
     lines.append("    _: None = Depends(verify_api_key),")
@@ -2554,6 +2555,14 @@ def generate_fastapi_code(
     lines.append("            webhook_delivery_failed is None")
     lines.append("            or task.get('webhook', {}).get('delivered')")
     lines.append("            == (not webhook_delivery_failed)")
+    lines.append("        )")
+    # ?timed_out=: a task's own "timed_out" marker (set only when it failed
+    # by exceeding its execution timeout) -- true narrows to exactly those,
+    # false to every other task. Before this, finding which tasks keep
+    # hitting their limit meant fetching every task and filtering by hand.
+    lines.append("        and (")
+    lines.append("            timed_out is None")
+    lines.append("            or bool(task.get('timed_out')) == timed_out")
     lines.append("        )")
     lines.append("    ]")
     lines.append(

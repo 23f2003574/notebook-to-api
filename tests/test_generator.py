@@ -8406,3 +8406,30 @@ def test_timed_out_task_webhook_payload_says_so(monkeypatch):
     assert len(delivered) == 1
     assert delivered[0]["status"] == "failed"
     assert delivered[0]["timed_out"] is True
+
+
+def test_list_tasks_filters_by_timed_out(monkeypatch):
+    """Confirmed missing before this feature: GET /tasks could filter by
+    status and webhook outcome, but not pick out tasks that timed out."""
+    import time as time_module
+
+    calls = {"n": 0}
+
+    def sometimes_slow():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            time_module.sleep(2)
+        return calls["n"]
+
+    client = _background_timeout_client(monkeypatch, {"train_model": 1}, sometimes_slow)
+    timed_out_id = client.post("/train_model", json={}).json()["task_id"]
+    ok_id = client.post("/train_model", json={}).json()["task_id"]
+
+    timed_out = client.get("/tasks", params={"timed_out": "true"}).json()
+    not_timed_out = client.get("/tasks", params={"timed_out": "false"}).json()
+    everything = client.get("/tasks").json()
+
+    ids = lambda body: set(body["tasks"])
+    assert ids(timed_out) == {timed_out_id}
+    assert ids(not_timed_out) == {ok_id}
+    assert ids(everything) == {timed_out_id, ok_id}

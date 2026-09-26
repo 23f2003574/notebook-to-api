@@ -28871,3 +28871,22 @@ def test_app_call_plain_504_is_still_a_generic_rejection(tmp_path, fake_dashboar
     output = proc.stdout + proc.stderr
     assert "App rejected the call (504)" in output
     assert "request timeout" not in output
+
+
+def test_app_tasks_list_forwards_timed_out(tmp_path, fake_dashboard):
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [_json_response(200, {
+        "tasks": {}, "total_tasks": 0, "matching_tasks": 0,
+        "completed_tasks": 0, "failed_tasks": 0, "processing_tasks": 0,
+        "limit": 100, "offset": 0,
+    })]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    _run_cli(
+        ["app-tasks", "list", "--host", host, "--port", str(port), "--timed-out", "true"],
+        cwd=workdir,
+    )
+
+    assert "timed_out=true" in handler.requests[0]
