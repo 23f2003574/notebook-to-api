@@ -1692,6 +1692,7 @@ def generate_python_sdk(
     lines.append(
         "        webhook_delivery_failed: bool = None,"
     )
+    lines.append("        timed_out: bool = None,")
     lines.append("    ) -> dict:")
     lines.append(
         '        """List background tasks, with a status-count summary.'
@@ -1717,6 +1718,10 @@ def generate_python_sdk(
     lines.append(
         '            params["webhook_delivery_failed"] = webhook_delivery_failed'
     )
+    # The app's own ?timed_out= (tasks that did / didn't fail by
+    # exceeding their execution timeout) -- sent as "true"/"false".
+    lines.append("        if timed_out is not None:")
+    lines.append('            params["timed_out"] = "true" if timed_out else "false"')
     lines.append("        return self._request(lambda: requests.get(")
     lines.append('            f"{self.base_url}/tasks",')
     lines.append('            headers={"X-API-Key": self.api_key},')
@@ -2718,7 +2723,8 @@ def generate_typescript_sdk(
     # list_tasks(webhook_delivery_failed=...) addition.
     lines.append(
         "  async listTasks(options: { status?: string; limit?: number; "
-        "offset?: number; webhookDeliveryFailed?: boolean } = {}): "
+        "offset?: number; webhookDeliveryFailed?: boolean; "
+        "timedOut?: boolean } = {}): "
         "Promise<any> {"
     )
     lines.append("    const params = new URLSearchParams();")
@@ -2738,6 +2744,10 @@ def generate_typescript_sdk(
         "    if (options.webhookDeliveryFailed !== undefined) "
         'params.set("webhook_delivery_failed", '
         "String(options.webhookDeliveryFailed));"
+    )
+    lines.append(
+        "    if (options.timedOut !== undefined) "
+        'params.set("timed_out", String(options.timedOut));'
     )
     lines.append("    const query = params.toString();")
     lines.append('    const path = `/tasks${query ? `?${query}` : ""}`;')
