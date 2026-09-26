@@ -25259,6 +25259,8 @@ def test_app_status_command_prints_health_ready_info_and_config(
             "json_logs_enabled": False,
         }),
     ]
+    # An app compiled before GET /deprecations existed answers 404.
+    handler.responses.append(_json_response(404, {"detail": "Not Found"}))
 
     workdir = tmp_path / "workdir"
     workdir.mkdir()
@@ -25278,7 +25280,7 @@ def test_app_status_command_prints_health_ready_info_and_config(
     assert "rate limit: 60 requests/minute per key" in proc.stdout
     assert "allowed origins: *" in proc.stdout
     assert "docs: enabled" in proc.stdout
-    assert handler.requests == ["/health", "/ready", "/info", "/config"]
+    assert handler.requests == ["/health", "/ready", "/info", "/config", "/deprecations"]
 
 
 def test_app_status_command_reports_disabled_limits_plainly(tmp_path, fake_dashboard):
@@ -25305,6 +25307,8 @@ def test_app_status_command_reports_disabled_limits_plainly(tmp_path, fake_dashb
             "disable_docs": True,
         }),
     ]
+    # An app compiled before GET /deprecations existed answers 404.
+    handler.responses.append(_json_response(404, {"detail": "Not Found"}))
 
     workdir = tmp_path / "workdir"
     workdir.mkdir()
@@ -25338,6 +25342,8 @@ def test_app_status_command_json_flag_emits_the_combined_raw_response(
         _json_response(200, info),
         _json_response(200, config),
     ]
+    # An app compiled before GET /deprecations existed answers 404.
+    handler.responses.append(_json_response(404, {"detail": "Not Found"}))
 
     workdir = tmp_path / "workdir"
     workdir.mkdir()
@@ -25350,6 +25356,7 @@ def test_app_status_command_json_flag_emits_the_combined_raw_response(
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert json.loads(proc.stdout) == {
         "health": health, "ready": ready, "info": info, "config": config,
+        "deprecations": None,
     }
 
 
@@ -27998,3 +28005,89 @@ def test_app_call_reports_a_retired_endpoint_clearly(tmp_path, fake_dashboard):
     assert "POST /add has been retired (410 Gone). Use add_v2." in (
         proc.stdout + proc.stderr
     )
+
+
+def _app_status_base_responses():
+    return [
+        _json_response(200, {"status": "healthy"}),
+        _json_response(200, {"status": "ready", "tasks_registered": 0}),
+        _json_response(200, {
+            "service": "svc", "version": "0.1.0", "status": "running",
+            "endpoints": ["/add"], "endpoint_count": 1,
+            "background_endpoint_count": 0,
+            "authentication": {"enabled": True, "type": "api_key"},
+        }),
+        _json_response(200, {
+            "max_request_body_bytes": 1, "task_ttl_seconds": 1,
+            "max_pending_tasks": 1, "task_execution_timeout_seconds": None,
+            "webhook_timeout_seconds": 1, "webhook_signing_enabled": False,
+            "webhook_max_retries": 0, "webhook_retry_backoff_seconds": 0.5,
+            "rate_limit_per_minute": 0, "allowed_origins": ["*"],
+            "disable_docs": False,
+        }),
+    ]
+
+
+def _run_app_status(tmp_path, fake_dashboard, deprecations_response, *extra):
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = _app_status_base_responses() + [deprecations_response]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    return _run_cli(
+        ["app-status", "--host", host, "--port", str(port), *extra], cwd=workdir
+    ), handler
+
+
+def test_app_status_command_lists_deprecated_endpoints(tmp_path, fake_dashboard):
+    """Confirmed missing before this feature: app-status never read the
+    app's own GET /deprecations, so an operator checking a deployment's
+    health got no hint it was serving (or already rejecting) deprecated
+    endpoints."""
+    proc, handler = _run_app_status(tmp_path, fake_dashboard, _json_response(200, {
+        "rejecting": False, "enforcing_sunset": True,
+        "endpoints": [
+            {"path": "/old_add", "reason": None, "calls": 4,
+             "sunset": "2000-01-01", "rejected": True},
+            {"path": "/old_sub", "reason": None, "calls": 1,
+             "sunset": None, "rejected": False},
+        ],
+    }))
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests[-1] == "/deprecations"
+    assert "Deprecated endpoints: 2 (1 answering 410)" in proc.stdout
+    assert "/old_add  calls=4  sunset=2000-01-01  REJECTED (410)" in proc.stdout
+    assert "/old_sub  calls=1\n" in proc.stdout
+
+
+def test_app_status_command_omits_deprecations_when_none(tmp_path, fake_dashboard):
+    proc, _ = _run_app_status(tmp_path, fake_dashboard, _json_response(200, {
+        "rejecting": False, "enforcing_sunset": False, "endpoints": [],
+    }))
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Deprecated endpoints" not in proc.stdout
+
+
+def test_app_status_command_tolerates_an_app_without_get_deprecations(
+    tmp_path, fake_dashboard
+):
+    proc, _ = _run_app_status(
+        tmp_path, fake_dashboard, _json_response(404, {"detail": "Not Found"}),
+        "--json",
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout)["deprecations"] is None
+
+
+def test_app_status_command_still_fails_on_a_non_404_deprecations_error(
+    tmp_path, fake_dashboard
+):
+    proc, _ = _run_app_status(
+        tmp_path, fake_dashboard, _json_response(500, {"detail": "boom"}),
+    )
+
+    assert proc.returncode != 0
+    assert "(500)" in proc.stdout + proc.stderr
