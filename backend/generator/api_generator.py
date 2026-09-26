@@ -90,6 +90,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "REJECT_DEPRECATED_ENDPOINTS",
     "ENFORCE_DEPRECATION_SUNSET",
     "_sunset_has_passed",
+    "_deprecated_endpoint_is_rejected",
     # Read by name from inside _add_deprecation_headers and deprecations().
     "_DEPRECATION_SUNSETS",
     # Assigned this compile's own real content hash once, at module load
@@ -1327,12 +1328,19 @@ def generate_fastapi_code(
     )
     lines.append("    )")
     lines.append("")
+    # The one place "is this deprecated path answering 410 right now"
+    # is decided -- shared by the middleware below and GET /deprecations'
+    # own per-endpoint "rejected", so the two can never disagree.
+    lines.append("def _deprecated_endpoint_is_rejected(path):")
+    lines.append("    return path in _DEPRECATED_ENDPOINTS and (")
+    lines.append("        REJECT_DEPRECATED_ENDPOINTS")
+    lines.append("        or (ENFORCE_DEPRECATION_SUNSET and _sunset_has_passed(path))")
+    lines.append("    )")
+    lines.append("")
     lines.append("@app.middleware('http')")
     lines.append("async def _add_deprecation_headers(request, call_next):")
     lines.append(
-        "    if request.url.path in _DEPRECATED_ENDPOINTS and ("
-        "REJECT_DEPRECATED_ENDPOINTS or ("
-        "ENFORCE_DEPRECATION_SUNSET and _sunset_has_passed(request.url.path))):"
+        "    if _deprecated_endpoint_is_rejected(request.url.path):"
     )
     lines.append("        response = JSONResponse(")
     lines.append("            status_code=410,")
@@ -2568,6 +2576,7 @@ def generate_fastapi_code(
     lines.append("def deprecations():")
     lines.append("    return {")
     lines.append("        'rejecting': REJECT_DEPRECATED_ENDPOINTS,")
+    lines.append("        'enforcing_sunset': ENFORCE_DEPRECATION_SUNSET,")
     lines.append("        'endpoints': [")
     lines.append("            {")
     lines.append("                'path': path,")
@@ -2575,6 +2584,9 @@ def generate_fastapi_code(
     lines.append("                'calls': _DEPRECATED_ENDPOINT_CALLS[path],")
     lines.append(
         "                'sunset': _DEPRECATION_SUNSETS.get(path, (None,))[0],"
+    )
+    lines.append(
+        "                'rejected': _deprecated_endpoint_is_rejected(path),"
     )
     lines.append("            }")
     lines.append("            for path, reason in sorted(_DEPRECATED_ENDPOINTS.items())")

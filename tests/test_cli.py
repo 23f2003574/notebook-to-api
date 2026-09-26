@@ -27820,3 +27820,22 @@ def test_every_diff_command_accepts_fail_on_sunset_moved_earlier():
         proc = _run_cli([*command, "--help"], cwd=Path.cwd())
         assert proc.returncode == 0, proc.stderr
         assert "--fail-on-sunset-moved-earlier" in proc.stdout, command
+
+
+def test_app_deprecations_marks_endpoints_the_app_is_rejecting(
+    tmp_path, fake_dashboard
+):
+    body = {
+        "rejecting": False, "enforcing_sunset": True,
+        "endpoints": [
+            {"path": "/old_add", "reason": None, "calls": 0,
+             "sunset": "2000-01-01", "rejected": True},
+            {"path": "/old_sub", "reason": None, "calls": 0,
+             "sunset": "2999-01-01", "rejected": False},
+        ],
+    }
+    proc, _ = _run_app_deprecations(tmp_path, fake_dashboard, body)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "/old_add  calls=0  sunset=2000-01-01  REJECTED (410)" in proc.stdout
+    assert "/old_sub  calls=0  sunset=2999-01-01\n" in proc.stdout

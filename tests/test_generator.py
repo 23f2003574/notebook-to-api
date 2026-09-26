@@ -7441,7 +7441,8 @@ def test_get_deprecations_lists_each_deprecated_endpoint_with_reason_and_calls(
     assert response.status_code == 200
     assert response.json() == {
         "rejecting": False,
-        "endpoints": [{"path": "/old_add", "reason": "Use add.", "calls": 1, "sunset": None}],
+        "enforcing_sunset": False,
+        "endpoints": [{"path": "/old_add", "reason": "Use add.", "calls": 1, "sunset": None, "rejected": False}],
     }
 
 
@@ -7452,7 +7453,8 @@ def test_get_deprecations_reports_rejecting_and_reason_none(monkeypatch):
 
     assert client.get("/deprecations").json() == {
         "rejecting": True,
-        "endpoints": [{"path": "/old_add", "reason": None, "calls": 0, "sunset": None}],
+        "enforcing_sunset": False,
+        "endpoints": [{"path": "/old_add", "reason": None, "calls": 0, "sunset": None, "rejected": True}],
     }
 
 
@@ -7460,7 +7462,7 @@ def test_get_deprecations_is_empty_when_nothing_is_deprecated(monkeypatch):
     client = _deprecation_test_client(monkeypatch, None)
 
     assert client.get("/deprecations").json() == {
-        "rejecting": False, "endpoints": [],
+        "rejecting": False, "enforcing_sunset": False, "endpoints": [],
     }
 
 
@@ -7657,3 +7659,28 @@ def test_enforce_sunset_backing_names_are_reserved():
 
     assert "ENFORCE_DEPRECATION_SUNSET" in RESERVED_INFRASTRUCTURE_NAMES
     assert "_sunset_has_passed" in RESERVED_INFRASTRUCTURE_NAMES
+
+
+def test_get_deprecations_reports_per_endpoint_rejected_under_enforce_sunset(
+    monkeypatch,
+):
+    """Confirmed missing before this feature: GET /deprecations only had
+    the global "rejecting" (the brownout switch) -- with
+    NOTEBOOK_API_ENFORCE_SUNSET rejecting individual endpoints by date,
+    nothing said which ones were actually answering 410 right now."""
+    client = _deprecation_test_client(
+        monkeypatch,
+        {"old_add": "sunset: 2000-01-01", "add": "sunset: 2999-01-01"},
+        enforce_sunset="true",
+    )
+
+    body = client.get("/deprecations").json()
+
+    assert body["rejecting"] is False
+    assert body["enforcing_sunset"] is True
+    by_path = {entry["path"]: entry for entry in body["endpoints"]}
+    assert by_path["/old_add"]["rejected"] is True
+    assert by_path["/add"]["rejected"] is False
+    # "rejected" must agree with what the endpoint actually does.
+    assert client.post("/old_add", json={}).status_code == 410
+    assert client.post("/add", json={}).status_code == 200

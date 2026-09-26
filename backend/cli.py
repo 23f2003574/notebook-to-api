@@ -8495,6 +8495,7 @@ def _dispatch_core_command(args):
                 print(
                     f"  {entry.get('path')}  calls={entry.get('calls', 0)}"
                     + (f"  sunset={sunset}" if sunset else "")
+                    + ("  REJECTED (410)" if entry.get("rejected") else "")
                     + (f"  ({reason})" if reason else "")
                 )
 
