@@ -7445,7 +7445,7 @@ def test_get_deprecations_lists_each_deprecated_endpoint_with_reason_and_calls(
     assert response.json() == {
         "rejecting": False,
         "enforcing_sunset": False,
-        "endpoints": [{"path": "/old_add", "reason": "Use add.", "calls": 1, "rejections": 0, "sunset": None, "rejected": False}],
+        "endpoints": [{"path": "/old_add", "reason": "Use add.", "calls": 1, "rejections": 0, "callers": {"testclient": 1}, "sunset": None, "rejected": False}],
     }
 
 
@@ -7457,7 +7457,7 @@ def test_get_deprecations_reports_rejecting_and_reason_none(monkeypatch):
     assert client.get("/deprecations").json() == {
         "rejecting": True,
         "enforcing_sunset": False,
-        "endpoints": [{"path": "/old_add", "reason": None, "calls": 0, "rejections": 0, "sunset": None, "rejected": True}],
+        "endpoints": [{"path": "/old_add", "reason": None, "calls": 0, "rejections": 0, "callers": {}, "sunset": None, "rejected": True}],
     }
 
 
@@ -7795,3 +7795,30 @@ def test_json_request_log_marks_a_rejected_deprecated_call_too(monkeypatch, caps
     assert entry["status_code"] == 410
     assert entry["deprecated"] is True
     assert entry["user_agent"] == "legacy-app"
+
+
+def test_get_deprecations_breaks_calls_down_by_user_agent(monkeypatch):
+    """Confirmed missing before this feature: GET /deprecations said how
+    many calls a deprecated endpoint got, never from whom -- identifying a
+    caller required a log pipeline over NOTEBOOK_API_JSON_LOGS."""
+    client = _deprecation_test_client(monkeypatch, {"old_add": None})
+    for agent in ("billing-cron/2", "billing-cron/2", "mobile/1"):
+        client.post("/old_add", json={}, headers={"User-Agent": agent})
+    client.post("/old_add", json={}, headers={"User-Agent": ""})
+
+    entry = client.get("/deprecations").json()["endpoints"][0]
+
+    assert entry["callers"] == {"billing-cron/2": 2, "(none)": 1, "mobile/1": 1}
+    assert list(entry["callers"]) == ["billing-cron/2", "(none)", "mobile/1"]
+
+
+def test_deprecated_callers_are_bounded_per_path(monkeypatch):
+    client = _deprecation_test_client(monkeypatch, {"old_add": None})
+    for i in range(55):
+        client.post("/old_add", json={}, headers={"User-Agent": f"agent-{i}" + "x" * 300})
+
+    callers = client.get("/deprecations").json()["endpoints"][0]["callers"]
+
+    assert len(callers) == 51  # 50 distinct + "(other)"
+    assert callers["(other)"] == 5
+    assert all(len(agent) <= 200 for agent in callers)
