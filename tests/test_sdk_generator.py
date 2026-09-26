@@ -338,7 +338,7 @@ def test_generate_python_sdk_constructor_accepts_a_configurable_timeout(tmp_path
     # makes no request of its own, it only calls self.get_task), plus the
     # 10 hardcoded health/ready/info/config/metrics/metrics_prometheus/
     # uptime/auth_status/auth_info/auth_validate methods.
-    assert source.count("timeout=self.timeout") == 21
+    assert source.count("timeout=self.timeout") == 22
 
 
 def test_generate_python_sdk_uses_the_configured_timeout_for_a_request(
@@ -410,7 +410,7 @@ def test_generate_typescript_sdk_constructor_accepts_a_configurable_timeout(
     # paths exist), plus the 10 hardcoded health/ready/info/config/
     # metrics/metricsPrometheus/uptime/authStatus/authInfo/authValidate
     # methods.
-    assert source.count("signal: AbortSignal.timeout(this.timeoutMs),") == 21
+    assert source.count("signal: AbortSignal.timeout(this.timeoutMs),") == 22
 
 
 def test_generate_python_sdk_method_name_handles_multi_segment_paths(tmp_path):
@@ -7064,3 +7064,87 @@ def test_typescript_sdk_runtime_deprecation_warning_includes_the_sunset_header(
         "The server reports that /add is deprecated. "
         "(sunset: Thu, 31 Dec 2099 00:00:00 GMT)"
     ]
+
+
+def test_generate_python_sdk_reset_deprecation_counters_posts_to_the_reset_route(
+    tmp_path, monkeypatch
+):
+    """Confirmed missing before this feature: the compiled app's own POST
+    /deprecations/reset had no method in either generated client."""
+    schema_path = _write_schema(tmp_path, {"/add": {"post": {"operationId": "add"}}})
+    output_path = tmp_path / "client.py"
+    generate_python_sdk(str(schema_path), str(output_path))
+    source = output_path.read_text(encoding="utf-8")
+    calls = []
+
+    class FakeResponse:
+        headers = {}
+        url = "http://localhost:8000/deprecations/reset"
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"reset": ["/old_add"]}
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs["headers"]))
+        return FakeResponse()
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.post = fake_post
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+    namespace = {}
+    exec(compile(source, str(output_path), "exec"), namespace)
+
+    client = namespace["NotebookAPIClient"]("http://localhost:8000", api_key="k")
+
+    assert client.reset_deprecation_counters() == {"reset": ["/old_add"]}
+    assert calls == [("http://localhost:8000/deprecations/reset", {"X-API-Key": "k"})]
+
+
+def test_notebook_function_named_reset_deprecation_counters_cannot_shadow_it(tmp_path):
+    schema_path = _write_schema(tmp_path, {
+        "/reset_deprecation_counters": {"post": {"operationId": "reset_deprecation_counters"}},
+        "/resetDeprecationCounters": {"post": {"operationId": "resetDeprecationCounters"}},
+    })
+    py_path = tmp_path / "client.py"
+    ts_path = tmp_path / "client.ts"
+
+    generate_python_sdk(str(schema_path), str(py_path))
+    generate_typescript_sdk(str(schema_path), str(ts_path))
+
+    assert py_path.read_text(encoding="utf-8").count(
+        "    def reset_deprecation_counters(self") == 1
+    assert ts_path.read_text(encoding="utf-8").count(
+        "  async resetDeprecationCounters(") == 1
+
+
+@_needs_node
+def test_generate_typescript_sdk_reset_deprecation_counters_posts(tmp_path):
+    schema_path = _write_schema(tmp_path, {"/add": {"post": {"operationId": "add"}}})
+    client_path = tmp_path / "client.ts"
+    generate_typescript_sdk(str(schema_path), str(client_path))
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        const calls = [];
+        globalThis.fetch = async (url, opts) => {{
+          calls.push({{ url, method: opts.method, key: opts.headers["X-API-Key"] }});
+          return {{ ok: true, status: 200, headers: new Headers(),
+                   json: async () => ({{ reset: ["/old_add"] }}) }};
+        }};
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000", {{ apiKey: "k" }});
+        const result = await client.resetDeprecationCounters();
+        console.log(JSON.stringify({{ result, calls }}));
+        """,
+        encoding="utf-8",
+    )
+    proc = subprocess.run(["node", str(runner_path)], capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout.strip().splitlines()[-1]) == {
+        "result": {"reset": ["/old_add"]},
+        "calls": [{"url": "http://localhost:8000/deprecations/reset",
+                   "method": "POST", "key": "k"}],
+    }
