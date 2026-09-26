@@ -89,6 +89,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "_DEPRECATED_ENDPOINT_CALLERS",
     "_DEPRECATED_CALLERS_LIMIT",
     "_DEPRECATION_COUNTERS_SINCE",
+    "_RETIRED_ENDPOINTS",
     "_record_deprecated_caller",
     # Read by name from inside _add_deprecation_headers on every request,
     # the same exposure JSON_REQUEST_LOGS has for _log_request_json.
@@ -1279,7 +1280,18 @@ def generate_fastapi_code(
             deprecated_paths[f"/{func['name']}"] = _deprecation_header_value(
                 reason
             )
+    # `retired_endpoints` (their 410 tombstone routes, emitted at the end
+    # of this function) are tracked like any other deprecated path --
+    # headers, call/rejection/caller counters, GET /deprecations -- so an
+    # operator can still see who keeps calling an endpoint after it was
+    # removed, not just before. _RETIRED_ENDPOINTS marks them.
+    retired_paths = sorted(f"/{name}" for name in (retired_endpoints or {}))
+    for retired_name, retired_reason in (retired_endpoints or {}).items():
+        deprecated_paths[f"/{retired_name}"] = _deprecation_header_value(
+            retired_reason
+        )
     lines.append(f"_DEPRECATED_ENDPOINTS = {repr(deprecated_paths)}")
+    lines.append(f"_RETIRED_ENDPOINTS = frozenset({repr(retired_paths)})")
     # RFC 8594 Sunset: when the directive's reason names a removal date
     # ("sunset: 2025-12-31"), every response from that endpoint says so
     # in the standard header clients and gateways already understand, and
@@ -1294,6 +1306,10 @@ def generate_fastapi_code(
         sunset = _deprecation_sunset_date(reason) if is_deprecated else None
         if sunset:
             sunsets[f"/{func['name']}"] = (sunset, _sunset_http_date(sunset))
+    for retired_name, retired_reason in (retired_endpoints or {}).items():
+        sunset = _deprecation_sunset_date(retired_reason)
+        if sunset:
+            sunsets[f"/{retired_name}"] = (sunset, _sunset_http_date(sunset))
     lines.append(f"_DEPRECATION_SUNSETS = {repr(sunsets)}")
     # Per-deprecated-path call counter, reported by GET /metrics and GET
     # /metrics/prometheus: the Deprecation header tells a caller, but only
@@ -1374,6 +1390,8 @@ def generate_fastapi_code(
     # is decided -- shared by the middleware below and GET /deprecations'
     # own per-endpoint "rejected", so the two can never disagree.
     lines.append("def _deprecated_endpoint_is_rejected(path):")
+    lines.append("    if path in _RETIRED_ENDPOINTS:")
+    lines.append("        return True")
     lines.append("    return path in _DEPRECATED_ENDPOINTS and (")
     lines.append("        REJECT_DEPRECATED_ENDPOINTS")
     lines.append("        or (ENFORCE_DEPRECATION_SUNSET and _sunset_has_passed(path))")
@@ -1381,10 +1399,15 @@ def generate_fastapi_code(
     lines.append("")
     lines.append("@app.middleware('http')")
     lines.append("async def _add_deprecation_headers(request, call_next):")
+    # A retired path is always rejected, but by its own tombstone route
+    # (with its more specific "has been removed" detail) -- so it's only
+    # counted here, then passed through to that route via call_next.
     lines.append(
         "    if _deprecated_endpoint_is_rejected(request.url.path):"
     )
     lines.append("        _DEPRECATED_ENDPOINT_REJECTIONS[request.url.path] += 1")
+    lines.append("    if (_deprecated_endpoint_is_rejected(request.url.path)")
+    lines.append("            and request.url.path not in _RETIRED_ENDPOINTS):")
     lines.append("        response = JSONResponse(")
     lines.append("            status_code=410,")
     lines.append(
@@ -2668,6 +2691,7 @@ def generate_fastapi_code(
     lines.append(
         "                'rejected': _deprecated_endpoint_is_rejected(path),"
     )
+    lines.append("                'retired': path in _RETIRED_ENDPOINTS,")
     lines.append("            }")
     lines.append("            for path, reason in sorted(_DEPRECATED_ENDPOINTS.items())")
     lines.append("        ],")
