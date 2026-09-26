@@ -28176,3 +28176,57 @@ def test_app_status_shows_rejected_call_counts(tmp_path, fake_dashboard):
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "/old_add  calls=4 (rejected=4)  REJECTED (410)" in proc.stdout
+
+
+_DEPRECATIONS_WITH_CALLERS = {
+    "rejecting": False, "enforcing_sunset": False,
+    "endpoints": [{
+        "path": "/old_add", "reason": None, "calls": 9, "rejections": 0,
+        "sunset": None, "rejected": False,
+        "callers": {"billing-cron/2": 5, "mobile/1": 3, "(none)": 1},
+    }],
+}
+
+
+def test_app_deprecations_lists_each_endpoints_top_callers(tmp_path, fake_dashboard):
+    """Confirmed missing before this feature: GET /deprecations' own
+    per-User-Agent "callers" breakdown never reached the CLI summary."""
+    proc, _ = _run_app_deprecations(tmp_path, fake_dashboard, _DEPRECATIONS_WITH_CALLERS)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (
+        "      caller: billing-cron/2  calls=5\n"
+        "      caller: mobile/1  calls=3\n"
+        "      caller: (none)  calls=1\n"
+    ) in proc.stdout
+
+
+def test_app_deprecations_top_callers_limits_and_summarizes_the_rest(
+    tmp_path, fake_dashboard
+):
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, _DEPRECATIONS_WITH_CALLERS, "--top-callers", "1"
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "caller: billing-cron/2  calls=5" in proc.stdout
+    assert "mobile/1" not in proc.stdout
+    assert "... and 2 more caller(s) (see --json)" in proc.stdout
+
+
+def test_app_deprecations_top_callers_zero_hides_them(tmp_path, fake_dashboard):
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, _DEPRECATIONS_WITH_CALLERS, "--top-callers", "0"
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "caller:" not in proc.stdout and "more caller" not in proc.stdout
+
+
+def test_app_deprecations_rejects_negative_top_callers(tmp_path, fake_dashboard):
+    proc, _ = _run_app_deprecations(
+        tmp_path, fake_dashboard, _DEPRECATIONS_WITH_CALLERS, "--top-callers", "-1"
+    )
+
+    assert proc.returncode != 0
+    assert "--top-callers" in proc.stdout + proc.stderr
