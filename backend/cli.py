@@ -5868,6 +5868,8 @@ def _dispatch_core_command(args):
             curl_preview_body["version_id"] = args.version_id
         if args.callback_url:
             curl_preview_body["callback_url"] = args.callback_url
+        if args.tag:
+            curl_preview_body["tags"] = _parse_comma_separated_names(args.tag)
         if args.expected_sha256:
             curl_preview_body["expected_sha256"] = args.expected_sha256
 
@@ -5930,6 +5932,8 @@ def _dispatch_core_command(args):
             postman_preview_body["version_id"] = args.version_id
         if args.callback_url:
             postman_preview_body["callback_url"] = args.callback_url
+        if args.tag:
+            postman_preview_body["tags"] = _parse_comma_separated_names(args.tag)
         if args.group_by_tag:
             postman_preview_body["group_by_tag"] = True
         if args.expected_sha256:
@@ -14325,6 +14329,7 @@ def main():
     )
     _add_version_id_argument(curl_preview_parser, "POST /api/curl-preview")
     _add_callback_url_argument(curl_preview_parser)
+    _add_tag_selection_argument(curl_preview_parser)
     curl_preview_parser.add_argument(
         "--expected-sha256",
         default=None,
@@ -14414,6 +14419,7 @@ def main():
     )
     _add_version_id_argument(postman_preview_parser, "POST /api/postman-preview")
     _add_callback_url_argument(postman_preview_parser)
+    _add_tag_selection_argument(postman_preview_parser)
     _add_group_by_tag_argument(postman_preview_parser)
     postman_preview_parser.add_argument(
         "--expected-sha256",

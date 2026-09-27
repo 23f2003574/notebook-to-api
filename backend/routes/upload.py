@@ -79,6 +79,7 @@ from backend.generator.kubernetes_generator import (
 )
 from backend.inspector import (
     apply_drop_past_sunset,
+    apply_tag_selection,
     past_sunset_functions,
     EXCLUDED_GENERATED_DIR_NAMES,
     EXCLUDED_GENERATED_FILE_NAMES,
@@ -15178,6 +15179,14 @@ def curl_preview_endpoint(data: dict):
     # sunset date -- matching an app compiled with it (POST /api/compile's
     # own identical option) -- see _drop_past_sunset_selection.
     drop_past_sunset = bool(data.get("drop_past_sunset", False))
+    # "tags": only the functions whose endpoint tag is one of these
+    # (apply_tag_selection) -- the same selection export-curl/
+    # export-postman --tag make.
+    tags = data.get("tags")
+    if tags is not None and (
+        not isinstance(tags, list) or not all(isinstance(t, str) and t for t in tags)
+    ):
+        raise HTTPException(status_code=400, detail="tags must be a list of non-empty strings")
     callback_url = data.get("callback_url")
     expected_sha256 = data.get("expected_sha256")
 
@@ -15257,6 +15266,7 @@ def curl_preview_endpoint(data: dict):
 
         with COMPILE_LOCK:
 
+            only, exclude = apply_tag_selection(str(full_path), tags, only, exclude)
             only, exclude, dropped_past_sunset = _drop_past_sunset_selection(
                 str(full_path), only, exclude, drop_past_sunset,
             )
@@ -15328,6 +15338,14 @@ def postman_preview_endpoint(data: dict):
     # sunset date -- matching an app compiled with it (POST /api/compile's
     # own identical option) -- see _drop_past_sunset_selection.
     drop_past_sunset = bool(data.get("drop_past_sunset", False))
+    # "tags": only the functions whose endpoint tag is one of these
+    # (apply_tag_selection) -- the same selection export-curl/
+    # export-postman --tag make.
+    tags = data.get("tags")
+    if tags is not None and (
+        not isinstance(tags, list) or not all(isinstance(t, str) and t for t in tags)
+    ):
+        raise HTTPException(status_code=400, detail="tags must be a list of non-empty strings")
     callback_url = data.get("callback_url")
     group_by_tag = bool(data.get("group_by_tag", False))
     expected_sha256 = data.get("expected_sha256")
@@ -15416,6 +15434,7 @@ def postman_preview_endpoint(data: dict):
 
         with COMPILE_LOCK:
 
+            only, exclude = apply_tag_selection(str(full_path), tags, only, exclude)
             only, exclude, dropped_past_sunset = _drop_past_sunset_selection(
                 str(full_path), only, exclude, drop_past_sunset,
             )

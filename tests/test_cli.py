@@ -29486,3 +29486,21 @@ def test_export_tag_matching_nothing_fails_clearly(tmp_path):
     assert proc.returncode != 0
     assert "No function is tagged Missing. Available tags: General, Scoring" in proc.stdout + proc.stderr
     assert not (workdir / "requests.sh").exists()
+
+
+@pytest.mark.parametrize("command, body_key", [("curl-preview", "tags"), ("postman-preview", "tags")])
+def test_preview_commands_pass_tag_selection_through(tmp_path, fake_dashboard, command, body_key):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "notebook": "nb.ipynb", "commands": [],
+                             "collection": {"info": {"name": "nb"}, "variable": [], "item": []}})
+    ]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [command, "nb.ipynb", "--dashboard-url", dashboard_url, "--tag", "Scoring,Training"], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0])[body_key] == ["Scoring", "Training"]

@@ -34559,3 +34559,43 @@ def test_postman_preview_groups_by_tag_when_asked():
 
     assert [folder["name"] for folder in grouped["item"]] == ["General", "Scoring"]
     assert [item["name"] for item in flat["item"]] == ["score", "add"]
+
+
+def _upload_tagged_notebook(name):
+    client.delete("/api/notebooks?confirm=true")
+    content = _notebook_bytes(
+        "# notebook-to-api: tag Scoring\ndef score(a: int) -> int:\n    return a\n\n"
+        "def add(a: int) -> int:\n    return a\n"
+    )
+    client.post("/api/upload", files={"file": (name, io.BytesIO(content), "application/json")})
+
+
+def test_curl_preview_selects_endpoints_by_tag():
+    """Confirmed missing before this feature: previews could only be
+    narrowed by function name."""
+    _upload_tagged_notebook("curl_tags.ipynb")
+
+    body = client.post("/api/curl-preview", json={"notebook_path": "curl_tags.ipynb", "tags": ["scoring"]}).json()
+
+    text = json.dumps(body)
+    assert "/score" in text and "/add" not in text
+
+
+def test_postman_preview_selects_endpoints_by_tag():
+    _upload_tagged_notebook("postman_tag_select.ipynb")
+
+    body = client.post(
+        "/api/postman-preview", json={"notebook_path": "postman_tag_select.ipynb", "tags": ["General"]}
+    ).json()
+
+    assert [item["name"] for item in body["collection"]["item"]] == ["add"]
+
+
+def test_preview_tag_selection_errors_are_400():
+    _upload_tagged_notebook("tag_errors.ipynb")
+
+    unknown = client.post("/api/curl-preview", json={"notebook_path": "tag_errors.ipynb", "tags": ["Nope"]})
+    malformed = client.post("/api/postman-preview", json={"notebook_path": "tag_errors.ipynb", "tags": "Scoring"})
+
+    assert unknown.status_code == 400 and "Available tags: General, Scoring" in unknown.json()["detail"]
+    assert malformed.status_code == 400 and "tags must be a list" in malformed.json()["detail"]
