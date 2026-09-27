@@ -955,6 +955,9 @@ def _extract_notebook_functions(notebook_path):
     background_overrides = _extract_background_overrides(code_cells)
     deprecated_overrides = _extract_deprecated_functions(code_cells)
     timeout_overrides = _extract_timeout_overrides(code_cells)
+    rate_limit_overrides = _extract_rate_limit_overrides(code_cells)
+    cache_overrides = _extract_cache_overrides(code_cells)
+    tag_overrides = _extract_tag_overrides(code_cells)
 
     for func in functions:
         func["is_background"] = _is_background_function(
@@ -964,6 +967,12 @@ def _extract_notebook_functions(notebook_path):
         # timeout-only edit shows up as "changed" and in
         # classify_notebook_diff's own "timeout_changed".
         func["timeout_seconds"] = timeout_overrides.get(func["name"])
+        # Its "rate-limit N" / "cache N" / "tag" directives (None without
+        # one) -- so a directive-only edit shows up as "changed" and in
+        # classify_notebook_diff's own "directive_changed".
+        func["rate_limit"] = rate_limit_overrides.get(func["name"])
+        func["cache_ttl"] = cache_overrides.get(func["name"])
+        func["tag"] = tag_overrides.get(func["name"])
         func["is_deprecated"], func["deprecation_reason"] = resolve_deprecation(
             func["name"], deprecated_overrides
         )
@@ -1051,6 +1060,9 @@ def _function_signature_key(func):
         # the function's code was untouched.
         _function_sunset(func),
         func.get("timeout_seconds"),
+        func.get("rate_limit"),
+        func.get("cache_ttl"),
+        func.get("tag"),
     )
 
 
@@ -1309,6 +1321,7 @@ def classify_notebook_diff(diff):
     newly_deprecated = []
     sunset_changed = []
     timeout_changed = []
+    directive_changed = []
     no_longer_deprecated = []
 
     # A removed function that was deprecated with a "sunset: YYYY-MM-DD"
@@ -1464,6 +1477,27 @@ def classify_notebook_diff(diff):
                 ),
             })
 
+        # A rate-limit, cache or tag directive added, removed or changed.
+        # "tightened" marks the changes that can start failing or
+        # altering calls that used to work: a new or lower rate limit
+        # (more 429s), or a cache newly added or lengthened (callers may
+        # now get an older answer). A tag change only regroups docs.
+        for directive, key in (("rate_limit", "rate_limit"), ("cache", "cache_ttl"), ("tag", "tag")):
+            old_value = entry["old"].get(key)
+            new_value = entry["new"].get(key)
+            if old_value == new_value:
+                continue
+            if directive == "tag":
+                tightened = False
+            elif directive == "rate_limit":
+                tightened = bool(new_value) and (not old_value or new_value < old_value)
+            else:
+                tightened = bool(new_value) and (not old_value or new_value > old_value)
+            directive_changed.append({
+                "name": name, "directive": directive, "old": old_value, "new": new_value,
+                "tightened": tightened,
+            })
+
         if old_is_deprecated and new_is_deprecated and old_sunset != new_sunset:
             sunset_changed.append({
                 "name": name,
@@ -1482,6 +1516,7 @@ def classify_notebook_diff(diff):
         "sunset_changed": sunset_changed,
         "planned_removals": planned_removals,
         "timeout_changed": timeout_changed,
+        "directive_changed": directive_changed,
     }
 
 
@@ -1635,6 +1670,20 @@ def print_notebook_diff(diff):
             print(
                 f"{marker}POST /{entry['name']}: {_label(entry.get('old_timeout'))} -> "
                 f"{_label(entry.get('new_timeout'))}"
+                + (" (tightened)" if entry.get("tightened") else "")
+            )
+
+    if diff.get("directive_changed"):
+        print(
+            f"\n{len(diff['directive_changed'])} endpoint directive change(s) "
+            "(rate-limit/cache/tag):"
+        )
+        for entry in diff["directive_changed"]:
+            marker = "  ! " if entry.get("tightened") else "  "
+            print(
+                f"{marker}POST /{entry['name']} {entry['directive']}: "
+                f"{entry.get('old') if entry.get('old') is not None else 'none'} -> "
+                f"{entry.get('new') if entry.get('new') is not None else 'none'}"
                 + (" (tightened)" if entry.get("tightened") else "")
             )
 

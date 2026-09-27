@@ -1589,6 +1589,7 @@ def test_classify_notebook_diff_deprecated_only_change_is_not_breaking(tmp_path)
         "sunset_changed": [],
         "planned_removals": [],
         "timeout_changed": [],
+        "directive_changed": [],
     }
 
 
@@ -1672,6 +1673,7 @@ def test_print_notebook_diff_prints_newly_deprecated(capsys):
         "sunset_changed": [],
         "planned_removals": [],
         "timeout_changed": [],
+        "directive_changed": [],
     })
 
     output = capsys.readouterr().out
@@ -1812,6 +1814,7 @@ def test_classify_notebook_diff_added_function_is_not_breaking(tmp_path):
         "sunset_changed": [],
         "planned_removals": [],
         "timeout_changed": [],
+        "directive_changed": [],
     }
 
 
@@ -1863,6 +1866,7 @@ def test_classify_notebook_diff_new_optional_parameter_is_not_breaking(tmp_path)
         "sunset_changed": [],
         "planned_removals": [],
         "timeout_changed": [],
+        "directive_changed": [],
     }
 
 
@@ -2092,6 +2096,7 @@ def test_classify_notebook_diff_gaining_a_return_type_annotation_is_not_breaking
         "sunset_changed": [],
         "planned_removals": [],
         "timeout_changed": [],
+        "directive_changed": [],
     }
 
 
@@ -2119,6 +2124,7 @@ def test_classify_notebook_diff_losing_a_return_type_annotation_is_not_breaking(
         "sunset_changed": [],
         "planned_removals": [],
         "timeout_changed": [],
+        "directive_changed": [],
     }
 
 
@@ -2147,6 +2153,7 @@ def test_classify_notebook_diff_async_only_change_is_not_breaking(tmp_path):
         "sunset_changed": [],
         "planned_removals": [],
         "timeout_changed": [],
+        "directive_changed": [],
     }
 
 
@@ -2258,6 +2265,7 @@ def test_classify_notebook_diff_no_changes_is_compatible(tmp_path):
         "sunset_changed": [],
         "planned_removals": [],
         "timeout_changed": [],
+        "directive_changed": [],
     }
 
 
@@ -3575,3 +3583,56 @@ def test_resolve_endpoint_tag_matches_the_generated_app():
     assert resolve_endpoint_tag("anything", {"anything": "Custom"}) == "Custom"
     code = generate_fastapi_code([{"name": "embed_text", "args": [], "return_type": "int"}])
     assert f'tags=["{resolve_endpoint_tag("embed_text")}"]' in code
+
+
+def test_classify_notebook_diff_reports_directive_changes(tmp_path):
+    """Confirmed missing before this feature: a rate-limit, cache or tag
+    edit left the function "unchanged" in the diff."""
+    diff, classification = _classify_timeout_directives(
+        tmp_path,
+        "# notebook-to-api: rate-limit 10\n# notebook-to-api: tag Old\n",
+        "# notebook-to-api: rate-limit 5\n# notebook-to-api: cache 30\n# notebook-to-api: tag New\n",
+    )
+
+    assert [entry["name"] for entry in diff["changed"]] == ["report"]
+    assert classification["compatible"] is True
+    assert classification["directive_changed"] == [
+        {"name": "report", "directive": "rate_limit", "old": 10, "new": 5, "tightened": True},
+        {"name": "report", "directive": "cache", "old": None, "new": 30, "tightened": True},
+        {"name": "report", "directive": "tag", "old": "Old", "new": "New", "tightened": False},
+    ]
+
+
+@pytest.mark.parametrize("old, new, tightened", [
+    ("# notebook-to-api: rate-limit 5\n", "# notebook-to-api: rate-limit 50\n", False),
+    ("# notebook-to-api: rate-limit 5\n", "", False),
+    ("", "# notebook-to-api: rate-limit 5\n", True),
+    ("# notebook-to-api: cache 60\n", "# notebook-to-api: cache 10\n", False),
+    ("# notebook-to-api: cache 10\n", "# notebook-to-api: cache 60\n", True),
+])
+def test_classify_notebook_diff_directive_tightened_flag(tmp_path, old, new, tightened):
+    _, classification = _classify_timeout_directives(tmp_path, old, new)
+
+    assert classification["directive_changed"][0]["tightened"] is tightened
+
+
+def test_classify_notebook_diff_unchanged_directives_report_nothing(tmp_path):
+    diff, classification = _classify_timeout_directives(
+        tmp_path, "# notebook-to-api: cache 30\n", "# notebook-to-api: cache 30\n",
+    )
+
+    assert diff["changed"] == [] and classification["directive_changed"] == []
+
+
+def test_print_classification_shows_directive_changes(tmp_path, capsys):
+    from backend.inspector import print_notebook_diff
+
+    diff, classification = _classify_timeout_directives(
+        tmp_path, "", "# notebook-to-api: rate-limit 5\n# notebook-to-api: tag Scoring\n",
+    )
+    print_notebook_diff({**diff, **classification})
+
+    output = capsys.readouterr().out
+    assert "2 endpoint directive change(s) (rate-limit/cache/tag):" in output
+    assert "  ! POST /report rate_limit: none -> 5 (tightened)" in output
+    assert "  POST /report tag: none -> Scoring" in output
