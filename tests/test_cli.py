@@ -29275,3 +29275,58 @@ def test_validate_command_reports_rate_limit_and_cache_directives(tmp_path):
     assert data["rate_limit_overrides"] == {"lookup": 4}
     assert data["cache_overrides"] == {"lookup": 20}
     assert data["ignored_cache_directives"] == ["train_model"]
+
+
+def test_diff_command_fail_on_directive_tightened_exits_1(tmp_path):
+    """Confirmed missing before this feature: "directive_changed"/"tightened"
+    had no CLI gate."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    old_path, new_path = _diff_timeout_directives(
+        workdir, "# notebook-to-api: rate-limit 60\n", "# notebook-to-api: rate-limit 10\n",
+    )
+
+    proc = _run_cli(
+        ["diff", str(old_path), str(new_path), "--fail-on-directive-tightened"], cwd=workdir,
+    )
+
+    assert proc.returncode == 1
+    assert "! POST /report rate_limit: 60 -> 10 (tightened)" in proc.stdout
+
+
+@pytest.mark.parametrize("old, new", [
+    ("# notebook-to-api: rate-limit 10\n", "# notebook-to-api: rate-limit 60\n"),
+    ("# notebook-to-api: cache 60\n", "# notebook-to-api: cache 10\n"),
+    ("# notebook-to-api: tag Old\n", "# notebook-to-api: tag New\n"),
+])
+def test_diff_command_fail_on_directive_tightened_ignores_loosening_and_tags(tmp_path, old, new):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    old_path, new_path = _diff_timeout_directives(workdir, old, new)
+
+    proc = _run_cli(
+        ["diff", str(old_path), str(new_path), "--fail-on-directive-tightened"], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_diff_command_new_cache_without_the_flag_exits_0(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    old_path, new_path = _diff_timeout_directives(workdir, "", "# notebook-to-api: cache 30\n")
+
+    proc = _run_cli(["diff", str(old_path), str(new_path)], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "POST /report cache: none -> 30 (tightened)" in proc.stdout
+
+
+def test_every_diff_command_accepts_fail_on_directive_tightened():
+    for command in (
+        ["diff"], ["remote-diff"], ["diff-notebooks"],
+        ["versions", "diff"], ["versions", "compare"],
+    ):
+        proc = _run_cli([*command, "--help"], cwd=Path.cwd())
+        assert proc.returncode == 0, proc.stderr
+        assert "--fail-on-directive-tightened" in proc.stdout, command

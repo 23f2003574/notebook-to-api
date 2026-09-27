@@ -2482,6 +2482,10 @@ def _dispatch_core_command(args):
             entry.get("tightened") for entry in diff.get("timeout_changed", [])
         ):
             sys.exit(1)
+        if args.fail_on_directive_tightened and any(
+            entry.get("tightened") for entry in diff.get("directive_changed", [])
+        ):
+            sys.exit(1)
     elif args.command == "upload":
         # Imported here, not at module scope, the same deferred-import
         # convention export-openapi/export-sdk's own dynamic imports
@@ -6937,6 +6941,10 @@ def _dispatch_core_command(args):
                 entry.get("tightened") for entry in diff.get("timeout_changed", [])
             ):
                 sys.exit(1)
+            if args.fail_on_directive_tightened and any(
+                entry.get("tightened") for entry in diff.get("directive_changed", [])
+            ):
+                sys.exit(1)
 
         elif args.versions_command == "compare":
 
@@ -6998,6 +7006,10 @@ def _dispatch_core_command(args):
                 sys.exit(1)
             if args.fail_on_timeout_tightened and any(
                 entry.get("tightened") for entry in data.get("timeout_changed", [])
+            ):
+                sys.exit(1)
+            if args.fail_on_directive_tightened and any(
+                entry.get("tightened") for entry in data.get("directive_changed", [])
             ):
                 sys.exit(1)
 
@@ -7439,6 +7451,10 @@ def _dispatch_core_command(args):
             entry.get("tightened") for entry in diff.get("timeout_changed", [])
         ):
             sys.exit(1)
+        if args.fail_on_directive_tightened and any(
+            entry.get("tightened") for entry in diff.get("directive_changed", [])
+        ):
+            sys.exit(1)
     elif args.command == "diff-notebooks":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -7504,6 +7520,10 @@ def _dispatch_core_command(args):
             sys.exit(1)
         if args.fail_on_timeout_tightened and any(
             entry.get("tightened") for entry in data.get("timeout_changed", [])
+        ):
+            sys.exit(1)
+        if args.fail_on_directive_tightened and any(
+            entry.get("tightened") for entry in data.get("directive_changed", [])
         ):
             sys.exit(1)
     elif args.command == "remote-curl":
@@ -10301,6 +10321,18 @@ def main():
             "timeout N\" directive added or lowered, which can start "
             "answering 504 to calls that used to succeed. Loosening or "
             "removing a timeout never fails it."
+        )
+    )
+    diff_parser.add_argument(
+        "--fail-on-directive-tightened",
+        action="store_true",
+        dest="fail_on_directive_tightened",
+        help=(
+            "Exit with status 1 if the diff's own \"directive_changed\" has "
+            "any entry with \"tightened\" -- a \"# notebook-to-api: "
+            "rate-limit N\" added or lowered (more 429s), or a \"cache N\" "
+            "added or lengthened (callers may get older answers). Tag "
+            "changes and loosened limits never fail it."
         )
     )
     diff_parser.add_argument(
@@ -15829,6 +15861,18 @@ def main():
         )
     )
     versions_diff_parser.add_argument(
+        "--fail-on-directive-tightened",
+        action="store_true",
+        dest="fail_on_directive_tightened",
+        help=(
+            "Exit with status 1 if the diff's own \"directive_changed\" has "
+            "any entry with \"tightened\" -- a \"# notebook-to-api: "
+            "rate-limit N\" added or lowered (more 429s), or a \"cache N\" "
+            "added or lengthened (callers may get older answers). Tag "
+            "changes and loosened limits never fail it."
+        )
+    )
+    versions_diff_parser.add_argument(
         "--fail-on-sunset-moved-earlier",
         action="store_true",
         dest="fail_on_sunset_moved_earlier",
@@ -15929,6 +15973,18 @@ def main():
             "timeout N\" directive added or lowered, which can start "
             "answering 504 to calls that used to succeed. Loosening or "
             "removing a timeout never fails it."
+        )
+    )
+    versions_compare_parser.add_argument(
+        "--fail-on-directive-tightened",
+        action="store_true",
+        dest="fail_on_directive_tightened",
+        help=(
+            "Exit with status 1 if the diff's own \"directive_changed\" has "
+            "any entry with \"tightened\" -- a \"# notebook-to-api: "
+            "rate-limit N\" added or lowered (more 429s), or a \"cache N\" "
+            "added or lengthened (callers may get older answers). Tag "
+            "changes and loosened limits never fail it."
         )
     )
     versions_compare_parser.add_argument(
@@ -16154,6 +16210,18 @@ def main():
         )
     )
     remote_diff_parser.add_argument(
+        "--fail-on-directive-tightened",
+        action="store_true",
+        dest="fail_on_directive_tightened",
+        help=(
+            "Exit with status 1 if the diff's own \"directive_changed\" has "
+            "any entry with \"tightened\" -- a \"# notebook-to-api: "
+            "rate-limit N\" added or lowered (more 429s), or a \"cache N\" "
+            "added or lengthened (callers may get older answers). Tag "
+            "changes and loosened limits never fail it."
+        )
+    )
+    remote_diff_parser.add_argument(
         "--fail-on-sunset-moved-earlier",
         action="store_true",
         dest="fail_on_sunset_moved_earlier",
@@ -16293,6 +16361,18 @@ def main():
             "timeout N\" directive added or lowered, which can start "
             "answering 504 to calls that used to succeed. Loosening or "
             "removing a timeout never fails it."
+        )
+    )
+    diff_notebooks_parser.add_argument(
+        "--fail-on-directive-tightened",
+        action="store_true",
+        dest="fail_on_directive_tightened",
+        help=(
+            "Exit with status 1 if the diff's own \"directive_changed\" has "
+            "any entry with \"tightened\" -- a \"# notebook-to-api: "
+            "rate-limit N\" added or lowered (more 429s), or a \"cache N\" "
+            "added or lengthened (callers may get older answers). Tag "
+            "changes and loosened limits never fail it."
         )
     )
     diff_notebooks_parser.add_argument(
