@@ -33,6 +33,7 @@ from backend.parser.notebook_parser import extract_code_cells, load_notebook
 # Import inspector for analysis
 from backend.inspector import (
     apply_drop_past_sunset,
+    apply_tag_selection,
     past_sunset_functions,
     DEFAULT_DEV_API_KEY,
     classify_notebook_diff,
@@ -680,6 +681,22 @@ def _add_function_selection_arguments(parser):
             "endpoints; every other function the notebook defines is "
             "compiled normally. Mutually exclusive with --only."
         )
+    )
+
+
+def _add_tag_selection_argument(parser):
+    """Add --tag to an export subcommand (export-curl, export-postman):
+    select functions by their endpoint's OpenAPI tag (see
+    inspector.apply_tag_selection)."""
+    parser.add_argument(
+        "--tag",
+        default=None,
+        help=(
+            "Comma-separated OpenAPI tags (case-insensitive) -- only export "
+            "requests for endpoints with one of these tags (the \"# "
+            "notebook-to-api: tag\" directive, else the name-based guess). "
+            "Combines with --only/--exclude."
+        ),
     )
 
 
@@ -2214,6 +2231,9 @@ def _dispatch_core_command(args):
     elif args.command == "export-curl":
         only = _parse_comma_separated_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
+        only, exclude = apply_tag_selection(
+            args.notebook, _parse_comma_separated_names(args.tag), only, exclude,
+        )
         # --drop-past-sunset (apply_drop_past_sunset): the same functions
         # `compile`/`deploy --drop-past-sunset` leave out of the app itself
         # -- without it, these exports kept shipping requests for
@@ -2258,6 +2278,9 @@ def _dispatch_core_command(args):
     elif args.command == "export-postman":
         only = _parse_comma_separated_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
+        only, exclude = apply_tag_selection(
+            args.notebook, _parse_comma_separated_names(args.tag), only, exclude,
+        )
         # --drop-past-sunset (apply_drop_past_sunset): the same functions
         # `compile`/`deploy --drop-past-sunset` leave out of the app itself
         # -- without it, these exports kept shipping requests for
@@ -10046,6 +10069,7 @@ def main():
         help="Path to write the generated shell script to. Default: requests.sh"
     )
     _add_function_selection_arguments(curl_parser)
+    _add_tag_selection_argument(curl_parser)
     curl_parser.add_argument(
         "--drop-past-sunset",
         action="store_true",
@@ -10116,6 +10140,7 @@ def main():
         help="Path to write the generated collection to. Default: postman_collection.json"
     )
     _add_function_selection_arguments(postman_parser)
+    _add_tag_selection_argument(postman_parser)
     postman_parser.add_argument(
         "--drop-past-sunset",
         action="store_true",

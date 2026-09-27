@@ -296,6 +296,35 @@ def apply_drop_past_sunset(notebook_path, only, exclude):
     return only, exclude
 
 
+def apply_tag_selection(notebook_path, tags, only, exclude):
+    """(only, exclude) narrowed to the functions whose endpoint tag (the
+    "# notebook-to-api: tag" directive, else the name-based guess -- the
+    same resolve_endpoint_tag the compiled app uses) is one of `tags`,
+    matched case-insensitively. Combined with an explicit `only`, the
+    result is their intersection; with `exclude`, the tagged functions
+    minus the excluded ones. No tags -> unchanged. Selecting nothing is a
+    ValueError naming the tags that do exist, rather than exporting
+    everything.
+    """
+    if not tags:
+        return only, exclude
+    wanted = {tag.lower() for tag in tags}
+    endpoints = inspect_notebook_data(notebook_path=notebook_path)["endpoints"]
+    tagged = [e["path"].lstrip("/") for e in endpoints if e["tag"].lower() in wanted]
+    if only:
+        selected = [name for name in only if name in tagged]
+    else:
+        selected = [name for name in tagged if name not in set(exclude or [])]
+    if not selected:
+        available = sorted({e["tag"] for e in endpoints})
+        raise ValueError(
+            f"No function is tagged {', '.join(sorted(tags))}"
+            + (" among the selected functions" if only or exclude else "")
+            + f". Available tags: {', '.join(available) or 'none'}."
+        )
+    return selected, None
+
+
 def _endpoint_sunset(func_name, deprecated_overrides):
     is_deprecated, reason = resolve_deprecation(func_name, deprecated_overrides)
     return _deprecation_sunset_date(reason) if is_deprecated else None

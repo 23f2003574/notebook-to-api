@@ -3687,3 +3687,29 @@ def test_postman_grouping_respects_selection_and_empty_collections(tmp_path):
     empty = tmp_path / "empty.ipynb"
     _write_notebook(empty, "x = 1\n")
     assert generate_postman_collection(str(empty), group_by_tag=True)["item"] == []
+
+
+def test_apply_tag_selection_filters_by_endpoint_tag(tmp_path):
+    """Confirmed missing before this feature: exports could only be narrowed
+    by function name, never by the tags the endpoints are grouped under."""
+    from backend.inspector import apply_tag_selection
+
+    path = tmp_path / "nb.ipynb"
+    _write_notebook(path, _TAGGED_SOURCE)
+
+    assert apply_tag_selection(str(path), ["scoring"], None, None) == (["score", "rank"], None)
+    assert apply_tag_selection(str(path), ["Scoring", "Training"], None, ["rank"]) == (["score", "train_model"], None)
+    assert apply_tag_selection(str(path), ["Scoring"], ["rank", "add"], None) == (["rank"], None)
+    assert apply_tag_selection(str(path), None, ["add"], None) == (["add"], None)
+
+
+def test_apply_tag_selection_rejects_an_empty_selection(tmp_path):
+    from backend.inspector import apply_tag_selection
+
+    path = tmp_path / "nb.ipynb"
+    _write_notebook(path, _TAGGED_SOURCE)
+
+    with pytest.raises(ValueError, match="No function is tagged Nope. Available tags: General, Scoring, Training"):
+        apply_tag_selection(str(path), ["Nope"], None, None)
+    with pytest.raises(ValueError, match="among the selected functions"):
+        apply_tag_selection(str(path), ["Scoring"], ["add"], None)

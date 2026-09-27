@@ -29441,3 +29441,48 @@ def test_app_status_without_endpoints_by_tag_prints_no_groups(tmp_path, fake_das
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "    General:" not in proc.stdout
+
+
+_TAGGED_CLI_SOURCE = (
+    "# notebook-to-api: tag Scoring\ndef score(a: int) -> int:\n    return a\n\n"
+    "def add(a: int) -> int:\n    return a\n"
+)
+
+
+def test_export_curl_tag_selects_only_tagged_endpoints(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(notebook_path, _TAGGED_CLI_SOURCE)
+
+    proc = _run_cli(["export-curl", str(notebook_path), "--tag", "scoring"], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    script = (workdir / "requests.sh").read_text()
+    assert "/score" in script and "/add" not in script
+
+
+def test_export_postman_tag_selects_only_tagged_endpoints(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(notebook_path, _TAGGED_CLI_SOURCE)
+
+    proc = _run_cli(["export-postman", str(notebook_path), "--tag", "General"], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    collection = json.loads((workdir / "postman_collection.json").read_text())
+    assert [item["name"] for item in collection["item"]] == ["add"]
+
+
+def test_export_tag_matching_nothing_fails_clearly(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(notebook_path, _TAGGED_CLI_SOURCE)
+
+    proc = _run_cli(["export-curl", str(notebook_path), "--tag", "Missing"], cwd=workdir)
+
+    assert proc.returncode != 0
+    assert "No function is tagged Missing. Available tags: General, Scoring" in proc.stdout + proc.stderr
+    assert not (workdir / "requests.sh").exists()
