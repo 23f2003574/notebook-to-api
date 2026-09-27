@@ -3636,3 +3636,54 @@ def test_print_classification_shows_directive_changes(tmp_path, capsys):
     assert "2 endpoint directive change(s) (rate-limit/cache/tag):" in output
     assert "  ! POST /report rate_limit: none -> 5 (tightened)" in output
     assert "  POST /report tag: none -> Scoring" in output
+
+
+_TAGGED_SOURCE = (
+    "# notebook-to-api: tag Scoring\ndef score(a: int) -> int:\n    return a\n\n"
+    "def train_model(a: int) -> int:\n    return a\n\n"
+    "# notebook-to-api: tag Scoring\ndef rank(a: int) -> int:\n    return a\n\n"
+    "def add(a: int) -> int:\n    return a\n"
+)
+
+
+def test_postman_collection_groups_requests_into_tag_folders(tmp_path):
+    """Confirmed missing before this feature: every request landed in one
+    flat list, however the endpoints were tagged."""
+    from backend.inspector import generate_postman_collection
+
+    path = tmp_path / "nb.ipynb"
+    _write_notebook(path, _TAGGED_SOURCE)
+
+    collection = generate_postman_collection(str(path), group_by_tag=True)
+
+    folders = {folder["name"]: [i["name"] for i in folder["item"]] for folder in collection["item"]}
+    assert [folder["name"] for folder in collection["item"]] == ["General", "Scoring", "Training"]
+    assert folders["Scoring"] == ["score", "rank"]
+    assert folders["General"] == ["add"]
+    # a background function's companion requests stay in its folder
+    assert folders["Training"][0] == "train_model" and len(folders["Training"]) > 1
+
+
+def test_postman_collection_stays_flat_by_default(tmp_path):
+    from backend.inspector import generate_postman_collection
+
+    path = tmp_path / "nb.ipynb"
+    _write_notebook(path, _TAGGED_SOURCE)
+
+    collection = generate_postman_collection(str(path))
+
+    assert all("request" in item for item in collection["item"])
+
+
+def test_postman_grouping_respects_selection_and_empty_collections(tmp_path):
+    from backend.inspector import generate_postman_collection
+
+    path = tmp_path / "nb.ipynb"
+    _write_notebook(path, _TAGGED_SOURCE)
+
+    collection = generate_postman_collection(str(path), group_by_tag=True, only=["score"])
+
+    assert [folder["name"] for folder in collection["item"]] == ["Scoring"]
+    empty = tmp_path / "empty.ipynb"
+    _write_notebook(empty, "x = 1\n")
+    assert generate_postman_collection(str(empty), group_by_tag=True)["item"] == []

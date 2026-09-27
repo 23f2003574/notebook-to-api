@@ -34539,3 +34539,23 @@ def test_readme_preview_groups_endpoints_by_tag_directive():
     body = json.dumps(client.post("/api/readme-preview", json={"notebook_path": "readme_tags.ipynb"}).json())
 
     assert "#### General" in body and "#### Scoring" in body
+
+
+def test_postman_preview_groups_by_tag_when_asked():
+    client.delete("/api/notebooks?confirm=true")
+    content = _notebook_bytes(
+        "# notebook-to-api: tag Scoring\ndef score(a: int) -> int:\n    return a\n\n"
+        "def add(a: int) -> int:\n    return a\n"
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("postman_tags.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    grouped = client.post(
+        "/api/postman-preview", json={"notebook_path": "postman_tags.ipynb", "group_by_tag": True}
+    ).json()["collection"]
+    flat = client.post("/api/postman-preview", json={"notebook_path": "postman_tags.ipynb"}).json()["collection"]
+
+    assert [folder["name"] for folder in grouped["item"]] == ["General", "Scoring"]
+    assert [item["name"] for item in flat["item"]] == ["score", "add"]

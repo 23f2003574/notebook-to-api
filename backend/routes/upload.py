@@ -15329,6 +15329,7 @@ def postman_preview_endpoint(data: dict):
     # own identical option) -- see _drop_past_sunset_selection.
     drop_past_sunset = bool(data.get("drop_past_sunset", False))
     callback_url = data.get("callback_url")
+    group_by_tag = bool(data.get("group_by_tag", False))
     expected_sha256 = data.get("expected_sha256")
 
     if expected_sha256 is not None and not isinstance(expected_sha256, str):
@@ -15421,7 +15422,7 @@ def postman_preview_endpoint(data: dict):
             collection = generate_postman_collection(
                 str(full_path), host=host, port=port, api_key=api_key,
                 only=only, exclude=exclude, collection_name=collection_name,
-                callback_url=callback_url,
+                callback_url=callback_url, group_by_tag=group_by_tag,
             )
 
     except ValueError as e:

@@ -1934,6 +1934,7 @@ _POSTMAN_DEPRECATION_CHECK_SCRIPT = [
 def generate_postman_collection(
     notebook_path, host="localhost", port=8000, api_key=None,
     only=None, exclude=None, collection_name=None, callback_url=None,
+    group_by_tag=False,
 ):
     """A Postman Collection v2.1.0 covering every function `notebook_path`
     would compile into an endpoint -- the same "try it before you compile
@@ -2084,10 +2085,20 @@ def generate_postman_collection(
         collection_variables.append({"key": "callback_url", "value": callback_url})
 
     items = []
+    # Parallel to `items`: the OpenAPI tag of the endpoint each request
+    # belongs to, for group_by_tag below. Filled for the previous function
+    # at the top of each iteration (and once after the loop), so every
+    # request a function adds -- including its task-status/wait companions
+    # -- lands in that function's folder.
+    item_tags = []
+    tag_by_path = {endpoint["path"]: endpoint.get("tag") for endpoint in data["endpoints"]}
+    current_tag = None
 
     for func in functions:
 
+        item_tags.extend([current_tag] * (len(items) - len(item_tags)))
         name = func["name"]
+        current_tag = tag_by_path.get(f"/{name}") or "General"
 
         if name in reserved_names:
             continue
@@ -2255,6 +2266,17 @@ def generate_postman_collection(
         else:
             _apply_deprecation_notice()
             items.append(item)
+
+    item_tags.extend([current_tag] * (len(items) - len(item_tags)))
+    # group_by_tag: one Postman folder per OpenAPI tag (the same grouping
+    # Swagger UI and the generated README use), folders sorted by name and
+    # requests kept in their original order inside each. Off by default,
+    # so existing collections keep their flat shape.
+    if group_by_tag and items:
+        folders = {}
+        for tag, item in zip(item_tags, items):
+            folders.setdefault(tag, []).append(item)
+        items = [{"name": tag, "item": folders[tag]} for tag in sorted(folders)]
 
     return {
         "info": {

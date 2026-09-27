@@ -2242,7 +2242,7 @@ def _dispatch_core_command(args):
         collection = generate_postman_collection(
             args.notebook, host=args.host, port=args.port, api_key=args.api_key,
             only=only, exclude=exclude, collection_name=args.collection_name,
-            callback_url=args.callback_url,
+            callback_url=args.callback_url, group_by_tag=args.group_by_tag,
         )
 
         output = args.output or "postman_collection.json"
@@ -10095,6 +10095,16 @@ def main():
         )
     )
     _add_callback_url_argument(postman_parser)
+    postman_parser.add_argument(
+        "--group-by-tag",
+        dest="group_by_tag",
+        action="store_true",
+        help=(
+            "Put the requests into one folder per OpenAPI tag (the tag "
+            "directive, else the name-based guess) -- the same grouping "
+            "Swagger UI and the generated README use."
+        ),
+    )
     postman_parser.add_argument(
         "--json",
         action="store_true",

@@ -29330,3 +29330,20 @@ def test_every_diff_command_accepts_fail_on_directive_tightened():
         proc = _run_cli([*command, "--help"], cwd=Path.cwd())
         assert proc.returncode == 0, proc.stderr
         assert "--fail-on-directive-tightened" in proc.stdout, command
+
+
+def test_export_postman_group_by_tag(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "# notebook-to-api: tag Scoring\ndef score(a: int) -> int:\n    return a\n\n"
+        "def add(a: int) -> int:\n    return a\n",
+    )
+
+    proc = _run_cli(["export-postman", str(notebook_path), "--group-by-tag", "--output", "c.json"], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    collection = json.loads((workdir / "c.json").read_text())
+    assert [folder["name"] for folder in collection["item"]] == ["General", "Scoring"]
