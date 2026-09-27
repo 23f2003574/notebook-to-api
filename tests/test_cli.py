@@ -3281,6 +3281,59 @@ def test_remote_curl_command_only_restricts_to_the_named_functions(
     assert "curl -X POST http://localhost:8000/subtract" not in script
 
 
+_REMOTE_TAGGED_SOURCE = (
+    "# notebook-to-api: tag Scoring\ndef score(a: int) -> int:\n    return a\n\n"
+    "def add(a: int, b: int) -> int:\n    return a + b\n"
+)
+
+
+def test_remote_curl_command_selects_endpoints_by_tag(tmp_path, fake_dashboard):
+    """Confirmed missing before this feature: --tag worked on export-curl
+    but not on remote-curl."""
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_raw_response(200, _notebook_bytes_with_function(_REMOTE_TAGGED_SOURCE))]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-curl", "nb.ipynb", "--dashboard-url", dashboard_url, "--tag", "scoring"], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    script = (workdir / "requests.sh").read_text(encoding="utf-8")
+    assert "localhost:8000/score" in script and "localhost:8000/add" not in script
+
+
+def test_remote_postman_command_selects_endpoints_by_tag(tmp_path, fake_dashboard):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_raw_response(200, _notebook_bytes_with_function(_REMOTE_TAGGED_SOURCE))]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-postman", "nb.ipynb", "--dashboard-url", dashboard_url, "--tag", "General"], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    collection = json.loads((workdir / "postman_collection.json").read_text(encoding="utf-8"))
+    assert [item["name"] for item in collection["item"]] == ["add"]
+
+
+def test_remote_curl_command_rejects_an_unknown_tag(tmp_path, fake_dashboard):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_raw_response(200, _notebook_bytes_with_function(_REMOTE_TAGGED_SOURCE))]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-curl", "nb.ipynb", "--dashboard-url", dashboard_url, "--tag", "Nope"], cwd=workdir,
+    )
+
+    assert proc.returncode != 0
+    assert "Available tags: General, Scoring" in proc.stdout + proc.stderr
+    assert not (workdir / "requests.sh").exists()
+
+
 def test_remote_curl_command_appends_callback_url_to_a_background_function(
     tmp_path, fake_dashboard
 ):

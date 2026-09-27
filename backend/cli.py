@@ -7655,6 +7655,12 @@ def _dispatch_core_command(args):
 
             only = _parse_comma_separated_names(args.only)
             exclude = _parse_comma_separated_names(args.exclude)
+            # --tag, resolved against the downloaded copy the same way
+            # export-curl/export-postman resolve it locally.
+            only, exclude = apply_tag_selection(
+                remote_notebook_path, _parse_comma_separated_names(args.tag),
+                only, exclude,
+            )
             # Applied to the downloaded copy -- see apply_drop_past_sunset.
             if args.drop_past_sunset:
                 only, exclude = apply_drop_past_sunset(
@@ -7769,6 +7775,12 @@ def _dispatch_core_command(args):
 
             only = _parse_comma_separated_names(args.only)
             exclude = _parse_comma_separated_names(args.exclude)
+            # --tag, resolved against the downloaded copy the same way
+            # export-curl/export-postman resolve it locally.
+            only, exclude = apply_tag_selection(
+                remote_notebook_path, _parse_comma_separated_names(args.tag),
+                only, exclude,
+            )
             # Applied to the downloaded copy -- see apply_drop_past_sunset.
             if args.drop_past_sunset:
                 only, exclude = apply_drop_past_sunset(
@@ -16552,6 +16564,7 @@ def main():
         )
     )
     _add_function_selection_arguments(remote_curl_parser)
+    _add_tag_selection_argument(remote_curl_parser)
     remote_curl_parser.add_argument(
         "--drop-past-sunset",
         action="store_true",
@@ -16668,6 +16681,7 @@ def main():
         )
     )
     _add_function_selection_arguments(remote_postman_parser)
+    _add_tag_selection_argument(remote_postman_parser)
     remote_postman_parser.add_argument(
         "--drop-past-sunset",
         action="store_true",
