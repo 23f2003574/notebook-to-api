@@ -29504,3 +29504,47 @@ def test_preview_commands_pass_tag_selection_through(tmp_path, fake_dashboard, c
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert json.loads(handler.bodies[0])[body_key] == ["Scoring", "Training"]
+
+
+def test_compile_command_tag_compiles_just_the_tagged_endpoints(tmp_path):
+    """Confirmed missing before this feature: compile could only select
+    functions by name, not by the tag they are grouped under."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "# notebook-to-api: tag Scoring\ndef score(a: int) -> int:\n    return a\n\n"
+        "def add(a: int) -> int:\n    return a\n\n"
+        "def train_model(a: int) -> int:\n    return a\n",
+    )
+
+    proc = _run_cli(["compile", str(notebook_path), "--output", "built", "--tag", "scoring,training"], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    generated_app = (workdir / "built" / "app.py").read_text(encoding="utf-8")
+    assert '"/score"' in generated_app and '"/train_model"' in generated_app
+    assert '"/add"' not in generated_app
+
+
+def test_compile_command_tag_combines_with_exclude_and_fails_on_no_match(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "# notebook-to-api: tag Scoring\ndef score(a: int) -> int:\n    return a\n\n"
+        "# notebook-to-api: tag Scoring\ndef rank(a: int) -> int:\n    return a\n",
+    )
+
+    combined = _run_cli(
+        ["compile", str(notebook_path), "--output", "built", "--tag", "Scoring", "--exclude", "rank"], cwd=workdir,
+    )
+    missing = _run_cli(["compile", str(notebook_path), "--output", "other", "--tag", "Nope"], cwd=workdir)
+
+    assert combined.returncode == 0, combined.stdout + combined.stderr
+    app = (workdir / "built" / "app.py").read_text(encoding="utf-8")
+    assert '"/score"' in app and '"/rank"' not in app
+    assert missing.returncode != 0
+    assert "No function is tagged Nope. Available tags: Scoring" in missing.stdout + missing.stderr
+    assert not (workdir / "other" / "app.py").exists()

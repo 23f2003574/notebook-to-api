@@ -685,15 +685,16 @@ def _add_function_selection_arguments(parser):
 
 
 def _add_tag_selection_argument(parser):
-    """Add --tag to an export subcommand (export-curl, export-postman):
-    select functions by their endpoint's OpenAPI tag (see
+    """Add --tag to a subcommand that selects functions (compile,
+    export-curl, export-postman, curl-preview, postman-preview): select
+    them by their endpoint's OpenAPI tag (see
     inspector.apply_tag_selection)."""
     parser.add_argument(
         "--tag",
         default=None,
         help=(
-            "Comma-separated OpenAPI tags (case-insensitive) -- only export "
-            "requests for endpoints with one of these tags (the \"# "
+            "Comma-separated OpenAPI tags (case-insensitive) -- only include "
+            "endpoints with one of these tags (the \"# "
             "notebook-to-api: tag\" directive, else the name-based guess). "
             "Combines with --only/--exclude."
         ),
@@ -1827,6 +1828,12 @@ def _dispatch_core_command(args):
         output_dir.mkdir(parents=True, exist_ok=True)
         only = _parse_comma_separated_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
+        # --tag: compile only the endpoints with these OpenAPI tags
+        # (apply_tag_selection) -- e.g. a deployment serving just the
+        # "Inference" endpoints of a notebook that also trains.
+        only, exclude = apply_tag_selection(
+            args.notebook, _parse_comma_separated_names(args.tag), only, exclude,
+        )
         # --drop-past-sunset: see _apply_drop_past_sunset.
         if args.drop_past_sunset:
             only, exclude = apply_drop_past_sunset(args.notebook, only, exclude)
@@ -9777,6 +9784,7 @@ def main():
         )
     )
     _add_function_selection_arguments(compile_parser)
+    _add_tag_selection_argument(compile_parser)
 
     # doctor command -- a local, read-only pre-flight check of this
     # machine's own environment, distinct from `governance doctor` below
