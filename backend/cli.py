@@ -755,6 +755,31 @@ def _add_version_id_argument(parser, endpoint):
     )
 
 
+def _postman_requests(items):
+    """Every request in a Postman item list, descending into --group-by-tag
+    folders -- so request counts stay right whether or not it's grouped."""
+    requests = []
+    for item in items:
+        requests.extend(_postman_requests(item["item"]) if "item" in item else [item])
+    return requests
+
+
+def _add_group_by_tag_argument(parser):
+    """Add --group-by-tag to a Postman-producing subcommand (export-postman,
+    postman-preview, remote-postman) -- one shared definition so all three
+    group identically."""
+    parser.add_argument(
+        "--group-by-tag",
+        dest="group_by_tag",
+        action="store_true",
+        help=(
+            "Put the requests into one folder per OpenAPI tag (the tag "
+            "directive, else the name-based guess) -- the same grouping "
+            "Swagger UI and the generated README use."
+        ),
+    )
+
+
 def _add_callback_url_argument(parser):
     """Add --callback-url to `parser` -- shared by `export-curl`,
     `export-postman`, `remote-curl`, `remote-postman`, `curl-preview`, and
@@ -2259,7 +2284,7 @@ def _dispatch_core_command(args):
         else:
             print(
                 f"\nPostman collection written to: {output} "
-                f"({len(collection['item'])} request(s))"
+                f"({len(_postman_requests(collection['item']))} request(s))"
             )
     elif args.command == "serve":
         if args.debounce_seconds < 0:
@@ -5882,6 +5907,8 @@ def _dispatch_core_command(args):
             postman_preview_body["version_id"] = args.version_id
         if args.callback_url:
             postman_preview_body["callback_url"] = args.callback_url
+        if args.group_by_tag:
+            postman_preview_body["group_by_tag"] = True
         if args.expected_sha256:
             postman_preview_body["expected_sha256"] = args.expected_sha256
 
@@ -5921,8 +5948,10 @@ def _dispatch_core_command(args):
             else:
                 for item in items:
                     print(f"- {item.get('name')}")
+                    for request in item.get("item", []):
+                        print(f"    - {request.get('name')}")
                 print(
-                    f"\n{len(items)} request(s) total. Pass --json to get "
+                    f"\n{len(_postman_requests(items))} request(s) total. Pass --json to get "
                     "the full collection document."
                 )
     elif args.command == "dockerfile-preview":
@@ -7713,7 +7742,7 @@ def _dispatch_core_command(args):
                 remote_notebook_path, host=args.host, port=args.port,
                 api_key=args.api_key, only=only, exclude=exclude,
                 collection_name=args.collection_name,
-                callback_url=args.callback_url,
+                callback_url=args.callback_url, group_by_tag=args.group_by_tag,
             )
 
         finally:
@@ -7738,7 +7767,7 @@ def _dispatch_core_command(args):
         else:
             print(
                 f"\nPostman collection for {source_label} on {dashboard_url} "
-                f"written to: {output} ({len(collection['item'])} request(s))"
+                f"written to: {output} ({len(_postman_requests(collection['item']))} request(s))"
             )
     elif args.command == "remote-export":
         # See `upload` above for why this is imported here rather than at
@@ -10095,16 +10124,7 @@ def main():
         )
     )
     _add_callback_url_argument(postman_parser)
-    postman_parser.add_argument(
-        "--group-by-tag",
-        dest="group_by_tag",
-        action="store_true",
-        help=(
-            "Put the requests into one folder per OpenAPI tag (the tag "
-            "directive, else the name-based guess) -- the same grouping "
-            "Swagger UI and the generated README use."
-        ),
-    )
+    _add_group_by_tag_argument(postman_parser)
     postman_parser.add_argument(
         "--json",
         action="store_true",
@@ -14365,6 +14385,7 @@ def main():
     )
     _add_version_id_argument(postman_preview_parser, "POST /api/postman-preview")
     _add_callback_url_argument(postman_preview_parser)
+    _add_group_by_tag_argument(postman_preview_parser)
     postman_preview_parser.add_argument(
         "--expected-sha256",
         default=None,
@@ -16612,6 +16633,7 @@ def main():
         )
     )
     _add_callback_url_argument(remote_postman_parser)
+    _add_group_by_tag_argument(remote_postman_parser)
     remote_postman_parser.add_argument(
         "--json",
         action="store_true",

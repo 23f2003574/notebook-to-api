@@ -29347,3 +29347,68 @@ def test_export_postman_group_by_tag(tmp_path):
     assert proc.returncode == 0, proc.stdout + proc.stderr
     collection = json.loads((workdir / "c.json").read_text())
     assert [folder["name"] for folder in collection["item"]] == ["General", "Scoring"]
+
+
+def test_postman_preview_command_passes_group_by_tag_and_lists_folders(tmp_path, fake_dashboard):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "notebook": "nb.ipynb",
+            "collection": {"info": {"name": "nb"}, "variable": [], "item": [
+                {"name": "General", "item": [{"name": "add"}]},
+                {"name": "Scoring", "item": [{"name": "rank"}, {"name": "score"}]},
+            ]},
+        })
+    ]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["postman-preview", "nb.ipynb", "--dashboard-url", dashboard_url, "--group-by-tag"], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0])["group_by_tag"] is True
+    assert "- Scoring\n    - rank\n    - score\n" in proc.stdout
+    assert "3 request(s) total" in proc.stdout
+
+
+def test_remote_postman_command_group_by_tag_counts_requests(tmp_path, fake_dashboard):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _notebook_bytes_with_function(
+                "# notebook-to-api: tag Math\ndef add(a: int, b: int) -> int:\n    return a + b\n\n"
+                "# notebook-to-api: tag Math\ndef subtract(a: int, b: int) -> int:\n    return a - b\n\n"
+                "def predict(a: int) -> int:\n    return a\n"
+            ),
+        )
+    ]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-postman", "nb.ipynb", "--dashboard-url", dashboard_url, "--group-by-tag"], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "(3 request(s))" in proc.stdout
+    collection = json.loads((workdir / "postman_collection.json").read_text(encoding="utf-8"))
+    assert [folder["name"] for folder in collection["item"]] == ["Inference", "Math"]
+
+
+def test_export_postman_group_by_tag_counts_requests_not_folders(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "# notebook-to-api: tag Math\ndef add(a: int) -> int:\n    return a\n\n"
+        "# notebook-to-api: tag Math\ndef sub(a: int) -> int:\n    return a\n",
+    )
+
+    proc = _run_cli(["export-postman", str(notebook_path), "--group-by-tag"], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "(2 request(s))" in proc.stdout
