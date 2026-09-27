@@ -897,6 +897,32 @@ TIMEOUT_DIRECTIVE_PATTERN = re.compile(
 # (optionally above other "# notebook-to-api:" directives) -- at most N
 # calls per minute per API key to that one endpoint, on top of the global
 # NOTEBOOK_API_RATE_LIMIT_PER_MINUTE.
+TAG_DIRECTIVE_PATTERN = re.compile(
+    r"^[ \t]*#\s*notebook-to-api:\s*tag\s+(?P<tag>[A-Za-z0-9][A-Za-z0-9 _-]{0,39}?)\s*$"
+    r"(?:\n[ \t]*(?:#\s*notebook-to-api:[^\n]*)?)*"
+    r"\n[ \t]*(?:async\s+)?def\s+(?P<name>[A-Za-z_]\w*)\s*\(",
+    re.MULTILINE,
+)
+
+
+def _extract_tag_overrides(code_cells):
+    """{function_name: tag} for every function marked
+    "# notebook-to-api: tag <Name>" (see TAG_DIRECTIVE_PATTERN). Before
+    this, an endpoint's OpenAPI tag -- how Swagger UI groups it, and the
+    x-notebook-to-api-category SDKs/docs read -- could only come from
+    guessing at its name ("train" -> Training, ...), so a notebook had no
+    way to group e.g. score_model with its other inference endpoints.
+    The tag is 1-40 letters, digits, spaces, '-' or '_', starting with a
+    letter or digit; anything else is not matched, so the name-based
+    default still applies. The last directive seen for a function wins.
+    """
+    overrides = {}
+    for cell in code_cells:
+        for match in TAG_DIRECTIVE_PATTERN.finditer(cell):
+            overrides[match.group("name")] = match.group("tag").strip()
+    return overrides
+
+
 CACHE_DIRECTIVE_PATTERN = re.compile(
     r"^[ \t]*#\s*notebook-to-api:\s*cache\s+(?P<ttl>\d+)\s*$"
     r"(?:\n[ \t]*(?:#\s*notebook-to-api:[^\n]*)?)*"
@@ -1817,6 +1843,7 @@ def compile_notebook_to_api(
             timeout_overrides=_extract_timeout_overrides(code_cells),
             rate_limit_overrides=_extract_rate_limit_overrides(code_cells),
             cache_overrides=_extract_cache_overrides(code_cells),
+            tag_overrides=_extract_tag_overrides(code_cells),
         )
 
         # generate_fastapi_code succeeding means this compile is now

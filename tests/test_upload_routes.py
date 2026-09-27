@@ -34505,3 +34505,16 @@ def test_validate_reports_rate_limit_and_cache_directives():
     assert body["rate_limit_overrides"] == {"lookup": 4}
     assert body["cache_overrides"] == {"lookup": 20}
     assert body["ignored_cache_directives"] == ["train_model"]
+
+
+def test_app_preview_applies_the_tag_directive():
+    client.delete("/api/notebooks?confirm=true")
+    content = _notebook_bytes("# notebook-to-api: tag Scoring\ndef score(a: int) -> int:\n    return a\n")
+    client.post(
+        "/api/upload",
+        files={"file": ("tagged.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    body = json.dumps(client.post("/api/app-preview", json={"notebook_path": "tagged.ipynb"}).json())
+
+    assert 'tags=[\\"Scoring\\"]' in body

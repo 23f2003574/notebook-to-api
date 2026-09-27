@@ -8370,3 +8370,16 @@ def test_extract_cache_overrides_reads_stacked_directives_and_ignores_zero():
     ]
 
     assert _extract_cache_overrides(cells) == {"lookup": 30}
+
+
+def test_extract_tag_overrides_reads_stacked_directives_and_rejects_bad_names():
+    from backend.compiler import _extract_tag_overrides
+
+    cells = [
+        "# notebook-to-api: tag Inference\n# notebook-to-api: cache 5\ndef score(x):\n    return x\n",
+        "# notebook-to-api: tag Model Ops_v2\nasync def train_fast():\n    return 1\n",
+        "# notebook-to-api: tag <script>\ndef bad():\n    return 2\n",
+        "def plain():\n    return 3\n",
+    ]
+
+    assert _extract_tag_overrides(cells) == {"score": "Inference", "train_fast": "Model Ops_v2"}

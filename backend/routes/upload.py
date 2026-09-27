@@ -39,6 +39,7 @@ from backend.compiler import (
     _extract_rate_limit_overrides,
     _extract_timeout_overrides,
     _extract_cache_overrides,
+    _extract_tag_overrides,
     COMPILE_LOCK,
     COMPILE_METADATA_FILENAME,
     NOTEBOOK_TO_API_VERSION,
@@ -14834,6 +14835,7 @@ def app_preview_endpoint(data: dict):
             timeout_overrides=_extract_timeout_overrides(code_cells),
             rate_limit_overrides=_extract_rate_limit_overrides(code_cells),
             cache_overrides=_extract_cache_overrides(code_cells),
+            tag_overrides=_extract_tag_overrides(code_cells),
         )
 
     except ReservedFunctionNameError as e:
@@ -15026,6 +15028,7 @@ def readme_preview_endpoint(data: dict):
             timeout_overrides=_extract_timeout_overrides(code_cells),
             rate_limit_overrides=_extract_rate_limit_overrides(code_cells),
             cache_overrides=_extract_cache_overrides(code_cells),
+            tag_overrides=_extract_tag_overrides(code_cells),
         )
 
         readme = readme_content(
@@ -15922,6 +15925,7 @@ def openapi_preview_endpoint(data: dict):
             timeout_overrides=_extract_timeout_overrides(code_cells),
             rate_limit_overrides=_extract_rate_limit_overrides(code_cells),
             cache_overrides=_extract_cache_overrides(code_cells),
+            tag_overrides=_extract_tag_overrides(code_cells),
         )
 
     except ReservedFunctionNameError as e:

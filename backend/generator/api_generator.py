@@ -946,7 +946,7 @@ def generate_fastapi_code(
     functions, package_name="generated", source_notebook_sha256=None,
     notebook_to_api_version="1.0.0", background_overrides=None,
     deprecated_overrides=None, retired_endpoints=None, timeout_overrides=None,
-    rate_limit_overrides=None, cache_overrides=None,
+    rate_limit_overrides=None, cache_overrides=None, tag_overrides=None,
 ):
     """Generate FastAPI app code for the given functions.
 
@@ -4193,6 +4193,9 @@ def generate_fastapi_code(
             for kw in ["embed", "vector"]
         ):
             tag = "Embeddings"
+        # "# notebook-to-api: tag <Name>" wins over the name-based guess
+        # above, for both the OpenAPI tag and x-notebook-to-api-category.
+        tag = (tag_overrides or {}).get(func_name, tag)
         category = tag
         args = func.get("args", [])
         example_response = func.get(

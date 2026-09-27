@@ -8904,3 +8904,35 @@ def test_cached_responses_keep_the_global_rate_limit_headers(monkeypatch):
 
     assert miss.headers["X-RateLimit-Remaining"] == "9"
     assert hit.headers["X-RateLimit-Remaining"] == "8"
+
+
+def test_tag_directive_overrides_the_name_based_openapi_tag(monkeypatch):
+    """Confirmed missing before this feature: an endpoint's OpenAPI tag
+    could only be guessed from its name."""
+    code = generate_fastapi_code(
+        [
+            {"name": "score", "args": [], "return_type": "int"},
+            {"name": "train_model", "args": [], "return_type": "int"},
+            {"name": "predict", "args": [], "return_type": "int"},
+        ],
+        tag_overrides={"score": "Inference", "train_model": "Model Ops"},
+    )
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    paths = TestClient(namespace["app"]).get("/openapi.json").json()["paths"]
+
+    assert paths["/score"]["post"]["tags"] == ["Inference"]
+    assert paths["/score"]["post"]["x-notebook-to-api-category"] == "Inference"
+    assert paths["/train_model"]["post"]["tags"] == ["Model Ops"]
+    assert paths["/train_model"]["post"]["x-notebook-to-api-async"] is True
+    assert paths["/predict"]["post"]["tags"] == ["Inference"]  # name-based default kept
+
+
+def test_no_tag_directive_keeps_the_name_based_tags():
+    code = generate_fastapi_code([{"name": "score", "args": [], "return_type": "int"}])
+
+    assert 'tags=["General"]' in code
