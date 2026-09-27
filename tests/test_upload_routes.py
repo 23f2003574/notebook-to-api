@@ -34599,3 +34599,24 @@ def test_preview_tag_selection_errors_are_400():
 
     assert unknown.status_code == 400 and "Available tags: General, Scoring" in unknown.json()["detail"]
     assert malformed.status_code == 400 and "tags must be a list" in malformed.json()["detail"]
+
+
+def test_compile_selects_endpoints_by_tag():
+    """Confirmed missing before this feature: POST /api/compile could
+    only be narrowed by function name, unlike the tag-aware previews."""
+    _upload_tagged_notebook("compile_tags.ipynb")
+
+    response = client.post("/api/compile", json={"notebook_path": "compile_tags.ipynb", "tags": ["scoring"]})
+
+    assert response.status_code == 200
+    assert [e["path"] for e in response.json()["endpoints"]] == ["/score"]
+
+
+def test_compile_tag_selection_errors_are_400():
+    _upload_tagged_notebook("compile_tag_errors.ipynb")
+
+    unknown = client.post("/api/compile", json={"notebook_path": "compile_tag_errors.ipynb", "tags": ["Nope"]})
+    malformed = client.post("/api/compile", json={"notebook_path": "compile_tag_errors.ipynb", "tags": [""]})
+
+    assert unknown.status_code == 400 and "Available tags: General, Scoring" in unknown.json()["detail"]
+    assert malformed.status_code == 400 and "tags must be a list" in malformed.json()["detail"]

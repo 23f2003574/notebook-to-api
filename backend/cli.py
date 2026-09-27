@@ -5207,6 +5207,9 @@ def _dispatch_core_command(args):
             request_body["drop_past_sunset"] = True
         if args.expected_sha256:
             request_body["expected_sha256"] = args.expected_sha256
+        if args.tag:
+            request_body["tags"] = _parse_comma_separated_names(args.tag)
+
 
         try:
             response = httpx.post(
@@ -13746,6 +13749,7 @@ def main():
     )
     _add_dashboard_url_and_timeout_arguments(remote_compile_parser)
     _add_function_selection_arguments(remote_compile_parser)
+    _add_tag_selection_argument(remote_compile_parser)
     _add_version_id_argument(remote_compile_parser, "POST /api/compile")
     remote_compile_parser.add_argument(
         "--expected-sha256",

@@ -13540,6 +13540,30 @@ def test_remote_compile_command_passes_smoke_test_through_to_the_dashboard(
     }
 
 
+def test_remote_compile_command_passes_tags_through_to_the_dashboard(
+    tmp_path, fake_dashboard
+):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "notebook": "nb.ipynb", "functions": [{"name": "score"}],
+            "endpoints": [{"path": "/score", "method": "POST", "is_async": False, "deprecated": False}],
+            "skipped_functions": [], "dependencies": [], "generated_files": ["app.py"],
+            "message": "Notebook compiled successfully",
+        })
+    ]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-compile", "nb.ipynb", "--dashboard-url", dashboard_url, "--tag", "Scoring, Inference"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0])["tags"] == ["Scoring", "Inference"]
+
+
 def test_remote_compile_command_exits_1_when_the_smoke_test_fails(
     tmp_path, fake_dashboard
 ):

@@ -16119,6 +16119,10 @@ def compile_notebook_endpoint(
     # rebuild actually carries out the removal the Sunset header promised.
     drop_past_sunset = bool(data.get("drop_past_sunset", False))
     expected_sha256 = data.get("expected_sha256")
+    # "tags": compile only the endpoints carrying one of these OpenAPI
+    # tags (a "# notebook-to-api: tag <Name>" override or the inferred
+    # Training/Inference/... tag) -- resolved into "only" below.
+    tags = data.get("tags")
 
     if version_id is not None and not isinstance(version_id, str):
 
@@ -16150,6 +16154,15 @@ def compile_notebook_endpoint(
                 status_code=400,
                 detail=f"{field_name} must be a list of strings"
             )
+
+    if tags is not None and (
+        not isinstance(tags, list)
+        or not all(isinstance(tag, str) and tag for tag in tags)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="tags must be a list of non-empty strings"
+        )
 
     if only and exclude:
 
@@ -16201,6 +16214,11 @@ def compile_notebook_endpoint(
         # Folded into "exclude" -- or, when "only" was given instead (the
         # two are mutually exclusive above), removed from "only" -- before
         # compile_notebook ever sees either list.
+        if tags:
+            only, exclude = apply_tag_selection(
+                str(content_path), tags, only, exclude
+            )
+
         dropped_past_sunset = []
         if drop_past_sunset:
             dropped_past_sunset = sorted(past_sunset_functions(
