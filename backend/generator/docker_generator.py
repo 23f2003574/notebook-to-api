@@ -2,7 +2,8 @@ import shlex
 import textwrap
 
 from backend.generator.api_generator import (
-    _deprecation_sunset_date, resolve_deprecation, resolve_is_background,
+    _deprecation_sunset_date, resolve_deprecation, resolve_endpoint_tag,
+    resolve_is_background,
 )
 
 
@@ -378,6 +379,7 @@ def readme_content(
     package_name="generated", functions=None, env_vars=None,
     background_overrides=None, deprecated_overrides=None,
     timeout_overrides=None, rate_limit_overrides=None, cache_overrides=None,
+    tag_overrides=None,
 ):
     """The exact README.md text generate_readme (below) writes to disk,
     as a pure string -- no filesystem access at all. See
@@ -496,6 +498,7 @@ def readme_content(
     env_vars = env_vars or []
 
     endpoint_lines = []
+    endpoint_tags = []
 
     for func in sorted(functions, key=lambda f: f["name"]):
 
@@ -558,6 +561,7 @@ def readme_content(
             )
 
         endpoint_lines.append(f"- `POST /{func['name']}`{suffix}")
+        endpoint_tags.append(resolve_endpoint_tag(func["name"], tag_overrides))
 
     # Only when something is actually deprecated: how the compiled app
     # itself signals and manages that at runtime (response headers, GET
@@ -606,11 +610,23 @@ brownout to find remaining callers before removing them for real.
 (or is still served past its sunset date) -- a pre-removal CI gate.
 """
 
-    endpoints_section = (
-        "\n".join(endpoint_lines)
-        if endpoint_lines
-        else "_This notebook doesn't expose any functions yet._"
-    )
+    # Grouped under the same OpenAPI tags Swagger UI groups them by (a
+    # "# notebook-to-api: tag" directive, else the name-based guess) --
+    # only once there is more than one tag; a single group stays a plain
+    # list, exactly as before.
+    if len(set(endpoint_tags)) > 1:
+        groups = {}
+        for tag, line in zip(endpoint_tags, endpoint_lines):
+            groups.setdefault(tag, []).append(line)
+        endpoints_section = "\n\n".join(
+            f"#### {tag}\n\n" + "\n".join(groups[tag]) for tag in sorted(groups)
+        )
+    else:
+        endpoints_section = (
+            "\n".join(endpoint_lines)
+            if endpoint_lines
+            else "_This notebook doesn't expose any functions yet._"
+        )
 
     env_var_lines = "\n".join(
         f"- `{entry['name']}` (default: `{entry['default']}`) -- "
@@ -679,7 +695,7 @@ def generate_readme(
     output_path="generated/README.md", package_name="generated",
     functions=None, env_vars=None, background_overrides=None,
     deprecated_overrides=None, timeout_overrides=None,
-    rate_limit_overrides=None, cache_overrides=None,
+    rate_limit_overrides=None, cache_overrides=None, tag_overrides=None,
 ):
     """Write a README.md for the compiled app at `output_path`, alongside
     the Dockerfile/.dockerignore/docker-compose.yml/.env.example
@@ -693,7 +709,7 @@ def generate_readme(
             readme_content(
                 package_name, functions, env_vars, background_overrides,
                 deprecated_overrides, timeout_overrides,
-                rate_limit_overrides, cache_overrides,
+                rate_limit_overrides, cache_overrides, tag_overrides,
             )
         )
 

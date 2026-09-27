@@ -34523,3 +34523,19 @@ def test_app_preview_applies_the_tag_directive():
     body = json.dumps(client.post("/api/app-preview", json={"notebook_path": "tagged.ipynb"}).json())
 
     assert 'tags=[\\"Scoring\\"]' in body
+
+
+def test_readme_preview_groups_endpoints_by_tag_directive():
+    client.delete("/api/notebooks?confirm=true")
+    content = _notebook_bytes(
+        "# notebook-to-api: tag Scoring\ndef score(a: int) -> int:\n    return a\n\n"
+        "def add(a: int) -> int:\n    return a\n"
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("readme_tags.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    body = json.dumps(client.post("/api/readme-preview", json={"notebook_path": "readme_tags.ipynb"}).json())
+
+    assert "#### General" in body and "#### Scoring" in body

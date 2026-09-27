@@ -8936,3 +8936,25 @@ def test_no_tag_directive_keeps_the_name_based_tags():
     code = generate_fastapi_code([{"name": "score", "args": [], "return_type": "int"}])
 
     assert 'tags=["General"]' in code
+
+
+def test_readme_groups_endpoints_by_their_openapi_tag():
+    """Confirmed missing before this feature: the README listed every
+    endpoint in one flat list, ignoring the tags Swagger UI groups by."""
+    from backend.generator.docker_generator import readme_content
+
+    content = readme_content(
+        functions=[{"name": "score"}, {"name": "train_model"}, {"name": "add"}, {"name": "rank"}],
+        tag_overrides={"score": "Scoring", "rank": "Scoring"},
+    )
+
+    assert "#### General\n\n- `POST /add`\n\n#### Scoring\n\n- `POST /rank`\n- `POST /score`\n\n#### Training" in content
+    assert content.index("#### Scoring") < content.index("#### Training")
+
+
+def test_readme_keeps_a_flat_list_for_a_single_tag():
+    from backend.generator.docker_generator import readme_content
+
+    content = readme_content(functions=[{"name": "add"}, {"name": "subtract"}])
+
+    assert "- `POST /add`\n- `POST /subtract`" in content and "####" not in content
