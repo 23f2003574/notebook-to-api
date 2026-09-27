@@ -8958,3 +8958,41 @@ def test_readme_keeps_a_flat_list_for_a_single_tag():
     content = readme_content(functions=[{"name": "add"}, {"name": "subtract"}])
 
     assert "- `POST /add`\n- `POST /subtract`" in content and "####" not in content
+
+
+def test_info_groups_endpoints_by_openapi_tag(monkeypatch):
+    """Confirmed missing before this feature: GET /info only listed paths,
+    with no way to discover endpoints by area short of parsing openapi.json."""
+    code = generate_fastapi_code(
+        [
+            {"name": "score", "args": [], "return_type": "int"},
+            {"name": "train_model", "args": [], "return_type": "int"},
+            {"name": "rank", "args": [], "return_type": "int"},
+            {"name": "add", "args": [], "return_type": "int"},
+        ],
+        tag_overrides={"score": "Scoring", "rank": "Scoring"},
+    )
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    info = TestClient(namespace["app"]).get("/info").json()
+
+    assert info["endpoints_by_tag"] == {
+        "General": ["/add"], "Scoring": ["/rank", "/score"], "Training": ["/train_model"],
+    }
+    assert list(info["endpoints_by_tag"]) == ["General", "Scoring", "Training"]
+    assert info["endpoint_count"] == 4
+
+
+def test_info_endpoints_by_tag_is_empty_without_functions(monkeypatch):
+    code = generate_fastapi_code([])
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    assert TestClient(namespace["app"]).get("/info").json()["endpoints_by_tag"] == {}

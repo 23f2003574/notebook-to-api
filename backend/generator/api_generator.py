@@ -2374,6 +2374,15 @@ def generate_fastapi_code(
         for func in functions
     ]
     total_generated_endpoint_count = len(endpoint_list)
+    # {tag: [paths]} -- the same grouping openapi.json's tags, the README
+    # and --group-by-tag Postman folders use, so a client of GET /info can
+    # discover endpoints by area without parsing the OpenAPI document.
+    endpoints_by_tag = {}
+    for func in sorted(functions, key=lambda f: f["name"]):
+        endpoints_by_tag.setdefault(resolve_endpoint_tag(func["name"], tag_overrides), []).append(
+            f"/{func['name']}"
+        )
+    endpoints_by_tag = dict(sorted(endpoints_by_tag.items()))
     background_endpoint_count = sum(
         1
         for func in functions
@@ -2525,6 +2534,7 @@ def generate_fastapi_code(
     lines.append('        "status": "running",')
     lines.append(f'        "endpoints": {repr(endpoint_list)},')
     lines.append(f'        "endpoint_count": {len(endpoint_list)},')
+    lines.append(f'        "endpoints_by_tag": {repr(endpoints_by_tag)},')
     lines.append(f'        "background_endpoint_count": {background_endpoint_count},')
     lines.append('        "source_notebook_sha256": SOURCE_NOTEBOOK_SHA256,')
     lines.append('        "authentication": {')

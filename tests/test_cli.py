@@ -29412,3 +29412,32 @@ def test_export_postman_group_by_tag_counts_requests_not_folders(tmp_path):
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "(2 request(s))" in proc.stdout
+
+
+def _app_status_with_info(tmp_path, fake_dashboard, **info_overrides):
+    responses = _app_status_base_responses()
+    info = json.loads(responses[2][1])
+    info.update(info_overrides)
+    responses[2] = _json_response(200, info)
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = responses + [_json_response(404, {"detail": "Not Found"})]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    return _run_cli(["app-status", "--host", host, "--port", str(port)], cwd=workdir)
+
+
+def test_app_status_lists_endpoints_by_tag(tmp_path, fake_dashboard):
+    proc = _app_status_with_info(
+        tmp_path, fake_dashboard, endpoints_by_tag={"General": ["/add"], "Scoring": ["/rank", "/score"]},
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "    General: /add\n    Scoring: /rank, /score\n" in proc.stdout
+
+
+def test_app_status_without_endpoints_by_tag_prints_no_groups(tmp_path, fake_dashboard):
+    proc = _app_status_with_info(tmp_path, fake_dashboard)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "    General:" not in proc.stdout

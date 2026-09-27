@@ -8460,6 +8460,10 @@ def _dispatch_core_command(args):
                 f"  endpoints: {info.get('endpoint_count')} "
                 f"({info.get('background_endpoint_count')} background)"
             )
+            # GET /info's "endpoints_by_tag" -- absent on an app compiled
+            # before it existed, in which case nothing extra is printed.
+            for tag, paths in (info.get("endpoints_by_tag") or {}).items():
+                print(f"    {tag}: {', '.join(paths)}")
             sha256 = info.get("source_notebook_sha256")
             if sha256:
                 print(f"  source notebook sha256: {sha256}")
