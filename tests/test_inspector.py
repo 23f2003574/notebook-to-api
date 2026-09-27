@@ -214,11 +214,12 @@ def test_inspect_notebook_data_reports_endpoints_and_flags_background_ones(tmp_p
     endpoints = {e["path"]: e for e in data["endpoints"]}
 
     assert endpoints["/add"] == {
-        "path": "/add", "method": "POST", "is_async": False, "deprecated": False, "sunset": None
+        "path": "/add", "method": "POST", "is_async": False, "deprecated": False, "sunset": None,
+        "tag": "General",
     }
     assert endpoints["/train_model"] == {
         "path": "/train_model", "method": "POST", "is_async": True,
-        "deprecated": False, "sunset": None,
+        "deprecated": False, "sunset": None, "tag": "Training",
     }
 
 
@@ -3545,3 +3546,32 @@ def test_print_notebook_diff_prints_timeout_changes(capsys):
     assert "2 endpoint(s) with a changed timeout directive:" in output
     assert "! POST /report: 60s -> 10s (tightened)" in output
     assert "POST /fit: none -> 0 (exempt)" in output
+
+
+def test_endpoint_metadata_reports_the_tag_directive(tmp_path):
+    """Confirmed missing before this feature: inspect never showed which
+    OpenAPI tag each endpoint would be published under."""
+    from backend.inspector import inspect_notebook_data
+
+    path = tmp_path / "nb.ipynb"
+    path.write_text(json.dumps({
+        "cells": [{"cell_type": "code", "metadata": {}, "outputs": [], "execution_count": None,
+                   "source": "# notebook-to-api: tag Scoring\ndef score(a: int) -> int:\n    return a\n\n"
+                             "def train_model(a: int) -> int:\n    return a\n"}],
+        "metadata": {}, "nbformat": 4, "nbformat_minor": 5,
+    }))
+
+    endpoints = {e["path"]: e for e in inspect_notebook_data(str(path))["endpoints"]}
+
+    assert endpoints["/score"]["tag"] == "Scoring"
+    assert endpoints["/train_model"]["tag"] == "Training"
+
+
+def test_resolve_endpoint_tag_matches_the_generated_app():
+    from backend.generator.api_generator import generate_fastapi_code, resolve_endpoint_tag
+
+    assert resolve_endpoint_tag("embed_text") == "Embeddings"
+    assert resolve_endpoint_tag("scrape_page") == "Data Processing"
+    assert resolve_endpoint_tag("anything", {"anything": "Custom"}) == "Custom"
+    code = generate_fastapi_code([{"name": "embed_text", "args": [], "return_type": "int"}])
+    assert f'tags=["{resolve_endpoint_tag("embed_text")}"]' in code

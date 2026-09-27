@@ -348,6 +348,27 @@ LONG_RUNNING_KEYWORDS = [
 ]
 
 
+def resolve_endpoint_tag(func_name, tag_overrides=None):
+    """The OpenAPI tag (and x-notebook-to-api-category) a compiled
+    endpoint gets: its "# notebook-to-api: tag <Name>" directive when
+    present, else a guess from its name. The single source of truth both
+    generate_fastapi_code and the inspector use, so an inspect/validate
+    preview always shows the tag the compiled app will publish.
+    """
+    if func_name in (tag_overrides or {}):
+        return tag_overrides[func_name]
+    lowered = func_name.lower()
+    if "train" in lowered:
+        return "Training"
+    if "predict" in lowered:
+        return "Inference"
+    if any(kw in lowered for kw in ("scrape", "extract", "process")):
+        return "Data Processing"
+    if any(kw in lowered for kw in ("embed", "vector")):
+        return "Embeddings"
+    return "General"
+
+
 def resolve_is_background(func_name, background_overrides=None):
     """Whether `func_name` should compile into a background/task_id
     endpoint rather than a synchronous one -- the single place every
@@ -4178,24 +4199,7 @@ def generate_fastapi_code(
             f'"x-notebook-to-api-rate-limit-per-minute": {int(endpoint_rate_limit)}, '
             if endpoint_rate_limit else ""
         )
-        tag = "General"
-        if "train" in func_name.lower():
-            tag = "Training"
-        elif "predict" in func_name.lower():
-            tag = "Inference"
-        elif any(
-            kw in func_name.lower()
-            for kw in ["scrape", "extract", "process"]
-        ):
-            tag = "Data Processing"
-        elif any(
-            kw in func_name.lower()
-            for kw in ["embed", "vector"]
-        ):
-            tag = "Embeddings"
-        # "# notebook-to-api: tag <Name>" wins over the name-based guess
-        # above, for both the OpenAPI tag and x-notebook-to-api-category.
-        tag = (tag_overrides or {}).get(func_name, tag)
+        tag = resolve_endpoint_tag(func_name, tag_overrides)
         category = tag
         args = func.get("args", [])
         example_response = func.get(

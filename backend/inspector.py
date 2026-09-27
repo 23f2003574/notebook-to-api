@@ -10,6 +10,7 @@ from backend.compiler import (
     _extract_timeout_overrides,
     _extract_rate_limit_overrides,
     _extract_cache_overrides,
+    _extract_tag_overrides,
     COMPILE_METADATA_FILENAME,
     _extract_background_overrides,
     _extract_deprecated_functions,
@@ -37,6 +38,7 @@ from backend.parser.ast_parser import (
 from backend.generator.api_generator import (
     _deprecation_sunset_date,
     resolve_deprecation,
+    resolve_endpoint_tag,
     resolve_is_background,
     RESERVED_INFRASTRUCTURE_NAMES,
 )
@@ -191,7 +193,7 @@ def _is_background_function(name, background_overrides=None):
     return resolve_is_background(name, background_overrides)
 
 
-def _endpoint_metadata(functions, background_overrides=None, deprecated_overrides=None):
+def _endpoint_metadata(functions, background_overrides=None, deprecated_overrides=None, tag_overrides=None):
     """The {"path", "method", "is_async"} shape POST /api/compile's
     "endpoints" field already returns (see routes/upload.py), computed
     here from a notebook that hasn't been compiled yet.
@@ -237,6 +239,9 @@ def _endpoint_metadata(functions, background_overrides=None, deprecated_override
             # compiling, so a dashboard/CI consumer of this preview needn't
             # re-parse the free-text reason itself.
             "sunset": _endpoint_sunset(func["name"], deprecated_overrides),
+            # The OpenAPI tag the compiled app will publish -- its
+            # "# notebook-to-api: tag" directive, else the name-based guess.
+            "tag": resolve_endpoint_tag(func["name"], tag_overrides),
         }
         for func in functions
     ]
@@ -711,7 +716,8 @@ def inspect_notebook_data(
         "generated_files": list_generated_files(output_dir),
         "reserved_name_conflicts": _reserved_name_conflicts(all_functions),
         "endpoints": _endpoint_metadata(
-            all_functions, background_overrides, deprecated_overrides
+            all_functions, background_overrides, deprecated_overrides,
+            _extract_tag_overrides(code_cells),
         ),
         "skipped_functions": _aggregate_skipped_functions(
             code_cells, {func["name"] for func in all_functions}
