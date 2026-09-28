@@ -8050,6 +8050,63 @@ def test_diff_notebooks_reports_added_removed_changed_and_unchanged():
     assert "required_parameter_added" in breaking_types
 
 
+def test_diff_notebooks_selects_endpoints_by_tag():
+    """Confirmed missing before this feature: GET /api/notebooks/diff
+    could only be narrowed by function name, unlike POST /api/compile.
+    A function tagged on either side is included (mirroring how "only"/
+    "exclude" already accept a name that appears on just one side).
+    """
+
+    old_content = _notebook_bytes(
+        "# notebook-to-api: tag Inference\n"
+        "def score(a: int) -> int:\n    return a\n\n"
+        "def other(a: int) -> int:\n    return a\n"
+    )
+    new_content = _notebook_bytes(
+        "# notebook-to-api: tag Inference\n"
+        "def score(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def other(a: int) -> int:\n    return a + 1\n"
+    )
+
+    for filename, content in (
+        ("diff_tag_old.ipynb", old_content),
+        ("diff_tag_new.ipynb", new_content),
+    ):
+        resp = client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+        assert resp.status_code == 200
+
+    resp = client.get(
+        "/api/notebooks/diff",
+        params={"old": "diff_tag_old.ipynb", "new": "diff_tag_new.ipynb", "tags": "Inference"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [c["name"] for c in body["changed"]] == ["score"]
+
+
+def test_diff_notebooks_tag_selection_errors_are_400():
+
+    old_content = _notebook_bytes("def add(a: int) -> int:\n    return a\n")
+
+    for filename in ("diff_tag_err_old.ipynb", "diff_tag_err_new.ipynb"):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(old_content), "application/json")},
+        )
+
+    resp = client.get(
+        "/api/notebooks/diff",
+        params={"old": "diff_tag_err_old.ipynb", "new": "diff_tag_err_new.ipynb", "tags": "Nope"},
+    )
+
+    assert resp.status_code == 400
+    assert "No function is tagged Nope" in resp.json()["detail"]
+
+
 def test_diff_notebooks_reports_compatible_when_nothing_would_break_callers():
 
     old_content = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
@@ -17145,6 +17202,55 @@ def test_diff_notebook_version_only_restricts_to_named_functions():
     # own removal, filtered out by "only", must not appear.
     breaking_types = {c["type"] for c in body["breaking_changes"]}
     assert breaking_types == {"required_parameter_added"}
+
+
+def test_diff_notebook_version_selects_endpoints_by_tag():
+    """Confirmed missing before this feature: GET .../versions/{id}/diff
+    could only be narrowed by function name, unlike POST /api/compile."""
+
+    filename = "versions_diff_tags.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes(
+                    "# notebook-to-api: tag Inference\n"
+                    "def score(a: int) -> int:\n    return a\n\n"
+                    "def other(a: int) -> int:\n    return a\n"
+                )),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes(
+                    "# notebook-to-api: tag Inference\n"
+                    "def score(a: int, b: int) -> int:\n    return a + b\n\n"
+                    "def other(a: int) -> int:\n    return a + 1\n"
+                )),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions/{version_id}/diff",
+        params={"tags": "Inference"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [c["name"] for c in body["changed"]] == ["score"]
 
 
 def test_diff_notebook_version_only_accepts_a_removed_only_name():

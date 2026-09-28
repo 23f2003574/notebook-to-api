@@ -7546,11 +7546,57 @@ def _filter_notebook_diff_by_name(diff, only_names, exclude_names):
     return diff
 
 
+def _resolve_diff_tag_selection(paths, tags, only_names, exclude_names):
+    """(only_names, exclude_names) narrowed to the union of `tags`-tagged
+    function names across every notebook in `paths` -- the OpenAPI-tag
+    counterpart of _filter_notebook_diff_by_name's own only/exclude
+    restriction above, shared by GET /api/notebooks/diff and GET
+    /api/notebooks/{filename}/versions/{version_id}/diff so their "tags"
+    can't drift apart from each other either.
+
+    A function tagged on *either* side is included, the same "checked
+    against the union of both sides" reasoning
+    _filter_notebook_diff_by_name's own docstring already gives for
+    only/exclude: a function only one side defines (reported under
+    "added" or "removed") is still a valid thing to select by tag.
+    compile/inspect/validate/curl-preview/postman-preview already let a
+    caller narrow a single notebook this way; comparing two notebooks
+    (or two versions of one) had no equivalent, so a CI check that only
+    cares whether a notebook's "Inference" endpoints changed shape had to
+    fetch the entire diff and filter it down by hand.
+    """
+    if not tags:
+        return only_names, exclude_names
+
+    wanted = {tag.lower() for tag in tags}
+    tagged_names = set()
+
+    for path in paths:
+        endpoints = inspect_notebook_data(str(path))["endpoints"]
+        tagged_names |= {
+            e["path"].lstrip("/") for e in endpoints if e["tag"].lower() in wanted
+        }
+
+    if not tagged_names:
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"No function is tagged {', '.join(sorted(tags))}."
+        )
+
+    if only_names:
+        return only_names & tagged_names, None
+    if exclude_names:
+        return tagged_names - exclude_names, None
+    return tagged_names, None
+
+
 @router.get("/notebooks/diff")
 def diff_notebooks(
     old: str = None, new: str = None,
     old_version: str = None, new_version: str = None,
     content: bool = False, only: str = None, exclude: str = None,
+    tags: str = None,
 ):
     """Compare the top-level functions two already-uploaded notebooks
     would each compile into endpoints -- entirely server-side, without
@@ -7630,12 +7676,19 @@ def diff_notebooks(
     under "removed") or only "new" does (under "added") is still a valid
     thing to filter to. An unrecognized name, or both given together, is
     rejected with 400, before either side is even resolved.
+
+    "tags" (optional, a comma-separated list of OpenAPI tags) narrows the
+    same report by tag instead of name, via _resolve_diff_tag_selection
+    above -- combines with only/exclude exactly the way apply_tag_
+    selection's own identical combination already does for a single
+    notebook.
     """
 
     only_names = {name.strip() for name in only.split(",") if name.strip()} if only else None
     exclude_names = (
         {name.strip() for name in exclude.split(",") if name.strip()} if exclude else None
     )
+    tag_list = [tag.strip() for tag in tags.split(",") if tag.strip()] if tags else None
 
     if only_names and exclude_names:
 
@@ -7669,6 +7722,10 @@ def diff_notebooks(
                     f"notebook: {e}"
                 )
             )
+
+    only_names, exclude_names = _resolve_diff_tag_selection(
+        (old_path, new_path), tag_list, only_names, exclude_names
+    )
 
     diff = diff_notebook_functions(str(old_path), str(new_path))
     diff = _filter_notebook_diff_by_name(diff, only_names, exclude_names)
@@ -12513,7 +12570,7 @@ def inspect_notebook_version(
 @router.get("/notebooks/{filename}/versions/{version_id}/diff")
 def diff_notebook_version(
     filename: str, version_id: str, against: str = None, content: bool = False,
-    only: str = None, exclude: str = None,
+    only: str = None, exclude: str = None, tags: str = None,
 ):
     """Compare the top-level functions a snapshotted version of `filename`
     would compile into endpoints against either another snapshotted
@@ -12572,12 +12629,18 @@ def diff_notebook_version(
     current live content defines (reported under "added") is still a
     valid thing to filter to. An unrecognized name, or both given
     together, is rejected with 400, before either side is even resolved.
+
+    "tags" (optional, a comma-separated list of OpenAPI tags) narrows the
+    same report by tag instead of name, via _resolve_diff_tag_selection
+    above -- the same addition GET /api/notebooks/diff's own identical
+    field just gained.
     """
 
     only_names = {name.strip() for name in only.split(",") if name.strip()} if only else None
     exclude_names = (
         {name.strip() for name in exclude.split(",") if name.strip()} if exclude else None
     )
+    tag_list = [tag.strip() for tag in tags.split(",") if tag.strip()] if tags else None
 
     if only_names and exclude_names:
 
@@ -12641,6 +12704,10 @@ def diff_notebook_version(
                 status_code=400,
                 detail=f"{label} is not a valid Jupyter notebook: {e}"
             )
+
+    only_names, exclude_names = _resolve_diff_tag_selection(
+        (old_path, new_path), tag_list, only_names, exclude_names
+    )
 
     diff = diff_notebook_functions(str(old_path), str(new_path))
     diff = _filter_notebook_diff_by_name(diff, only_names, exclude_names)

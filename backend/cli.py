@@ -688,8 +688,9 @@ def _add_tag_selection_argument(parser):
     """Add --tag to a subcommand that selects functions (compile,
     export-curl, export-postman, curl-preview, postman-preview, serve,
     watch, validate, remote-validate, app-preview, readme-preview,
-    openapi-preview, remote-inspect): select them by their endpoint's
-    OpenAPI tag (see inspector.apply_tag_selection)."""
+    openapi-preview, remote-inspect, diff-notebooks, versions compare):
+    select them by their endpoint's OpenAPI tag (see
+    inspector.apply_tag_selection)."""
     parser.add_argument(
         "--tag",
         default=None,
@@ -7055,6 +7056,8 @@ def _dispatch_core_command(args):
                 compare_params["only"] = args.only
             if args.exclude:
                 compare_params["exclude"] = args.exclude
+            if args.tag:
+                compare_params["tags"] = args.tag
 
             try:
                 response = httpx.get(
@@ -7571,6 +7574,8 @@ def _dispatch_core_command(args):
             params["only"] = args.only
         if args.exclude:
             params["exclude"] = args.exclude
+        if args.tag:
+            params["tags"] = args.tag
 
         try:
             response = httpx.get(
@@ -16072,6 +16077,7 @@ def main():
         )
     )
     _add_function_selection_arguments(versions_compare_parser)
+    _add_tag_selection_argument(versions_compare_parser)
     _add_dashboard_url_and_timeout_arguments(versions_compare_parser)
     versions_compare_parser.add_argument(
         "--json",
@@ -16459,6 +16465,7 @@ def main():
         )
     )
     _add_function_selection_arguments(diff_notebooks_parser)
+    _add_tag_selection_argument(diff_notebooks_parser)
     _add_dashboard_url_and_timeout_arguments(diff_notebooks_parser)
     diff_notebooks_parser.add_argument(
         "--json",
