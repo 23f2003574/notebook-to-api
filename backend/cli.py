@@ -689,8 +689,8 @@ def _add_tag_selection_argument(parser):
     export-curl, export-postman, curl-preview, postman-preview, serve,
     watch, validate, remote-validate, app-preview, readme-preview,
     openapi-preview, remote-inspect, diff-notebooks, versions compare,
-    diff, remote-diff): select them by their endpoint's OpenAPI tag (see
-    inspector.apply_tag_selection)."""
+    diff, remote-diff, versions diff): select them by their endpoint's
+    OpenAPI tag (see inspector.apply_tag_selection)."""
     parser.add_argument(
         "--tag",
         default=None,
@@ -7060,7 +7060,19 @@ def _dispatch_core_command(args):
                 with os.fdopen(new_fd, "wb") as f:
                     f.write(new_content)
 
+                only = _parse_comma_separated_names(args.only)
+                exclude = _parse_comma_separated_names(args.exclude)
+                tags = _parse_comma_separated_names(args.tag)
+                if only and exclude:
+                    raise ValueError(
+                        "only and exclude can't both be given -- choose one."
+                    )
+                only, exclude = _resolve_local_diff_tag_selection(
+                    (old_path, new_path), tags, only, exclude
+                )
+
                 diff = diff_notebook_functions(old_path, new_path)
+                diff = _filter_local_notebook_diff_by_name(diff, only, exclude)
                 diff.update(classify_notebook_diff(diff))
 
                 if args.content:
@@ -16033,6 +16045,8 @@ def main():
             "restoring either one first."
         )
     )
+    _add_function_selection_arguments(versions_diff_parser)
+    _add_tag_selection_argument(versions_diff_parser)
     _add_dashboard_url_and_timeout_arguments(versions_diff_parser)
     versions_diff_parser.add_argument(
         "--json",

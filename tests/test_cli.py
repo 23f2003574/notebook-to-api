@@ -20862,6 +20862,87 @@ def test_versions_diff_command_compares_a_version_against_the_current_notebook(
     ]
 
 
+def test_versions_diff_command_only_restricts_the_report_to_the_named_function(
+    tmp_path, fake_dashboard
+):
+    """`versions diff` previously had no --only/--exclude/--tag at all,
+    unlike `versions compare`'s identical dashboard-backed flags.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _versions_diff_notebook_bytes(
+                "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+                "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+            ),
+        ),
+        _raw_response(
+            200,
+            _versions_diff_notebook_bytes(
+                "def add(a: int, b: int, c: int = 0) -> int:\n    return a + b + c\n\n"
+                "def multiply(a: int, b: int) -> int:\n    return a * b\n"
+            ),
+        ),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "diff", "nb.ipynb", "v1.ipynb",
+            "--only", "add", "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    body = json.loads(proc.stdout)
+    assert body["added"] == []
+    assert body["removed"] == []
+    assert [c["name"] for c in body["changed"]] == ["add"]
+
+
+def test_versions_diff_command_selects_endpoints_by_tag(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _versions_diff_notebook_bytes(
+                "# notebook-to-api: tag Inference\n"
+                "def score(a: int) -> int:\n    return a\n\n"
+                "def other(a: int) -> int:\n    return a\n"
+            ),
+        ),
+        _raw_response(
+            200,
+            _versions_diff_notebook_bytes(
+                "# notebook-to-api: tag Inference\n"
+                "def score(a: int, b: int) -> int:\n    return a + b\n\n"
+                "def other(a: int) -> int:\n    return a + 1\n"
+            ),
+        ),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "versions", "diff", "nb.ipynb", "v1.ipynb",
+            "--tag", "Inference", "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    body = json.loads(proc.stdout)
+    assert [c["name"] for c in body["changed"]] == ["score"]
+
+
 def test_versions_diff_command_content_flag_prints_a_line_level_diff(
     tmp_path, fake_dashboard
 ):
