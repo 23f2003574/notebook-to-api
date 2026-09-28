@@ -13586,6 +13586,7 @@ def inspect_notebook_endpoint(
 
     only = data.get("only")
     exclude = data.get("exclude")
+    tags = data.get("tags")
     expected_sha256 = data.get("expected_sha256")
 
     if expected_sha256 is not None and not isinstance(expected_sha256, str):
@@ -13605,6 +13606,17 @@ def inspect_notebook_endpoint(
                 status_code=400,
                 detail=f"{field_name} must be a list of strings"
             )
+
+    # Mirrors POST /api/compile's own identical "tags" validation -- see
+    # apply_tag_selection below for the gap this closes here too.
+    if tags is not None and (
+        not isinstance(tags, list)
+        or not all(isinstance(tag, str) and tag for tag in tags)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="tags must be a list of non-empty strings"
+        )
 
     if only and exclude:
 
@@ -13677,6 +13689,19 @@ def inspect_notebook_endpoint(
             status_code=500,
             detail=f"Inspection error: {str(e)}"
         )
+
+    if tags:
+
+        try:
+
+            only, exclude = apply_tag_selection(str(full_path), tags, only, exclude)
+
+        except ValueError as e:
+
+            raise HTTPException(
+                status_code=400,
+                detail=str(e)
+            )
 
     if only or exclude:
 

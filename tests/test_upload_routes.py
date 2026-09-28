@@ -22748,6 +22748,22 @@ def test_inspect_only_keeps_just_the_named_function():
     assert [e["path"] for e in body["endpoints"]] == ["/add"]
 
 
+def test_inspect_selects_endpoints_by_tag():
+    """Confirmed missing before this feature: POST /api/inspect could
+    only be narrowed by function name, unlike POST /api/compile."""
+    _upload_tagged_notebook("inspect_tags.ipynb")
+
+    resp = client.post(
+        "/api/inspect",
+        json={"notebook_path": "inspect_tags.ipynb", "tags": ["scoring"]},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [f["name"] for f in body["functions"]] == ["score"]
+    assert [e["path"] for e in body["endpoints"]] == ["/score"]
+
+
 def test_inspect_rejects_only_and_exclude_together():
 
     _upload_sample_notebook("inspect_only_exclude_conflict.ipynb")

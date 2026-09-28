@@ -14235,6 +14235,55 @@ def test_remote_inspect_command_passes_expected_sha256_through_to_the_post_body(
     }
 
 
+def test_remote_inspect_command_passes_the_tag_flag_through(tmp_path, fake_dashboard):
+    """`remote-inspect` previously had no --tag at all, unlike
+    `remote-compile`/`curl-preview`/`postman-preview`.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "functions": [{"name": "score"}],
+            "dependencies": [],
+            "generated_files": [],
+            "reserved_name_conflicts": [],
+            "endpoints": [{"path": "/score", "method": "POST", "is_async": False, "deprecated": False}],
+            "skipped_functions": [],
+            "private_functions": [],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-inspect", "nb.ipynb", "--dashboard-url", dashboard_url, "--tag", "Inference"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {
+        "notebook_path": "nb.ipynb", "tags": ["Inference"],
+    }
+
+
+def test_remote_inspect_command_rejects_tag_together_with_version_id(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-inspect", "nb.ipynb", "--dashboard-url", "http://localhost:1",
+            "--tag", "Inference", "--version-id", "v1.ipynb",
+        ],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "--tag isn't supported together with --version-id")
+
+
 def test_remote_inspect_command_version_id_passes_expected_sha256_as_a_query_param(
     tmp_path, fake_dashboard
 ):

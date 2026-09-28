@@ -688,8 +688,8 @@ def _add_tag_selection_argument(parser):
     """Add --tag to a subcommand that selects functions (compile,
     export-curl, export-postman, curl-preview, postman-preview, serve,
     watch, validate, remote-validate, app-preview, readme-preview,
-    openapi-preview): select them by their endpoint's OpenAPI tag (see
-    inspector.apply_tag_selection)."""
+    openapi-preview, remote-inspect): select them by their endpoint's
+    OpenAPI tag (see inspector.apply_tag_selection)."""
     parser.add_argument(
         "--tag",
         default=None,
@@ -5303,6 +5303,14 @@ def _dispatch_core_command(args):
         only = _parse_comma_separated_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
 
+        if args.tag and args.version_id:
+
+            raise ValueError(
+                "--tag isn't supported together with --version-id -- "
+                "GET .../versions/{version_id}/inspect has no tag "
+                "selection of its own yet."
+            )
+
         try:
             if args.version_id:
                 params = {}
@@ -5326,6 +5334,8 @@ def _dispatch_core_command(args):
                     inspect_body["only"] = only
                 if exclude:
                     inspect_body["exclude"] = exclude
+                if args.tag:
+                    inspect_body["tags"] = _parse_comma_separated_names(args.tag)
                 response = httpx.post(
                     f"{dashboard_url}/api/inspect",
                     json=inspect_body,
@@ -13889,6 +13899,7 @@ def main():
         )
     )
     _add_function_selection_arguments(remote_inspect_parser)
+    _add_tag_selection_argument(remote_inspect_parser)
     _add_dashboard_url_and_timeout_arguments(remote_inspect_parser)
     remote_inspect_parser.add_argument(
         "--json",
