@@ -16,7 +16,19 @@ _ARG_SECTION_HEADER_PATTERN = re.compile(r"^(Args|Arguments|Parameters):$")
 # optional "(type)" is accepted but never used (the notebook function's
 # own real annotation, not free-text repeated in a docstring, is always
 # authoritative for the generated field's actual type).
-_ARG_ENTRY_PATTERN = re.compile(r"^([A-Za-z_]\w*)\s*(?:\([^)]*\))?\s*:\s*(.*)$")
+#
+# A leading "**" or "*" (e.g. "**kwargs: Arbitrary keyword arguments.",
+# the standard Google style guide's own example for documenting a
+# **kwargs catch-all) is accepted and discarded -- extract_functions_
+# from_code stores a **kwargs parameter's own name without the stars
+# (ast.arguments.kwarg.arg is just "kwargs"), so a docstring entry
+# spelled with them wouldn't otherwise match this pattern at all.
+# Before this, such a line didn't just fail to attach a description to
+# the catch-all parameter -- since it didn't match here, the loop below
+# treated it as an ordinary continuation line of whichever entry came
+# right before it in the docstring, silently appending its text onto
+# that unrelated parameter's own description instead.
+_ARG_ENTRY_PATTERN = re.compile(r"^\*{0,2}([A-Za-z_]\w*)\s*(?:\([^)]*\))?\s*:\s*(.*)$")
 
 
 def _parse_docstring_arg_descriptions(docstring):

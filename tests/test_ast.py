@@ -409,6 +409,40 @@ def test_parse_docstring_arg_descriptions_handles_type_annotation_in_entry():
     }
 
 
+def test_parse_docstring_arg_descriptions_handles_a_kwargs_entry():
+    """A "**kwargs: description" entry -- the Google style guide's own
+    documented convention for a **kwargs catch-all -- must attach its
+    description to "kwargs" (the name extract_functions_from_code
+    actually stores, without the stars), not get treated as an
+    unrecognized line and silently swallowed into whichever entry came
+    before it.
+    """
+
+    docstring = (
+        "Summary.\n\n"
+        "Args:\n"
+        "    a: The main value.\n"
+        "    **kwargs: Additional options passed to the backend.\n"
+    )
+
+    assert _parse_docstring_arg_descriptions(docstring) == {
+        "a": "The main value.",
+        "kwargs": "Additional options passed to the backend.",
+    }
+
+
+def test_parse_docstring_arg_descriptions_handles_a_single_star_args_entry():
+    """The identical "*args: description" convention for a *args
+    catch-all, same stripping rule as "**kwargs:" above.
+    """
+
+    docstring = "Summary.\n\nArgs:\n    *args: Extra positional values.\n"
+
+    assert _parse_docstring_arg_descriptions(docstring) == {
+        "args": "Extra positional values."
+    }
+
+
 def test_parse_docstring_arg_descriptions_joins_wrapped_continuation_lines():
 
     docstring = (
@@ -843,6 +877,38 @@ def f(a, **kwargs):
         "kind": "var_keyword",
         "description": None,
     }
+
+
+def test_function_extraction_attaches_a_docstring_description_to_the_kwargs_field():
+    """A "**kwargs: ..." Args: entry (see
+    test_parse_docstring_arg_descriptions_handles_a_kwargs_entry) must
+    reach the actual "kwargs" field extract_functions_from_code builds
+    for it, the same "prefer the author's own words" treatment every
+    other documented parameter already gets -- and must not leak into
+    the preceding parameter's own description the way it silently did
+    before _ARG_ENTRY_PATTERN accepted a leading "**"/"*".
+    """
+
+    code = '''
+def f(a, **kwargs):
+    """Do something.
+
+    Args:
+        a: the value
+        **kwargs: additional options passed straight to the backend.
+    """
+    return a
+'''
+
+    args = extract_functions_from_code(code)[0]["args"]
+
+    assert args[0]["name"] == "a"
+    assert args[0]["description"] == "the value"
+    assert args[1]["name"] == "kwargs"
+    assert (
+        args[1]["description"]
+        == "additional options passed straight to the backend."
+    )
 
 
 def test_function_extraction_still_includes_sibling_function_beside_var_args_function():
