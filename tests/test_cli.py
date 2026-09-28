@@ -2620,6 +2620,90 @@ def test_diff_command_reports_added_removed_and_changed_functions(tmp_path):
     assert "POST /add" in proc.stdout
 
 
+def test_diff_command_only_restricts_the_report_to_the_named_function(tmp_path):
+    """`diff` previously had no --only/--exclude/--tag at all, unlike
+    `diff-notebooks`'s identical dashboard-backed flags.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    old_path = workdir / "old.ipynb"
+    new_path = workdir / "new.ipynb"
+
+    _write_notebook_with_function(
+        old_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def subtract(a: int, b: int) -> int:\n    return a - b\n",
+    )
+    _write_notebook_with_function(
+        new_path,
+        "def add(a: int, b: int, c: int = 0) -> int:\n    return a + b + c\n\n"
+        "def multiply(a: int, b: int) -> int:\n    return a * b\n",
+    )
+
+    proc = _run_cli(
+        ["diff", str(old_path), str(new_path), "--only", "add", "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    body = json.loads(proc.stdout)
+    assert body["added"] == []
+    assert body["removed"] == []
+    assert [c["name"] for c in body["changed"]] == ["add"]
+
+
+def test_diff_command_selects_endpoints_by_tag(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    old_path = workdir / "old.ipynb"
+    new_path = workdir / "new.ipynb"
+
+    _write_notebook_with_function(
+        old_path,
+        "# notebook-to-api: tag Inference\n"
+        "def score(a: int) -> int:\n    return a\n\n"
+        "def other(a: int) -> int:\n    return a\n",
+    )
+    _write_notebook_with_function(
+        new_path,
+        "# notebook-to-api: tag Inference\n"
+        "def score(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def other(a: int) -> int:\n    return a + 1\n",
+    )
+
+    proc = _run_cli(
+        ["diff", str(old_path), str(new_path), "--tag", "Inference", "--json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    body = json.loads(proc.stdout)
+    assert [c["name"] for c in body["changed"]] == ["score"]
+
+
+def test_diff_command_tag_selection_reports_a_clean_error_for_an_unmatched_tag(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    old_path = workdir / "old.ipynb"
+    new_path = workdir / "new.ipynb"
+
+    _write_notebook_with_function(old_path, "def add(a: int) -> int:\n    return a\n")
+    _write_notebook_with_function(new_path, "def add(a: int) -> int:\n    return a\n")
+
+    proc = _run_cli(
+        ["diff", str(old_path), str(new_path), "--tag", "NoSuchTag"],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "No function is tagged NoSuchTag")
+
+
 def test_diff_command_reports_no_changes_for_identical_notebooks(tmp_path):
 
     workdir = tmp_path / "workdir"

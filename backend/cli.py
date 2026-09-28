@@ -688,8 +688,8 @@ def _add_tag_selection_argument(parser):
     """Add --tag to a subcommand that selects functions (compile,
     export-curl, export-postman, curl-preview, postman-preview, serve,
     watch, validate, remote-validate, app-preview, readme-preview,
-    openapi-preview, remote-inspect, diff-notebooks, versions compare):
-    select them by their endpoint's OpenAPI tag (see
+    openapi-preview, remote-inspect, diff-notebooks, versions compare,
+    diff): select them by their endpoint's OpenAPI tag (see
     inspector.apply_tag_selection)."""
     parser.add_argument(
         "--tag",
@@ -866,6 +866,71 @@ def _parse_comma_separated_names(value):
     names = [name.strip() for name in value.split(",") if name.strip()]
 
     return names or None
+
+
+def _filter_local_notebook_diff_by_name(diff, only, exclude):
+    """Restrict a diff_notebook_functions result to only the named
+    functions -- the local-file counterpart of _filter_notebook_diff_by_name
+    (backend/routes/upload.py), for the `diff` command's own --only/
+    --exclude (previously missing here, unlike `diff-notebooks`'s
+    identical dashboard-backed flags). A name is accepted as long as it
+    appears in "added", "removed", "changed", or "unchanged" -- not just
+    old_notebook's own functions -- since a function only new_notebook
+    defines (reported under "added") is still a valid thing to filter to.
+    """
+    if not only and not exclude:
+        return diff
+
+    known_names = (
+        {f["name"] for f in diff["added"]}
+        | {f["name"] for f in diff["removed"]}
+        | {c["name"] for c in diff["changed"]}
+        | set(diff["unchanged"])
+    )
+
+    kept_names = {
+        func["name"]
+        for func in _filter_functions_by_name(
+            [{"name": name} for name in known_names], only, exclude
+        )
+    }
+
+    diff["added"] = [f for f in diff["added"] if f["name"] in kept_names]
+    diff["removed"] = [f for f in diff["removed"] if f["name"] in kept_names]
+    diff["changed"] = [c for c in diff["changed"] if c["name"] in kept_names]
+    diff["unchanged"] = [name for name in diff["unchanged"] if name in kept_names]
+
+    return diff
+
+
+def _resolve_local_diff_tag_selection(paths, tags, only, exclude):
+    """(only, exclude) narrowed to the union of `tags`-tagged function
+    names across every notebook path in `paths` -- the local-file
+    counterpart of _resolve_diff_tag_selection (backend/routes/upload.py),
+    for the `diff` command's own --tag. A function tagged on either side
+    is included, the same reasoning _filter_local_notebook_diff_by_name
+    above already applies to --only/--exclude.
+    """
+    if not tags:
+        return only, exclude
+
+    wanted = {tag.lower() for tag in tags}
+    tagged_names = set()
+
+    for path in paths:
+        endpoints = inspect_notebook_data(str(path))["endpoints"]
+        tagged_names |= {
+            e["path"].lstrip("/") for e in endpoints if e["tag"].lower() in wanted
+        }
+
+    if not tagged_names:
+        raise ValueError(f"No function is tagged {', '.join(sorted(tags))}.")
+
+    if only:
+        return [name for name in only if name in tagged_names], None
+    if exclude:
+        return sorted(tagged_names - set(exclude)), None
+    return sorted(tagged_names), None
 
 
 def _parse_import_url_headers(header_args):
@@ -2528,7 +2593,16 @@ def _dispatch_core_command(args):
                 if smoke_test_result is not None and not smoke_test_result["passed"]:
                     sys.exit(1)
     elif args.command == "diff":
+        only = _parse_comma_separated_names(args.only)
+        exclude = _parse_comma_separated_names(args.exclude)
+        tags = _parse_comma_separated_names(args.tag)
+        if only and exclude:
+            raise ValueError("only and exclude can't both be given -- choose one.")
+        only, exclude = _resolve_local_diff_tag_selection(
+            (args.old_notebook, args.new_notebook), tags, only, exclude
+        )
         diff = diff_notebook_functions(args.old_notebook, args.new_notebook)
+        diff = _filter_local_notebook_diff_by_name(diff, only, exclude)
         diff.update(classify_notebook_diff(diff))
         if args.content:
             diff["content_diff"] = diff_notebook_source(
@@ -10504,6 +10578,8 @@ def main():
             "uploaded first."
         )
     )
+    _add_function_selection_arguments(diff_parser)
+    _add_tag_selection_argument(diff_parser)
 
     # upload command (push a local notebook to a running dashboard)
     upload_parser = subparsers.add_parser(
