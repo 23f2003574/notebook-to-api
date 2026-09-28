@@ -14784,6 +14784,7 @@ def app_preview_endpoint(data: dict):
 
     only = data.get("only")
     exclude = data.get("exclude")
+    tags = data.get("tags")
     # "drop_past_sunset": preview exactly what POST /api/compile would
     # produce with its own identical option -- see
     # _drop_past_sunset_selection.
@@ -14809,6 +14810,18 @@ def app_preview_endpoint(data: dict):
                 detail=f"{field_name} must be a list of strings"
             )
 
+    # Mirrors POST /api/compile's own identical "tags" validation -- see
+    # apply_tag_selection below for the "exact preview a real compile
+    # would produce" gap this closes here too.
+    if tags is not None and (
+        not isinstance(tags, list)
+        or not all(isinstance(tag, str) and tag for tag in tags)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="tags must be a list of non-empty strings"
+        )
+
     if only and exclude:
 
         raise HTTPException(
@@ -14823,6 +14836,11 @@ def app_preview_endpoint(data: dict):
     try:
 
         notebook = load_notebook(str(full_path))
+
+        if tags:
+            only, exclude = apply_tag_selection(
+                str(full_path), tags, only, exclude
+            )
 
         only, exclude, dropped_past_sunset = _drop_past_sunset_selection(
             str(full_path), only, exclude, drop_past_sunset,
@@ -14977,6 +14995,7 @@ def readme_preview_endpoint(data: dict):
 
     only = data.get("only")
     exclude = data.get("exclude")
+    tags = data.get("tags")
     # "drop_past_sunset": preview exactly what POST /api/compile would
     # produce with its own identical option -- see
     # _drop_past_sunset_selection.
@@ -15002,6 +15021,18 @@ def readme_preview_endpoint(data: dict):
                 detail=f"{field_name} must be a list of strings"
             )
 
+    # Mirrors POST /api/compile's own identical "tags" validation -- see
+    # apply_tag_selection below for the "exact preview a real compile
+    # would produce" gap this closes here too.
+    if tags is not None and (
+        not isinstance(tags, list)
+        or not all(isinstance(tag, str) and tag for tag in tags)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="tags must be a list of non-empty strings"
+        )
+
     if only and exclude:
 
         raise HTTPException(
@@ -15016,6 +15047,11 @@ def readme_preview_endpoint(data: dict):
     try:
 
         notebook = load_notebook(str(full_path))
+
+        if tags:
+            only, exclude = apply_tag_selection(
+                str(full_path), tags, only, exclude
+            )
 
         only, exclude, dropped_past_sunset = _drop_past_sunset_selection(
             str(full_path), only, exclude, drop_past_sunset,
@@ -15880,6 +15916,7 @@ def openapi_preview_endpoint(data: dict):
 
     only = data.get("only")
     exclude = data.get("exclude")
+    tags = data.get("tags")
     # "drop_past_sunset": preview exactly what POST /api/compile would
     # produce with its own identical option -- see
     # _drop_past_sunset_selection.
@@ -15896,6 +15933,18 @@ def openapi_preview_endpoint(data: dict):
                 status_code=400,
                 detail=f"{field_name} must be a list of strings"
             )
+
+    # Mirrors POST /api/compile's own identical "tags" validation -- see
+    # apply_tag_selection below for the "exact schema a real compile
+    # would produce" gap this closes here too.
+    if tags is not None and (
+        not isinstance(tags, list)
+        or not all(isinstance(tag, str) and tag for tag in tags)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="tags must be a list of non-empty strings"
+        )
 
     if only and exclude:
 
@@ -15936,6 +15985,11 @@ def openapi_preview_endpoint(data: dict):
     try:
 
         notebook = load_notebook(str(full_path))
+
+        if tags:
+            only, exclude = apply_tag_selection(
+                str(full_path), tags, only, exclude
+            )
 
         only, exclude, dropped_past_sunset = _drop_past_sunset_selection(
             str(full_path), only, exclude, drop_past_sunset,

@@ -25333,6 +25333,22 @@ def test_app_preview_respects_only_and_exclude():
     assert "def subtract(" not in app_code
 
 
+def test_app_preview_selects_endpoints_by_tag():
+    """Confirmed missing before this feature: POST /api/app-preview could
+    only be narrowed by function name, unlike POST /api/curl-preview."""
+    _upload_tagged_notebook("app_preview_tags.ipynb")
+
+    resp = client.post(
+        "/api/app-preview",
+        json={"notebook_path": "app_preview_tags.ipynb", "tags": ["scoring"]},
+    )
+
+    assert resp.status_code == 200
+    app_code = resp.json()["app_code"]
+    assert "def score(" in app_code
+    assert "def add(" not in app_code
+
+
 def test_app_preview_never_exposes_a_private_directive_marked_function():
 
     content = _notebook_bytes(
@@ -25822,6 +25838,22 @@ def test_openapi_preview_respects_only_and_exclude():
     assert "/subtract" not in paths
 
 
+def test_openapi_preview_selects_endpoints_by_tag():
+    """Confirmed missing before this feature: POST /api/openapi-preview
+    could only be narrowed by function name, unlike POST /api/curl-preview."""
+    _upload_tagged_notebook("openapi_preview_tags.ipynb")
+
+    resp = client.post(
+        "/api/openapi-preview",
+        json={"notebook_path": "openapi_preview_tags.ipynb", "tags": ["scoring"]},
+    )
+
+    assert resp.status_code == 200
+    paths = resp.json()["schema"]["paths"]
+    assert "/score" in paths
+    assert "/add" not in paths
+
+
 def test_openapi_preview_never_exposes_a_private_directive_marked_function():
 
     content = _notebook_bytes(
@@ -26198,6 +26230,22 @@ def test_readme_preview_only_restricts_to_the_named_functions():
     readme = resp.json()["readme"]
     assert "`POST /add`" in readme
     assert "`POST /subtract`" not in readme
+
+
+def test_readme_preview_selects_endpoints_by_tag():
+    """Confirmed missing before this feature: POST /api/readme-preview
+    could only be narrowed by function name, unlike POST /api/curl-preview."""
+    _upload_tagged_notebook("readme_preview_tags.ipynb")
+
+    resp = client.post(
+        "/api/readme-preview",
+        json={"notebook_path": "readme_preview_tags.ipynb", "tags": ["scoring"]},
+    )
+
+    assert resp.status_code == 200
+    readme = resp.json()["readme"]
+    assert "`POST /score`" in readme
+    assert "`POST /add`" not in readme
 
 
 def test_readme_preview_exclude_omits_the_named_functions():

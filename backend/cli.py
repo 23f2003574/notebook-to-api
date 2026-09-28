@@ -687,8 +687,9 @@ def _add_function_selection_arguments(parser):
 def _add_tag_selection_argument(parser):
     """Add --tag to a subcommand that selects functions (compile,
     export-curl, export-postman, curl-preview, postman-preview, serve,
-    watch, validate, remote-validate): select them by their endpoint's
-    OpenAPI tag (see inspector.apply_tag_selection)."""
+    watch, validate, remote-validate, app-preview, readme-preview,
+    openapi-preview): select them by their endpoint's OpenAPI tag (see
+    inspector.apply_tag_selection)."""
     parser.add_argument(
         "--tag",
         default=None,
@@ -5723,6 +5724,8 @@ def _dispatch_core_command(args):
         }
         if args.drop_past_sunset:
             app_preview_body["drop_past_sunset"] = True
+        if args.tag:
+            app_preview_body["tags"] = _parse_comma_separated_names(args.tag)
         if args.version_id:
             app_preview_body["version_id"] = args.version_id
         if args.expected_sha256:
@@ -5776,6 +5779,8 @@ def _dispatch_core_command(args):
         }
         if args.drop_past_sunset:
             readme_preview_body["drop_past_sunset"] = True
+        if args.tag:
+            readme_preview_body["tags"] = _parse_comma_separated_names(args.tag)
         if args.version_id:
             readme_preview_body["version_id"] = args.version_id
         if args.expected_sha256:
@@ -5830,6 +5835,8 @@ def _dispatch_core_command(args):
         }
         if args.drop_past_sunset:
             openapi_preview_body["drop_past_sunset"] = True
+        if args.tag:
+            openapi_preview_body["tags"] = _parse_comma_separated_names(args.tag)
         if args.version_id:
             openapi_preview_body["version_id"] = args.version_id
         if args.expected_sha256:
@@ -14225,6 +14232,7 @@ def main():
     )
     _add_dashboard_url_and_timeout_arguments(app_preview_parser)
     _add_function_selection_arguments(app_preview_parser)
+    _add_tag_selection_argument(app_preview_parser)
     app_preview_parser.add_argument(
         "--drop-past-sunset",
         action="store_true",
@@ -14281,6 +14289,7 @@ def main():
     )
     _add_dashboard_url_and_timeout_arguments(readme_preview_parser)
     _add_function_selection_arguments(readme_preview_parser)
+    _add_tag_selection_argument(readme_preview_parser)
     readme_preview_parser.add_argument(
         "--drop-past-sunset",
         action="store_true",
@@ -14671,6 +14680,7 @@ def main():
     )
     _add_dashboard_url_and_timeout_arguments(openapi_preview_parser)
     _add_function_selection_arguments(openapi_preview_parser)
+    _add_tag_selection_argument(openapi_preview_parser)
     openapi_preview_parser.add_argument(
         "--drop-past-sunset",
         action="store_true",

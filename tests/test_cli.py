@@ -15544,6 +15544,36 @@ def test_app_preview_command_passes_only_and_exclude(tmp_path, fake_dashboard):
     }
 
 
+def test_app_preview_command_passes_the_tag_flag_through(tmp_path, fake_dashboard):
+    """`app-preview` (and `readme-preview`/`openapi-preview` below)
+    previously had no --tag at all, unlike `curl-preview`/`postman-preview`.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "notebook": "nb.ipynb",
+            "package_name": "generated",
+            "app_code": "app = FastAPI()\n",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["app-preview", "nb.ipynb", "--tag", "Inference", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {
+        "notebook_path": "nb.ipynb", "only": None, "exclude": None,
+        "tags": ["Inference"],
+    }
+
+
 def test_app_preview_command_passes_the_version_id_flag_through(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard
@@ -15701,6 +15731,33 @@ def test_readme_preview_command_passes_only_and_exclude(tmp_path, fake_dashboard
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert json.loads(handler.bodies[0]) == {
         "notebook_path": "nb.ipynb", "only": ["add", "subtract"], "exclude": None,
+    }
+
+
+def test_readme_preview_command_passes_the_tag_flag_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "notebook": "nb.ipynb",
+            "package_name": "generated",
+            "readme": "# generated\n",
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["readme-preview", "nb.ipynb", "--tag", "Inference", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {
+        "notebook_path": "nb.ipynb", "only": None, "exclude": None,
+        "tags": ["Inference"],
     }
 
 
@@ -15867,6 +15924,33 @@ def test_openapi_preview_command_passes_only_and_exclude(tmp_path, fake_dashboar
     assert json.loads(handler.bodies[0]) == {
         "notebook_path": "nb.ipynb", "only": ["add", "subtract"], "exclude": None,
         "format": "json",
+    }
+
+
+def test_openapi_preview_command_passes_the_tag_flag_through(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "notebook": "nb.ipynb",
+            "package_name": "generated",
+            "schema": {"openapi": "3.1.0"},
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["openapi-preview", "nb.ipynb", "--tag", "Inference", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {
+        "notebook_path": "nb.ipynb", "only": None, "exclude": None,
+        "format": "json", "tags": ["Inference"],
     }
 
 
