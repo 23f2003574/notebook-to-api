@@ -695,9 +695,23 @@ def _extract_excluded_imports(code_cells):
 # REQUIREMENT_DIRECTIVE_PATTERN/EXCLUDE_DIRECTIVE_PATTERN above, this one
 # is positional: it only matches when directly followed by a "def"/"async
 # def" line, since which function it applies to is the entire point.
+#
+# Also tolerates another "# notebook-to-api: ..." directive stacked
+# between this one and the def, the same way TIMEOUT_DIRECTIVE_PATTERN/
+# TAG_DIRECTIVE_PATTERN/CACHE_DIRECTIVE_PATTERN/RATE_LIMIT_DIRECTIVE_
+# PATTERN below already do -- previously only a blank line was tolerated
+# there, so "# notebook-to-api: private" stacked with any other directive
+# (e.g. "# notebook-to-api: tag Admin" right above the same def) silently
+# failed to match at all: the "# notebook-to-api: tag ..." line is
+# neither blank nor a "def", so it broke this pattern's own strict
+# "blank lines only" allowance. Confirmed exploitable: a function marked
+# both private and tagged still compiled into a public endpoint, with no
+# error or warning that the author's own "private" directive had been
+# silently ignored -- exactly the kind of unexpectedly-exposed endpoint
+# this directive exists to prevent in the first place.
 PRIVATE_FUNCTION_DIRECTIVE_PATTERN = re.compile(
     r"^[ \t]*#\s*notebook-to-api:\s*private\s*$"
-    r"(?:\n[ \t]*\n)*"
+    r"(?:\n[ \t]*(?:#\s*notebook-to-api:[^\n]*)?)*"
     r"\n[ \t]*(?:async\s+)?def\s+(?P<name>[A-Za-z_]\w*)\s*\(",
     re.MULTILINE,
 )
@@ -795,10 +809,13 @@ def _drop_private_functions(functions, code_cells, only=None, exclude=None):
 # lines in between are tolerated, same as PRIVATE_FUNCTION_DIRECTIVE_
 # PATTERN above) -- see _extract_background_overrides below for what it's
 # for. Positional, for the identical reason PRIVATE_FUNCTION_DIRECTIVE_
-# PATTERN is: which function it applies to is the entire point.
+# PATTERN is: which function it applies to is the entire point. Also
+# tolerates another "# notebook-to-api: ..." directive stacked in
+# between (see PRIVATE_FUNCTION_DIRECTIVE_PATTERN's own comment above for
+# the exact silent-failure this fixes here too).
 BACKGROUND_OVERRIDE_DIRECTIVE_PATTERN = re.compile(
     r"^[ \t]*#\s*notebook-to-api:\s*(?P<mode>background|sync)\s*$"
-    r"(?:\n[ \t]*\n)*"
+    r"(?:\n[ \t]*(?:#\s*notebook-to-api:[^\n]*)?)*"
     r"\n[ \t]*(?:async\s+)?def\s+(?P<name>[A-Za-z_]\w*)\s*\(",
     re.MULTILINE,
 )
@@ -871,10 +888,13 @@ def _extract_background_overrides(code_cells):
 # reason, mirroring REQUIREMENT_DIRECTIVE_PATTERN's own "<spec>" capture
 # for a directive that takes an argument -- "deprecated" alone (no colon)
 # is equally valid, for a function whose author has no specific
-# replacement or reason to give.
+# replacement or reason to give. Also tolerates another "# notebook-to-
+# api: ..." directive stacked in between (see PRIVATE_FUNCTION_DIRECTIVE_
+# PATTERN's own comment above for the exact silent-failure this fixes
+# here too).
 DEPRECATED_FUNCTION_DIRECTIVE_PATTERN = re.compile(
     r"^[ \t]*#\s*notebook-to-api:\s*deprecated(?:\s*:\s*(?P<reason>\S.*?))?\s*$"
-    r"(?:\n[ \t]*\n)*"
+    r"(?:\n[ \t]*(?:#\s*notebook-to-api:[^\n]*)?)*"
     r"\n[ \t]*(?:async\s+)?def\s+(?P<name>[A-Za-z_]\w*)\s*\(",
     re.MULTILINE,
 )

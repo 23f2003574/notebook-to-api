@@ -2519,6 +2519,23 @@ def test_extract_private_function_names_tolerates_blank_lines_between_directive_
     assert _extract_private_function_names(code_cells) == {"helper"}
 
 
+def test_extract_private_function_names_tolerates_a_directive_stacked_above_it():
+    """Confirmed exploitable before this: a "private" directive stacked
+    with any other "# notebook-to-api: ..." directive on the same
+    function (unlike a blank line) fell outside this pattern's own
+    stacking allowance and silently failed to match at all -- the
+    function still compiled into a public endpoint, with nothing to
+    indicate its own "private" directive had been ignored.
+    """
+
+    code_cells = [
+        "# notebook-to-api: private\n# notebook-to-api: tag Admin\n"
+        "def helper(x):\n    return x\n"
+    ]
+
+    assert _extract_private_function_names(code_cells) == {"helper"}
+
+
 def test_extract_private_function_names_matches_an_async_def():
 
     code_cells = [
@@ -2631,6 +2648,19 @@ def test_extract_background_overrides_matches_a_sync_directive():
     }
 
 
+def test_extract_background_overrides_tolerates_a_directive_stacked_above_it():
+    """Same silent-failure as private's own equivalent test above, for
+    "background"/"sync" stacked with another directive.
+    """
+
+    code_cells = [
+        "# notebook-to-api: background\n# notebook-to-api: tag Training\n"
+        "def train_model(x):\n    return x\n"
+    ]
+
+    assert _extract_background_overrides(code_cells) == {"train_model": True}
+
+
 def test_extract_background_overrides_tolerates_blank_lines_between_directive_and_def():
 
     code_cells = [
@@ -2728,6 +2758,19 @@ def test_extract_deprecated_functions_tolerates_blank_lines_between_directive_an
     ]
 
     assert _extract_deprecated_functions(code_cells) == {"helper": None}
+
+
+def test_extract_deprecated_functions_tolerates_a_directive_stacked_above_it():
+    """Same silent-failure as private's own equivalent test above, for
+    "deprecated" stacked with another directive.
+    """
+
+    code_cells = [
+        "# notebook-to-api: deprecated: use v2\n# notebook-to-api: tag Legacy\n"
+        "def old_fn():\n    return 1\n"
+    ]
+
+    assert _extract_deprecated_functions(code_cells) == {"old_fn": "use v2"}
 
 
 def test_extract_deprecated_functions_matches_an_async_def():
@@ -2874,6 +2917,41 @@ def test_compile_notebook_never_exposes_a_private_directive_marked_function(tmp_
     assert '"/add"' in generated_app
     assert '"/helper"' not in generated_app
     assert "def helper(" in runtime_module
+
+
+def test_compile_notebook_private_directive_still_applies_when_stacked_with_another(
+    tmp_path,
+):
+    """The end-to-end version of
+    test_extract_private_function_names_tolerates_a_directive_stacked_above_it:
+    a "private" directive immediately followed by another directive (here
+    "tag") on the same function must still keep it out of the compiled
+    app, not silently expose it as a public endpoint.
+    """
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "# notebook-to-api: private\n"
+            "# notebook-to-api: tag Admin\n"
+            "def helper(x: int) -> int:\n"
+            "    return x * 2\n\n"
+            "def add(a: int, b: int) -> int:\n"
+            "    return helper(a) + helper(b)\n"
+        )
+    )
+
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    generated_app = (output_dir / "app.py").read_text(encoding="utf-8")
+
+    assert '"/add"' in generated_app
+    assert '"/helper"' not in generated_app
 
 
 def test_compile_notebook_sync_directive_overrides_a_long_running_keyword_match(
