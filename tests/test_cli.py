@@ -21777,6 +21777,85 @@ def test_remote_diff_command_reports_added_removed_and_changed_functions(
     assert handler.requests == ["/api/notebooks/nb.ipynb"]
 
 
+def test_remote_diff_command_only_restricts_the_report_to_the_named_function(
+    tmp_path, fake_dashboard
+):
+    """`remote-diff` previously had no --only/--exclude/--tag at all,
+    unlike `diff-notebooks`'s identical dashboard-backed flags.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _notebook_bytes_with_function(
+                "def add(a: int, b: int) -> int:\n    return a + b\n\n"
+                "def subtract(a: int, b: int) -> int:\n    return a - b\n"
+            ),
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    local_path = workdir / "local.ipynb"
+    _write_notebook_with_function(
+        local_path,
+        "def add(a: int, b: int, c: int = 0) -> int:\n    return a + b + c\n\n"
+        "def multiply(a: int, b: int) -> int:\n    return a * b\n",
+    )
+
+    proc = _run_cli(
+        [
+            "remote-diff", "nb.ipynb", str(local_path),
+            "--only", "add", "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    body = json.loads(proc.stdout)
+    assert body["added"] == []
+    assert body["removed"] == []
+    assert [c["name"] for c in body["changed"]] == ["add"]
+
+
+def test_remote_diff_command_selects_endpoints_by_tag(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _raw_response(
+            200,
+            _notebook_bytes_with_function(
+                "# notebook-to-api: tag Inference\n"
+                "def score(a: int) -> int:\n    return a\n\n"
+                "def other(a: int) -> int:\n    return a\n"
+            ),
+        )
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    local_path = workdir / "local.ipynb"
+    _write_notebook_with_function(
+        local_path,
+        "# notebook-to-api: tag Inference\n"
+        "def score(a: int, b: int) -> int:\n    return a + b\n\n"
+        "def other(a: int) -> int:\n    return a + 1\n",
+    )
+
+    proc = _run_cli(
+        [
+            "remote-diff", "nb.ipynb", str(local_path),
+            "--tag", "Inference", "--dashboard-url", dashboard_url, "--json",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    body = json.loads(proc.stdout)
+    assert [c["name"] for c in body["changed"]] == ["score"]
+
+
 def test_remote_diff_command_version_id_fetches_the_pinned_snapshot(
     tmp_path, fake_dashboard
 ):

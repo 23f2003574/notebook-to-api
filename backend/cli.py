@@ -689,7 +689,7 @@ def _add_tag_selection_argument(parser):
     export-curl, export-postman, curl-preview, postman-preview, serve,
     watch, validate, remote-validate, app-preview, readme-preview,
     openapi-preview, remote-inspect, diff-notebooks, versions compare,
-    diff): select them by their endpoint's OpenAPI tag (see
+    diff, remote-diff): select them by their endpoint's OpenAPI tag (see
     inspector.apply_tag_selection)."""
     parser.add_argument(
         "--tag",
@@ -7576,12 +7576,22 @@ def _dispatch_core_command(args):
             with os.fdopen(remote_notebook_fd, "wb") as f:
                 f.write(response.content)
 
+            only = _parse_comma_separated_names(args.only)
+            exclude = _parse_comma_separated_names(args.exclude)
+            tags = _parse_comma_separated_names(args.tag)
+            if only and exclude:
+                raise ValueError("only and exclude can't both be given -- choose one.")
+            only, exclude = _resolve_local_diff_tag_selection(
+                (remote_notebook_path, local_notebook_path), tags, only, exclude
+            )
+
             # The dashboard's own copy of `filename` is "old", the local
             # file is "new" -- diff_notebook_functions' own "added"/
             # "removed"/"changed" then read the same direction `upload
             # --overwrite` would move the world in: what an overwrite is
             # about to change on the dashboard, not the reverse.
             diff = diff_notebook_functions(remote_notebook_path, local_notebook_path)
+            diff = _filter_local_notebook_diff_by_name(diff, only, exclude)
             diff.update(classify_notebook_diff(diff))
 
             remote_target = (
@@ -16467,6 +16477,8 @@ def main():
             "`diff --content`'s own help for what this shows."
         )
     )
+    _add_function_selection_arguments(remote_diff_parser)
+    _add_tag_selection_argument(remote_diff_parser)
     remote_diff_parser.add_argument(
         "--expected-sha256",
         default=None,
