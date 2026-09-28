@@ -13458,6 +13458,81 @@ def test_validate_command_only_including_the_conflicting_function_still_fails(tm
     assert "health_check" in proc.stdout
 
 
+def test_validate_command_tag_selection_excludes_a_reserved_name_conflict_outside_the_tag(
+    tmp_path,
+):
+    """`validate` previously had no --tag at all, unlike `compile`/
+    `curl-preview`/`postman-preview` -- even though this command's whole
+    job is predicting what a `compile` of the same selection would do.
+    A reserved-name conflict outside the selected tag must not fail
+    validation, the same way test_validate_command_exclude_of_the_
+    conflicting_function_passes already confirms for a plain --exclude.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "# notebook-to-api: tag Infra\n"
+        "def health_check() -> dict:\n    return {}\n\n"
+        "# notebook-to-api: tag Math\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    proc = _run_cli(
+        ["validate", str(notebook_path), "--tag", "Math"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No issues found." in proc.stdout
+
+
+def test_validate_command_tag_selection_including_the_conflicting_function_still_fails(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "# notebook-to-api: tag Infra\n"
+        "def health_check() -> dict:\n    return {}\n\n"
+        "# notebook-to-api: tag Math\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    proc = _run_cli(
+        ["validate", str(notebook_path), "--tag", "Infra"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "health_check" in proc.stdout
+
+
+def test_validate_command_tag_selection_reports_a_clean_error_for_an_unmatched_tag(
+    tmp_path,
+):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    proc = _run_cli(
+        ["validate", str(notebook_path), "--tag", "NoSuchTag"],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "No function is tagged")
+
+
 def test_validate_command_fails_on_a_conflicting_requires_directive(tmp_path):
     """Confirmed missing before this fix: inspect_notebook_data's own
     report never checked for a conflicting "# notebook-to-api: requires"

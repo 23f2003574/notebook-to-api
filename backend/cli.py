@@ -687,7 +687,7 @@ def _add_function_selection_arguments(parser):
 def _add_tag_selection_argument(parser):
     """Add --tag to a subcommand that selects functions (compile,
     export-curl, export-postman, curl-preview, postman-preview, serve,
-    watch): select them by their endpoint's OpenAPI tag (see
+    watch, validate): select them by their endpoint's OpenAPI tag (see
     inspector.apply_tag_selection)."""
     parser.add_argument(
         "--tag",
@@ -1941,6 +1941,17 @@ def _dispatch_core_command(args):
 
         only = _parse_comma_separated_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
+        # --tag: validate only the endpoints with these OpenAPI tags (see
+        # apply_tag_selection's own docstring) -- the same --tag
+        # `compile`/`curl-preview`/`postman-preview` already accept,
+        # previously missing here even though this command's entire job
+        # is predicting what a `compile` of the very same selection would
+        # do. Narrows `only`/`exclude` before the reserved-name-conflict
+        # filtering below, exactly like a `--only`/`--exclude` given
+        # directly already does.
+        only, exclude = apply_tag_selection(
+            args.notebook, _parse_comma_separated_names(args.tag), only, exclude,
+        )
 
         reserved_name_conflicts = data["reserved_name_conflicts"]
         skipped_functions = data["skipped_functions"]
@@ -9900,6 +9911,7 @@ def main():
         )
     )
     _add_function_selection_arguments(validate_parser)
+    _add_tag_selection_argument(validate_parser)
     validate_parser.add_argument(
         "--json",
         action="store_true",
