@@ -1618,6 +1618,103 @@ def test_change_handler_drop_past_sunset_reports_an_emptied_only_as_a_compile_er
     assert "left nothing to compile" in capsys.readouterr().out
 
 
+_TAGGED_SOURCE = (
+    "# notebook-to-api: tag Inference\n"
+    "def score(a: int) -> int:\n    return a\n\n"
+    "# notebook-to-api: tag Inference\n"
+    "def predict(a: int) -> int:\n    return a\n\n"
+    "def other(a: int) -> int:\n    return a\n"
+)
+
+
+def test_change_handler_tag_selection_narrows_functions_and_is_re_read_on_every_recompile(
+    tmp_path, monkeypatch
+):
+    """Confirmed missing before this feature: serve/watch had no --tag at
+    all, unlike compile/curl-preview/postman-preview -- and, once added,
+    a function's own tag must be re-read on every rebuild the same way
+    drop_past_sunset already is (see _effective_selection's own
+    docstring), not frozen at whatever the notebook looked like when
+    serve/watch first started.
+    """
+    notebook_path, handler, calls = _recompile_once(
+        tmp_path, monkeypatch, _TAGGED_SOURCE, tags=["Inference"],
+    )
+    assert calls == [(["score", "predict"], None)]
+
+    # A later save tagging "other" as "Inference" too is picked up on the
+    # next rebuild.
+    _write_sunset_notebook(
+        notebook_path,
+        _TAGGED_SOURCE.replace(
+            "def other(", "# notebook-to-api: tag Inference\ndef other("
+        ),
+    )
+    handler.last_compile_time = 0
+    handler.on_modified(type("Event", (), {"src_path": str(notebook_path)})())
+
+    assert sorted(calls[-1][0]) == ["other", "predict", "score"]
+    assert calls[-1][1] is None
+
+
+def test_change_handler_tag_selection_combines_with_exclude(tmp_path, monkeypatch):
+
+    _, _, calls = _recompile_once(
+        tmp_path, monkeypatch, _TAGGED_SOURCE,
+        tags=["Inference"], exclude=["predict"],
+    )
+
+    assert calls == [(["score"], None)]
+
+
+def test_change_handler_tag_selection_reports_an_unmatched_tag_as_a_compile_error(
+    tmp_path, monkeypatch, capsys
+):
+
+    _, _, calls = _recompile_once(
+        tmp_path, monkeypatch, _TAGGED_SOURCE, tags=["NoSuchTag"],
+    )
+
+    assert calls == []
+    assert "No function is tagged" in capsys.readouterr().out
+
+
+def test_watch_notebook_initial_compile_honors_tag_selection(tmp_path, monkeypatch):
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_sunset_notebook(notebook_path, _TAGGED_SOURCE)
+    calls = []
+    monkeypatch.setattr(
+        serve_module, "compile_notebook",
+        lambda nb, out, only=None, exclude=None: calls.append((only, exclude)),
+    )
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
+
+    class _StopImmediately:
+        def schedule(self, *a, **k):
+            pass
+
+        def start(self):
+            raise KeyboardInterrupt
+
+        def stop(self):
+            pass
+
+        def join(self, *a, **k):
+            pass
+
+    monkeypatch.setattr(serve_module, "Observer", _StopImmediately)
+
+    try:
+        serve_module.watch_notebook(
+            str(notebook_path), str(tmp_path / "generated"), tags=["Inference"],
+        )
+    except KeyboardInterrupt:
+        pass
+
+    assert sorted(calls[0][0]) == ["predict", "score"]
+    assert calls[0][1] is None
+
+
 def test_watch_notebook_initial_compile_honors_drop_past_sunset(tmp_path, monkeypatch):
     notebook_path = tmp_path / "nb.ipynb"
     _write_sunset_notebook(notebook_path, _PAST_SUNSET_SOURCE)

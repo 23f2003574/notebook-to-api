@@ -686,8 +686,8 @@ def _add_function_selection_arguments(parser):
 
 def _add_tag_selection_argument(parser):
     """Add --tag to a subcommand that selects functions (compile,
-    export-curl, export-postman, curl-preview, postman-preview): select
-    them by their endpoint's OpenAPI tag (see
+    export-curl, export-postman, curl-preview, postman-preview, serve,
+    watch): select them by their endpoint's OpenAPI tag (see
     inspector.apply_tag_selection)."""
     parser.add_argument(
         "--tag",
@@ -2326,6 +2326,7 @@ def _dispatch_core_command(args):
             only=only, exclude=exclude, debounce_seconds=args.debounce_seconds,
             on_change=args.on_change,
             drop_past_sunset=args.drop_past_sunset,
+            tags=_parse_comma_separated_names(args.tag),
         )
     elif args.command == "watch":
         if args.debounce_seconds < 0:
@@ -2336,6 +2337,7 @@ def _dispatch_core_command(args):
             args.notebook, args.output, only=only, exclude=exclude,
             debounce_seconds=args.debounce_seconds, on_change=args.on_change,
             drop_past_sunset=args.drop_past_sunset,
+            tags=_parse_comma_separated_names(args.tag),
         )
     elif args.command == "deploy":
         output_dir = Path(args.output)
@@ -10228,6 +10230,7 @@ def main():
         )
     )
     _add_function_selection_arguments(serve_parser)
+    _add_tag_selection_argument(serve_parser)
     _add_debounce_argument(serve_parser)
     _add_on_change_argument(serve_parser)
 
@@ -10255,6 +10258,7 @@ def main():
         help="Output directory where the FastAPI app and assets will be written."
     )
     _add_function_selection_arguments(watch_parser)
+    _add_tag_selection_argument(watch_parser)
     _add_debounce_argument(watch_parser)
     _add_on_change_argument(watch_parser)
 

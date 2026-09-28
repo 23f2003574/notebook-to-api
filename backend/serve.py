@@ -6,13 +6,30 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 from backend.compiler import compile_notebook, package_name_for_output_dir
-from backend.inspector import apply_drop_past_sunset, print_compile_summary
+from backend.inspector import (
+    apply_drop_past_sunset, apply_tag_selection, print_compile_summary,
+)
 
 
-def _effective_selection(notebook_path, only, exclude, drop_past_sunset):
+def _effective_selection(notebook_path, only, exclude, drop_past_sunset, tags=None):
     """(only, exclude) to actually compile with -- the caller's own
-    --only/--exclude, adjusted by apply_drop_past_sunset when
-    --drop-past-sunset is on (re-read from the notebook every call)."""
+    --only/--exclude, narrowed by apply_tag_selection when --tag is given
+    and then adjusted by apply_drop_past_sunset when --drop-past-sunset is
+    on, the same order `compile`/`deploy`'s own --tag/--drop-past-sunset
+    handling already applies them in (cli.py).
+
+    Both are re-read from the notebook on every call, not resolved once
+    at `serve`/`watch` startup: a long-running session can cross a
+    function's sunset date (apply_drop_past_sunset's own reason for this
+    already), and a save can just as easily add, remove, or move a
+    "# notebook-to-api: tag" directive -- resolving --tag only once would
+    keep filtering by a tag mapping that's gone stale the moment a
+    notebook author edits it, silently dropping or restoring the wrong
+    endpoints on the very next recompile instead of matching what a
+    fresh `compile --tag` would actually produce from the current file.
+    """
+    if tags:
+        only, exclude = apply_tag_selection(notebook_path, tags, only, exclude)
     if not drop_past_sunset:
         return only, exclude
     return apply_drop_past_sunset(notebook_path, only, exclude)
@@ -106,6 +123,7 @@ class NotebookChangeHandler(FileSystemEventHandler):
     def __init__(
         self, notebook_path, output_dir, only=None, exclude=None,
         debounce_seconds=1.0, on_change=None, drop_past_sunset=False,
+        tags=None,
     ):
         """debounce_seconds (default 1.0, previously hardcoded to exactly
         this value with no way to change it) is how long
@@ -138,6 +156,9 @@ class NotebookChangeHandler(FileSystemEventHandler):
         # once at startup: a long-running serve/watch session can cross a
         # function's sunset date, and a save can add or move one.
         self.drop_past_sunset = drop_past_sunset
+        # Also re-evaluated on every recompile, for the identical reason
+        # -- see _effective_selection's own docstring.
+        self.tags = tags
         self.debounce_seconds = debounce_seconds
         self.on_change = on_change
         self.last_compile_time = time.time()
@@ -216,7 +237,7 @@ class NotebookChangeHandler(FileSystemEventHandler):
             try:
                 only, exclude = _effective_selection(
                     self.notebook_path, self.only, self.exclude,
-                    self.drop_past_sunset,
+                    self.drop_past_sunset, tags=self.tags,
                 )
                 compile_notebook(
                     self.notebook_path, self.output_dir,
@@ -236,6 +257,7 @@ class NotebookChangeHandler(FileSystemEventHandler):
 def serve_notebook(
     notebook_path, output_dir="generated", port=8000, host="0.0.0.0",
     only=None, exclude=None, debounce_seconds=1.0, on_change=None, drop_past_sunset=False,
+    tags=None,
 ):
     """
     Serve a notebook as a live API with hot recompilation.
@@ -281,12 +303,24 @@ def serve_notebook(
             successful recompile -- see NotebookChangeHandler's own
             docstring for exactly what this is for and why it didn't
             exist before.
+        tags: Comma-free list of OpenAPI tags (see apply_tag_selection,
+            backend/inspector.py) -- only functions tagged with one of
+            these become endpoints, combined with `only`/`exclude` the
+            same way `compile --tag`'s already does. Previously
+            unavailable here at all, unlike `compile`/`deploy`/
+            `curl-preview`/`postman-preview`, which already let a caller
+            narrow to just the endpoints carrying a given tag (e.g.
+            iterating on just a notebook's "Inference" endpoints without
+            also recompiling its "Training" ones on every save) -- `serve`
+            and `watch` (below) had no equivalent, and re-resolved on
+            every recompile exactly like `drop_past_sunset` already is
+            (see _effective_selection's own docstring for why).
     """
 
     # Initial compilation
     print("📝 Initial compilation...")
     initial_only, initial_exclude = _effective_selection(
-        notebook_path, only, exclude, drop_past_sunset,
+        notebook_path, only, exclude, drop_past_sunset, tags=tags,
     )
     compile_notebook(
         notebook_path, output_dir, only=initial_only, exclude=initial_exclude,
@@ -303,7 +337,7 @@ def serve_notebook(
     handler = NotebookChangeHandler(
         notebook_path, output_dir, only=only, exclude=exclude,
         debounce_seconds=debounce_seconds, on_change=on_change,
-        drop_past_sunset=drop_past_sunset,
+        drop_past_sunset=drop_past_sunset, tags=tags,
     )
 
     # Watch the directory containing the notebook
@@ -461,6 +495,7 @@ def serve_notebook(
 def watch_notebook(
     notebook_path, output_dir="generated", only=None, exclude=None,
     debounce_seconds=1.0, on_change=None, drop_past_sunset=False,
+    tags=None,
 ):
     """Compile a notebook once, then keep recompiling it on every save --
     without also starting a live API server the way `serve` does.
@@ -492,11 +527,13 @@ def watch_notebook(
         on_change: Same on_change serve_notebook already accepts -- see
             NotebookChangeHandler's own docstring for exactly what this
             runs and when.
+        tags: Same --tag serve_notebook already accepts -- see its own
+            docstring for why this was missing here too before now.
     """
 
     print("📝 Initial compilation...")
     initial_only, initial_exclude = _effective_selection(
-        notebook_path, only, exclude, drop_past_sunset,
+        notebook_path, only, exclude, drop_past_sunset, tags=tags,
     )
     compile_notebook(
         notebook_path, output_dir, only=initial_only, exclude=initial_exclude,
@@ -512,7 +549,7 @@ def watch_notebook(
     handler = NotebookChangeHandler(
         notebook_path, output_dir, only=only, exclude=exclude,
         debounce_seconds=debounce_seconds, on_change=on_change,
-        drop_past_sunset=drop_past_sunset,
+        drop_past_sunset=drop_past_sunset, tags=tags,
     )
 
     notebook_dir = Path(notebook_path).parent.resolve()

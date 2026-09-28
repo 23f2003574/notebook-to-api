@@ -2409,6 +2409,25 @@ def test_serve_command_only_and_exclude_are_mutually_exclusive(tmp_path):
     _assert_clean_cli_error(proc, "only and exclude can't both be given")
 
 
+def test_serve_command_accepts_tag_flag(tmp_path):
+    """`serve` (and `watch`, below) previously had no --tag at all, unlike
+    `compile`/`curl-preview`/`postman-preview` -- confirmed here the same
+    "argparse accepts it, reaching the missing-notebook error rather than
+    an 'unrecognized arguments' one" way test_serve_command_accepts_only_
+    and_exclude_flags above already does for --only/--exclude.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["serve", str(workdir / "does-not-exist.ipynb"), "--tag", "Inference"],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "No such file or directory")
+
+
 def test_watch_command_accepts_only_and_exclude_flags(tmp_path):
 
     workdir = tmp_path / "workdir"
@@ -2416,6 +2435,19 @@ def test_watch_command_accepts_only_and_exclude_flags(tmp_path):
 
     proc = _run_cli(
         ["watch", str(workdir / "does-not-exist.ipynb"), "--exclude", "helper"],
+        cwd=workdir,
+    )
+
+    _assert_clean_cli_error(proc, "No such file or directory")
+
+
+def test_watch_command_accepts_tag_flag(tmp_path):
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["watch", str(workdir / "does-not-exist.ipynb"), "--tag", "Inference"],
         cwd=workdir,
     )
 
