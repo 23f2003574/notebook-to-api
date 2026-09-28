@@ -5378,14 +5378,6 @@ def _dispatch_core_command(args):
         only = _parse_comma_separated_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
 
-        if args.tag and args.version_id:
-
-            raise ValueError(
-                "--tag isn't supported together with --version-id -- "
-                "GET .../versions/{version_id}/inspect has no tag "
-                "selection of its own yet."
-            )
-
         try:
             if args.version_id:
                 params = {}
@@ -5395,6 +5387,8 @@ def _dispatch_core_command(args):
                     params["only"] = args.only
                 if args.exclude:
                     params["exclude"] = args.exclude
+                if args.tag:
+                    params["tags"] = args.tag
                 response = httpx.get(
                     f"{dashboard_url}/api/notebooks/{args.filename}"
                     f"/versions/{args.version_id}/inspect",

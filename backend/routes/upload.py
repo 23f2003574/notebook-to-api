@@ -12407,7 +12407,7 @@ def set_notebook_version_notes_batch(filename: str, data: dict):
 @router.get("/notebooks/{filename}/versions/{version_id}/inspect")
 def inspect_notebook_version(
     filename: str, version_id: str, expected_sha256: str = None,
-    only: str = None, exclude: str = None,
+    only: str = None, exclude: str = None, tags: str = None,
 ):
     """Inspect one of a notebook's previously snapshotted versions --
     its functions, dependencies, reserved-name conflicts, would-be
@@ -12466,12 +12466,19 @@ def inspect_notebook_version(
     to a version snapshot's own content instead of a notebook's current
     one. An unrecognized name, or both given together, is rejected with
     400, the same way POST /api/inspect's own already is.
+
+    "tags" (optional, a comma-separated list of OpenAPI tags -- a query-
+    param-friendly rendering of POST /api/inspect's own identical "tags"
+    field) narrows the same way, via apply_tag_selection -- previously
+    missing here, so `remote-inspect --tag` had no way to reach a version
+    snapshot at all.
     """
 
     only_names = [name.strip() for name in only.split(",") if name.strip()] if only else None
     exclude_names = (
         [name.strip() for name in exclude.split(",") if name.strip()] if exclude else None
     )
+    tag_list = [tag.strip() for tag in tags.split(",") if tag.strip()] if tags else None
 
     if only_names and exclude_names:
 
@@ -12526,6 +12533,21 @@ def inspect_notebook_version(
             str(version_path),
             GENERATED_DIR
         )
+
+    if tag_list:
+
+        try:
+
+            only_names, exclude_names = apply_tag_selection(
+                str(version_path), tag_list, only_names, exclude_names
+            )
+
+        except ValueError as e:
+
+            raise HTTPException(
+                status_code=400,
+                detail=str(e)
+            )
 
     if only_names or exclude_names:
 

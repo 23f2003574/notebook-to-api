@@ -14352,20 +14352,45 @@ def test_remote_inspect_command_passes_the_tag_flag_through(tmp_path, fake_dashb
     }
 
 
-def test_remote_inspect_command_rejects_tag_together_with_version_id(tmp_path):
+def test_remote_inspect_command_passes_the_tag_flag_through_with_version_id(
+    tmp_path, fake_dashboard
+):
+    """GET .../versions/{version_id}/inspect previously had no "tags" of
+    its own, so `remote-inspect --tag` was rejected outright when combined
+    with --version-id -- confirmed missing before this feature.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "filename": "nb.ipynb",
+            "version_id": "v1.ipynb",
+            "functions": [{"name": "score"}],
+            "dependencies": [],
+            "generated_files": [],
+            "reserved_name_conflicts": [],
+            "endpoints": [{"path": "/score", "method": "POST", "is_async": False, "deprecated": False}],
+            "skipped_functions": [],
+            "private_functions": [],
+        })
+    ]
 
     workdir = tmp_path / "workdir"
     workdir.mkdir()
 
     proc = _run_cli(
         [
-            "remote-inspect", "nb.ipynb", "--dashboard-url", "http://localhost:1",
-            "--tag", "Inference", "--version-id", "v1.ipynb",
+            "remote-inspect", "nb.ipynb", "--version-id", "v1.ipynb",
+            "--tag", "Inference", "--dashboard-url", dashboard_url,
         ],
         cwd=workdir,
     )
 
-    _assert_clean_cli_error(proc, "--tag isn't supported together with --version-id")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == [
+        "/api/notebooks/nb.ipynb/versions/v1.ipynb/inspect?tags=Inference"
+    ]
 
 
 def test_remote_inspect_command_version_id_passes_expected_sha256_as_a_query_param(

@@ -16975,6 +16975,52 @@ def test_inspect_notebook_version_only_keeps_just_the_named_function():
     assert [e["path"] for e in body["endpoints"]] == ["/add"]
 
 
+def test_inspect_notebook_version_selects_endpoints_by_tag():
+    """Confirmed missing before this feature: GET .../versions/{id}/inspect
+    could only be narrowed by function name, unlike POST /api/inspect."""
+
+    filename = "versions_inspect_tags.ipynb"
+
+    client.post(
+        "/api/upload",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes(
+                    "# notebook-to-api: tag Scoring\n"
+                    "def score(a: int) -> int:\n    return a\n\n"
+                    "def add(a: int) -> int:\n    return a\n"
+                )),
+                "application/json",
+            )
+        },
+    )
+    client.post(
+        "/api/upload?overwrite=true",
+        files={
+            "file": (
+                filename,
+                io.BytesIO(_notebook_bytes("def g() -> int:\n    return 2\n")),
+                "application/json",
+            )
+        },
+    )
+
+    version_id = client.get(
+        f"/api/notebooks/{filename}/versions"
+    ).json()["versions"][0]["version_id"]
+
+    resp = client.get(
+        f"/api/notebooks/{filename}/versions/{version_id}/inspect",
+        params={"tags": "Scoring"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [f["name"] for f in body["functions"]] == ["score"]
+    assert [e["path"] for e in body["endpoints"]] == ["/score"]
+
+
 def test_inspect_notebook_version_rejects_only_and_exclude_together():
 
     filename = "versions_inspect_only_exclude_conflict.ipynb"
