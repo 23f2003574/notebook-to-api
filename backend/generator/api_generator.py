@@ -785,7 +785,18 @@ def _call_arg_expr(arg):
     Keyword-only parameters (those after a bare `*`, e.g.
     `def train(data, *, epochs=10)`) cannot be passed positionally, so
     they must be forwarded as `name=req.name` rather than plain `req.name`.
+
+    A `**kwargs` catch-all (kind "var_keyword", see extract_functions_
+    from_code, backend/parser/ast_parser.py) is rendered as `**req.name`
+    instead -- its own request field is a single Dict[str, Any], and the
+    notebook function's own `**kwargs` parameter expects each of that
+    dict's keys spread in as its own keyword, not the whole dict nested
+    under a literal "name" keyword (which the notebook function would
+    never see: its own **kwargs only catches keywords it didn't already
+    declare by name, and "name" isn't one of them).
     """
+    if arg.get("kind") == "var_keyword":
+        return f"**req.{arg['name']}"
     if arg.get("kind") == "keyword_only":
         return f"{arg['name']}=req.{arg['name']}"
     return f"req.{arg['name']}"
@@ -4602,12 +4613,25 @@ def generate_fastapi_code(
             replay_pos_args = "".join(
                 f"req.{arg['name']}, "
                 for arg in args
-                if arg.get("kind") != "keyword_only"
+                if arg.get("kind") not in ("keyword_only", "var_keyword")
             )
             replay_kwargs = "".join(
                 f"{arg['name']!r}: req.{arg['name']}, "
                 for arg in args
                 if arg.get("kind") == "keyword_only"
+            )
+            # A `**kwargs` field (kind "var_keyword") is a single dict,
+            # not one more named entry -- spread with the same `**req.name`
+            # this dict literal already supports for exactly this purpose,
+            # so retry_task's own `**replay['kwargs']` (below) forwards
+            # each of its keys as its own keyword, matching what the
+            # original call actually did (see _call_arg_expr's own
+            # docstring above for why it can't be nested under a literal
+            # "name" key instead).
+            replay_kwargs += "".join(
+                f"**req.{arg['name']}, "
+                for arg in args
+                if arg.get("kind") == "var_keyword"
             )
             lines.append(
                 f"    TASKS[task_id]['_replay'] = {{'func_name': {func_name!r}, "

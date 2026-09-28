@@ -3268,6 +3268,93 @@ def test_notebook_function_named_retry_task_is_rejected():
         generate_fastapi_code(functions)
 
 
+def test_function_with_kwargs_catchall_spreads_extra_fields_into_the_call(monkeypatch):
+    """A notebook function's own `**kwargs` catch-all (kind "var_keyword",
+    see extract_functions_from_code, backend/parser/ast_parser.py) gets a
+    single Dict[str, Any] request field. Whatever a caller sends under
+    that field must be spread back into the notebook function call as
+    real keyword arguments (`**req.opts`), not nested under a literal
+    "opts" keyword the notebook function's own **kwargs would never see.
+    """
+
+    functions = [{
+        "name": "configure",
+        "args": [
+            {"name": "name", "type": "str", "kind": "positional"},
+            {
+                "name": "opts", "type": "Dict[str, Any]", "default": {},
+                "default_is_literal": True, "has_default": True,
+                "kind": "var_keyword",
+            },
+        ],
+        "return_type": "dict",
+    }]
+    code = generate_fastapi_code(functions)
+
+    assert "**req.opts" in code
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].configure = (
+        lambda name, **opts: {"name": name, **opts}
+    )
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    response = client.post(
+        "/configure",
+        json={"name": "svc", "opts": {"retries": 3, "verbose": True}},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "result": {"name": "svc", "retries": 3, "verbose": True}
+    }
+
+
+def test_function_with_kwargs_catchall_defaults_to_an_empty_dict(monkeypatch):
+    """Omitting the kwargs field entirely must behave exactly like calling
+    the notebook function with no extra keywords at all, not raise or pass
+    a literal None where the function's own **kwargs expects a mapping.
+    """
+
+    functions = [{
+        "name": "configure",
+        "args": [
+            {"name": "name", "type": "str", "kind": "positional"},
+            {
+                "name": "opts", "type": "Dict[str, Any]", "default": {},
+                "default_is_literal": True, "has_default": True,
+                "kind": "var_keyword",
+            },
+        ],
+        "return_type": "dict",
+    }]
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].configure = (
+        lambda name, **opts: {"name": name, "extra": opts}
+    )
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    response = client.post("/configure", json={"name": "svc"}, headers=headers)
+
+    assert response.status_code == 200
+    assert response.json() == {"result": {"name": "svc", "extra": {}}}
+
+
 def test_retry_resubmits_a_failed_task_with_its_original_inputs(monkeypatch):
     """POST /tasks/{task_id}/retry must re-run the notebook function --
     unlike redeliver-webhook, which deliberately never does -- using the
@@ -3334,6 +3421,67 @@ def test_retry_resubmits_a_failed_task_with_its_original_inputs(monkeypatch):
     # The original failed task is untouched by the retry.
     assert namespace["TASKS"][task_id]["status"] == "failed"
     assert namespace["TASKS"][task_id]["error"] == "boom"
+
+
+def test_retry_resubmits_a_failed_background_task_with_its_original_kwargs(monkeypatch):
+    """A background endpoint's own `**kwargs` catch-all (kind
+    "var_keyword") must round-trip through POST /tasks/{task_id}/retry
+    exactly like the named keyword-only argument already covered above --
+    replayed as `**req.opts`, not nested under a literal "opts" keyword
+    the notebook function's own **kwargs would never see (see
+    _call_arg_expr's own docstring, api_generator.py).
+    """
+
+    functions = [
+        {
+            "name": "train_model",
+            "args": [
+                {"name": "x", "type": "int", "kind": "positional"},
+                {
+                    "name": "opts", "type": "Dict[str, Any]", "default": {},
+                    "default_is_literal": True, "has_default": True,
+                    "kind": "var_keyword",
+                },
+            ],
+            "return_type": "dict",
+        }
+    ]
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    calls = []
+
+    def flaky(x, **opts):
+        calls.append((x, opts))
+        if len(calls) == 1:
+            raise ValueError("boom")
+        return {"x": x, **opts}
+
+    namespace["notebook_module"].train_model = flaky
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    submit_response = client.post(
+        "/train_model", json={"x": 3, "opts": {"lr": 0.01}}, headers=headers
+    )
+    task_id = submit_response.json()["task_id"]
+    assert namespace["TASKS"][task_id]["status"] == "failed"
+    assert calls == [(3, {"lr": 0.01})]
+
+    retry_response = client.post(f"/tasks/{task_id}/retry", headers=headers)
+    assert retry_response.status_code == 200
+    new_task_id = retry_response.json()["task_id"]
+
+    assert calls == [(3, {"lr": 0.01}), (3, {"lr": 0.01})]
+    new_task = namespace["TASKS"][new_task_id]
+    assert new_task["status"] == "completed"
+    assert new_task["result"] == {"x": 3, "lr": 0.01}
 
 
 def test_retry_404s_for_an_unknown_task(monkeypatch):

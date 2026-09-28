@@ -815,7 +815,14 @@ def f(a, *args):
     assert funcs == []
 
 
-def test_function_extraction_excludes_function_with_kwargs():
+def test_function_extraction_includes_function_with_kwargs_as_a_dict_field():
+    """Unlike `*args`, a `**kwargs` catch-all doesn't need a fixed name
+    for each caller-supplied value -- it already collects them all under
+    one name. That name gets its own Dict[str, Any] request field
+    ("kind": "var_keyword") instead of the function being skipped
+    entirely; see _call_arg_expr (api_generator.py) for how it's spread
+    back into the actual notebook function call.
+    """
 
     code = """
 def f(a, **kwargs):
@@ -824,16 +831,27 @@ def f(a, **kwargs):
 
     funcs = extract_functions_from_code(code)
 
-    assert funcs == []
+    assert len(funcs) == 1
+    args = funcs[0]["args"]
+    assert [a["name"] for a in args] == ["a", "kwargs"]
+    assert args[1] == {
+        "name": "kwargs",
+        "type": "Dict[str, Any]",
+        "default": {},
+        "default_is_literal": True,
+        "has_default": True,
+        "kind": "var_keyword",
+        "description": None,
+    }
 
 
 def test_function_extraction_still_includes_sibling_function_beside_var_args_function():
-    """One function using **kwargs must not cause the whole notebook's
+    """One function using *args must not cause the whole notebook's
     other, perfectly representable functions to be dropped too.
     """
 
     code = """
-def unsupported(a, **kwargs):
+def unsupported(a, *args):
     return a
 
 def add(a: int, b: int) -> int:
@@ -858,24 +876,42 @@ def f(a, *args):
         {
             "name": "f",
             "reason": (
-                "uses *args/**kwargs, which can't be represented as a "
+                "uses *args, which can't be represented as a "
                 "fixed set of request fields"
             ),
         }
     ]
 
 
-def test_extract_skipped_functions_reports_kwargs_with_a_reason():
+def test_extract_skipped_functions_does_not_report_a_kwargs_only_function():
+    """A `**kwargs` catch-all no longer disqualifies a function (see
+    test_function_extraction_includes_function_with_kwargs_as_a_dict_field
+    above), so it must not show up here as skipped either.
+    """
 
     code = """
 def f(a, **kwargs):
     return a
 """
 
+    assert extract_skipped_functions_from_code(code) == []
+
+
+def test_extract_skipped_functions_reports_a_function_combining_args_and_kwargs():
+    """`*args` alone is still unrepresentable, so it still disqualifies
+    the whole function even when it's paired with a `**kwargs` that would
+    otherwise be fine on its own.
+    """
+
+    code = """
+def f(a, *args, **kwargs):
+    return a
+"""
+
     skipped = extract_skipped_functions_from_code(code)
 
     assert skipped[0]["name"] == "f"
-    assert "**kwargs" in skipped[0]["reason"]
+    assert "*args" in skipped[0]["reason"]
 
 
 def test_extract_skipped_functions_reports_class_methods():
