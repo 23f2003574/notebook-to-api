@@ -14443,6 +14443,39 @@ def test_remote_validate_command_passes_the_version_id_flag_through(tmp_path, fa
     }
 
 
+def test_remote_validate_command_passes_the_tag_flag_through(tmp_path, fake_dashboard):
+    """`remote-validate` previously had no --tag at all, unlike
+    `remote-compile`/`curl-preview`/`postman-preview`.
+    """
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "pass",
+            "notebook": "nb.ipynb",
+            "reserved_name_conflicts": [],
+            "skipped_functions": [],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        [
+            "remote-validate", "nb.ipynb",
+            "--dashboard-url", dashboard_url, "--tag", "Math,Inference",
+        ],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(handler.bodies[0]) == {
+        "notebook_path": "nb.ipynb", "strict": False,
+        "tags": ["Math", "Inference"],
+    }
+
+
 def test_remote_validate_command_passes_the_expected_sha256_flag_through(tmp_path, fake_dashboard):
 
     dashboard_url, handler = fake_dashboard

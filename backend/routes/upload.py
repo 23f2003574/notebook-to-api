@@ -13834,6 +13834,13 @@ def validate_notebook_endpoint(
     function was never a candidate to become an endpoint in the first
     place, whether or not only/exclude names it.
 
+    "tags" (optional, a list of OpenAPI tags -- see apply_tag_selection,
+    backend/inspector.py) narrows "only"/"exclude" the same way POST
+    /api/compile's own identical field already does, before the
+    reserved-name-conflict filtering above -- previously missing here
+    even though this endpoint's whole job is predicting what a compile
+    of the same selection would do.
+
     "duplicate_functions" (see inspect_notebook_data's own field of the
     same name, backend/inspector.py) also contributes to "status" the
     same way "skipped_functions" does: "warn" without "strict", "fail"
@@ -13880,6 +13887,7 @@ def validate_notebook_endpoint(
     version_id = data.get("version_id")
     only = data.get("only")
     exclude = data.get("exclude")
+    tags = data.get("tags")
     expected_sha256 = data.get("expected_sha256")
 
     if expected_sha256 is not None and not isinstance(expected_sha256, str):
@@ -13899,6 +13907,21 @@ def validate_notebook_endpoint(
                 status_code=400,
                 detail=f"{field_name} must be a list of strings"
             )
+
+    # Mirrors POST /api/compile's own identical "tags" validation -- see
+    # its docstring for the "would this notebook compile cleanly" gap
+    # this closes here too: without it, a reserved-name conflict or
+    # skipped/duplicate function outside a caller's intended tag
+    # selection always reported "fail"/"warn", even when the tag-scoped
+    # compile it's meant to predict would succeed cleanly.
+    if tags is not None and (
+        not isinstance(tags, list)
+        or not all(isinstance(tag, str) and tag for tag in tags)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="tags must be a list of non-empty strings"
+        )
 
     if only and exclude:
 
@@ -13933,6 +13956,23 @@ def validate_notebook_endpoint(
             str(full_path),
             GENERATED_DIR
         )
+
+    # Narrows only/exclude before the reserved-name-conflict filtering
+    # below, exactly like an explicit "only"/"exclude" already does.
+    if tags:
+
+        try:
+
+            only, exclude = apply_tag_selection(
+                str(full_path), tags, only, exclude
+            )
+
+        except ValueError as e:
+
+            raise HTTPException(
+                status_code=400,
+                detail=str(e)
+            )
 
     reserved_name_conflicts = inspection["reserved_name_conflicts"]
     skipped_functions = inspection["skipped_functions"]

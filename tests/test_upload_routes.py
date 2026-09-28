@@ -34620,3 +34620,49 @@ def test_compile_tag_selection_errors_are_400():
 
     assert unknown.status_code == 400 and "Available tags: General, Scoring" in unknown.json()["detail"]
     assert malformed.status_code == 400 and "tags must be a list" in malformed.json()["detail"]
+
+
+def test_validate_narrows_reserved_name_conflicts_by_tag():
+    """Confirmed missing before this feature: POST /api/validate could
+    only be narrowed by function name, unlike POST /api/compile -- so a
+    reserved-name conflict outside a caller's own tag selection always
+    reported "fail", even though the tag-scoped compile it's meant to
+    predict would succeed cleanly.
+    """
+    client.delete("/api/notebooks?confirm=true")
+    content = _notebook_bytes(
+        "# notebook-to-api: tag Infra\n"
+        "def health_check() -> dict:\n    return {}\n\n"
+        "# notebook-to-api: tag Math\n"
+        "def add(a: int) -> int:\n    return a\n"
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("validate_tags.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    scoped = client.post(
+        "/api/validate", json={"notebook_path": "validate_tags.ipynb", "tags": ["Math"]}
+    ).json()
+    assert scoped["status"] == "pass"
+    assert scoped["reserved_name_conflicts"] == []
+
+    unscoped = client.post(
+        "/api/validate", json={"notebook_path": "validate_tags.ipynb", "tags": ["Infra"]}
+    ).json()
+    assert unscoped["status"] == "fail"
+    assert unscoped["reserved_name_conflicts"] == ["health_check"]
+
+
+def test_validate_tag_selection_errors_are_400():
+    _upload_tagged_notebook("validate_tag_errors.ipynb")
+
+    unknown = client.post(
+        "/api/validate", json={"notebook_path": "validate_tag_errors.ipynb", "tags": ["Nope"]}
+    )
+    malformed = client.post(
+        "/api/validate", json={"notebook_path": "validate_tag_errors.ipynb", "tags": "Scoring"}
+    )
+
+    assert unknown.status_code == 400 and "Available tags: General, Scoring" in unknown.json()["detail"]
+    assert malformed.status_code == 400 and "tags must be a list" in malformed.json()["detail"]

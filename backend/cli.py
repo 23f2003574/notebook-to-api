@@ -687,8 +687,8 @@ def _add_function_selection_arguments(parser):
 def _add_tag_selection_argument(parser):
     """Add --tag to a subcommand that selects functions (compile,
     export-curl, export-postman, curl-preview, postman-preview, serve,
-    watch, validate): select them by their endpoint's OpenAPI tag (see
-    inspector.apply_tag_selection)."""
+    watch, validate, remote-validate): select them by their endpoint's
+    OpenAPI tag (see inspector.apply_tag_selection)."""
     parser.add_argument(
         "--tag",
         default=None,
@@ -5426,6 +5426,8 @@ def _dispatch_core_command(args):
             validate_body["only"] = only
         if exclude:
             validate_body["exclude"] = exclude
+        if args.tag:
+            validate_body["tags"] = _parse_comma_separated_names(args.tag)
         if args.expected_sha256:
             validate_body["expected_sha256"] = args.expected_sha256
 
@@ -13937,6 +13939,7 @@ def main():
         )
     )
     _add_function_selection_arguments(remote_validate_parser)
+    _add_tag_selection_argument(remote_validate_parser)
     remote_validate_parser.add_argument(
         "--expected-sha256",
         default=None,
