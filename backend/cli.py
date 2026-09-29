@@ -2111,6 +2111,7 @@ def _dispatch_core_command(args):
                     "rate_limit_overrides": data["rate_limit_overrides"],
                     "cache_overrides": data["cache_overrides"],
                     "ignored_cache_directives": data["ignored_cache_directives"],
+                    "unrecognized_directives": data["unrecognized_directives"],
                 },
                 indent=2,
             ))
@@ -2143,6 +2144,10 @@ def _dispatch_core_command(args):
             for name, sunset in past_sunset.items():
                 marker = "✗" if args.fail_on_past_sunset else "⚠"
                 print(f"{marker} Past sunset: {name} (sunset {sunset}) -- still defined")
+            for item in data["unrecognized_directives"]:
+                print(
+                    f"⚠ Unrecognized directive ignored: {item['line']}"
+                )
             for name in data["ignored_cache_directives"]:
                 print(
                     f"⚠ Ignored cache directive: {name} is a background "

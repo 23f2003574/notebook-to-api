@@ -1016,6 +1016,36 @@ def _extract_timeout_overrides(code_cells):
     return overrides
 
 
+KNOWN_DIRECTIVE_NAMES = frozenset({
+    "requires", "apt-requires", "exclude", "private", "background", "sync",
+    "deprecated", "timeout", "rate-limit", "cache", "tag",
+})
+
+ANY_DIRECTIVE_PATTERN = re.compile(
+    r"^[ \t]*#\s*notebook-to-api:\s*(?P<name>[A-Za-z][\w-]*)[^\n]*$",
+    re.MULTILINE,
+)
+
+
+def _find_unrecognized_directives(code_cells):
+    """[{"directive": name, "line": text}] for every
+    "# notebook-to-api: <name> ..." comment whose <name> isn't a directive
+    this tool implements. A typo ("cahce 60", "rate_limit 5") matches none
+    of the per-directive patterns above, so it was silently ignored --
+    compiling fine, with the quota/cache/tag the author meant never applied.
+    Names are matched case-sensitively, exactly as the real directives are.
+    """
+    found = []
+    for cell in code_cells:
+        for match in ANY_DIRECTIVE_PATTERN.finditer(cell):
+            if match.group("name") not in KNOWN_DIRECTIVE_NAMES:
+                found.append({
+                    "directive": match.group("name"),
+                    "line": match.group(0).strip(),
+                })
+    return found
+
+
 def _extract_deprecated_functions(code_cells):
     """{function_name: reason_or_None} for every function `code_cells`
     marks "# notebook-to-api: deprecated" (immediately above its own

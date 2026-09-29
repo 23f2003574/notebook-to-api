@@ -14178,6 +14178,7 @@ def validate_notebook_endpoint(
         "rate_limit_overrides": inspection["rate_limit_overrides"],
         "cache_overrides": inspection["cache_overrides"],
         "ignored_cache_directives": inspection["ignored_cache_directives"],
+        "unrecognized_directives": inspection["unrecognized_directives"],
     }
 
 
