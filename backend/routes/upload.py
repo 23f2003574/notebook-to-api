@@ -18117,6 +18117,7 @@ def compile_history_endpoint(
     compiled_after: str = None,
     compiled_before: str = None,
     tag: str = None,
+    version_id: str = None,
     limit: int = None,
     offset: int = 0,
     format: str = "json",
@@ -18194,6 +18195,12 @@ def compile_history_endpoint(
     /api/compile request scoped itself to) include that exact tag; entries
     recorded before "tags" existed, or compiled without any, never match.
 
+    "version_id" matches exactly against each entry's own "version_id" --
+    the snapshotted notebook version POST /api/compile was asked to
+    compile (null for a compile of the notebook's current content) -- so
+    "was this exact old version ever compiled" no longer needs the whole
+    log filtered client-side. Composes with every other filter as an AND.
+
     Deliberately read-only, the same reasoning GET /api/deploy/history's
     own docstring already gives: this dashboard's compile history is a
     record of what already happened, not something a caller edits or
@@ -18255,6 +18262,12 @@ def compile_history_endpoint(
         entries = [
             entry for entry in entries
             if entry.get("source_notebook_sha256") == source_notebook_sha256
+        ]
+
+    if version_id is not None:
+        entries = [
+            entry for entry in entries
+            if entry.get("version_id") == version_id
         ]
 
     if tag is not None:
@@ -18394,6 +18407,7 @@ def clear_compile_history(
     compiled_after: str = None,
     compiled_before: str = None,
     tag: str = None,
+    version_id: str = None,
     dry_run: bool = False,
 ):
     """Permanently discard this dashboard's compile history log, the exact
@@ -18465,6 +18479,9 @@ def clear_compile_history(
     "tag" mirrors GET /api/compile/history's own "tag": discard only
     entries whose recorded "tags" include that exact tag (an AND with every
     other filter); entries without "tags" are never matched.
+
+    "version_id" mirrors GET /api/compile/history's own "version_id": discard
+    only entries recorded for that exact snapshotted notebook version.
     """
 
     if older_than_days is not None and older_than_days <= 0:
@@ -18500,6 +18517,7 @@ def clear_compile_history(
         or compiled_after_dt is not None
         or compiled_before_dt is not None
         or tag is not None
+        or version_id is not None
     ):
 
         def _should_discard(entry):
@@ -18516,6 +18534,8 @@ def clear_compile_history(
             ):
                 return False
 
+            if version_id is not None and entry.get("version_id") != version_id:
+                return False
             if tag is not None and tag not in (entry.get("tags") or []):
                 return False
             if cutoff is not None and not _compile_history_entry_is_older_than(entry, cutoff):

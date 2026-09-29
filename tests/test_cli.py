@@ -30322,3 +30322,31 @@ def test_compile_history_command_shows_each_compiles_tags(tmp_path, fake_dashboa
     plain = next(l for l in lines if "plain.ipynb" in l)
     assert "tags: math, v2" in tagged
     assert "tags:" not in plain
+
+
+def test_compile_history_and_clear_send_version_id_query_param(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "entries": [], "entry_count": 0}),
+        _json_response(200, {"status": "success", "deleted_count": 1}),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    listed = _run_cli(
+        ["compile-history", "--version-id", "v1", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+    cleared = _run_cli(
+        ["clear-compile-history", "--version-id", "v1", "--dashboard-url", dashboard_url, "--yes"],
+        cwd=workdir,
+    )
+
+    assert listed.returncode == 0, listed.stdout + listed.stderr
+    assert cleared.returncode == 0, cleared.stdout + cleared.stderr
+    assert handler.requests == [
+        "/api/compile/history?version_id=v1",
+        "/api/compile/history?version_id=v1",
+    ]
