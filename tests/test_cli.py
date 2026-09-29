@@ -30433,3 +30433,42 @@ def test_validate_all_command_prints_directive_warnings_per_notebook(tmp_path, f
     assert "    unrecognized directive: # notebook-to-api: cahce 60" in proc.stdout
     assert "    ignored cache directive: train_model (background endpoint)" in proc.stdout
     assert proc.stdout.count("unrecognized directive") == 1
+
+
+def test_app_tasks_list_forwards_endpoint_and_shows_it_per_task(tmp_path, fake_dashboard):
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    empty = {
+        "tasks": {}, "total_tasks": 0, "matching_tasks": 0,
+        "completed_tasks": 0, "failed_tasks": 0, "processing_tasks": 0,
+        "limit": 100, "offset": 0,
+    }
+    handler.responses = [
+        _json_response(200, {
+            **empty, "matching_tasks": 2,
+            "tasks": {
+                "t1": {"status": "completed", "endpoint": "/train_model"},
+                # A task recorded before "endpoint" existed.
+                "t2": {"status": "failed"},
+            },
+        }),
+        _json_response(200, empty),
+    ]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    bare = _run_cli(
+        ["app-tasks", "list", "--host", host, "--port", str(port), "--endpoint", "train_model"],
+        cwd=workdir,
+    )
+    slashed = _run_cli(
+        ["app-tasks", "list", "--host", host, "--port", str(port), "--endpoint", "/train_model"],
+        cwd=workdir,
+    )
+
+    assert bare.returncode == 0, bare.stdout + bare.stderr
+    assert slashed.returncode == 0, slashed.stdout + slashed.stderr
+    assert "endpoint=%2Ftrain_model" in handler.requests[0]
+    assert "endpoint=%2Ftrain_model" in handler.requests[1]
+    assert "t1  (completed)  /train_model" in bare.stdout
+    assert "t2  (failed)\n" in bare.stdout + "\n"
