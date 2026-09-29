@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 from backend.compiler import (
+    _find_unrecognized_directives,
     _extract_timeout_overrides,
     _extract_rate_limit_overrides,
     _extract_cache_overrides,
@@ -806,6 +807,9 @@ def inspect_notebook_data(
         # above, with "dependencies" giving no way to tell "never
         # imported" apart from "imported, but deliberately excluded".
         "excluded_imports": sorted(excluded_imports),
+        # "# notebook-to-api: <typo>" comments no directive matches -- see
+        # _find_unrecognized_directives.
+        "unrecognized_directives": _find_unrecognized_directives(code_cells),
         # Names defined more than once in the notebook's own raw
         # extraction (before deduplicate_functions_by_name, backend/
         # parser/ast_parser.py, silently collapses each down to its last

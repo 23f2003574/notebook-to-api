@@ -30227,3 +30227,248 @@ def test_compile_command_tag_combines_with_exclude_and_fails_on_no_match(tmp_pat
     assert missing.returncode != 0
     assert "No function is tagged Nope. Available tags: Scoring" in missing.stdout + missing.stderr
     assert not (workdir / "other" / "app.py").exists()
+
+
+def test_compile_history_command_sends_tag_query_param(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_json_response(200, {"status": "success", "entries": [], "entry_count": 0})]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["compile-history", "--tag", "math", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/compile/history?tag=math"]
+
+
+def test_clear_compile_history_command_sends_tag_query_param(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_json_response(200, {"status": "success", "deleted_count": 2})]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["clear-compile-history", "--tag", "math", "--dashboard-url", dashboard_url, "--yes"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Discarded 2 compile history" in proc.stdout
+    assert handler.requests == ["/api/compile/history?tag=math"]
+
+
+def test_clear_compile_history_command_prompt_names_the_tag(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "backend.cli",
+            "clear-compile-history", "--tag", "math",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=str(workdir),
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT)},
+        input="n\n",
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert "tag 'math'" in proc.stdout
+    assert "Aborted." in proc.stdout
+    assert handler.requests == []
+
+
+def test_compile_history_command_shows_each_compiles_tags(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    base = {
+        "source_notebook_sha256": "abc", "only": None, "exclude": None,
+        "endpoint_count": 1, "dependency_count": 0, "skipped_function_count": 0,
+    }
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "entries": [
+                {**base, "compiled_at": "2024-06-02T12:00:00+00:00",
+                 "notebook_filename": "tagged.ipynb", "tags": ["math", "v2"]},
+                # Entries recorded before "tags" existed have no such key.
+                {**base, "compiled_at": "2024-06-01T12:00:00+00:00",
+                 "notebook_filename": "plain.ipynb"},
+            ],
+            "entry_count": 2,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["compile-history", "--dashboard-url", dashboard_url], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    lines = proc.stdout.splitlines()
+    tagged = next(l for l in lines if "tagged.ipynb" in l)
+    plain = next(l for l in lines if "plain.ipynb" in l)
+    assert "tags: math, v2" in tagged
+    assert "tags:" not in plain
+
+
+def test_compile_history_and_clear_send_version_id_query_param(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "entries": [], "entry_count": 0}),
+        _json_response(200, {"status": "success", "deleted_count": 1}),
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    listed = _run_cli(
+        ["compile-history", "--version-id", "v1", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+    cleared = _run_cli(
+        ["clear-compile-history", "--version-id", "v1", "--dashboard-url", dashboard_url, "--yes"],
+        cwd=workdir,
+    )
+
+    assert listed.returncode == 0, listed.stdout + listed.stderr
+    assert cleared.returncode == 0, cleared.stdout + cleared.stderr
+    assert handler.requests == [
+        "/api/compile/history?version_id=v1",
+        "/api/compile/history?version_id=v1",
+    ]
+
+
+def test_validate_command_warns_about_unrecognized_directives(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "# notebook-to-api: rate_limit 4\ndef lookup(a: int) -> int:\n    return a\n",
+    )
+
+    proc = _run_cli(["validate", str(notebook_path)], cwd=workdir)
+    json_proc = _run_cli(["validate", str(notebook_path), "--json"], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "⚠ Unrecognized directive ignored: # notebook-to-api: rate_limit 4" in proc.stdout
+    assert json.loads(json_proc.stdout)["unrecognized_directives"] == [
+        {"directive": "rate_limit", "line": "# notebook-to-api: rate_limit 4"}
+    ]
+
+
+def test_remote_validate_command_prints_directive_warnings(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "pass",
+            "notebook": "nb.ipynb",
+            "reserved_name_conflicts": [],
+            "skipped_functions": [],
+            "unrecognized_directives": [
+                {"directive": "cahce", "line": "# notebook-to-api: cahce 60"}
+            ],
+            "ignored_cache_directives": ["train_model"],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-validate", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "⚠ Unrecognized directive ignored: # notebook-to-api: cahce 60" in proc.stdout
+    assert "⚠ Ignored cache directive: train_model is a background endpoint" in proc.stdout
+
+
+def test_validate_all_command_prints_directive_warnings_per_notebook(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {
+                    "filename": "a.ipynb", "status": "pass",
+                    "reserved_name_conflicts": [], "skipped_functions": [], "detail": None,
+                    "unrecognized_directives": [
+                        {"directive": "cahce", "line": "# notebook-to-api: cahce 60"}
+                    ],
+                    "ignored_cache_directives": ["train_model"],
+                },
+                {
+                    "filename": "b.ipynb", "status": "pass",
+                    "reserved_name_conflicts": [], "skipped_functions": [], "detail": None,
+                },
+            ],
+            "pass_count": 2, "warn_count": 0, "fail_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["validate-all", "--dashboard-url", dashboard_url], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "    unrecognized directive: # notebook-to-api: cahce 60" in proc.stdout
+    assert "    ignored cache directive: train_model (background endpoint)" in proc.stdout
+    assert proc.stdout.count("unrecognized directive") == 1
+
+
+def test_app_tasks_list_forwards_endpoint_and_shows_it_per_task(tmp_path, fake_dashboard):
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    empty = {
+        "tasks": {}, "total_tasks": 0, "matching_tasks": 0,
+        "completed_tasks": 0, "failed_tasks": 0, "processing_tasks": 0,
+        "limit": 100, "offset": 0,
+    }
+    handler.responses = [
+        _json_response(200, {
+            **empty, "matching_tasks": 2,
+            "tasks": {
+                "t1": {"status": "completed", "endpoint": "/train_model"},
+                # A task recorded before "endpoint" existed.
+                "t2": {"status": "failed"},
+            },
+        }),
+        _json_response(200, empty),
+    ]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    bare = _run_cli(
+        ["app-tasks", "list", "--host", host, "--port", str(port), "--endpoint", "train_model"],
+        cwd=workdir,
+    )
+    slashed = _run_cli(
+        ["app-tasks", "list", "--host", host, "--port", str(port), "--endpoint", "/train_model"],
+        cwd=workdir,
+    )
+
+    assert bare.returncode == 0, bare.stdout + bare.stderr
+    assert slashed.returncode == 0, slashed.stdout + slashed.stderr
+    assert "endpoint=%2Ftrain_model" in handler.requests[0]
+    assert "endpoint=%2Ftrain_model" in handler.requests[1]
+    assert "t1  (completed)  /train_model" in bare.stdout
+    assert "t2  (failed)\n" in bare.stdout + "\n"

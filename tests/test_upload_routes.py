@@ -23608,6 +23608,7 @@ def test_validate_reports_pass_for_a_clean_notebook():
         "rate_limit_overrides": {},
         "cache_overrides": {},
         "ignored_cache_directives": [],
+        "unrecognized_directives": [],
     }
 
 
@@ -30567,11 +30568,11 @@ def test_compile_history_csv_format_returns_a_csv_response(tmp_path, monkeypatch
     assert rows[0] == (
         "compiled_at,notebook_filename,source_notebook_sha256,only,exclude,"
         "endpoint_count,dependency_count,skipped_function_count,"
-        "dropped_past_sunset"
+        "dropped_past_sunset,tags"
     )
     # "only" is a semicolon-joined cell, not one CSV column per function;
-    # an entry recorded before "dropped_past_sunset" existed gets "".
-    assert rows[1] == "2024-01-01T00:00:00+00:00,nb.ipynb,aaa,add;subtract,,2,0,0,"
+    # an entry recorded before "dropped_past_sunset"/"tags" existed gets "".
+    assert rows[1] == "2024-01-01T00:00:00+00:00,nb.ipynb,aaa,add;subtract,,2,0,0,,"
     assert len(rows) == 2
 
 
@@ -34645,7 +34646,7 @@ def test_compile_history_records_which_functions_drop_past_sunset_removed():
     assert entry["notebook_filename"] == "history_drop_sunset.ipynb"
     assert entry["dropped_past_sunset"] == ["old_add"]
     assert entry["exclude"] == ["old_add"]
-    assert csv_rows[1].endswith(",old_add")
+    assert csv_rows[1].endswith(",old_add,")
 
 
 def test_validate_reports_timeout_directives():
@@ -34882,3 +34883,187 @@ def test_validate_tag_selection_errors_are_400():
 
     assert unknown.status_code == 400 and "Available tags: General, Scoring" in unknown.json()["detail"]
     assert malformed.status_code == 400 and "tags must be a list" in malformed.json()["detail"]
+
+
+def test_compile_history_records_tags_and_filters_by_tag(tmp_path, monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "compile_history_tags_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    base = {
+        "notebook_filename": "nb.ipynb", "source_notebook_sha256": "aaa",
+        "only": None, "exclude": None, "endpoint_count": 1,
+        "dependency_count": 0, "skipped_function_count": 0,
+    }
+    upload_module._append_compile_history_entry(
+        {**base, "compiled_at": "2024-01-01T00:00:00+00:00", "tags": ["math", "v2"]}
+    )
+    upload_module._append_compile_history_entry(
+        {**base, "compiled_at": "2024-01-02T00:00:00+00:00", "tags": None}
+    )
+    # An entry recorded before "tags" existed has no such key at all.
+    upload_module._append_compile_history_entry(
+        {**base, "compiled_at": "2024-01-03T00:00:00+00:00"}
+    )
+
+    resp = client.get("/api/compile/history", params={"tag": "math"})
+    assert resp.status_code == 200
+    assert [e["compiled_at"] for e in resp.json()["entries"]] == ["2024-01-01T00:00:00+00:00"]
+
+    assert client.get("/api/compile/history", params={"tag": "nope"}).json()["entry_count"] == 0
+    assert client.get("/api/compile/history").json()["entry_count"] == 3
+
+    csv_resp = client.get("/api/compile/history", params={"tag": "v2", "format": "csv"})
+    rows = csv_resp.text.strip().split("\r\n")
+    assert rows[0].endswith(",tags")
+    assert rows[1].endswith(",math;v2")
+    assert len(rows) == 2
+
+
+def test_clear_compile_history_filters_by_tag(tmp_path, monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_compile_history_tag_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    base = {
+        "notebook_filename": "nb.ipynb", "source_notebook_sha256": "aaa",
+        "only": None, "exclude": None, "endpoint_count": 1,
+        "dependency_count": 0, "skipped_function_count": 0,
+    }
+    for day, tags in ((1, ["math"]), (2, ["other"]), (3, None)):
+        upload_module._append_compile_history_entry(
+            {**base, "compiled_at": f"2024-01-0{day}T00:00:00+00:00", "tags": tags}
+        )
+
+    dry = client.delete("/api/compile/history", params={"tag": "math", "dry_run": True})
+    assert dry.json() == {"status": "success", "dry_run": True, "deleted_count": 1}
+    assert client.get("/api/compile/history").json()["entry_count"] == 3
+
+    resp = client.delete("/api/compile/history", params={"tag": "math"})
+    assert resp.json()["deleted_count"] == 1
+    remaining = client.get("/api/compile/history").json()["entries"]
+    assert [e["compiled_at"][:10] for e in remaining] == ["2024-01-03", "2024-01-02"]
+
+    none = client.delete("/api/compile/history", params={"tag": "missing"})
+    assert none.json()["deleted_count"] == 0
+    assert client.get("/api/compile/history").json()["entry_count"] == 2
+
+
+def test_compile_history_filters_and_clears_by_version_id(tmp_path, monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "compile_history_version_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    base = {
+        "notebook_filename": "nb.ipynb", "source_notebook_sha256": "aaa",
+        "only": None, "exclude": None, "endpoint_count": 1,
+        "dependency_count": 0, "skipped_function_count": 0,
+    }
+    for day, version_id in ((1, "v-old"), (2, None), (3, "v-old")):
+        upload_module._append_compile_history_entry(
+            {**base, "compiled_at": f"2024-01-0{day}T00:00:00+00:00", "version_id": version_id}
+        )
+
+    resp = client.get("/api/compile/history", params={"version_id": "v-old"})
+    assert [e["compiled_at"][:10] for e in resp.json()["entries"]] == ["2024-01-03", "2024-01-01"]
+    assert client.get("/api/compile/history", params={"version_id": "nope"}).json()["entry_count"] == 0
+
+    dry = client.delete("/api/compile/history", params={"version_id": "v-old", "dry_run": True})
+    assert dry.json()["deleted_count"] == 2
+    assert client.get("/api/compile/history").json()["entry_count"] == 3
+
+    assert client.delete("/api/compile/history", params={"version_id": "v-old"}).json()["deleted_count"] == 2
+    remaining = client.get("/api/compile/history").json()["entries"]
+    assert [e["compiled_at"][:10] for e in remaining] == ["2024-01-02"]
+
+
+def test_dashboard_metrics_prometheus_reports_version_count_and_storage_bytes(
+    monkeypatch, tmp_path
+):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "metrics_versions_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    empty = client.get("/api/metrics/prometheus").text
+    assert "notebook_to_api_dashboard_notebook_versions_total 0\n" in empty
+    assert "notebook_to_api_dashboard_storage_bytes 0\n" in empty
+
+    for body in ("def f(): return 1\n", "def f(): return 2\n", "def f(): return 3\n"):
+        resp = client.post(
+            "/api/upload",
+            params={"overwrite": True},
+            files={"file": (
+                "metrics_versions.ipynb",
+                io.BytesIO(_notebook_bytes(body)),
+                "application/json",
+            )},
+        )
+        assert resp.status_code == 200
+
+    text = client.get("/api/metrics/prometheus").text
+    assert "notebook_to_api_dashboard_notebook_versions_total 2\n" in text
+    assert (
+        f"notebook_to_api_dashboard_storage_bytes {upload_module._current_total_storage_bytes()}\n"
+    ) in text
+    assert "notebook_to_api_dashboard_storage_bytes 0\n" not in text
+
+
+def test_validate_reports_unrecognized_directives_without_changing_status():
+    client.delete("/api/notebooks?confirm=true")
+    content = _notebook_bytes(
+        "# notebook-to-api: cahce 60\ndef lookup(a: int) -> int:\n    return a\n\n"
+        "# notebook-to-api: cache 60\ndef fine(a: int) -> int:\n    return a\n"
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("validate_typo.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    body = client.post("/api/validate", json={"notebook_path": "validate_typo.ipynb"}).json()
+
+    assert body["status"] == "pass"
+    assert body["unrecognized_directives"] == [
+        {"directive": "cahce", "line": "# notebook-to-api: cahce 60"}
+    ]
+    assert body["cache_overrides"] == {"fine": 60}
+
+
+def test_validate_all_reports_unrecognized_and_ignored_cache_directives():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    contents = {
+        "va_typo.ipynb": "# notebook-to-api: cahce 60\ndef a(x: int) -> int:\n    return x\n",
+        "va_bg_cache.ipynb": "# notebook-to-api: cache 60\ndef train_model(x: int) -> int:\n    return x\n",
+        "va_clean.ipynb": "def b(x: int) -> int:\n    return x\n",
+    }
+    for filename, source in contents.items():
+        resp = client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(_notebook_bytes(source)), "application/json")},
+        )
+        assert resp.status_code == 200
+
+    body = client.get("/api/validate-all").json()
+    by_name = {r["filename"]: r for r in body["results"]}
+
+    assert by_name["va_typo.ipynb"]["unrecognized_directives"] == [
+        {"directive": "cahce", "line": "# notebook-to-api: cahce 60"}
+    ]
+    assert by_name["va_bg_cache.ipynb"]["ignored_cache_directives"] == ["train_model"]
+    assert by_name["va_clean.ipynb"]["unrecognized_directives"] == []
+    assert by_name["va_clean.ipynb"]["ignored_cache_directives"] == []
+    # Informational only: never changes a notebook's verdict.
+    assert body["pass_count"] == 3
