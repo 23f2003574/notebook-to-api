@@ -18393,6 +18393,7 @@ def clear_compile_history(
     older_than_days: int = None,
     compiled_after: str = None,
     compiled_before: str = None,
+    tag: str = None,
     dry_run: bool = False,
 ):
     """Permanently discard this dashboard's compile history log, the exact
@@ -18460,6 +18461,10 @@ def clear_compile_history(
     to this dashboard's compile history instead. A naive value is assumed
     UTC; "compiled_after" later than "compiled_before" is rejected with
     400, identically.
+
+    "tag" mirrors GET /api/compile/history's own "tag": discard only
+    entries whose recorded "tags" include that exact tag (an AND with every
+    other filter); entries without "tags" are never matched.
     """
 
     if older_than_days is not None and older_than_days <= 0:
@@ -18494,6 +18499,7 @@ def clear_compile_history(
         or cutoff is not None
         or compiled_after_dt is not None
         or compiled_before_dt is not None
+        or tag is not None
     ):
 
         def _should_discard(entry):
@@ -18510,6 +18516,8 @@ def clear_compile_history(
             ):
                 return False
 
+            if tag is not None and tag not in (entry.get("tags") or []):
+                return False
             if cutoff is not None and not _compile_history_entry_is_older_than(entry, cutoff):
                 return False
 
