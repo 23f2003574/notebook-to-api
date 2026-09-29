@@ -9558,6 +9558,13 @@ def _dispatch_core_command(args):
                 params["webhook_delivery_failed"] = args.webhook_delivery_failed
             if args.timed_out is not None:
                 params["timed_out"] = args.timed_out
+            if args.endpoint:
+                # GET /tasks' "endpoint" is the route path ("/train_model");
+                # accept the bare function name too.
+                params["endpoint"] = (
+                    args.endpoint if args.endpoint.startswith("/")
+                    else f"/{args.endpoint}"
+                )
             if args.limit is not None:
                 params["limit"] = args.limit
             if args.offset is not None:
@@ -9601,7 +9608,10 @@ def _dispatch_core_command(args):
                                 else "  webhook: FAILED"
                             )
                         timed_out_note = "  TIMED OUT" if task.get("timed_out") else ""
-                        print(f"{task_id}  ({task.get('status')}){timed_out_note}{webhook_note}")
+                        endpoint_note = (
+                            f"  {task['endpoint']}" if task.get("endpoint") else ""
+                        )
+                        print(f"{task_id}  ({task.get('status')}){endpoint_note}{timed_out_note}{webhook_note}")
 
                 timed_out_count = data.get("timed_out_tasks", 0)
                 print(
@@ -18239,6 +18249,16 @@ def main():
             "Only show tasks that did (\"true\") or didn't (\"false\") "
             "fail by exceeding their execution timeout, via GET /tasks' "
             "own ?timed_out= query param. Composes with --status."
+        )
+    )
+    app_tasks_list_parser.add_argument(
+        "--endpoint",
+        default=None,
+        help=(
+            "Only show tasks submitted to this background endpoint (a "
+            "function name like \"train_model\" or its route "
+            "\"/train_model\"), via GET /tasks' own ?endpoint= query "
+            "param. Composes with --status."
         )
     )
     app_tasks_list_parser.add_argument(
