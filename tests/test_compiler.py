@@ -8461,3 +8461,24 @@ def test_extract_tag_overrides_reads_stacked_directives_and_rejects_bad_names():
     ]
 
     assert _extract_tag_overrides(cells) == {"score": "Inference", "train_fast": "Model Ops_v2"}
+
+
+def test_find_unrecognized_directives_flags_only_unknown_names():
+    from backend.compiler import _find_unrecognized_directives
+
+    cells = [
+        "# notebook-to-api: cache 5\n# notebook-to-api: rate-limit 2\n"
+        "# notebook-to-api: deprecated: old\n# notebook-to-api: requires numpy\n"
+        "# notebook-to-api: apt-requires git\n# notebook-to-api: exclude os\n"
+        "# notebook-to-api: private\n# notebook-to-api: background\n"
+        "# notebook-to-api: sync\n# notebook-to-api: timeout 3\n"
+        "# notebook-to-api: tag Math\ndef ok():\n    pass\n",
+        "  # notebook-to-api: cahce 60\ndef a():\n    pass\n",
+        "# notebook-to-api: Private\n# regular comment\n# notebook-to-api:\n",
+    ]
+
+    assert _find_unrecognized_directives(cells) == [
+        {"directive": "cahce", "line": "# notebook-to-api: cahce 60"},
+        {"directive": "Private", "line": "# notebook-to-api: Private"},
+    ]
+    assert _find_unrecognized_directives([]) == []

@@ -23608,6 +23608,7 @@ def test_validate_reports_pass_for_a_clean_notebook():
         "rate_limit_overrides": {},
         "cache_overrides": {},
         "ignored_cache_directives": [],
+        "unrecognized_directives": [],
     }
 
 
@@ -35017,3 +35018,23 @@ def test_dashboard_metrics_prometheus_reports_version_count_and_storage_bytes(
         f"notebook_to_api_dashboard_storage_bytes {upload_module._current_total_storage_bytes()}\n"
     ) in text
     assert "notebook_to_api_dashboard_storage_bytes 0\n" not in text
+
+
+def test_validate_reports_unrecognized_directives_without_changing_status():
+    client.delete("/api/notebooks?confirm=true")
+    content = _notebook_bytes(
+        "# notebook-to-api: cahce 60\ndef lookup(a: int) -> int:\n    return a\n\n"
+        "# notebook-to-api: cache 60\ndef fine(a: int) -> int:\n    return a\n"
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("validate_typo.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    body = client.post("/api/validate", json={"notebook_path": "validate_typo.ipynb"}).json()
+
+    assert body["status"] == "pass"
+    assert body["unrecognized_directives"] == [
+        {"directive": "cahce", "line": "# notebook-to-api: cahce 60"}
+    ]
+    assert body["cache_overrides"] == {"fine": 60}

@@ -30350,3 +30350,22 @@ def test_compile_history_and_clear_send_version_id_query_param(tmp_path, fake_da
         "/api/compile/history?version_id=v1",
         "/api/compile/history?version_id=v1",
     ]
+
+
+def test_validate_command_warns_about_unrecognized_directives(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "# notebook-to-api: rate_limit 4\ndef lookup(a: int) -> int:\n    return a\n",
+    )
+
+    proc = _run_cli(["validate", str(notebook_path)], cwd=workdir)
+    json_proc = _run_cli(["validate", str(notebook_path), "--json"], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "⚠ Unrecognized directive ignored: # notebook-to-api: rate_limit 4" in proc.stdout
+    assert json.loads(json_proc.stdout)["unrecognized_directives"] == [
+        {"directive": "rate_limit", "line": "# notebook-to-api: rate_limit 4"}
+    ]
