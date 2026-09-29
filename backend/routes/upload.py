@@ -14493,6 +14493,8 @@ def validate_all_notebooks(
                 "skipped_functions": [],
                 "duplicate_functions": [],
                 "requirements_conflict": None,
+                "unrecognized_directives": [],
+                "ignored_cache_directives": [],
                 "detail": f"Uploaded file is not a valid Jupyter notebook: {e}",
             }
             if checksums:
@@ -14584,6 +14586,12 @@ def validate_all_notebooks(
             "requirements_conflict": requirements_conflict,
             "deprecated_functions": deprecated_functions,
             "past_sunset_functions": past_sunset_functions,
+            # Informational, never part of "status" -- the same fields POST
+            # /api/validate reports for one notebook: catalog-wide, a typo'd
+            # directive ("cahce 60") or a cache directive on a background
+            # endpoint is otherwise silently ignored.
+            "unrecognized_directives": inspection["unrecognized_directives"],
+            "ignored_cache_directives": inspection["ignored_cache_directives"],
             "detail": None,
         }
         if upcoming_cutoff is not None:
