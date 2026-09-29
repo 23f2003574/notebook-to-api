@@ -2608,6 +2608,7 @@ def generate_fastapi_code(
     lines.append("    status: Optional[str] = None,")
     lines.append("    webhook_delivery_failed: Optional[bool] = None,")
     lines.append("    timed_out: Optional[bool] = None,")
+    lines.append("    endpoint: Optional[str] = None,")
     lines.append("    limit: int = Query(default=100, ge=1, le=1000),")
     lines.append("    offset: int = Query(default=0, ge=0),")
     lines.append("    _: None = Depends(verify_api_key),")
@@ -2716,6 +2717,12 @@ def generate_fastapi_code(
     lines.append("            timed_out is None")
     lines.append("            or bool(task.get('timed_out')) == timed_out")
     lines.append("        )")
+    # Which background endpoint submitted each task -- before this, a
+    # notebook with several background functions had no way to list just
+    # one endpoint's tasks (e.g. "/train_model") short of fetching every
+    # task and filtering client-side. A task recorded without an
+    # 'endpoint' (none, before this field existed) matches no filter.
+    lines.append("        and (endpoint is None or task.get('endpoint') == endpoint)")
     lines.append("    ]")
     lines.append(
         "    matching_items.sort("
@@ -4585,7 +4592,8 @@ def generate_fastapi_code(
             # close.
             lines.append(
                 "        TASKS[task_id] = {\"status\": \"processing\", "
-                "\"created_at\": time.time(), \"callback_url\": callback_url}"
+                "\"created_at\": time.time(), \"callback_url\": callback_url, "
+                f"\"endpoint\": {'/' + func_name!r}}}"
             )
             # Recorded only now, after TASKS[task_id] above already exists
             # -- so a concurrent lookup of this same key (see the
