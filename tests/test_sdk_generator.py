@@ -1410,6 +1410,7 @@ def test_generate_python_sdk_includes_task_management_helpers(tmp_path):
         "offset: int = None,\n"
         "        webhook_delivery_failed: bool = None,\n"
         "        timed_out: bool = None,\n"
+        "        endpoint: str = None,\n"
         "    ) -> dict:"
     ) in source
     assert "def delete_task(self, task_id: str) -> dict:" in source
@@ -3539,7 +3540,7 @@ def test_generate_typescript_sdk_includes_task_management_helpers(tmp_path):
     assert (
         "async listTasks(options: { status?: string; limit?: number; "
         "offset?: number; webhookDeliveryFailed?: boolean; "
-        "timedOut?: boolean } = {}): "
+        "timedOut?: boolean; endpoint?: string } = {}): "
         "Promise<any> {"
     ) in source
     assert "async deleteTask(taskId: string): Promise<any> {" in source
@@ -7705,3 +7706,73 @@ def test_generate_typescript_sdk_no_cache_bypasses_a_cached_endpoint(tmp_path):
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert json.loads(proc.stdout.strip().splitlines()[-1]) == [None, "no-cache", None]
     assert "async plain(payload: PlainRequest): " in client_path.read_text(encoding="utf-8")
+
+
+def test_python_sdk_list_tasks_can_filter_by_endpoint(tmp_path, monkeypatch):
+    schema_path = _write_schema(tmp_path, {"/add": {"post": {"operationId": "add"}}})
+    output_path = tmp_path / "client.py"
+    generate_python_sdk(str(schema_path), str(output_path))
+    source = output_path.read_text(encoding="utf-8")
+    seen = []
+
+    class FakeResponse:
+        headers = {}
+        url = "http://localhost:8000/tasks"
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"tasks": {}}
+
+    def fake_get(url, **kwargs):
+        seen.append(kwargs.get("params"))
+        return FakeResponse()
+
+    fake_requests = types.ModuleType("requests")
+    fake_requests.get = fake_get
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+    namespace = {}
+    exec(compile(source, str(output_path), "exec"), namespace)
+    client = namespace["NotebookAPIClient"]("http://localhost:8000")
+
+    client.list_tasks(endpoint="train_model")
+    client.list_tasks(endpoint="/train_model", status="failed")
+    client.list_tasks()
+
+    assert seen == [
+        {"endpoint": "/train_model"},
+        {"status": "failed", "endpoint": "/train_model"},
+        {},
+    ]
+
+
+@_needs_node
+def test_typescript_sdk_list_tasks_can_filter_by_endpoint(tmp_path):
+    schema_path = _write_schema(tmp_path, {"/add": {"post": {"operationId": "add"}}})
+    client_path = tmp_path / "client.ts"
+    generate_typescript_sdk(str(schema_path), str(client_path))
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        const urls = [];
+        globalThis.fetch = async (url) => {{
+          urls.push(url);
+          return {{ ok: true, status: 200, headers: new Headers(), json: async () => ({{ tasks: {{}} }}) }};
+        }};
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+        await client.listTasks({{ endpoint: "train_model" }});
+        await client.listTasks({{ endpoint: "/train_model" }});
+        await client.listTasks();
+        console.log(JSON.stringify(urls));
+        """,
+        encoding="utf-8",
+    )
+    proc = subprocess.run(["node", str(runner_path)], capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(proc.stdout.strip().splitlines()[-1]) == [
+        "http://localhost:8000/tasks?endpoint=%2Ftrain_model",
+        "http://localhost:8000/tasks?endpoint=%2Ftrain_model",
+        "http://localhost:8000/tasks",
+    ]
