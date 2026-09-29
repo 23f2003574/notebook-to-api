@@ -19443,6 +19443,14 @@ def dashboard_metrics_prometheus():
         if entry.is_file() and entry.suffix == ".ipynb"
     ) if upload_root.is_dir() else 0
 
+    version_count = sum(
+        1 for entry in upload_root.iterdir()
+        if entry.is_file() and entry.suffix == ".ipynb"
+        and _notebook_versions_dir(entry.name).is_dir()
+        for snapshot in _notebook_versions_dir(entry.name).iterdir()
+        if snapshot.is_file()
+    ) if upload_root.is_dir() else 0
+
     compiled_app_present = (Path(GENERATED_DIR) / "app.py").is_file()
 
     uptime_seconds = time.time() - _DASHBOARD_START_TIME
@@ -19467,6 +19475,15 @@ def dashboard_metrics_prometheus():
         "# TYPE notebook_to_api_dashboard_deploy_history_total gauge\n"
         "notebook_to_api_dashboard_deploy_history_total "
         f"{len(_read_deploy_history())}\n"
+        "# HELP notebook_to_api_dashboard_notebook_versions_total Total "
+        "number of snapshotted previous notebook versions kept across "
+        "every uploaded notebook.\n"
+        "# TYPE notebook_to_api_dashboard_notebook_versions_total gauge\n"
+        f"notebook_to_api_dashboard_notebook_versions_total {version_count}\n"
+        "# HELP notebook_to_api_dashboard_storage_bytes Bytes used by "
+        "uploaded notebooks plus their version snapshots.\n"
+        "# TYPE notebook_to_api_dashboard_storage_bytes gauge\n"
+        f"notebook_to_api_dashboard_storage_bytes {_current_total_storage_bytes()}\n"
         "# HELP notebook_to_api_dashboard_uptime_seconds Seconds since "
         "this dashboard process started.\n"
         "# TYPE notebook_to_api_dashboard_uptime_seconds counter\n"
