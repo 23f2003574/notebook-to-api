@@ -34983,3 +34983,37 @@ def test_compile_history_filters_and_clears_by_version_id(tmp_path, monkeypatch)
     assert client.delete("/api/compile/history", params={"version_id": "v-old"}).json()["deleted_count"] == 2
     remaining = client.get("/api/compile/history").json()["entries"]
     assert [e["compiled_at"][:10] for e in remaining] == ["2024-01-02"]
+
+
+def test_dashboard_metrics_prometheus_reports_version_count_and_storage_bytes(
+    monkeypatch, tmp_path
+):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "metrics_versions_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    empty = client.get("/api/metrics/prometheus").text
+    assert "notebook_to_api_dashboard_notebook_versions_total 0\n" in empty
+    assert "notebook_to_api_dashboard_storage_bytes 0\n" in empty
+
+    for body in ("def f(): return 1\n", "def f(): return 2\n", "def f(): return 3\n"):
+        resp = client.post(
+            "/api/upload",
+            params={"overwrite": True},
+            files={"file": (
+                "metrics_versions.ipynb",
+                io.BytesIO(_notebook_bytes(body)),
+                "application/json",
+            )},
+        )
+        assert resp.status_code == 200
+
+    text = client.get("/api/metrics/prometheus").text
+    assert "notebook_to_api_dashboard_notebook_versions_total 2\n" in text
+    assert (
+        f"notebook_to_api_dashboard_storage_bytes {upload_module._current_total_storage_bytes()}\n"
+    ) in text
+    assert "notebook_to_api_dashboard_storage_bytes 0\n" not in text
