@@ -8321,9 +8321,14 @@ def _dispatch_core_command(args):
                     notebook = entry.get("notebook_filename") or "(unknown notebook)"
 
                     dropped = entry.get("dropped_past_sunset") or []
+                    entry_tags = entry.get("tags") or []
                     print(
                         f"{entry.get('compiled_at')}  {notebook}  "
                         f"({endpoint_count} endpoint(s))"
+                        + (
+                            f"  tags: {', '.join(entry_tags)}"
+                            if entry_tags else ""
+                        )
                         + (
                             f"  dropped past sunset: {', '.join(dropped)}"
                             if dropped else ""
