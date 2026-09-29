@@ -1702,6 +1702,7 @@ def generate_python_sdk(
         "        webhook_delivery_failed: bool = None,"
     )
     lines.append("        timed_out: bool = None,")
+    lines.append("        endpoint: str = None,")
     lines.append("    ) -> dict:")
     lines.append(
         '        """List background tasks, with a status-count summary.'
@@ -1731,6 +1732,13 @@ def generate_python_sdk(
     # exceeding their execution timeout) -- sent as "true"/"false".
     lines.append("        if timed_out is not None:")
     lines.append('            params["timed_out"] = "true" if timed_out else "false"')
+    # The app's own ?endpoint= -- only tasks submitted to that background
+    # endpoint's route ("/train_model"; a bare function name gets its "/").
+    lines.append("        if endpoint is not None:")
+    lines.append(
+        '            params["endpoint"] = endpoint if endpoint.startswith("/") '
+        'else f"/{endpoint}"'
+    )
     lines.append("        return self._request(lambda: requests.get(")
     lines.append('            f"{self.base_url}/tasks",')
     lines.append('            headers={"X-API-Key": self.api_key},')
@@ -2781,7 +2789,7 @@ def generate_typescript_sdk(
     lines.append(
         "  async listTasks(options: { status?: string; limit?: number; "
         "offset?: number; webhookDeliveryFailed?: boolean; "
-        "timedOut?: boolean } = {}): "
+        "timedOut?: boolean; endpoint?: string } = {}): "
         "Promise<any> {"
     )
     lines.append("    const params = new URLSearchParams();")
@@ -2805,6 +2813,11 @@ def generate_typescript_sdk(
     lines.append(
         "    if (options.timedOut !== undefined) "
         'params.set("timed_out", String(options.timedOut));'
+    )
+    lines.append(
+        "    if (options.endpoint !== undefined) "
+        'params.set("endpoint", options.endpoint.startsWith("/") '
+        "? options.endpoint : `/${options.endpoint}`);"
     )
     lines.append("    const query = params.toString();")
     lines.append('    const path = `/tasks${query ? `?${query}` : ""}`;')
