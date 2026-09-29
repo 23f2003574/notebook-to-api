@@ -1022,9 +1022,22 @@ KNOWN_DIRECTIVE_NAMES = frozenset({
 })
 
 ANY_DIRECTIVE_PATTERN = re.compile(
-    r"^[ \t]*#\s*notebook-to-api:\s*(?P<name>[A-Za-z][\w-]*)[^\n]*$",
+    r"^[ \t]*#\s*notebook-to-api:\s*(?P<name>[A-Za-z][\w-]*)(?P<rest>[^\n]*)$",
     re.MULTILINE,
 )
+
+# What may follow a directive's name for its own pattern above to ever match
+# it -- "cache abc" or "private now" is a *known* directive that's silently
+# ignored just like a typo'd name is.
+DIRECTIVE_ARGUMENT_SHAPES = {
+    "cache": re.compile(r"\s+\d+\s*"),
+    "rate-limit": re.compile(r"\s+\d+\s*"),
+    "timeout": re.compile(r"\s+\d+\s*"),
+    "tag": re.compile(r"\s+[A-Za-z0-9][A-Za-z0-9 _-]{0,39}?\s*"),
+    "private": re.compile(r"\s*"),
+    "background": re.compile(r"\s*"),
+    "sync": re.compile(r"\s*"),
+}
 
 
 def _find_unrecognized_directives(code_cells):
@@ -1034,15 +1047,24 @@ def _find_unrecognized_directives(code_cells):
     of the per-directive patterns above, so it was silently ignored --
     compiling fine, with the quota/cache/tag the author meant never applied.
     Names are matched case-sensitively, exactly as the real directives are.
+    A real directive whose argument is malformed ("cache abc", "timeout",
+    "tag Bad!", "private now") is reported too: it matches no pattern
+    above either, so it's ignored just the same.
     """
     found = []
     for cell in code_cells:
         for match in ANY_DIRECTIVE_PATTERN.finditer(cell):
-            if match.group("name") not in KNOWN_DIRECTIVE_NAMES:
-                found.append({
-                    "directive": match.group("name"),
-                    "line": match.group(0).strip(),
-                })
+            name = match.group("name")
+            argument_shape = DIRECTIVE_ARGUMENT_SHAPES.get(name)
+            if name in KNOWN_DIRECTIVE_NAMES and (
+                argument_shape is None
+                or argument_shape.fullmatch(match.group("rest"))
+            ):
+                continue
+            found.append({
+                "directive": name,
+                "line": match.group(0).strip(),
+            })
     return found
 
 

@@ -8482,3 +8482,27 @@ def test_find_unrecognized_directives_flags_only_unknown_names():
         {"directive": "Private", "line": "# notebook-to-api: Private"},
     ]
     assert _find_unrecognized_directives([]) == []
+
+
+def test_find_unrecognized_directives_flags_malformed_arguments_of_real_directives():
+    from backend.compiler import _find_unrecognized_directives
+
+    cells = [
+        "# notebook-to-api: cache abc\ndef a():\n    pass\n"
+        "# notebook-to-api: timeout\ndef b():\n    pass\n"
+        "# notebook-to-api: rate-limit -5\ndef c():\n    pass\n"
+        "# notebook-to-api: tag Bad!Name\ndef d():\n    pass\n"
+        "# notebook-to-api: private now\ndef e():\n    pass\n",
+        # Well-formed -- never flagged, trailing whitespace included.
+        "# notebook-to-api: cache 30  \ndef f():\n    pass\n"
+        "# notebook-to-api: tag My Tag-2\ndef g():\n    pass\n"
+        "# notebook-to-api: timeout 0\n# notebook-to-api: sync\ndef h():\n    pass\n",
+    ]
+
+    assert [(item["directive"], item["line"]) for item in _find_unrecognized_directives(cells)] == [
+        ("cache", "# notebook-to-api: cache abc"),
+        ("timeout", "# notebook-to-api: timeout"),
+        ("rate-limit", "# notebook-to-api: rate-limit -5"),
+        ("tag", "# notebook-to-api: tag Bad!Name"),
+        ("private", "# notebook-to-api: private now"),
+    ]
