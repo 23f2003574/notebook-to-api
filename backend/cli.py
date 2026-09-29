@@ -8270,6 +8270,8 @@ def _dispatch_core_command(args):
             params["compiled_after"] = args.compiled_after
         if args.compiled_before:
             params["compiled_before"] = args.compiled_before
+        if args.tag:
+            params["tag"] = args.tag
         if args.limit is not None:
             params["limit"] = args.limit
         if args.offset:
@@ -8348,6 +8350,8 @@ def _dispatch_core_command(args):
                 target_parts.append(repr(args.notebook_filename))
             if args.source_notebook_sha256:
                 target_parts.append(f"sha256 {args.source_notebook_sha256!r}")
+            if args.tag:
+                target_parts.append(f"tag {args.tag!r}")
             target = (
                 f"the compile history for {' and '.join(target_parts)} on "
                 f"{dashboard_url}" if target_parts
@@ -8369,6 +8373,8 @@ def _dispatch_core_command(args):
             params["compiled_after"] = args.compiled_after
         if args.compiled_before:
             params["compiled_before"] = args.compiled_before
+        if args.tag:
+            params["tag"] = args.tag
         if args.dry_run:
             params["dry_run"] = True
 
@@ -17368,6 +17374,15 @@ def main():
         )
     )
     compile_history_parser.add_argument(
+        "--tag",
+        default=None,
+        help=(
+            "Only show compile history entries whose POST /api/compile "
+            "request was scoped to this OpenAPI tag, via GET /api/compile/history's own "
+            "?tag=."
+        )
+    )
+    compile_history_parser.add_argument(
         "--limit",
         type=int,
         help=(
@@ -17494,6 +17509,15 @@ def main():
             "Only discard compile history entries on or before this ISO "
             "8601 datetime, via DELETE /api/compile/history's own "
             "?compiled_before=."
+        )
+    )
+    clear_compile_history_parser.add_argument(
+        "--tag",
+        default=None,
+        help=(
+            "Only discard compile history entries whose POST /api/compile "
+            "request was scoped to this OpenAPI tag, via DELETE /api/compile/history's own "
+            "?tag=."
         )
     )
     clear_compile_history_parser.add_argument(

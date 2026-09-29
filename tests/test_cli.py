@@ -30227,3 +30227,64 @@ def test_compile_command_tag_combines_with_exclude_and_fails_on_no_match(tmp_pat
     assert missing.returncode != 0
     assert "No function is tagged Nope. Available tags: Scoring" in missing.stdout + missing.stderr
     assert not (workdir / "other" / "app.py").exists()
+
+
+def test_compile_history_command_sends_tag_query_param(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_json_response(200, {"status": "success", "entries": [], "entry_count": 0})]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["compile-history", "--tag", "math", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/compile/history?tag=math"]
+
+
+def test_clear_compile_history_command_sends_tag_query_param(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_json_response(200, {"status": "success", "deleted_count": 2})]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["clear-compile-history", "--tag", "math", "--dashboard-url", dashboard_url, "--yes"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Discarded 2 compile history" in proc.stdout
+    assert handler.requests == ["/api/compile/history?tag=math"]
+
+
+def test_clear_compile_history_command_prompt_names_the_tag(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "backend.cli",
+            "clear-compile-history", "--tag", "math",
+            "--dashboard-url", dashboard_url,
+        ],
+        cwd=str(workdir),
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT)},
+        input="n\n",
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert "tag 'math'" in proc.stdout
+    assert "Aborted." in proc.stdout
+    assert handler.requests == []
