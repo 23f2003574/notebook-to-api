@@ -14178,6 +14178,7 @@ def validate_notebook_endpoint(
         "rate_limit_overrides": inspection["rate_limit_overrides"],
         "cache_overrides": inspection["cache_overrides"],
         "ignored_cache_directives": inspection["ignored_cache_directives"],
+        "unrecognized_directives": inspection["unrecognized_directives"],
     }
 
 
@@ -14492,6 +14493,8 @@ def validate_all_notebooks(
                 "skipped_functions": [],
                 "duplicate_functions": [],
                 "requirements_conflict": None,
+                "unrecognized_directives": [],
+                "ignored_cache_directives": [],
                 "detail": f"Uploaded file is not a valid Jupyter notebook: {e}",
             }
             if checksums:
@@ -14583,6 +14586,12 @@ def validate_all_notebooks(
             "requirements_conflict": requirements_conflict,
             "deprecated_functions": deprecated_functions,
             "past_sunset_functions": past_sunset_functions,
+            # Informational, never part of "status" -- the same fields POST
+            # /api/validate reports for one notebook: catalog-wide, a typo'd
+            # directive ("cahce 60") or a cache directive on a background
+            # endpoint is otherwise silently ignored.
+            "unrecognized_directives": inspection["unrecognized_directives"],
+            "ignored_cache_directives": inspection["ignored_cache_directives"],
             "detail": None,
         }
         if upcoming_cutoff is not None:
@@ -16521,6 +16530,10 @@ def compile_notebook_endpoint(
             "version_id": version_id,
             "only": only,
             "exclude": exclude,
+            # The request's own "tags" -- "only"/"exclude" above are recorded
+            # post-tag-resolution, so without this a tag-scoped compile is
+            # indistinguishable from one that named those functions itself.
+            "tags": tags or None,
             # Which of "exclude" drop_past_sunset added (vs. the caller's own
             # names) -- otherwise indistinguishable in this record.
             "dropped_past_sunset": dropped_past_sunset,
@@ -18112,6 +18125,8 @@ def compile_history_endpoint(
     source_notebook_sha256: str = None,
     compiled_after: str = None,
     compiled_before: str = None,
+    tag: str = None,
+    version_id: str = None,
     limit: int = None,
     offset: int = 0,
     format: str = "json",
@@ -18185,6 +18200,16 @@ def compile_history_endpoint(
     "compiled_after" later than "compiled_before" is rejected with 400,
     the same way it already is there.
 
+    "tag" matches entries whose own "tags" (the OpenAPI tags the POST
+    /api/compile request scoped itself to) include that exact tag; entries
+    recorded before "tags" existed, or compiled without any, never match.
+
+    "version_id" matches exactly against each entry's own "version_id" --
+    the snapshotted notebook version POST /api/compile was asked to
+    compile (null for a compile of the notebook's current content) -- so
+    "was this exact old version ever compiled" no longer needs the whole
+    log filtered client-side. Composes with every other filter as an AND.
+
     Deliberately read-only, the same reasoning GET /api/deploy/history's
     own docstring already gives: this dashboard's compile history is a
     record of what already happened, not something a caller edits or
@@ -18248,6 +18273,18 @@ def compile_history_endpoint(
             if entry.get("source_notebook_sha256") == source_notebook_sha256
         ]
 
+    if version_id is not None:
+        entries = [
+            entry for entry in entries
+            if entry.get("version_id") == version_id
+        ]
+
+    if tag is not None:
+        entries = [
+            entry for entry in entries
+            if tag in (entry.get("tags") or [])
+        ]
+
     if compiled_after_dt is not None or compiled_before_dt is not None:
 
         filtered_entries = []
@@ -18294,7 +18331,7 @@ def compile_history_endpoint(
         writer.writerow([
             "compiled_at", "notebook_filename", "source_notebook_sha256",
             "only", "exclude", "endpoint_count", "dependency_count",
-            "skipped_function_count", "dropped_past_sunset",
+            "skipped_function_count", "dropped_past_sunset", "tags",
         ])
 
         for entry in entries:
@@ -18310,6 +18347,7 @@ def compile_history_endpoint(
                 entry.get("skipped_function_count"),
                 # .get(): entries recorded before this field existed.
                 ";".join(entry.get("dropped_past_sunset") or []),
+                ";".join(entry.get("tags") or []),
             ])
 
         return StreamingResponse(
@@ -18377,6 +18415,8 @@ def clear_compile_history(
     older_than_days: int = None,
     compiled_after: str = None,
     compiled_before: str = None,
+    tag: str = None,
+    version_id: str = None,
     dry_run: bool = False,
 ):
     """Permanently discard this dashboard's compile history log, the exact
@@ -18444,6 +18484,13 @@ def clear_compile_history(
     to this dashboard's compile history instead. A naive value is assumed
     UTC; "compiled_after" later than "compiled_before" is rejected with
     400, identically.
+
+    "tag" mirrors GET /api/compile/history's own "tag": discard only
+    entries whose recorded "tags" include that exact tag (an AND with every
+    other filter); entries without "tags" are never matched.
+
+    "version_id" mirrors GET /api/compile/history's own "version_id": discard
+    only entries recorded for that exact snapshotted notebook version.
     """
 
     if older_than_days is not None and older_than_days <= 0:
@@ -18478,6 +18525,8 @@ def clear_compile_history(
         or cutoff is not None
         or compiled_after_dt is not None
         or compiled_before_dt is not None
+        or tag is not None
+        or version_id is not None
     ):
 
         def _should_discard(entry):
@@ -18494,6 +18543,10 @@ def clear_compile_history(
             ):
                 return False
 
+            if version_id is not None and entry.get("version_id") != version_id:
+                return False
+            if tag is not None and tag not in (entry.get("tags") or []):
+                return False
             if cutoff is not None and not _compile_history_entry_is_older_than(entry, cutoff):
                 return False
 
@@ -19399,6 +19452,14 @@ def dashboard_metrics_prometheus():
         if entry.is_file() and entry.suffix == ".ipynb"
     ) if upload_root.is_dir() else 0
 
+    version_count = sum(
+        1 for entry in upload_root.iterdir()
+        if entry.is_file() and entry.suffix == ".ipynb"
+        and _notebook_versions_dir(entry.name).is_dir()
+        for snapshot in _notebook_versions_dir(entry.name).iterdir()
+        if snapshot.is_file()
+    ) if upload_root.is_dir() else 0
+
     compiled_app_present = (Path(GENERATED_DIR) / "app.py").is_file()
 
     uptime_seconds = time.time() - _DASHBOARD_START_TIME
@@ -19423,6 +19484,15 @@ def dashboard_metrics_prometheus():
         "# TYPE notebook_to_api_dashboard_deploy_history_total gauge\n"
         "notebook_to_api_dashboard_deploy_history_total "
         f"{len(_read_deploy_history())}\n"
+        "# HELP notebook_to_api_dashboard_notebook_versions_total Total "
+        "number of snapshotted previous notebook versions kept across "
+        "every uploaded notebook.\n"
+        "# TYPE notebook_to_api_dashboard_notebook_versions_total gauge\n"
+        f"notebook_to_api_dashboard_notebook_versions_total {version_count}\n"
+        "# HELP notebook_to_api_dashboard_storage_bytes Bytes used by "
+        "uploaded notebooks plus their version snapshots.\n"
+        "# TYPE notebook_to_api_dashboard_storage_bytes gauge\n"
+        f"notebook_to_api_dashboard_storage_bytes {_current_total_storage_bytes()}\n"
         "# HELP notebook_to_api_dashboard_uptime_seconds Seconds since "
         "this dashboard process started.\n"
         "# TYPE notebook_to_api_dashboard_uptime_seconds counter\n"

@@ -2111,6 +2111,7 @@ def _dispatch_core_command(args):
                     "rate_limit_overrides": data["rate_limit_overrides"],
                     "cache_overrides": data["cache_overrides"],
                     "ignored_cache_directives": data["ignored_cache_directives"],
+                    "unrecognized_directives": data["unrecognized_directives"],
                 },
                 indent=2,
             ))
@@ -2143,6 +2144,10 @@ def _dispatch_core_command(args):
             for name, sunset in past_sunset.items():
                 marker = "✗" if args.fail_on_past_sunset else "⚠"
                 print(f"{marker} Past sunset: {name} (sunset {sunset}) -- still defined")
+            for item in data["unrecognized_directives"]:
+                print(
+                    f"⚠ Unrecognized directive ignored: {item['line']}"
+                )
             for name in data["ignored_cache_directives"]:
                 print(
                     f"⚠ Ignored cache directive: {name} is a background "
@@ -5570,6 +5575,14 @@ def _dispatch_core_command(args):
             for name, sunset in (data.get("past_sunset_functions") or {}).items():
                 marker = "✗" if args.fail_on_past_sunset else "⚠"
                 print(f"{marker} Past sunset: {name} (sunset {sunset}) -- still defined")
+            for item in data.get("unrecognized_directives") or []:
+                print(f"⚠ Unrecognized directive ignored: {item['line']}")
+            for name in data.get("ignored_cache_directives") or []:
+                print(
+                    f"⚠ Ignored cache directive: {name} is a background "
+                    "endpoint -- its tasks are never answered from the "
+                    "response cache"
+                )
 
             if status == "pass":
                 print("\n✓ No issues found.")
@@ -5685,6 +5698,12 @@ def _dispatch_core_command(args):
 
                     for name, sunset in result.get("upcoming_sunset_functions", {}).items():
                         print(f"    upcoming sunset: {name} (sunset {sunset})")
+
+                    for item in result.get("unrecognized_directives") or []:
+                        print(f"    unrecognized directive: {item['line']}")
+
+                    for name in result.get("ignored_cache_directives") or []:
+                        print(f"    ignored cache directive: {name} (background endpoint)")
 
                 result_count = data.get("result_count", len(results))
 
@@ -8270,6 +8289,10 @@ def _dispatch_core_command(args):
             params["compiled_after"] = args.compiled_after
         if args.compiled_before:
             params["compiled_before"] = args.compiled_before
+        if args.tag:
+            params["tag"] = args.tag
+        if args.version_id:
+            params["version_id"] = args.version_id
         if args.limit is not None:
             params["limit"] = args.limit
         if args.offset:
@@ -8319,9 +8342,14 @@ def _dispatch_core_command(args):
                     notebook = entry.get("notebook_filename") or "(unknown notebook)"
 
                     dropped = entry.get("dropped_past_sunset") or []
+                    entry_tags = entry.get("tags") or []
                     print(
                         f"{entry.get('compiled_at')}  {notebook}  "
                         f"({endpoint_count} endpoint(s))"
+                        + (
+                            f"  tags: {', '.join(entry_tags)}"
+                            if entry_tags else ""
+                        )
                         + (
                             f"  dropped past sunset: {', '.join(dropped)}"
                             if dropped else ""
@@ -8348,6 +8376,10 @@ def _dispatch_core_command(args):
                 target_parts.append(repr(args.notebook_filename))
             if args.source_notebook_sha256:
                 target_parts.append(f"sha256 {args.source_notebook_sha256!r}")
+            if args.tag:
+                target_parts.append(f"tag {args.tag!r}")
+            if args.version_id:
+                target_parts.append(f"version {args.version_id!r}")
             target = (
                 f"the compile history for {' and '.join(target_parts)} on "
                 f"{dashboard_url}" if target_parts
@@ -8369,6 +8401,10 @@ def _dispatch_core_command(args):
             params["compiled_after"] = args.compiled_after
         if args.compiled_before:
             params["compiled_before"] = args.compiled_before
+        if args.tag:
+            params["tag"] = args.tag
+        if args.version_id:
+            params["version_id"] = args.version_id
         if args.dry_run:
             params["dry_run"] = True
 
@@ -9522,6 +9558,13 @@ def _dispatch_core_command(args):
                 params["webhook_delivery_failed"] = args.webhook_delivery_failed
             if args.timed_out is not None:
                 params["timed_out"] = args.timed_out
+            if args.endpoint:
+                # GET /tasks' "endpoint" is the route path ("/train_model");
+                # accept the bare function name too.
+                params["endpoint"] = (
+                    args.endpoint if args.endpoint.startswith("/")
+                    else f"/{args.endpoint}"
+                )
             if args.limit is not None:
                 params["limit"] = args.limit
             if args.offset is not None:
@@ -9565,7 +9608,10 @@ def _dispatch_core_command(args):
                                 else "  webhook: FAILED"
                             )
                         timed_out_note = "  TIMED OUT" if task.get("timed_out") else ""
-                        print(f"{task_id}  ({task.get('status')}){timed_out_note}{webhook_note}")
+                        endpoint_note = (
+                            f"  {task['endpoint']}" if task.get("endpoint") else ""
+                        )
+                        print(f"{task_id}  ({task.get('status')}){endpoint_note}{timed_out_note}{webhook_note}")
 
                 timed_out_count = data.get("timed_out_tasks", 0)
                 print(
@@ -17368,6 +17414,24 @@ def main():
         )
     )
     compile_history_parser.add_argument(
+        "--tag",
+        default=None,
+        help=(
+            "Only show compile history entries whose POST /api/compile "
+            "request was scoped to this OpenAPI tag, via GET /api/compile/history's own "
+            "?tag=."
+        )
+    )
+    compile_history_parser.add_argument(
+        "--version-id",
+        default=None,
+        dest="version_id",
+        help=(
+            "Only show compiles of this snapshotted notebook version, "
+            "via GET /api/compile/history's own ?version_id=."
+        )
+    )
+    compile_history_parser.add_argument(
         "--limit",
         type=int,
         help=(
@@ -17494,6 +17558,24 @@ def main():
             "Only discard compile history entries on or before this ISO "
             "8601 datetime, via DELETE /api/compile/history's own "
             "?compiled_before=."
+        )
+    )
+    clear_compile_history_parser.add_argument(
+        "--tag",
+        default=None,
+        help=(
+            "Only discard compile history entries whose POST /api/compile "
+            "request was scoped to this OpenAPI tag, via DELETE /api/compile/history's own "
+            "?tag=."
+        )
+    )
+    clear_compile_history_parser.add_argument(
+        "--version-id",
+        default=None,
+        dest="version_id",
+        help=(
+            "Only discard compiles of this snapshotted notebook version, "
+            "via DELETE /api/compile/history's own ?version_id=."
         )
     )
     clear_compile_history_parser.add_argument(
@@ -18167,6 +18249,16 @@ def main():
             "Only show tasks that did (\"true\") or didn't (\"false\") "
             "fail by exceeding their execution timeout, via GET /tasks' "
             "own ?timed_out= query param. Composes with --status."
+        )
+    )
+    app_tasks_list_parser.add_argument(
+        "--endpoint",
+        default=None,
+        help=(
+            "Only show tasks submitted to this background endpoint (a "
+            "function name like \"train_model\" or its route "
+            "\"/train_model\"), via GET /tasks' own ?endpoint= query "
+            "param. Composes with --status."
         )
     )
     app_tasks_list_parser.add_argument(
