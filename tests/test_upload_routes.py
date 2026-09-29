@@ -35038,3 +35038,32 @@ def test_validate_reports_unrecognized_directives_without_changing_status():
         {"directive": "cahce", "line": "# notebook-to-api: cahce 60"}
     ]
     assert body["cache_overrides"] == {"fine": 60}
+
+
+def test_validate_all_reports_unrecognized_and_ignored_cache_directives():
+
+    client.delete("/api/notebooks?confirm=true")
+
+    contents = {
+        "va_typo.ipynb": "# notebook-to-api: cahce 60\ndef a(x: int) -> int:\n    return x\n",
+        "va_bg_cache.ipynb": "# notebook-to-api: cache 60\ndef train_model(x: int) -> int:\n    return x\n",
+        "va_clean.ipynb": "def b(x: int) -> int:\n    return x\n",
+    }
+    for filename, source in contents.items():
+        resp = client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(_notebook_bytes(source)), "application/json")},
+        )
+        assert resp.status_code == 200
+
+    body = client.get("/api/validate-all").json()
+    by_name = {r["filename"]: r for r in body["results"]}
+
+    assert by_name["va_typo.ipynb"]["unrecognized_directives"] == [
+        {"directive": "cahce", "line": "# notebook-to-api: cahce 60"}
+    ]
+    assert by_name["va_bg_cache.ipynb"]["ignored_cache_directives"] == ["train_model"]
+    assert by_name["va_clean.ipynb"]["unrecognized_directives"] == []
+    assert by_name["va_clean.ipynb"]["ignored_cache_directives"] == []
+    # Informational only: never changes a notebook's verdict.
+    assert body["pass_count"] == 3
