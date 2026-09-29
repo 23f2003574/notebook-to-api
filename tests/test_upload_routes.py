@@ -30567,11 +30567,11 @@ def test_compile_history_csv_format_returns_a_csv_response(tmp_path, monkeypatch
     assert rows[0] == (
         "compiled_at,notebook_filename,source_notebook_sha256,only,exclude,"
         "endpoint_count,dependency_count,skipped_function_count,"
-        "dropped_past_sunset"
+        "dropped_past_sunset,tags"
     )
     # "only" is a semicolon-joined cell, not one CSV column per function;
-    # an entry recorded before "dropped_past_sunset" existed gets "".
-    assert rows[1] == "2024-01-01T00:00:00+00:00,nb.ipynb,aaa,add;subtract,,2,0,0,"
+    # an entry recorded before "dropped_past_sunset"/"tags" existed gets "".
+    assert rows[1] == "2024-01-01T00:00:00+00:00,nb.ipynb,aaa,add;subtract,,2,0,0,,"
     assert len(rows) == 2
 
 
@@ -34645,7 +34645,7 @@ def test_compile_history_records_which_functions_drop_past_sunset_removed():
     assert entry["notebook_filename"] == "history_drop_sunset.ipynb"
     assert entry["dropped_past_sunset"] == ["old_add"]
     assert entry["exclude"] == ["old_add"]
-    assert csv_rows[1].endswith(",old_add")
+    assert csv_rows[1].endswith(",old_add,")
 
 
 def test_validate_reports_timeout_directives():
@@ -34882,3 +34882,41 @@ def test_validate_tag_selection_errors_are_400():
 
     assert unknown.status_code == 400 and "Available tags: General, Scoring" in unknown.json()["detail"]
     assert malformed.status_code == 400 and "tags must be a list" in malformed.json()["detail"]
+
+
+def test_compile_history_records_tags_and_filters_by_tag(tmp_path, monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "compile_history_tags_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    base = {
+        "notebook_filename": "nb.ipynb", "source_notebook_sha256": "aaa",
+        "only": None, "exclude": None, "endpoint_count": 1,
+        "dependency_count": 0, "skipped_function_count": 0,
+    }
+    upload_module._append_compile_history_entry(
+        {**base, "compiled_at": "2024-01-01T00:00:00+00:00", "tags": ["math", "v2"]}
+    )
+    upload_module._append_compile_history_entry(
+        {**base, "compiled_at": "2024-01-02T00:00:00+00:00", "tags": None}
+    )
+    # An entry recorded before "tags" existed has no such key at all.
+    upload_module._append_compile_history_entry(
+        {**base, "compiled_at": "2024-01-03T00:00:00+00:00"}
+    )
+
+    resp = client.get("/api/compile/history", params={"tag": "math"})
+    assert resp.status_code == 200
+    assert [e["compiled_at"] for e in resp.json()["entries"]] == ["2024-01-01T00:00:00+00:00"]
+
+    assert client.get("/api/compile/history", params={"tag": "nope"}).json()["entry_count"] == 0
+    assert client.get("/api/compile/history").json()["entry_count"] == 3
+
+    csv_resp = client.get("/api/compile/history", params={"tag": "v2", "format": "csv"})
+    rows = csv_resp.text.strip().split("\r\n")
+    assert rows[0].endswith(",tags")
+    assert rows[1].endswith(",math;v2")
+    assert len(rows) == 2

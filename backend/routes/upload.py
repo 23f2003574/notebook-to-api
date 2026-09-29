@@ -16521,6 +16521,10 @@ def compile_notebook_endpoint(
             "version_id": version_id,
             "only": only,
             "exclude": exclude,
+            # The request's own "tags" -- "only"/"exclude" above are recorded
+            # post-tag-resolution, so without this a tag-scoped compile is
+            # indistinguishable from one that named those functions itself.
+            "tags": tags or None,
             # Which of "exclude" drop_past_sunset added (vs. the caller's own
             # names) -- otherwise indistinguishable in this record.
             "dropped_past_sunset": dropped_past_sunset,
@@ -18112,6 +18116,7 @@ def compile_history_endpoint(
     source_notebook_sha256: str = None,
     compiled_after: str = None,
     compiled_before: str = None,
+    tag: str = None,
     limit: int = None,
     offset: int = 0,
     format: str = "json",
@@ -18185,6 +18190,10 @@ def compile_history_endpoint(
     "compiled_after" later than "compiled_before" is rejected with 400,
     the same way it already is there.
 
+    "tag" matches entries whose own "tags" (the OpenAPI tags the POST
+    /api/compile request scoped itself to) include that exact tag; entries
+    recorded before "tags" existed, or compiled without any, never match.
+
     Deliberately read-only, the same reasoning GET /api/deploy/history's
     own docstring already gives: this dashboard's compile history is a
     record of what already happened, not something a caller edits or
@@ -18248,6 +18257,12 @@ def compile_history_endpoint(
             if entry.get("source_notebook_sha256") == source_notebook_sha256
         ]
 
+    if tag is not None:
+        entries = [
+            entry for entry in entries
+            if tag in (entry.get("tags") or [])
+        ]
+
     if compiled_after_dt is not None or compiled_before_dt is not None:
 
         filtered_entries = []
@@ -18294,7 +18309,7 @@ def compile_history_endpoint(
         writer.writerow([
             "compiled_at", "notebook_filename", "source_notebook_sha256",
             "only", "exclude", "endpoint_count", "dependency_count",
-            "skipped_function_count", "dropped_past_sunset",
+            "skipped_function_count", "dropped_past_sunset", "tags",
         ])
 
         for entry in entries:
@@ -18310,6 +18325,7 @@ def compile_history_endpoint(
                 entry.get("skipped_function_count"),
                 # .get(): entries recorded before this field existed.
                 ";".join(entry.get("dropped_past_sunset") or []),
+                ";".join(entry.get("tags") or []),
             ])
 
         return StreamingResponse(
