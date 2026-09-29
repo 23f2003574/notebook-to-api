@@ -5575,6 +5575,14 @@ def _dispatch_core_command(args):
             for name, sunset in (data.get("past_sunset_functions") or {}).items():
                 marker = "✗" if args.fail_on_past_sunset else "⚠"
                 print(f"{marker} Past sunset: {name} (sunset {sunset}) -- still defined")
+            for item in data.get("unrecognized_directives") or []:
+                print(f"⚠ Unrecognized directive ignored: {item['line']}")
+            for name in data.get("ignored_cache_directives") or []:
+                print(
+                    f"⚠ Ignored cache directive: {name} is a background "
+                    "endpoint -- its tasks are never answered from the "
+                    "response cache"
+                )
 
             if status == "pass":
                 print("\n✓ No issues found.")
@@ -5690,6 +5698,12 @@ def _dispatch_core_command(args):
 
                     for name, sunset in result.get("upcoming_sunset_functions", {}).items():
                         print(f"    upcoming sunset: {name} (sunset {sunset})")
+
+                    for item in result.get("unrecognized_directives") or []:
+                        print(f"    unrecognized directive: {item['line']}")
+
+                    for name in result.get("ignored_cache_directives") or []:
+                        print(f"    ignored cache directive: {name} (background endpoint)")
 
                 result_count = data.get("result_count", len(results))
 

@@ -30369,3 +30369,67 @@ def test_validate_command_warns_about_unrecognized_directives(tmp_path):
     assert json.loads(json_proc.stdout)["unrecognized_directives"] == [
         {"directive": "rate_limit", "line": "# notebook-to-api: rate_limit 4"}
     ]
+
+
+def test_remote_validate_command_prints_directive_warnings(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "pass",
+            "notebook": "nb.ipynb",
+            "reserved_name_conflicts": [],
+            "skipped_functions": [],
+            "unrecognized_directives": [
+                {"directive": "cahce", "line": "# notebook-to-api: cahce 60"}
+            ],
+            "ignored_cache_directives": ["train_model"],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-validate", "nb.ipynb", "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "⚠ Unrecognized directive ignored: # notebook-to-api: cahce 60" in proc.stdout
+    assert "⚠ Ignored cache directive: train_model is a background endpoint" in proc.stdout
+
+
+def test_validate_all_command_prints_directive_warnings_per_notebook(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {
+                    "filename": "a.ipynb", "status": "pass",
+                    "reserved_name_conflicts": [], "skipped_functions": [], "detail": None,
+                    "unrecognized_directives": [
+                        {"directive": "cahce", "line": "# notebook-to-api: cahce 60"}
+                    ],
+                    "ignored_cache_directives": ["train_model"],
+                },
+                {
+                    "filename": "b.ipynb", "status": "pass",
+                    "reserved_name_conflicts": [], "skipped_functions": [], "detail": None,
+                },
+            ],
+            "pass_count": 2, "warn_count": 0, "fail_count": 0,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["validate-all", "--dashboard-url", dashboard_url], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "    unrecognized directive: # notebook-to-api: cahce 60" in proc.stdout
+    assert "    ignored cache directive: train_model (background endpoint)" in proc.stdout
+    assert proc.stdout.count("unrecognized directive") == 1
