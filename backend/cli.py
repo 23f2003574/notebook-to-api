@@ -8272,6 +8272,8 @@ def _dispatch_core_command(args):
             params["compiled_before"] = args.compiled_before
         if args.tag:
             params["tag"] = args.tag
+        if args.version_id:
+            params["version_id"] = args.version_id
         if args.limit is not None:
             params["limit"] = args.limit
         if args.offset:
@@ -8357,6 +8359,8 @@ def _dispatch_core_command(args):
                 target_parts.append(f"sha256 {args.source_notebook_sha256!r}")
             if args.tag:
                 target_parts.append(f"tag {args.tag!r}")
+            if args.version_id:
+                target_parts.append(f"version {args.version_id!r}")
             target = (
                 f"the compile history for {' and '.join(target_parts)} on "
                 f"{dashboard_url}" if target_parts
@@ -8380,6 +8384,8 @@ def _dispatch_core_command(args):
             params["compiled_before"] = args.compiled_before
         if args.tag:
             params["tag"] = args.tag
+        if args.version_id:
+            params["version_id"] = args.version_id
         if args.dry_run:
             params["dry_run"] = True
 
@@ -17388,6 +17394,15 @@ def main():
         )
     )
     compile_history_parser.add_argument(
+        "--version-id",
+        default=None,
+        dest="version_id",
+        help=(
+            "Only show compiles of this snapshotted notebook version, "
+            "via GET /api/compile/history's own ?version_id=."
+        )
+    )
+    compile_history_parser.add_argument(
         "--limit",
         type=int,
         help=(
@@ -17523,6 +17538,15 @@ def main():
             "Only discard compile history entries whose POST /api/compile "
             "request was scoped to this OpenAPI tag, via DELETE /api/compile/history's own "
             "?tag=."
+        )
+    )
+    clear_compile_history_parser.add_argument(
+        "--version-id",
+        default=None,
+        dest="version_id",
+        help=(
+            "Only discard compiles of this snapshotted notebook version, "
+            "via DELETE /api/compile/history's own ?version_id=."
         )
     )
     clear_compile_history_parser.add_argument(
