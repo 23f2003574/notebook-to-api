@@ -34920,3 +34920,35 @@ def test_compile_history_records_tags_and_filters_by_tag(tmp_path, monkeypatch):
     assert rows[0].endswith(",tags")
     assert rows[1].endswith(",math;v2")
     assert len(rows) == 2
+
+
+def test_clear_compile_history_filters_by_tag(tmp_path, monkeypatch):
+
+    from backend.routes import upload as upload_module
+
+    isolated_upload_dir = tmp_path / "clear_compile_history_tag_upload_dir"
+    isolated_upload_dir.mkdir()
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(isolated_upload_dir))
+
+    base = {
+        "notebook_filename": "nb.ipynb", "source_notebook_sha256": "aaa",
+        "only": None, "exclude": None, "endpoint_count": 1,
+        "dependency_count": 0, "skipped_function_count": 0,
+    }
+    for day, tags in ((1, ["math"]), (2, ["other"]), (3, None)):
+        upload_module._append_compile_history_entry(
+            {**base, "compiled_at": f"2024-01-0{day}T00:00:00+00:00", "tags": tags}
+        )
+
+    dry = client.delete("/api/compile/history", params={"tag": "math", "dry_run": True})
+    assert dry.json() == {"status": "success", "dry_run": True, "deleted_count": 1}
+    assert client.get("/api/compile/history").json()["entry_count"] == 3
+
+    resp = client.delete("/api/compile/history", params={"tag": "math"})
+    assert resp.json()["deleted_count"] == 1
+    remaining = client.get("/api/compile/history").json()["entries"]
+    assert [e["compiled_at"][:10] for e in remaining] == ["2024-01-03", "2024-01-02"]
+
+    none = client.delete("/api/compile/history", params={"tag": "missing"})
+    assert none.json()["deleted_count"] == 0
+    assert client.get("/api/compile/history").json()["entry_count"] == 2
