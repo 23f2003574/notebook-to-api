@@ -30288,3 +30288,37 @@ def test_clear_compile_history_command_prompt_names_the_tag(tmp_path, fake_dashb
     assert "tag 'math'" in proc.stdout
     assert "Aborted." in proc.stdout
     assert handler.requests == []
+
+
+def test_compile_history_command_shows_each_compiles_tags(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    base = {
+        "source_notebook_sha256": "abc", "only": None, "exclude": None,
+        "endpoint_count": 1, "dependency_count": 0, "skipped_function_count": 0,
+    }
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "entries": [
+                {**base, "compiled_at": "2024-06-02T12:00:00+00:00",
+                 "notebook_filename": "tagged.ipynb", "tags": ["math", "v2"]},
+                # Entries recorded before "tags" existed have no such key.
+                {**base, "compiled_at": "2024-06-01T12:00:00+00:00",
+                 "notebook_filename": "plain.ipynb"},
+            ],
+            "entry_count": 2,
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["compile-history", "--dashboard-url", dashboard_url], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    lines = proc.stdout.splitlines()
+    tagged = next(l for l in lines if "tagged.ipynb" in l)
+    plain = next(l for l in lines if "plain.ipynb" in l)
+    assert "tags: math, v2" in tagged
+    assert "tags:" not in plain
