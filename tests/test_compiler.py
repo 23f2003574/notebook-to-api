@@ -7635,6 +7635,7 @@ def test_compiler_pipeline_background_task_does_not_block_the_event_loop(tmp_pat
             "result": 5,
             "created_at": task["created_at"],
             "callback_url": None,
+            "endpoint": "/train_slow",
         }
 
     finally:
@@ -8506,3 +8507,77 @@ def test_find_unrecognized_directives_flags_malformed_arguments_of_real_directiv
         ("tag", "# notebook-to-api: tag Bad!Name"),
         ("private", "# notebook-to-api: private now"),
     ]
+
+
+def test_compiler_pipeline_tasks_record_their_endpoint_and_list_filters_by_it(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code",
+                "execution_count": None,
+                "metadata": {},
+                "outputs": [],
+                "source": (
+                    "# notebook-to-api: background\n"
+                    "def alpha(x: int) -> int:\n    return x\n\n"
+                    "# notebook-to-api: background\n"
+                    "def beta(x: int) -> int:\n    return x\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+alpha_id = client.post("/alpha", json={{"x": 1}}, headers=headers).json()["task_id"]
+client.post("/beta", json={{"x": 2}}, headers=headers)
+client.post("/beta", json={{"x": 3}}, headers=headers)
+
+everything = client.get("/tasks", headers=headers).json()
+assert everything["matching_tasks"] == 3, everything
+assert everything["tasks"][alpha_id]["endpoint"] == "/alpha", everything
+
+only_alpha = client.get("/tasks", params={{"endpoint": "/alpha"}}, headers=headers).json()
+assert list(only_alpha["tasks"]) == [alpha_id], only_alpha
+
+only_beta = client.get("/tasks", params={{"endpoint": "/beta"}}, headers=headers).json()
+assert only_beta["matching_tasks"] == 2, only_beta
+
+none = client.get("/tasks", params={{"endpoint": "/missing"}}, headers=headers).json()
+assert none["matching_tasks"] == 0 and none["tasks"] == {{}}, none
+
+print("TASK_ENDPOINT_FILTER_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "TASK_ENDPOINT_FILTER_E2E_OK" in proc.stdout
