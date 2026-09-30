@@ -8964,3 +8964,90 @@ print("UNMODELABLE_TYPES_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "UNMODELABLE_TYPES_E2E_OK" in proc.stdout
+
+
+def test_jupyter_builtin_prelude_stubs_only_undefined_display_and_get_ipython():
+    from backend.compiler import _jupyter_builtin_prelude
+
+    both = _jupyter_builtin_prelude("display(1)\nif get_ipython() is not None:\n    pass\n")
+    assert "def display(" in both and "def get_ipython(" in both
+
+    only_display = _jupyter_builtin_prelude("display(1)\n")
+    assert "def display(" in only_display and "get_ipython" not in only_display
+
+    # Unused, imported, defined, or shadowed by the notebook itself -> untouched.
+    assert _jupyter_builtin_prelude("x = 1\n") == ""
+    assert _jupyter_builtin_prelude("from IPython.display import display\ndisplay(1)\n") == ""
+    assert _jupyter_builtin_prelude("def display(x):\n    pass\ndisplay(1)\n") == ""
+    assert _jupyter_builtin_prelude("get_ipython = lambda: 1\nget_ipython()\n") == ""
+    # `from __future__` must stay first in the module; unparseable code is skipped.
+    assert _jupyter_builtin_prelude("from __future__ import annotations\ndisplay(1)\n") == ""
+    assert _jupyter_builtin_prelude("def broken(:\n") == ""
+
+
+def test_compiler_pipeline_top_level_display_and_get_ipython_no_longer_crash_the_app(tmp_path):
+    """Confirmed before this: a notebook calling display(...) or
+    get_ipython() at top level raised NameError when the compiled app
+    imported its runtime module, taking every endpoint down."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [
+                {
+                    "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                    "source": (
+                        "FACTOR = 3\n"
+                        "display(FACTOR)\n"
+                        "IN_JUPYTER = get_ipython() is not None\n"
+                    ),
+                },
+                {
+                    "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                    "source": (
+                        "def scale(x: int) -> int:\n    return x * FACTOR\n\n"
+                        "def in_jupyter() -> bool:\n    return IN_JUPYTER\n"
+                    ),
+                },
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+assert client.post("/scale", json={{"x": 2}}, headers=headers).json() == {{"result": 6}}
+# get_ipython() answers "not under IPython", so such guards take their other branch.
+assert client.post("/in_jupyter", json={{}}, headers=headers).json() == {{"result": False}}
+print("JUPYTER_BUILTINS_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "JUPYTER_BUILTINS_E2E_OK" in proc.stdout

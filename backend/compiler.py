@@ -1,3 +1,4 @@
+import ast
 import datetime
 import functools
 import hashlib
@@ -288,6 +289,63 @@ def package_name_for_output_dir(output_dir):
     return name
 
 
+JUPYTER_BUILTIN_STUBS = {
+    "display": (
+        "def display(*objs, **kwargs):\n"
+        "    return None\n"
+    ),
+    "get_ipython": (
+        "def get_ipython():\n"
+        "    return None\n"
+    ),
+}
+
+
+def _jupyter_builtin_prelude(combined_code):
+    """Stub definitions for the Jupyter-only builtins `combined_code` calls
+    but never defines or imports.
+
+    `display(df)` and `get_ipython()` are injected into a notebook's
+    namespace by IPython, so they exist in Jupyter and nowhere else: a
+    notebook that used either at top level (an ordinary `display(df)` to
+    inspect a frame, or the idiomatic `if get_ipython() is not None:` guard)
+    raised NameError the moment the compiled app imported its runtime
+    module, taking every endpoint down. display() becomes a no-op and
+    get_ipython() returns None -- IPython's own "not running under IPython"
+    answer, so such guards take their non-IPython branch. A notebook that
+    defines or imports either name itself is left untouched, as is one using
+    `from __future__` (which must stay first in the module).
+    """
+    try:
+        tree = ast.parse(combined_code)
+    except SyntaxError:
+        return ""
+
+    if "from __future__" in combined_code:
+        return ""
+
+    bound = set()
+    used = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bound.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                bound.add((alias.asname or alias.name).split(".")[0])
+        elif isinstance(node, ast.Name):
+            (used if isinstance(node.ctx, ast.Load) else bound).add(node.id)
+        elif isinstance(node, ast.arg):
+            bound.add(node.arg)
+
+    stubs = [
+        stub for name, stub in JUPYTER_BUILTIN_STUBS.items()
+        if name in used and name not in bound
+    ]
+    if not stubs:
+        return ""
+    return "# Jupyter built-ins, stubbed outside Jupyter (notebook-to-api)\n" + "\n".join(stubs) + "\n\n"
+
+
 def write_runtime_module(code_cells, output_dir):
 
     runtime_path = Path(output_dir) / "runtime" / "notebook_module.py"
@@ -298,6 +356,7 @@ def write_runtime_module(code_cells, output_dir):
     )
 
     combined_code = "\n\n".join(code_cells)
+    combined_code = _jupyter_builtin_prelude(combined_code) + combined_code
 
     with open(runtime_path, "w", encoding="utf-8") as f:
         f.write(combined_code)
