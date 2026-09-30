@@ -9391,3 +9391,93 @@ print("EXIT_SHIELD_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "EXIT_SHIELD_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_matplotlib_figures_axes_and_pil_images_come_back_as_png_data_uris(tmp_path):
+    """Confirmed before this: returning a matplotlib Figure/Axes or a PIL
+    image -- what a plotting notebook function naturally returns -- was a
+    500 "not JSON-serializable"."""
+    pytest.importorskip("matplotlib")
+    pytest.importorskip("PIL")
+    pytest.importorskip("pandas")
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "import matplotlib\nmatplotlib.use('Agg')\n"
+                    "import matplotlib.pyplot as plt\n"
+                    "import pandas as pd\n"
+                    "from PIL import Image\n"
+                    "def chart(n: int):\n"
+                    "    fig, ax = plt.subplots()\n    ax.plot(range(n))\n    return fig\n\n"
+                    "def frame_plot(n: int):\n"
+                    "    return pd.DataFrame({'a': list(range(n))}).plot()\n\n"
+                    "def picture(n: int):\n    return Image.new('RGB', (4, 4), 'red')\n\n"
+                    "def nested(n: int):\n    return {'img': Image.new('RGB', (2, 2)), 'n': n}\n\n"
+                    "def open_figures(n: int) -> int:\n    return len(plt.get_fignums())\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import base64
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+PREFIX = "data:image/png;base64,"
+
+def call(name):
+    response = client.post("/" + name, json={{"n": 3}}, headers=headers)
+    assert response.status_code == 200, (name, response.status_code, response.text)
+    return response.json()["result"]
+
+def assert_png(uri):
+    assert uri.startswith(PREFIX), uri[:40]
+    assert base64.b64decode(uri[len(PREFIX):]).startswith(b"\\x89PNG")
+
+assert_png(call("chart"))
+assert_png(call("frame_plot"))
+assert_png(call("picture"))
+nested = call("nested")
+assert_png(nested["img"]) and nested["n"] == 3
+
+# Figures are closed after rendering, so a busy server doesn't leak one per call.
+for _ in range(3):
+    call("chart")
+assert call("open_figures") == 0
+
+print("PNG_RESULTS_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=90,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "PNG_RESULTS_E2E_OK" in proc.stdout

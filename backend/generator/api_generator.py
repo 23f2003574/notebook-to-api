@@ -169,6 +169,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # 'req'", nothing to do with train_model's own logic at all.
     "_evict_expired_tasks", "_run_background_task", "_json_safe",
     "_coerce_array_like", "_safe_annotation", "_shield_exit",
+    "_png_data_uri",
     # Every name below is one of this file's own top-level `import`s --
     # never previously reserved at all, on the (never actually verified)
     # assumption that only names *this file itself defines* (a constant,
@@ -2271,6 +2272,21 @@ def generate_fastapi_code(
     lines.append("            detail=f'Could not build a {kind} from the request value: {e}',")
     lines.append("        )")
     lines.append("")
+    lines.append("def _png_data_uri(write, close=None):")
+    lines.append("    import base64 as _base64")
+    lines.append("    import io as _io")
+    lines.append("    buffer = _io.BytesIO()")
+    lines.append("    try:")
+    lines.append("        write(buffer, format='png', bbox_inches='tight')")
+    lines.append("    finally:")
+    lines.append("        if close is not None:")
+    lines.append("            try:")
+    lines.append("                import matplotlib.pyplot as _plt")
+    lines.append("                _plt.close(close)")
+    lines.append("            except Exception:")
+    lines.append("                pass")
+    lines.append("    return 'data:image/png;base64,' + _base64.b64encode(buffer.getvalue()).decode('ascii')")
+    lines.append("")
     lines.append("def _json_safe(value, _depth=0):")
     lines.append("    if _depth > 50:")
     lines.append("        return value")
@@ -2279,6 +2295,22 @@ def generate_fastapi_code(
     # into the string "NaT". Matched by type name, so no pandas import.
     lines.append("    if type(value).__name__ in ('NAType', 'NaTType'):")
     lines.append("        return None")
+    # A plot or image is what a visual notebook function naturally returns --
+    # a matplotlib Figure/Axes (`fig`, `ax`, `df.plot()`) or a PIL image --
+    # and none of them is JSON: each was a 500 "not JSON-serializable".
+    # Rendered to a PNG data URI instead. A matplotlib figure is also closed
+    # afterwards: pyplot keeps every figure alive until told otherwise, so a
+    # server answering plot requests would otherwise leak one per call.
+    lines.append("    if hasattr(value, 'savefig') and hasattr(value, 'axes'):")
+    lines.append("        return _png_data_uri(value.savefig, close=value)")
+    lines.append("    if hasattr(value, 'get_figure') and hasattr(value, 'plot'):")
+    lines.append("        figure = value.get_figure()")
+    lines.append("        return _png_data_uri(figure.savefig, close=figure)")
+    lines.append(
+        "    if hasattr(value, 'save') and hasattr(value, 'mode') "
+        "and hasattr(value, 'size'):"
+    )
+    lines.append("        return _png_data_uri(lambda buf, **kw: value.save(buf, format='PNG'))")
     lines.append("    if isinstance(value, range):")
     lines.append("        return [_json_safe(v, _depth + 1) for v in value]")
     lines.append("    if isinstance(value, float):")
