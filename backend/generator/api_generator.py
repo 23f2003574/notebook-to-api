@@ -168,6 +168,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # _evict_expired_tasks() missing 1 required positional argument:
     # 'req'", nothing to do with train_model's own logic at all.
     "_evict_expired_tasks", "_run_background_task", "_json_safe",
+    "_coerce_array_like",
     # Every name below is one of this file's own top-level `import`s --
     # never previously reserved at all, on the (never actually verified)
     # assumption that only names *this file itself defines* (a constant,
@@ -779,6 +780,15 @@ def _auth_and_rate_limit_error_responses():
     }
 
 
+def _arg_value_expr(arg):
+    """The expression for one request field's value: plain `req.name`, or
+    wrapped in _coerce_array_like for a numpy/pandas-annotated parameter."""
+    kind = _array_like_kind(arg.get("type"))
+    if kind:
+        return f"_coerce_array_like(req.{arg['name']}, {kind!r})"
+    return f"req.{arg['name']}"
+
+
 def _call_arg_expr(arg):
     """Render a single argument for the notebook_module.<fn>(...) call.
 
@@ -798,8 +808,8 @@ def _call_arg_expr(arg):
     if arg.get("kind") == "var_keyword":
         return f"**req.{arg['name']}"
     if arg.get("kind") == "keyword_only":
-        return f"{arg['name']}=req.{arg['name']}"
-    return f"req.{arg['name']}"
+        return f"{arg['name']}={_arg_value_expr(arg)}"
+    return _arg_value_expr(arg)
 
 
 _TYPING_EXPORTS = frozenset(
@@ -873,6 +883,58 @@ def _build_model_names(functions):
     return model_names
 
 
+_ARRAY_LIKE_ALIASES = {"np", "numpy", "pd", "pandas", "npt"}
+_ARRAY_LIKE_KINDS = {
+    "ndarray": "ndarray", "NDArray": "ndarray",
+    "DataFrame": "dataframe", "Series": "series",
+}
+
+
+def _array_like_kind(type_str):
+    """"ndarray" / "dataframe" / "series" when `type_str` (a raw
+    `ast.unparse`d annotation) is a numpy array or pandas frame/series --
+    bare, subscripted (`npt.NDArray[np.float64]`), or made optional
+    (`Optional[...]`, `... | None`) -- else None.
+
+    Pydantic can't build a schema for these, so a notebook function taking
+    one used to crash the *entire* generated app at import
+    (PydanticSchemaGenerationError), not just its own endpoint. The request
+    field becomes plain JSON (a list, or records/columns for a frame) and
+    _coerce_array_like rebuilds the real object before calling the function.
+    """
+    if not type_str:
+        return None
+    try:
+        node = ast.parse(type_str, mode="eval").body
+    except SyntaxError:
+        return None
+    while True:
+        if isinstance(node, ast.Subscript):
+            base = node.value
+            base_name = base.attr if isinstance(base, ast.Attribute) else getattr(base, "id", None)
+            if base_name == "Optional":
+                node = node.slice
+                continue
+            node = base
+            continue
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+            sides = [side for side in (node.left, node.right)
+                     if not (isinstance(side, ast.Constant) and side.value is None)]
+            if len(sides) == 1:
+                node = sides[0]
+                continue
+            return None
+        break
+    if isinstance(node, ast.Attribute):
+        root = node.value
+        if isinstance(root, ast.Name) and root.id in _ARRAY_LIKE_ALIASES:
+            return _ARRAY_LIKE_KINDS.get(node.attr)
+        return None
+    if isinstance(node, ast.Name) and node.id == "NDArray":
+        return "ndarray"
+    return None
+
+
 def _resolve_annotation_source(type_str):
     """Turn a raw `ast.unparse`d annotation string (as stored in
     arg["type"] by the parser) into source the generated app can actually
@@ -888,6 +950,9 @@ def _resolve_annotation_source(type_str):
     """
     if not type_str:
         return "str", set()
+
+    if _array_like_kind(type_str):
+        return "Any", {"Any"}
 
     try:
         tree = ast.parse(type_str, mode="eval")
@@ -2134,6 +2199,27 @@ def generate_fastapi_code(
     # crashes response serialization with an opaque "Internal Server Error".
     # Duck-typed (no numpy/pandas import), so a notebook without either pays
     # nothing. NaN/inf become null, the usual JSON convention.
+    # _coerce_array_like: rebuilds the numpy array / DataFrame / Series a
+    # notebook function annotated as one, from the plain JSON the request
+    # model accepts (see _array_like_kind). A value that can't be turned
+    # into one is a caller error, reported as 422 instead of a 500.
+    lines.append("def _coerce_array_like(value, kind):")
+    lines.append("    if value is None:")
+    lines.append("        return None")
+    lines.append("    try:")
+    lines.append("        if kind == 'ndarray':")
+    lines.append("            import numpy")
+    lines.append("            return numpy.asarray(value)")
+    lines.append("        import pandas")
+    lines.append("        if kind == 'dataframe':")
+    lines.append("            return pandas.DataFrame(value)")
+    lines.append("        return pandas.Series(value)")
+    lines.append("    except Exception as e:")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=422,")
+    lines.append("            detail=f'Could not build a {kind} from the request value: {e}',")
+    lines.append("        )")
+    lines.append("")
     lines.append("def _json_safe(value, _depth=0):")
     lines.append("    if _depth > 50:")
     lines.append("        return value")
@@ -4663,12 +4749,12 @@ def generate_fastapi_code(
             # /tasks and GET /tasks/{task_id} above) -- this exists purely
             # for retry_task below to consume.
             replay_pos_args = "".join(
-                f"req.{arg['name']}, "
+                f"{_arg_value_expr(arg)}, "
                 for arg in args
                 if arg.get("kind") not in ("keyword_only", "var_keyword")
             )
             replay_kwargs = "".join(
-                f"{arg['name']!r}: req.{arg['name']}, "
+                f"{arg['name']!r}: {_arg_value_expr(arg)}, "
                 for arg in args
                 if arg.get("kind") == "keyword_only"
             )

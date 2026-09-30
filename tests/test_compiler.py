@@ -8761,3 +8761,109 @@ print("JSON_SAFE_RESULTS_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "JSON_SAFE_RESULTS_E2E_OK" in proc.stdout
+
+
+def test_array_like_kind_detects_numpy_and_pandas_annotations():
+    from backend.generator.api_generator import _array_like_kind
+
+    assert _array_like_kind("np.ndarray") == "ndarray"
+    assert _array_like_kind("numpy.ndarray") == "ndarray"
+    assert _array_like_kind("npt.NDArray[np.float64]") == "ndarray"
+    assert _array_like_kind("NDArray") == "ndarray"
+    assert _array_like_kind("pd.DataFrame") == "dataframe"
+    assert _array_like_kind("pandas.Series") == "series"
+    assert _array_like_kind("Optional[pd.DataFrame]") == "dataframe"
+    assert _array_like_kind("pd.Series | None") == "series"
+    # Not array-like, or not attributable to numpy/pandas.
+    for other in ("int", "list[float]", "Optional[int]", "mylib.DataFrame", "DataFrame", "int | str", None, ""):
+        assert _array_like_kind(other) is None, other
+
+
+def test_compiler_pipeline_numpy_and_pandas_parameters_are_accepted_as_json(tmp_path):
+    """Confirmed before this: a function annotated np.ndarray / pd.DataFrame /
+    pd.Series crashed the *whole* generated app at import with a
+    PydanticSchemaGenerationError, taking every endpoint down with it."""
+    pytest.importorskip("numpy")
+    pytest.importorskip("pandas")
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code",
+                "execution_count": None,
+                "metadata": {},
+                "outputs": [],
+                "source": (
+                    "import numpy as np\n"
+                    "import pandas as pd\n"
+                    "from typing import Optional\n"
+                    "def total(arr: np.ndarray, k: float = 1.0) -> float:\n"
+                    "    return float(arr.sum() * k)\n\n"
+                    "def columns(df: pd.DataFrame) -> list:\n"
+                    "    return list(df.columns)\n\n"
+                    "def first(series: pd.Series) -> float:\n"
+                    "    return float(series.iloc[0])\n\n"
+                    "def head(df: Optional[pd.DataFrame] = None, n: int = 1) -> pd.DataFrame:\n"
+                    "    return (df if df is not None else pd.DataFrame({'a': [1, 2]})).head(n)\n\n"
+                    "def plain(values: list[float]) -> float:\n"
+                    "    return sum(values)\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def call(name, body, status=200):
+    response = client.post("/" + name, json=body, headers=headers)
+    assert response.status_code == status, (name, response.status_code, response.text)
+    return response.json()
+
+assert call("total", {{"arr": [1, 2, 3], "k": 2}})["result"] == 12.0
+assert call("columns", {{"df": [{{"a": 1, "b": 2}}]}})["result"] == ["a", "b"]
+assert call("columns", {{"df": {{"x": [1], "y": [2]}}}})["result"] == ["x", "y"]
+assert call("first", {{"series": [5, 6]}})["result"] == 5.0
+assert call("head", {{"df": [{{"a": 5}}, {{"a": 6}}], "n": 1}})["result"] == [{{"a": 5}}]
+assert call("head", {{}})["result"] == [{{"a": 1}}]
+assert call("plain", {{"values": [1, 2]}})["result"] == 3.0
+
+# A value that can't become the annotated type is the caller's error.
+detail = call("total", {{"arr": [[1, 2], [3]]}}, status=422)["detail"]
+assert "ndarray" in detail, detail
+
+assert client.get("/openapi.json").status_code == 200
+print("ARRAY_PARAMS_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ARRAY_PARAMS_E2E_OK" in proc.stdout
