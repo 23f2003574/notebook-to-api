@@ -168,7 +168,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # _evict_expired_tasks() missing 1 required positional argument:
     # 'req'", nothing to do with train_model's own logic at all.
     "_evict_expired_tasks", "_run_background_task", "_json_safe",
-    "_coerce_array_like",
+    "_coerce_array_like", "_safe_annotation",
     # Every name below is one of this file's own top-level `import`s --
     # never previously reserved at all, on the (never actually verified)
     # assumption that only names *this file itself defines* (a constant,
@@ -812,9 +812,10 @@ def _call_arg_expr(arg):
     return _arg_value_expr(arg)
 
 
-_TYPING_EXPORTS = frozenset(
-    name for name in dir(typing) if not name.startswith("_")
-)
+# typing.__all__, not dir(typing): dir() also lists the deprecated `io` and
+# `re` pseudo-submodules, so `io.BytesIO` / `re.Pattern` annotations were
+# "qualified" as typing names and imported from typing -- breaking the app.
+_TYPING_EXPORTS = frozenset(typing.__all__)
 _BUILTIN_NAMES = frozenset(dir(builtins))
 
 
@@ -1200,7 +1201,12 @@ def generate_fastapi_code(
     lines.append("from urllib.parse import urlparse")
     lines.append("from datetime import datetime")
     lines.append("import time")
-    lines.append("from pydantic import BaseModel, Field")
+    lines.append("from pydantic import BaseModel, Field, TypeAdapter")
+    lines.append(
+        "from pydantic.errors import "
+        "PydanticInvalidForJsonSchema, PydanticSchemaGenerationError"
+    )
+    lines.append("from typing import Any as _AnyType")
     if needed_typing_names:
         lines.append(f"from typing import {', '.join(sorted(needed_typing_names))}")
     lines.append(f"import {package_name}.runtime.notebook_module as notebook_module")
@@ -4221,6 +4227,20 @@ def generate_fastapi_code(
     lines.append("            if task_id in TASKS:")
     lines.append("                TASKS[task_id][\"webhook\"] = webhook_result")
     lines.append("")
+    # _safe_annotation: a request-field type Pydantic can't build a schema
+    # (or JSON schema) for -- numpy scalars, pandas Timestamps, a plain
+    # notebook class -- degrades to Any instead of raising at import, which
+    # would take every endpoint down, not just the one using the type. The
+    # value then arrives as plain JSON. Only those two schema errors are
+    # swallowed; anything else (e.g. an undefined forward reference)
+    # propagates exactly as before.
+    lines.append("def _safe_annotation(tp):")
+    lines.append("    try:")
+    lines.append("        TypeAdapter(tp).json_schema()")
+    lines.append("    except (PydanticSchemaGenerationError, PydanticInvalidForJsonSchema):")
+    lines.append("        return _AnyType")
+    lines.append("    return tp")
+    lines.append("")
     # Generate Pydantic models for request bodies
     for func in functions:
         func_name = func["name"]
@@ -4241,6 +4261,12 @@ def generate_fastapi_code(
             arg_name = arg.get("name", "param")
             raw_arg_type = arg.get("type")
             arg_type, _ = _resolve_annotation_source(raw_arg_type)
+            # A type from the notebook's own namespace (a numpy/pandas
+            # scalar, a notebook-defined class, ...) may be one Pydantic has
+            # no schema for, which would otherwise crash the *whole* app at
+            # import. _safe_annotation falls back to Any for those.
+            if "notebook_module." in arg_type:
+                arg_type = f"_safe_annotation({arg_type})"
 
             # repr()'d below (see description=repr(field_description)),
             # not embedded as a raw f-string inside a hand-written

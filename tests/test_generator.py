@@ -5157,7 +5157,7 @@ def test_notebook_defined_type_is_qualified_with_notebook_module():
 
     code = generate_fastapi_code(functions)
 
-    assert "status: notebook_module.Status = Field(" in code
+    assert "status: _safe_annotation(notebook_module.Status) = Field(" in code
     assert "status: Status = Field(" not in code
     # The human-readable Field description should stay unqualified.
     assert "of type Status" in code
@@ -5194,7 +5194,7 @@ def test_non_literal_default_is_embedded_as_a_qualified_expression_not_a_string(
     code = generate_fastapi_code(functions)
 
     assert (
-        "priority: notebook_module.Priority = Field("
+        "priority: _safe_annotation(notebook_module.Priority) = Field("
         "default=notebook_module.Priority.HIGH, "
         in code
     )

@@ -8867,3 +8867,100 @@ print("ARRAY_PARAMS_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "ARRAY_PARAMS_E2E_OK" in proc.stdout
+
+
+def test_typing_exports_exclude_the_io_and_re_pseudo_modules():
+    """`io.BytesIO` / `re.Pattern` annotations were being imported from
+    typing because dir(typing) lists the deprecated `io`/`re` shims."""
+    from backend.generator.api_generator import _TYPING_EXPORTS
+
+    assert "io" not in _TYPING_EXPORTS and "re" not in _TYPING_EXPORTS
+    assert {"Optional", "List", "Dict", "Any", "Literal", "Annotated"} <= _TYPING_EXPORTS
+
+
+def test_compiler_pipeline_unmodelable_parameter_types_no_longer_crash_the_app(tmp_path):
+    """Confirmed before this: a parameter typed np.float64, pd.Timestamp, a
+    plain notebook class, or io.BytesIO crashed the *entire* generated app
+    at import (PydanticSchemaGenerationError / a bad `from typing import`),
+    so every other endpoint in the notebook went down with it."""
+    pytest.importorskip("numpy")
+    pytest.importorskip("pandas")
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code",
+                "execution_count": None,
+                "metadata": {},
+                "outputs": [],
+                "source": (
+                    "import io\n"
+                    "import numpy as np\n"
+                    "import pandas as pd\n"
+                    "from enum import Enum\n"
+                    "class Mode(Enum):\n    FAST = 'fast'\n    SLOW = 'slow'\n\n"
+                    "class Model:\n    pass\n\n"
+                    "def scalar(x: np.float64) -> float:\n    return float(x) * 2\n\n"
+                    "def when(ts: pd.Timestamp) -> str:\n    return str(ts)\n\n"
+                    "def custom(m: Model) -> int:\n    return 1\n\n"
+                    "def buffer(b: io.BytesIO) -> int:\n    return 1\n\n"
+                    "def picks(mode: Mode = Mode.FAST) -> str:\n    return mode.value\n\n"
+                    "def healthy(n: int) -> int:\n    return n + 1\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def call(name, body):
+    response = client.post("/" + name, json=body, headers=headers)
+    assert response.status_code == 200, (name, response.status_code, response.text)
+    return response.json()["result"]
+
+assert call("scalar", {{"x": 1.5}}) == 3.0
+assert call("when", {{"ts": "2024-01-02"}}) == "2024-01-02"
+assert call("custom", {{"m": {{"a": 1}}}}) == 1
+assert call("buffer", {{"b": "abc"}}) == 1
+# Types Pydantic *can* model are left exactly as they were: an Enum still
+# validates, rather than silently degrading to Any.
+assert call("picks", {{}}) == "fast"
+assert call("picks", {{"mode": "slow"}}) == "slow"
+assert client.post("/picks", json={{"mode": "nope"}}, headers=headers).status_code == 422
+assert call("healthy", {{"n": 1}}) == 2
+assert client.get("/openapi.json").status_code == 200
+print("UNMODELABLE_TYPES_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "UNMODELABLE_TYPES_E2E_OK" in proc.stdout
