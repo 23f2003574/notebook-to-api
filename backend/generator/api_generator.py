@@ -780,13 +780,28 @@ def _auth_and_rate_limit_error_responses():
     }
 
 
+def _field_name(arg):
+    """The Pydantic request-model attribute for one notebook parameter.
+
+    Pydantic rejects field names with a leading underscore ("Fields must not
+    use names with leading underscores"), which raised at import -- crashing
+    the *whole* generated app, compile having succeeded -- for any notebook
+    function with a parameter like `_df` or `__x`. Such a parameter is stored
+    under a `p`-prefixed attribute and keeps its real name as the field's
+    alias, so the JSON request body, OpenAPI schema and SDKs still use the
+    parameter's actual name.
+    """
+    name = arg["name"]
+    return f"p{name}" if name.startswith("_") else name
+
+
 def _arg_value_expr(arg):
     """The expression for one request field's value: plain `req.name`, or
     wrapped in _coerce_array_like for a numpy/pandas-annotated parameter."""
     kind = _array_like_kind(arg.get("type"))
     if kind:
-        return f"_coerce_array_like(req.{arg['name']}, {kind!r})"
-    return f"req.{arg['name']}"
+        return f"_coerce_array_like(req.{_field_name(arg)}, {kind!r})"
+    return f"req.{_field_name(arg)}"
 
 
 def _call_arg_expr(arg):
@@ -806,7 +821,7 @@ def _call_arg_expr(arg):
     declare by name, and "name" isn't one of them).
     """
     if arg.get("kind") == "var_keyword":
-        return f"**req.{arg['name']}"
+        return f"**req.{_field_name(arg)}"
     if arg.get("kind") == "keyword_only":
         return f"{arg['name']}={_arg_value_expr(arg)}"
     return _arg_value_expr(arg)
@@ -4259,6 +4274,9 @@ def generate_fastapi_code(
             lines.append("    pass")
         for arg in func.get("args", []):
             arg_name = arg.get("name", "param")
+            field_name = _field_name({"name": arg_name})
+            # The real parameter name stays the JSON key via an alias.
+            alias_part = f", alias={arg_name!r}" if field_name != arg_name else ""
             raw_arg_type = arg.get("type")
             arg_type, _ = _resolve_annotation_source(raw_arg_type)
             # A type from the notebook's own namespace (a numpy/pandas
@@ -4327,21 +4345,21 @@ def generate_fastapi_code(
                     default_expr, _ = _resolve_annotation_source(default_value)
                 if field_description is not None:
                     lines.append(
-                        f'    {arg_name}: {arg_type} = Field('
+                        f'    {field_name}: {arg_type} = Field('
                         f'default={default_expr}, '
-                        f'description={repr(field_description)}'
+                        f'description={repr(field_description)}{alias_part}'
                         f')'
                     )
                 else:
                     lines.append(
-                        f'    {arg_name}: {arg_type} = Field('
-                        f'default={default_expr}'
+                        f'    {field_name}: {arg_type} = Field('
+                        f'default={default_expr}{alias_part}'
                         f')'
                     )
             elif field_description is not None:
                 lines.append(
-                    f'    {arg_name}: {arg_type} = Field('
-                    f'description={repr(field_description)}'
+                    f'    {field_name}: {arg_type} = Field('
+                    f'description={repr(field_description)}{alias_part}'
                     f')'
                 )
             else:
@@ -4352,7 +4370,12 @@ def generate_fastapi_code(
                 # a valid required Pydantic field declaration, exactly
                 # like a hand-written `Annotated[...]`-only field would
                 # be; an empty `= Field()` here would add nothing.
-                lines.append(f'    {arg_name}: {arg_type}')
+                if alias_part:
+                    lines.append(
+                        f'    {field_name}: {arg_type} = Field(alias={arg_name!r})'
+                    )
+                else:
+                    lines.append(f'    {field_name}: {arg_type}')
         if example_payload:
             lines.append("")
             lines.append("    model_config = {")
@@ -4793,7 +4816,7 @@ def generate_fastapi_code(
             # docstring above for why it can't be nested under a literal
             # "name" key instead).
             replay_kwargs += "".join(
-                f"**req.{arg['name']}, "
+                f"**req.{_field_name(arg)}, "
                 for arg in args
                 if arg.get("kind") == "var_keyword"
             )

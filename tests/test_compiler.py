@@ -9100,3 +9100,97 @@ def test_resolve_requirements_writes_real_distribution_names_for_uninstalled_ali
 
     assert {"scikit-learn", "pillow"} <= names
     assert "sklearn" not in names and "PIL" not in names
+
+
+def test_field_name_prefixes_only_leading_underscore_parameters():
+    from backend.generator.api_generator import _field_name
+
+    assert _field_name({"name": "x"}) == "x"
+    assert _field_name({"name": "x_"}) == "x_"
+    assert _field_name({"name": "_x"}) == "p_x"
+    assert _field_name({"name": "__x"}) == "p__x"
+
+
+def test_compiler_pipeline_leading_underscore_parameters_no_longer_crash_the_app(tmp_path):
+    """Confirmed before this: a parameter like `_df` or `__x` made Pydantic
+    raise "Fields must not use names with leading underscores" when the
+    compiled app was imported -- compile succeeded, then *every* endpoint in
+    the notebook was dead."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "def mix(_x: int = 1, __y: int = 2, z: int = 3) -> int:\n"
+                    "    return _x * 100 + __y * 10 + z\n\n"
+                    "def only_kw(a: int, *, _flag: bool = False) -> int:\n"
+                    "    return a + (100 if _flag else 0)\n\n"
+                    "def required(_data: list[int]) -> int:\n    return sum(_data)\n\n"
+                    "# notebook-to-api: background\n"
+                    "def train(_n: int) -> int:\n    return _n * 2\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+import time
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def post(path, body):
+    return client.post(path, json=body, headers=headers)
+
+# The JSON keys are the parameters' real names.
+assert post("/mix", {{"_x": 5, "__y": 6, "z": 7}}).json() == {{"result": 567}}
+assert post("/mix", {{}}).json() == {{"result": 123}}
+assert post("/only_kw", {{"a": 1, "_flag": True}}).json() == {{"result": 101}}
+assert post("/required", {{"_data": [1, 2, 3]}}).json() == {{"result": 6}}
+assert post("/required", {{}}).status_code == 422
+
+task_id = post("/train", {{"_n": 4}}).json()["task_id"]
+deadline = time.time() + 10
+while True:
+    task = client.get("/tasks/" + task_id, headers=headers).json()
+    if task["status"] != "processing":
+        break
+    assert time.time() < deadline, "task never finished"
+    time.sleep(0.02)
+assert task["status"] == "completed" and task["result"] == 8, task
+
+# ... and the published schema uses them too, not the internal attribute names.
+schema = client.get("/openapi.json").json()["components"]["schemas"]
+assert list(schema["MixRequest"]["properties"]) == ["_x", "__y", "z"], schema["MixRequest"]
+print("UNDERSCORE_PARAMS_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "UNDERSCORE_PARAMS_E2E_OK" in proc.stdout
