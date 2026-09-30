@@ -9481,3 +9481,95 @@ print("PNG_RESULTS_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "PNG_RESULTS_E2E_OK" in proc.stdout
+
+
+def test_arg_annotation_source_infers_unannotated_types_from_the_default():
+    from backend.generator.api_generator import _arg_annotation_source
+
+    def arg(**fields):
+        return {"name": "x", **fields}
+
+    # An explicit annotation always wins.
+    assert _arg_annotation_source(arg(type="List[int]", has_default=True, default=5))[0] == "List[int]"
+    # Otherwise the default's literal type decides...
+    for default, expected in ((True, "bool"), (3, "int"), (1.5, "float"), ("s", "str"), ([1], "list"), ({"a": 1}, "dict")):
+        assert _arg_annotation_source(arg(has_default=True, default=default)) == (expected, set())
+    # ... and with nothing to go on, any JSON value is accepted.
+    assert _arg_annotation_source(arg()) == ("Any", {"Any"})
+    assert _arg_annotation_source(arg(has_default=True, default=None)) == ("Any", {"Any"})
+    assert _arg_annotation_source(arg(has_default=True, default="X.Y", default_is_literal=False)) == ("Any", {"Any"})
+
+
+def test_compiler_pipeline_unannotated_parameters_accept_json_numbers(tmp_path):
+    """Confirmed before this: every unannotated parameter was forced to
+    `str`, so the most ordinary notebook function -- `def add(a, b)` --
+    answered `add(1, 2)` with a 422 "Input should be a valid string"."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "def add(a, b):\n    return a + b\n\n"
+                    "def scale(x, factor=2, label='n', verbose=False, extras=None):\n"
+                    "    return [x * factor, label, verbose, extras]\n\n"
+                    "def typed(x: str, n=3) -> str:\n    return x * n\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def post(path, body):
+    return client.post(path, json=body, headers=headers)
+
+# No annotation and no default: any JSON value.
+assert post("/add", {{"a": 1, "b": 2}}).json() == {{"result": 3}}
+assert post("/add", {{"a": 1.5, "b": 2}}).json() == {{"result": 3.5}}
+assert post("/add", {{"a": "x", "b": "y"}}).json() == {{"result": "xy"}}
+assert post("/add", {{"a": 1}}).status_code == 422  # still required
+
+# No annotation: the type follows the default.
+assert post("/scale", {{"x": 4}}).json() == {{"result": [8, "n", False, None]}}
+assert post("/scale", {{"x": 4, "factor": 3, "verbose": True}}).json() == {{"result": [12, "n", True, None]}}
+assert post("/scale", {{"x": 1, "factor": "three"}}).status_code == 422
+assert post("/typed", {{"x": "ab"}}).json() == {{"result": "ababab"}}
+
+properties = client.get("/openapi.json").json()["components"]["schemas"]["ScaleRequest"]["properties"]
+assert properties["factor"]["type"] == "integer" and properties["factor"]["default"] == 2, properties
+assert properties["verbose"]["type"] == "boolean", properties
+print("UNANNOTATED_PARAMS_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "UNANNOTATED_PARAMS_E2E_OK" in proc.stdout

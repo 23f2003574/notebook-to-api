@@ -983,6 +983,30 @@ def _resolve_annotation_source(type_str):
     return ast.unparse(rewritten), qualifier.typing_names
 
 
+def _arg_annotation_source(arg):
+    """(annotation source, typing names) for one notebook parameter.
+
+    A parameter with no annotation used to be forced to `str` -- even one
+    with a numeric default -- so the most ordinary notebook function,
+    `def add(a, b): return a + b`, answered `add(1, 2)` with a 422 "Input
+    should be a valid string", and `def f(n=10)` advertised `n` as a string
+    with an int default. With no annotation, the type now comes from the
+    default's own literal type (bool/int/float/str/list/dict), and is `Any`
+    when there's no usable default either, so any JSON value is accepted.
+    """
+    if arg.get("type"):
+        return _resolve_annotation_source(arg["type"])
+    if arg.get("has_default") and arg.get("default_is_literal", True):
+        default = arg.get("default")
+        for python_type, name in (
+            (bool, "bool"), (int, "int"), (float, "float"),
+            (str, "str"), (list, "list"), (dict, "dict"),
+        ):
+            if isinstance(default, python_type):
+                return name, set()
+    return "Any", {"Any"}
+
+
 def _annotation_has_own_field_description(type_str):
     """Whether `type_str` (a raw `ast.unparse`d annotation, as stored in
     arg["type"] by the parser -- the *original*, pre-
@@ -1178,7 +1202,7 @@ def generate_fastapi_code(
     needed_typing_names = {"Optional"}
     for func in functions:
         for arg in func.get("args", []):
-            _, typing_names = _resolve_annotation_source(arg.get("type"))
+            _, typing_names = _arg_annotation_source(arg)
             needed_typing_names |= typing_names
 
             if arg.get("has_default") and not arg.get(
@@ -4355,7 +4379,7 @@ def generate_fastapi_code(
             # The real parameter name stays the JSON key via an alias.
             alias_part = f", alias={arg_name!r}" if field_name != arg_name else ""
             raw_arg_type = arg.get("type")
-            arg_type, _ = _resolve_annotation_source(raw_arg_type)
+            arg_type, _ = _arg_annotation_source(arg)
             # A type from the notebook's own namespace (a numpy/pandas
             # scalar, a notebook-defined class, ...) may be one Pydantic has
             # no schema for, which would otherwise crash the *whole* app at
@@ -4393,7 +4417,7 @@ def generate_fastapi_code(
             else:
                 field_description = arg.get("description") or (
                     f"Parameter '{arg_name}' "
-                    f"of type {raw_arg_type or 'str'}"
+                    f"of type {raw_arg_type or arg_type}"
                 )
 
             default_value = arg.get("default")
