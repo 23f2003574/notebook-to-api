@@ -9194,3 +9194,82 @@ print("UNDERSCORE_PARAMS_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "UNDERSCORE_PARAMS_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_range_pandas_missing_values_and_nan_fields_are_plain_json(tmp_path):
+    """Confirmed before this: `return range(n)` was a 500, pd.NaT came back
+    as the string "NaT", pd.NA as a junk {"__module__": "pandas"} object, and
+    a Decimal('NaN') or a dataclass holding a float NaN crashed response
+    serialization."""
+    pytest.importorskip("pandas")
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "import dataclasses, decimal\n"
+                    "import pandas as pd\n"
+                    "@dataclasses.dataclass\n"
+                    "class Stats:\n    mean: float\n    n: int\n\n"
+                    "def counted(n: int):\n    return range(n)\n\n"
+                    "def missing(n: int):\n    return {'when': pd.NaT, 'v': pd.NA, 'ok': 1}\n\n"
+                    "def stats(n: int):\n    return Stats(float('nan'), n)\n\n"
+                    "def decimals(n: int):\n"
+                    "    return {'nan': decimal.Decimal('NaN'), 'inf': decimal.Decimal('Infinity'), "
+                    "'ok': decimal.Decimal('2.5')}\n\n"
+                    "def frame(n: int):\n"
+                    "    return pd.DataFrame({'t': [pd.NaT, pd.Timestamp('2024-01-02')], "
+                    "'v': pd.array([1, None], dtype='Int64')})\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def call(name):
+    response = client.post("/" + name, json={{"n": 3}}, headers=headers)
+    assert response.status_code == 200, (name, response.status_code, response.text)
+    return response.json()["result"]
+
+assert call("counted") == [0, 1, 2]
+assert call("missing") == {{"when": None, "v": None, "ok": 1}}
+assert call("stats") == {{"mean": None, "n": 3}}
+assert call("decimals") == {{"nan": None, "inf": None, "ok": 2.5}}
+assert call("frame") == [{{"t": None, "v": 1}}, {{"t": "2024-01-02T00:00:00", "v": None}}]
+print("JSON_SAFE_EXTRAS_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "JSON_SAFE_EXTRAS_E2E_OK" in proc.stdout

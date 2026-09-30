@@ -2244,11 +2244,25 @@ def generate_fastapi_code(
     lines.append("def _json_safe(value, _depth=0):")
     lines.append("    if _depth > 50:")
     lines.append("        return value")
+    # pandas' missing-value singletons (pd.NA, pd.NaT): jsonable_encoder
+    # turned pd.NA into a junk {"__module__": "pandas"} object and pd.NaT
+    # into the string "NaT". Matched by type name, so no pandas import.
+    lines.append("    if type(value).__name__ in ('NAType', 'NaTType'):")
+    lines.append("        return None")
+    lines.append("    if isinstance(value, range):")
+    lines.append("        return [_json_safe(v, _depth + 1) for v in value]")
     lines.append("    if isinstance(value, float):")
     lines.append(
         "        return value if value == value and value not in "
         "(float('inf'), float('-inf')) else None"
     )
+    # Decimal('NaN') / Decimal('Infinity'): jsonable_encoder turns them into
+    # float nan/inf *after* this function ran, which then breaks serialization.
+    lines.append(
+        "    if hasattr(value, 'is_nan') and hasattr(value, 'is_infinite') "
+        "and (value.is_nan() or value.is_infinite()):"
+    )
+    lines.append("        return None")
     lines.append("    if isinstance(value, dict):")
     lines.append("        return {k: _json_safe(v, _depth + 1) for k, v in value.items()}")
     lines.append("    if isinstance(value, (list, tuple, set, frozenset)):")
@@ -4145,7 +4159,7 @@ def generate_fastapi_code(
     lines.append("        # and GET /tasks entirely (for every task, not just this")
     lines.append("        # one), the moment FastAPI's own response serialization")
     lines.append("        # ran into it.")
-    lines.append("        result = jsonable_encoder(_json_safe(result))")
+    lines.append("        result = _json_safe(jsonable_encoder(_json_safe(result)))")
     # `task_id in TASKS` rather than an unconditional TASKS[task_id][...]
     # write: _evict_expired_tasks above never removes a 'processing' task,
     # but POST /tasks/reset still unconditionally clears every entry,
@@ -5059,7 +5073,7 @@ def generate_fastapi_code(
             # every other failure mode this generated app already reports
             # clearly (auth, reserved names, oversized bodies, ...).
             lines.append("    try:")
-            lines.append("        result = jsonable_encoder(_json_safe(result))")
+            lines.append("        result = _json_safe(jsonable_encoder(_json_safe(result)))")
             lines.append("    except Exception as e:")
             lines.append("        raise HTTPException(")
             lines.append("            status_code=500,")
