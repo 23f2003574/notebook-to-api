@@ -14141,13 +14141,21 @@ def validate_notebook_endpoint(
     except ValueError as e:
         requirements_conflict = str(e)
 
+    # A notebook (or an only/exclude/tags selection) that leaves no endpoint
+    # at all still compiles "successfully", into an app with no routes --
+    # which used to validate as a clean "pass". A warning, or a failure
+    # under "strict", the same treatment a skipped function gets.
+    no_endpoints = (
+        len(kept_names) if (only or exclude) else len(inspection["functions"])
+    ) == 0
+
     has_blocking_issues = (
         bool(reserved_name_conflicts)
         or requirements_conflict is not None
-        or (strict and (bool(skipped_functions) or bool(duplicate_functions)))
+        or (strict and (bool(skipped_functions) or bool(duplicate_functions) or no_endpoints))
     )
     has_warnings = (
-        bool(skipped_functions) or bool(duplicate_functions)
+        bool(skipped_functions) or bool(duplicate_functions) or no_endpoints
     ) and not has_blocking_issues
 
     if has_blocking_issues:
@@ -14180,6 +14188,7 @@ def validate_notebook_endpoint(
         "ignored_cache_directives": inspection["ignored_cache_directives"],
         "unrecognized_directives": inspection["unrecognized_directives"],
         "import_time_hazards": inspection["import_time_hazards"],
+        "no_endpoints": no_endpoints,
     }
 
 
@@ -14536,13 +14545,15 @@ def validate_all_notebooks(
         except ValueError as e:
             requirements_conflict = str(e)
 
+        no_endpoints = not inspection["functions"]
+
         has_blocking_issues = (
             bool(reserved_name_conflicts)
             or requirements_conflict is not None
-            or (strict and (bool(skipped_functions) or bool(duplicate_functions)))
+            or (strict and (bool(skipped_functions) or bool(duplicate_functions) or no_endpoints))
         )
         has_warnings = (
-            bool(skipped_functions) or bool(duplicate_functions)
+            bool(skipped_functions) or bool(duplicate_functions) or no_endpoints
         ) and not has_blocking_issues
 
         if has_blocking_issues:
@@ -14593,6 +14604,7 @@ def validate_all_notebooks(
             # endpoint is otherwise silently ignored.
             "unrecognized_directives": inspection["unrecognized_directives"],
             "ignored_cache_directives": inspection["ignored_cache_directives"],
+            "no_endpoints": no_endpoints,
             "detail": None,
         }
         if upcoming_cutoff is not None:

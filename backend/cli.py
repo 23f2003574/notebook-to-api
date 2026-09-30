@@ -2072,13 +2072,19 @@ def _dispatch_core_command(args):
         except ValueError as e:
             requirements_conflict = str(e)
 
+        # No endpoint left (empty notebook, or an only/exclude/tag selection
+        # that removes them all) compiles into an app with no routes.
+        no_endpoints = (
+            len(kept_names) if (only or exclude) else len(data["functions"])
+        ) == 0
+
         has_blocking_issues = (
             bool(reserved_name_conflicts)
             or requirements_conflict is not None
-            or (args.strict and (bool(skipped_functions) or bool(duplicate_functions)))
+            or (args.strict and (bool(skipped_functions) or bool(duplicate_functions) or no_endpoints))
         )
         has_warnings = (
-            bool(skipped_functions) or bool(duplicate_functions)
+            bool(skipped_functions) or bool(duplicate_functions) or no_endpoints
         ) and not has_blocking_issues
 
         if has_blocking_issues:
@@ -2113,6 +2119,7 @@ def _dispatch_core_command(args):
                     "ignored_cache_directives": data["ignored_cache_directives"],
                     "unrecognized_directives": data["unrecognized_directives"],
                     "import_time_hazards": data["import_time_hazards"],
+                    "no_endpoints": no_endpoints,
                 },
                 indent=2,
             ))
@@ -2145,6 +2152,9 @@ def _dispatch_core_command(args):
             for name, sunset in past_sunset.items():
                 marker = "✗" if args.fail_on_past_sunset else "⚠"
                 print(f"{marker} Past sunset: {name} (sunset {sunset}) -- still defined")
+            if no_endpoints:
+                marker = "✗" if args.strict else "⚠"
+                print(f"\n{marker} No endpoints: nothing in this notebook would be exposed, so the compiled app has no routes.")
             for item in data["unrecognized_directives"]:
                 print(
                     f"⚠ Unrecognized directive ignored: {item['line']}"
@@ -5588,6 +5598,9 @@ def _dispatch_core_command(args):
             for name, sunset in (data.get("past_sunset_functions") or {}).items():
                 marker = "✗" if args.fail_on_past_sunset else "⚠"
                 print(f"{marker} Past sunset: {name} (sunset {sunset}) -- still defined")
+            if data.get("no_endpoints"):
+                marker = "✗" if args.strict else "⚠"
+                print(f"\n{marker} No endpoints: nothing in this notebook would be exposed, so the compiled app has no routes.")
             for item in data.get("unrecognized_directives") or []:
                 print(f"⚠ Unrecognized directive ignored: {item['line']}")
             for hazard in data.get("import_time_hazards") or []:
@@ -5717,6 +5730,9 @@ def _dispatch_core_command(args):
 
                     for name, sunset in result.get("upcoming_sunset_functions", {}).items():
                         print(f"    upcoming sunset: {name} (sunset {sunset})")
+
+                    if result.get("no_endpoints"):
+                        print("    no endpoints: nothing would be exposed")
 
                     for item in result.get("unrecognized_directives") or []:
                         print(f"    unrecognized directive: {item['line']}")

@@ -23610,6 +23610,7 @@ def test_validate_reports_pass_for_a_clean_notebook():
         "ignored_cache_directives": [],
         "unrecognized_directives": [],
         "import_time_hazards": [],
+        "no_endpoints": False,
     }
 
 
@@ -35087,3 +35088,35 @@ def test_validate_reports_import_time_hazards_without_changing_status():
     assert body["import_time_hazards"] == [
         {"kind": "file_read", "call": "pd.read_csv", "path": "sales.csv", "cell": 1, "line": 2}
     ]
+
+
+def test_validate_warns_when_a_notebook_exposes_no_endpoints_and_fails_under_strict():
+    client.delete("/api/notebooks?confirm=true")
+    empty = _notebook_bytes("x = 1\nprint(x)\n")
+    with_endpoint = _notebook_bytes("def add(a: int, b: int) -> int:\n    return a + b\n")
+    for filename, content in (("va_empty.ipynb", empty), ("va_ok.ipynb", with_endpoint)):
+        client.post(
+            "/api/upload",
+            files={"file": (filename, io.BytesIO(content), "application/json")},
+        )
+
+    warn = client.post("/api/validate", json={"notebook_path": "va_empty.ipynb"}).json()
+    assert warn["status"] == "warn" and warn["no_endpoints"] is True
+
+    strict = client.post("/api/validate", json={"notebook_path": "va_empty.ipynb", "strict": True}).json()
+    assert strict["status"] == "fail" and strict["no_endpoints"] is True
+
+    ok = client.post("/api/validate", json={"notebook_path": "va_ok.ipynb"}).json()
+    assert ok["status"] == "pass" and ok["no_endpoints"] is False
+
+    # An only-selection that matches nothing left is also "no endpoints"...
+    excluded = client.post(
+        "/api/validate", json={"notebook_path": "va_ok.ipynb", "exclude": ["add"]}
+    ).json()
+    assert excluded["status"] == "warn" and excluded["no_endpoints"] is True
+
+    # ... and validate-all reports it per notebook.
+    results = {r["filename"]: r for r in client.get("/api/validate-all").json()["results"]}
+    assert results["va_empty.ipynb"]["status"] == "warn"
+    assert results["va_empty.ipynb"]["no_endpoints"] is True
+    assert results["va_ok.ipynb"]["no_endpoints"] is False

@@ -30520,3 +30520,39 @@ def test_remote_validate_command_prints_import_time_hazards(tmp_path, fake_dashb
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "⚠ Import-time hazard (cell 2, line 4): pd.read_csv('sales.csv') runs on startup" in proc.stdout
     assert "⚠ Import-time hazard (cell 3, line 1): input() runs on startup" in proc.stdout
+
+
+def test_validate_command_warns_when_nothing_would_be_exposed(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(notebook_path, "x = 1\nprint(x)\n")
+
+    warn = _run_cli(["validate", str(notebook_path)], cwd=workdir)
+    strict = _run_cli(["validate", str(notebook_path), "--strict"], cwd=workdir)
+    as_json = _run_cli(["validate", str(notebook_path), "--json"], cwd=workdir)
+
+    assert warn.returncode == 1, warn.stdout + warn.stderr
+    assert "⚠ No endpoints: nothing in this notebook would be exposed" in warn.stdout
+    assert strict.returncode == 2, strict.stdout + strict.stderr
+    assert "✗ No endpoints" in strict.stdout
+    data = json.loads(as_json.stdout)
+    assert data["status"] == "warn" and data["no_endpoints"] is True
+
+
+def test_remote_validate_command_prints_the_no_endpoints_warning(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "warn", "notebook": "nb.ipynb", "reserved_name_conflicts": [],
+            "skipped_functions": [], "no_endpoints": True,
+        })
+    ]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["remote-validate", "nb.ipynb", "--dashboard-url", dashboard_url], cwd=workdir)
+
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "⚠ No endpoints: nothing in this notebook would be exposed" in proc.stdout
