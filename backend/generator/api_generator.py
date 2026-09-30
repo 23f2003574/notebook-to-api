@@ -167,7 +167,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # crashed `POST /train_model` itself with "TypeError:
     # _evict_expired_tasks() missing 1 required positional argument:
     # 'req'", nothing to do with train_model's own logic at all.
-    "_evict_expired_tasks", "_run_background_task",
+    "_evict_expired_tasks", "_run_background_task", "_json_safe",
     # Every name below is one of this file's own top-level `import`s --
     # never previously reserved at all, on the (never actually verified)
     # assumption that only names *this file itself defines* (a constant,
@@ -2125,6 +2125,35 @@ def generate_fastapi_code(
     # expiring N seconds after it was stored. Bounded per process by
     # _RESPONSE_CACHE_MAX_ENTRIES (oldest insertion evicted first) so a
     # caller cycling through unique inputs can't grow it without limit.
+    # _json_safe: plain-data normalization applied to every notebook
+    # function's return value *before* jsonable_encoder. jsonable_encoder
+    # alone doesn't handle what a data notebook returns all the time: a
+    # numpy scalar/array or a DataFrame holding numpy ints raises
+    # "TypeError: 'numpy.int64' object is not iterable", and a float NaN/inf
+    # (a mean over an empty column, a failed division) passes it and then
+    # crashes response serialization with an opaque "Internal Server Error".
+    # Duck-typed (no numpy/pandas import), so a notebook without either pays
+    # nothing. NaN/inf become null, the usual JSON convention.
+    lines.append("def _json_safe(value, _depth=0):")
+    lines.append("    if _depth > 50:")
+    lines.append("        return value")
+    lines.append("    if isinstance(value, float):")
+    lines.append(
+        "        return value if value == value and value not in "
+        "(float('inf'), float('-inf')) else None"
+    )
+    lines.append("    if isinstance(value, dict):")
+    lines.append("        return {k: _json_safe(v, _depth + 1) for k, v in value.items()}")
+    lines.append("    if isinstance(value, (list, tuple, set, frozenset)):")
+    lines.append("        return [_json_safe(v, _depth + 1) for v in value]")
+    lines.append("    if hasattr(value, 'to_dict') and hasattr(value, 'columns'):")
+    lines.append("        return _json_safe(value.to_dict(orient='records'), _depth + 1)")
+    lines.append("    if hasattr(value, 'to_dict') and hasattr(value, 'index'):")
+    lines.append("        return _json_safe(value.to_dict(), _depth + 1)")
+    lines.append("    if hasattr(value, 'tolist'):")
+    lines.append("        return _json_safe(value.tolist(), _depth + 1)")
+    lines.append("    return value")
+    lines.append("")
     lines.append("_RESPONSE_CACHE = {}")
     lines.append("_RESPONSE_CACHE_LOCK = threading.Lock()")
     lines.append("_RESPONSE_CACHE_MAX_ENTRIES = 1024")
@@ -4009,7 +4038,7 @@ def generate_fastapi_code(
     lines.append("        # and GET /tasks entirely (for every task, not just this")
     lines.append("        # one), the moment FastAPI's own response serialization")
     lines.append("        # ran into it.")
-    lines.append("        result = jsonable_encoder(result)")
+    lines.append("        result = jsonable_encoder(_json_safe(result))")
     # `task_id in TASKS` rather than an unconditional TASKS[task_id][...]
     # write: _evict_expired_tasks above never removes a 'processing' task,
     # but POST /tasks/reset still unconditionally clears every entry,
@@ -4895,7 +4924,7 @@ def generate_fastapi_code(
             # every other failure mode this generated app already reports
             # clearly (auth, reserved names, oversized bodies, ...).
             lines.append("    try:")
-            lines.append("        result = jsonable_encoder(result)")
+            lines.append("        result = jsonable_encoder(_json_safe(result))")
             lines.append("    except Exception as e:")
             lines.append("        raise HTTPException(")
             lines.append("            status_code=500,")

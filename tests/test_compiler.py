@@ -8668,3 +8668,96 @@ print("TASK_PURGE_ENDPOINT_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "TASK_PURGE_ENDPOINT_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_numpy_pandas_and_nan_results_are_returned_as_plain_json(tmp_path):
+    """Confirmed before this: a sync function returning a numpy value/array
+    or a DataFrame got a 500 "not JSON-serializable", and a float NaN
+    crashed response serialization with a bare "Internal Server Error"."""
+    pytest.importorskip("numpy")
+    pytest.importorskip("pandas")
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code",
+                "execution_count": None,
+                "metadata": {},
+                "outputs": [],
+                "source": (
+                    "import numpy as np\n"
+                    "import pandas as pd\n"
+                    "def frame(n: int):\n"
+                    "    return pd.DataFrame({'a': list(range(n)), 'b': [float('nan')] * n})\n\n"
+                    "def array(n: int):\n    return np.arange(n)\n\n"
+                    "def scalar(n: int):\n    return np.int64(n)\n\n"
+                    "def not_a_number(n: int):\n    return {'mean': float('nan'), 'top': float('inf'), 'ok': 1.5}\n\n"
+                    "def plain(n: int):\n    return [n, 'x', None]\n\n"
+                    "# notebook-to-api: background\n"
+                    "def train_array(n: int):\n    return np.arange(n)\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+import time
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def call(name):
+    response = client.post("/" + name, json={{"n": 2}}, headers=headers)
+    assert response.status_code == 200, (name, response.status_code, response.text)
+    return response.json()["result"]
+
+assert call("frame") == [{{"a": 0, "b": None}}, {{"a": 1, "b": None}}]
+assert call("array") == [0, 1]
+assert call("scalar") == 2
+assert call("not_a_number") == {{"mean": None, "top": None, "ok": 1.5}}
+# Ordinary results are untouched.
+assert call("plain") == [2, "x", None]
+
+# A background task's stored result is normalized the same way.
+task_id = client.post("/train_array", json={{"n": 3}}, headers=headers).json()["task_id"]
+deadline = time.time() + 10
+while True:
+    task = client.get("/tasks/" + task_id, headers=headers).json()
+    if task["status"] != "processing":
+        break
+    assert time.time() < deadline, "task never finished"
+    time.sleep(0.02)
+assert task["status"] == "completed" and task["result"] == [0, 1, 2], task
+
+print("JSON_SAFE_RESULTS_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "JSON_SAFE_RESULTS_E2E_OK" in proc.stdout
