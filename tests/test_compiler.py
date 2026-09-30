@@ -9304,3 +9304,90 @@ def test_find_import_time_hazards_reports_only_import_time_failures():
         (4, 11, "file_read", "pd.read_parquet", "p.parquet"),
     ]
     assert _find_import_time_hazards([]) == []
+
+
+def test_compiler_pipeline_sys_exit_and_keyboard_interrupt_fail_the_call_instead_of_hanging(tmp_path):
+    """Confirmed before this: a notebook function calling sys.exit()/exit() or
+    raising SystemExit/KeyboardInterrupt raised a BaseException that no
+    `except Exception` caught, and the request (or background task) hung
+    instead of ever answering."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "import sys\n"
+                    "def quits(n: int):\n    sys.exit(3)\n\n"
+                    "def bare_exit(n: int):\n    exit()\n\n"
+                    "def interrupted(n: int):\n    raise KeyboardInterrupt()\n\n"
+                    "async def async_quits(n: int):\n    raise SystemExit('bye')\n\n"
+                    "def fine(n: int) -> int:\n    return n + 1\n\n"
+                    "# notebook-to-api: background\n"
+                    "def train(n: int):\n    sys.exit(1)\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+import time
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+expected = {{
+    "quits": "sys.exit(3)",
+    "bare_exit": "sys.exit(None)",
+    "interrupted": "KeyboardInterrupt",
+    "async_quits": "sys.exit('bye')",
+}}
+for name, fragment in expected.items():
+    response = client.post("/" + name, json={{"n": 1}}, headers=headers)
+    assert response.status_code == 500, (name, response.status_code, response.text)
+    assert fragment in response.json()["detail"], (name, response.text)
+
+# The app is still alive and answering afterwards.
+assert client.post("/fine", json={{"n": 1}}, headers=headers).json() == {{"result": 2}}
+
+task_id = client.post("/train", json={{"n": 1}}, headers=headers).json()["task_id"]
+deadline = time.time() + 10
+while True:
+    task = client.get("/tasks/" + task_id, headers=headers).json()
+    if task["status"] != "processing":
+        break
+    assert time.time() < deadline, "task never left processing"
+    time.sleep(0.02)
+assert task["status"] == "failed" and "sys.exit(1)" in task["error"], task
+
+print("EXIT_SHIELD_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "EXIT_SHIELD_E2E_OK" in proc.stdout

@@ -168,7 +168,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # _evict_expired_tasks() missing 1 required positional argument:
     # 'req'", nothing to do with train_model's own logic at all.
     "_evict_expired_tasks", "_run_background_task", "_json_safe",
-    "_coerce_array_like", "_safe_annotation",
+    "_coerce_array_like", "_safe_annotation", "_shield_exit",
     # Every name below is one of this file's own top-level `import`s --
     # never previously reserved at all, on the (never actually verified)
     # assumption that only names *this file itself defines* (a constant,
@@ -1933,7 +1933,37 @@ def generate_fastapi_code(
     }
     lines.append(f"_ENDPOINT_RATE_LIMITS = {repr(dict(sorted(endpoint_rate_limits.items())))}")
     lines.append(f"_ENDPOINT_CACHE_TTLS = {repr(dict(sorted(endpoint_cache_ttls.items())))}")
+    # _shield_exit: a notebook function that calls sys.exit()/exit()/quit() or
+    # raises SystemExit/KeyboardInterrupt -- routine in code written as a
+    # script -- raised a BaseException that the `except Exception` handlers
+    # around every call never caught; in the worker thread it was never
+    # delivered back either, so the request (or background task) just hung
+    # until killed. Converted into an ordinary RuntimeError in the same
+    # thread/coroutine, so it becomes the usual 500 / failed-task with a
+    # message naming what happened.
+    lines.append("def _shield_exit(func):")
+    lines.append("    def _exit_error(e):")
+    lines.append("        if isinstance(e, SystemExit):")
+    lines.append("            return RuntimeError(f'notebook function called sys.exit({e.code!r})')")
+    lines.append("        return RuntimeError('notebook function raised KeyboardInterrupt')")
+    lines.append("    if inspect.iscoroutinefunction(func):")
+    lines.append("        @functools.wraps(func)")
+    lines.append("        async def _shielded(*args, **kwargs):")
+    lines.append("            try:")
+    lines.append("                return await func(*args, **kwargs)")
+    lines.append("            except (SystemExit, KeyboardInterrupt) as e:")
+    lines.append("                raise _exit_error(e) from None")
+    lines.append("    else:")
+    lines.append("        @functools.wraps(func)")
+    lines.append("        def _shielded(*args, **kwargs):")
+    lines.append("            try:")
+    lines.append("                return func(*args, **kwargs)")
+    lines.append("            except (SystemExit, KeyboardInterrupt) as e:")
+    lines.append("                raise _exit_error(e) from None")
+    lines.append("    return _shielded")
+    lines.append("")
     lines.append("async def _call_notebook_function(call, is_async=False, timeout=None):")
+    lines.append("    call = _shield_exit(call)")
     lines.append("    limit = REQUEST_TIMEOUT_SECONDS if timeout is None else timeout")
     lines.append("    with anyio.fail_after(limit or None):")
     lines.append("        if is_async:")
@@ -4095,6 +4125,7 @@ def generate_fastapi_code(
         "    task_limit = _TASK_TIMEOUTS.get("
         "getattr(func, '__name__', None), TASK_EXECUTION_TIMEOUT_SECONDS)"
     )
+    lines.append("    func = _shield_exit(func)")
     lines.append("    try:")
     lines.append("        # Calling a plain (non-async) notebook function directly")
     lines.append("        # here would run its entire body synchronously, inline, on")
