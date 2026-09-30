@@ -131,6 +131,47 @@ def _installed_third_party_package_names():
     return frozenset(_installed_packages_distributions().keys())
 
 
+# Import names whose PyPI distribution has a *different* name, for when the
+# compiling host doesn't have the package installed to read that from (the
+# usual case: a dashboard host compiling a data-science notebook whose
+# libraries it never installed). Without this, `import sklearn` was written
+# to requirements.txt as "sklearn" -- a deprecated stub that makes `pip
+# install` fail outright -- and `import PIL`/`cv2`/`bs4`/`yaml` as names that
+# don't exist on PyPI at all, failing every `docker build` for the notebook.
+KNOWN_IMPORT_TO_DISTRIBUTION = {
+    "sklearn": "scikit-learn",
+    "skimage": "scikit-image",
+    "PIL": "pillow",
+    "cv2": "opencv-python",
+    "bs4": "beautifulsoup4",
+    "yaml": "PyYAML",
+    "dotenv": "python-dotenv",
+    "dateutil": "python-dateutil",
+    "attr": "attrs",
+    "jwt": "PyJWT",
+    "IPython": "ipython",
+    "Bio": "biopython",
+    "fitz": "pymupdf",
+    "docx": "python-docx",
+    "pptx": "python-pptx",
+    "git": "GitPython",
+    "serial": "pyserial",
+    "usb": "pyusb",
+    "zmq": "pyzmq",
+    "Crypto": "pycryptodome",
+    "nacl": "PyNaCl",
+    "OpenSSL": "pyOpenSSL",
+    "MySQLdb": "mysqlclient",
+    "psycopg2": "psycopg2-binary",
+    "magic": "python-magic",
+    "umap": "umap-learn",
+    "win32com": "pywin32",
+    "wx": "wxPython",
+    "mpl_toolkits": "matplotlib",
+    "tensorflow_datasets": "tensorflow-datasets",
+}
+
+
 def distribution_name_for_import(import_name):
     """The actual PyPI distribution name that provides `import_name`, if
     it's satisfied by something installed in the environment compiling
@@ -167,7 +208,9 @@ def distribution_name_for_import(import_name):
     distributions = _installed_packages_distributions().get(import_name)
 
     if not distributions:
-        return import_name
+        # Not installed here: a well-known mismatch is still better than the
+        # raw import name, which for these is never a valid PyPI package.
+        return KNOWN_IMPORT_TO_DISTRIBUTION.get(import_name, import_name)
 
     return sorted(distributions)[0]
 

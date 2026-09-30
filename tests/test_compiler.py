@@ -9051,3 +9051,52 @@ print("JUPYTER_BUILTINS_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "JUPYTER_BUILTINS_E2E_OK" in proc.stdout
+
+
+def test_distribution_name_for_import_maps_well_known_aliases_when_not_installed(monkeypatch):
+    """Confirmed before this: with the package not installed on the compiling
+    host, `import sklearn` became "sklearn" in requirements.txt (a deprecated
+    stub that makes pip fail) and `import PIL`/`cv2`/`bs4` names that don't
+    exist on PyPI -- failing every docker build."""
+    from backend import compiler as compiler_module
+
+    monkeypatch.setattr(compiler_module, "_installed_packages_distributions", lambda: {})
+
+    expected = {
+        "sklearn": "scikit-learn",
+        "PIL": "pillow",
+        "cv2": "opencv-python",
+        "bs4": "beautifulsoup4",
+        "yaml": "PyYAML",
+        "skimage": "scikit-image",
+        "dotenv": "python-dotenv",
+        "IPython": "ipython",
+    }
+    for import_name, distribution in expected.items():
+        assert compiler_module.distribution_name_for_import(import_name) == distribution
+    # Names that match their distribution, or are unknown, are unchanged.
+    assert compiler_module.distribution_name_for_import("numpy") == "numpy"
+    assert compiler_module.distribution_name_for_import("totally_unknown_xyz") == "totally_unknown_xyz"
+
+
+def test_distribution_name_for_import_prefers_what_is_actually_installed(monkeypatch):
+    from backend import compiler as compiler_module
+
+    # The installed metadata is authoritative over the static alias table.
+    monkeypatch.setattr(
+        compiler_module, "_installed_packages_distributions",
+        lambda: {"sklearn": ["scikit-learn-intelex"]},
+    )
+    assert compiler_module.distribution_name_for_import("sklearn") == "scikit-learn-intelex"
+
+
+def test_resolve_requirements_writes_real_distribution_names_for_uninstalled_aliases(monkeypatch):
+    from backend import compiler as compiler_module
+
+    monkeypatch.setattr(compiler_module, "_installed_packages_distributions", lambda: {})
+
+    lines = compiler_module.resolve_requirements({"sklearn", "PIL", "pandas"})
+    names = {line.split("==")[0].split(">=")[0] for line in lines}
+
+    assert {"scikit-learn", "pillow"} <= names
+    assert "sklearn" not in names and "PIL" not in names
