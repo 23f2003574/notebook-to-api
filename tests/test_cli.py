@@ -30472,3 +30472,51 @@ def test_app_tasks_list_forwards_endpoint_and_shows_it_per_task(tmp_path, fake_d
     assert "endpoint=%2Ftrain_model" in handler.requests[1]
     assert "t1  (completed)  /train_model" in bare.stdout
     assert "t2  (failed)\n" in bare.stdout + "\n"
+
+
+def test_validate_command_warns_about_import_time_hazards(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        'import pandas as pd\ndf = pd.read_csv("sales.csv")\nname = input("who?")\n'
+        "def total(a: int) -> int:\n    return a\n",
+    )
+
+    proc = _run_cli(["validate", str(notebook_path)], cwd=workdir)
+    json_proc = _run_cli(["validate", str(notebook_path), "--json"], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "⚠ Import-time hazard (cell 1, line 2): pd.read_csv('sales.csv') reads a data file" in proc.stdout
+    assert "input() waits on stdin" in proc.stdout
+    hazards = json.loads(json_proc.stdout)["import_time_hazards"]
+    assert [(h["kind"], h["line"]) for h in hazards] == [("file_read", 2), ("input", 3)]
+
+
+def test_remote_validate_command_prints_import_time_hazards(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "pass",
+            "notebook": "nb.ipynb",
+            "reserved_name_conflicts": [],
+            "skipped_functions": [],
+            "import_time_hazards": [
+                {"kind": "file_read", "call": "pd.read_csv", "path": "sales.csv", "cell": 2, "line": 4},
+                {"kind": "input", "call": "input", "path": None, "cell": 3, "line": 1},
+            ],
+        })
+    ]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(
+        ["remote-validate", "nb.ipynb", "--dashboard-url", dashboard_url], cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "⚠ Import-time hazard (cell 2, line 4): pd.read_csv('sales.csv') runs on startup" in proc.stdout
+    assert "⚠ Import-time hazard (cell 3, line 1): input() runs on startup" in proc.stdout

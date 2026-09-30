@@ -2112,6 +2112,7 @@ def _dispatch_core_command(args):
                     "cache_overrides": data["cache_overrides"],
                     "ignored_cache_directives": data["ignored_cache_directives"],
                     "unrecognized_directives": data["unrecognized_directives"],
+                    "import_time_hazards": data["import_time_hazards"],
                 },
                 indent=2,
             ))
@@ -2147,6 +2148,18 @@ def _dispatch_core_command(args):
             for item in data["unrecognized_directives"]:
                 print(
                     f"⚠ Unrecognized directive ignored: {item['line']}"
+                )
+            for hazard in data["import_time_hazards"]:
+                if hazard["kind"] == "input":
+                    detail = "input() waits on stdin, which the compiled app doesn't have"
+                else:
+                    detail = (
+                        f"{hazard['call']}({hazard['path']!r}) reads a data file the "
+                        "compiled app won't ship"
+                    )
+                print(
+                    f"⚠ Import-time hazard (cell {hazard['cell']}, line "
+                    f"{hazard['line']}): {detail} -- the app will fail on startup"
                 )
             for name in data["ignored_cache_directives"]:
                 print(
@@ -5577,6 +5590,12 @@ def _dispatch_core_command(args):
                 print(f"{marker} Past sunset: {name} (sunset {sunset}) -- still defined")
             for item in data.get("unrecognized_directives") or []:
                 print(f"⚠ Unrecognized directive ignored: {item['line']}")
+            for hazard in data.get("import_time_hazards") or []:
+                target = f"{hazard['call']}({hazard['path']!r})" if hazard.get("path") else hazard["call"] + "()"
+                print(
+                    f"⚠ Import-time hazard (cell {hazard['cell']}, line "
+                    f"{hazard['line']}): {target} runs on startup and will fail"
+                )
             for name in data.get("ignored_cache_directives") or []:
                 print(
                     f"⚠ Ignored cache directive: {name} is a background "

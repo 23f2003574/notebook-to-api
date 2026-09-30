@@ -1118,6 +1118,138 @@ def _extract_timeout_overrides(code_cells):
     return overrides
 
 
+# File-reading calls whose first argument is a path: matched by the called
+# name (`pd.read_csv` -> "read_csv"), or -- for the generic `load` -- only on
+# a numpy/torch/joblib base.
+_FILE_READ_CALLS = frozenset({
+    "read_csv", "read_excel", "read_json", "read_parquet", "read_feather",
+    "read_pickle", "read_table", "read_hdf", "loadtxt", "genfromtxt",
+    "imread", "load_workbook", "open",
+})
+_FILE_LOAD_BASES = frozenset({"np", "numpy", "torch", "joblib"})
+
+
+def _call_label(func):
+    """("pd.read_csv", "read_csv", "pd") for a Call's `func` node."""
+    if isinstance(func, ast.Attribute):
+        base = func.value.id if isinstance(func.value, ast.Name) else None
+        return (f"{base}.{func.attr}" if base else func.attr), func.attr, base
+    if isinstance(func, ast.Name):
+        return func.id, func.id, None
+    return None, None, None
+
+
+def _is_main_guard(node):
+    test = node.test if isinstance(node, ast.If) else None
+    return (
+        isinstance(test, ast.Compare)
+        and isinstance(test.left, ast.Name) and test.left.id == "__name__"
+    )
+
+
+def _relative_literal_path(call):
+    """The call's first-argument string literal when it's a relative local
+    path (not absolute, `~`, or a URL), else None."""
+    arg = call.args[0] if call.args else next(
+        (kw.value for kw in call.keywords
+         if kw.arg in ("filepath_or_buffer", "io", "path", "file", "fname", "fp")),
+        None,
+    )
+    if not (isinstance(arg, ast.Constant) and isinstance(arg.value, str)):
+        return None
+    path = arg.value
+    if not path or path.startswith(("/", "~")) or "://" in path or (len(path) > 1 and path[1] == ":"):
+        return None
+    return path
+
+
+def _find_import_time_hazards(code_cells):
+    """[{"kind", "call", "path", "cell", "line"}] for top-level statements
+    that run when the compiled app imports the notebook and can't succeed
+    there: `input()` (EOFError -- nothing is attached to stdin), and reads of
+    a *relative* data file (`pd.read_csv("data.csv")`, `open("x.json")`,
+    `np.load(...)`, ...). The compile copies no data files next to the app
+    and the app runs from wherever it's launched, so such a notebook
+    compiled fine and then crashed on startup -- every endpoint down -- far
+    from where the notebook was authored. Reported, never rewritten.
+
+    Only module-level code is scanned: function/class bodies run on demand
+    and an `if __name__ == ...:` block never runs on import. Write-mode
+    `open()` calls are ignored. `cell` is the 1-based position among
+    `code_cells`, `line` the line within that cell.
+    """
+    hazards = []
+
+    def visit(statements, cell_number):
+        for node in statements:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            if isinstance(node, ast.If) and _is_main_guard(node):
+                visit(node.orelse, cell_number)
+                continue
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, ast.stmt):
+                    visit([child], cell_number)
+            for call in _statement_calls(node):
+                label, name, base = _call_label(call.func)
+                if label is None:
+                    continue
+                if name == "input" and base is None:
+                    hazards.append({
+                        "kind": "input", "call": label, "path": None,
+                        "cell": cell_number, "line": call.lineno,
+                    })
+                    continue
+                is_read = name in _FILE_READ_CALLS or (
+                    name == "load" and base in _FILE_LOAD_BASES
+                )
+                if not is_read:
+                    continue
+                if name == "open" and base is None:
+                    mode = call.args[1] if len(call.args) > 1 else next(
+                        (kw.value for kw in call.keywords if kw.arg == "mode"), None
+                    )
+                    if (
+                        isinstance(mode, ast.Constant) and isinstance(mode.value, str)
+                        and set(mode.value) & set("wax+")
+                    ):
+                        continue
+                path = _relative_literal_path(call)
+                if path is not None:
+                    hazards.append({
+                        "kind": "file_read", "call": label, "path": path,
+                        "cell": cell_number, "line": call.lineno,
+                    })
+
+    for cell_number, cell in enumerate(code_cells, start=1):
+        try:
+            tree = ast.parse(cell)
+        except SyntaxError:
+            continue
+        visit(tree.body, cell_number)
+
+    hazards.sort(key=lambda item: (item["cell"], item["line"]))
+    return hazards
+
+
+def _statement_calls(node):
+    """Calls belonging to `node` itself, not to statements nested inside it
+    (those are visited on their own) and not inside a lambda or
+    comprehension-free nested def."""
+    calls = []
+
+    def walk(current):
+        for child in ast.iter_child_nodes(current):
+            if isinstance(child, (ast.stmt, ast.Lambda)):
+                continue
+            if isinstance(child, ast.Call):
+                calls.append(child)
+            walk(child)
+
+    walk(node)
+    return calls
+
+
 KNOWN_DIRECTIVE_NAMES = frozenset({
     "requires", "apt-requires", "exclude", "private", "background", "sync",
     "deprecated", "timeout", "rate-limit", "cache", "tag",

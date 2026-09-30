@@ -9273,3 +9273,34 @@ print("JSON_SAFE_EXTRAS_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "JSON_SAFE_EXTRAS_E2E_OK" in proc.stdout
+
+
+def test_find_import_time_hazards_reports_only_import_time_failures():
+    from backend.compiler import _find_import_time_hazards
+
+    cells = [
+        'import pandas as pd\ndf = pd.read_csv("data.csv")\nname = input("who?")\n',
+        # Run on demand, never on import -> not hazards.
+        'def load():\n    return pd.read_csv("inside.csv")\nclass A:\n    x = open("c.txt")\n'
+        'f = lambda: pd.read_csv("lam.csv")\n',
+        # A main-guard body never runs on import; its else branch does.
+        'if __name__ == "__main__":\n    pd.read_csv("main.csv")\nelse:\n    open("else.txt")\n',
+        'import numpy as np\nm = np.load("w.npy")\nwith open("r.json") as fh:\n    d = fh.read()\n'
+        'open("out.txt", "w")\npd.read_csv("/abs.csv")\npd.read_csv("http://x/y.csv")\n'
+        'for i in range(2):\n    pd.read_excel("loop.xlsx")\n'
+        'try:\n    pd.read_parquet(path="p.parquet")\nexcept Exception:\n    pass\n',
+        "def broken(:\n",
+    ]
+
+    found = [(h["cell"], h["line"], h["kind"], h["call"], h["path"]) for h in _find_import_time_hazards(cells)]
+
+    assert found == [
+        (1, 2, "file_read", "pd.read_csv", "data.csv"),
+        (1, 3, "input", "input", None),
+        (3, 4, "file_read", "open", "else.txt"),
+        (4, 2, "file_read", "np.load", "w.npy"),
+        (4, 3, "file_read", "open", "r.json"),
+        (4, 9, "file_read", "pd.read_excel", "loop.xlsx"),
+        (4, 11, "file_read", "pd.read_parquet", "p.parquet"),
+    ]
+    assert _find_import_time_hazards([]) == []

@@ -23609,6 +23609,7 @@ def test_validate_reports_pass_for_a_clean_notebook():
         "cache_overrides": {},
         "ignored_cache_directives": [],
         "unrecognized_directives": [],
+        "import_time_hazards": [],
     }
 
 
@@ -35067,3 +35068,22 @@ def test_validate_all_reports_unrecognized_and_ignored_cache_directives():
     assert by_name["va_clean.ipynb"]["ignored_cache_directives"] == []
     # Informational only: never changes a notebook's verdict.
     assert body["pass_count"] == 3
+
+
+def test_validate_reports_import_time_hazards_without_changing_status():
+    client.delete("/api/notebooks?confirm=true")
+    content = _notebook_bytes(
+        'import pandas as pd\ndf = pd.read_csv("sales.csv")\n'
+        "def total(a: int) -> int:\n    return a\n"
+    )
+    client.post(
+        "/api/upload",
+        files={"file": ("validate_hazard.ipynb", io.BytesIO(content), "application/json")},
+    )
+
+    body = client.post("/api/validate", json={"notebook_path": "validate_hazard.ipynb"}).json()
+
+    assert body["status"] == "pass"
+    assert body["import_time_hazards"] == [
+        {"kind": "file_read", "call": "pd.read_csv", "path": "sales.csv", "cell": 1, "line": 2}
+    ]
