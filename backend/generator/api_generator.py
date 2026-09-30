@@ -2614,6 +2614,8 @@ def generate_fastapi_code(
     lines.append("    _: None = Depends(verify_api_key),")
     lines.append("):")
 
+    lines.append("    if endpoint is not None and not endpoint.startswith('/'):")
+    lines.append("        endpoint = '/' + endpoint")
     lines.append("    valid_statuses = ('processing', 'completed', 'failed')")
     lines.append("    if status is not None and status not in valid_statuses:")
     lines.append("        raise HTTPException(")
@@ -2780,7 +2782,15 @@ def generate_fastapi_code(
     )
     lines.append("")
     lines.append("@app.delete('/tasks/completed')")
-    lines.append("def delete_completed_tasks(_: None = Depends(verify_api_key)):")
+    lines.append(
+        "def delete_completed_tasks(endpoint: Optional[str] = None, "
+        "_: None = Depends(verify_api_key)):"
+    )
+    # ?endpoint= (a route like "/train_model", or the bare function name)
+    # purges only that background endpoint's tasks -- the same filter GET
+    # /tasks takes; omitted, every completed task is purged as before.
+    lines.append("    if endpoint is not None and not endpoint.startswith('/'):")
+    lines.append("        endpoint = '/' + endpoint")
 
     # list(...) snapshot -- see list_tasks' own "tasks_snapshot" comment
     # above for why a live TASKS.items() iteration here can raise
@@ -2791,6 +2801,7 @@ def generate_fastapi_code(
     lines.append("        task_id")
     lines.append("        for task_id, task in list(TASKS.items())")
     lines.append("        if task.get('status') == 'completed'")
+    lines.append("        and (endpoint is None or task.get('endpoint') == endpoint)")
     lines.append("    ]")
 
     lines.append("    for task_id in completed_task_ids:")
@@ -2805,8 +2816,11 @@ def generate_fastapi_code(
     lines.append("@app.delete('/tasks/failed')")
     lines.append(
         "def delete_failed_tasks(timed_out: Optional[bool] = None, "
+        "endpoint: Optional[str] = None, "
         "_: None = Depends(verify_api_key)):"
     )
+    lines.append("    if endpoint is not None and not endpoint.startswith('/'):")
+    lines.append("        endpoint = '/' + endpoint")
 
     # list(...) snapshot -- same "RuntimeError: dictionary changed size
     # during iteration" reasoning as delete_completed_tasks just above.
@@ -2820,6 +2834,7 @@ def generate_fastapi_code(
     lines.append(
         "        and (timed_out is None or bool(task.get('timed_out')) == timed_out)"
     )
+    lines.append("        and (endpoint is None or task.get('endpoint') == endpoint)")
     lines.append("    ]")
 
     lines.append("    for task_id in failed_task_ids:")

@@ -4071,8 +4071,14 @@ def test_tasks_endpoints_require_api_key_auth():
     list_tasks_signature = code[code.index("def list_tasks("):code.index("):", code.index("def list_tasks(")) + 2]
     assert "_: None = Depends(verify_api_key)" in list_tasks_signature
     assert "def get_task(task_id: str, _: None = Depends(verify_api_key)):" in code
-    assert "def delete_completed_tasks(_: None = Depends(verify_api_key)):" in code
-    assert "def delete_failed_tasks(timed_out: Optional[bool] = None, _: None = Depends(verify_api_key)):" in code
+    assert (
+        "def delete_completed_tasks(endpoint: Optional[str] = None, "
+        "_: None = Depends(verify_api_key)):"
+    ) in code
+    assert (
+        "def delete_failed_tasks(timed_out: Optional[bool] = None, "
+        "endpoint: Optional[str] = None, _: None = Depends(verify_api_key)):"
+    ) in code
     assert "def cleanup_tasks(_: None = Depends(verify_api_key)):" in code
     assert "def reset_tasks(_: None = Depends(verify_api_key)):" in code
     assert "def delete_task(task_id: str, _: None = Depends(verify_api_key)):" in code

@@ -8581,3 +8581,90 @@ print("TASK_ENDPOINT_FILTER_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "TASK_ENDPOINT_FILTER_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_task_purge_endpoints_can_target_one_endpoint(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code",
+                "execution_count": None,
+                "metadata": {},
+                "outputs": [],
+                "source": (
+                    "# notebook-to-api: background\n"
+                    "def alpha(x: int) -> int:\n    return x\n\n"
+                    "# notebook-to-api: background\n"
+                    "def beta(x: int) -> int:\n    return x\n\n"
+                    "# notebook-to-api: background\n"
+                    "def boom(x: int) -> int:\n    raise RuntimeError('nope')\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+import time
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+for name in ("alpha", "beta", "beta", "boom", "boom"):
+    assert client.post("/" + name, json={{"x": 1}}, headers=headers).status_code == 200
+
+deadline = time.time() + 10
+while client.get("/tasks", params={{"status": "processing"}}, headers=headers).json()["matching_tasks"]:
+    assert time.time() < deadline, "tasks never finished"
+    time.sleep(0.02)
+
+# The bare function name works like GET /tasks' route form.
+assert client.get("/tasks", params={{"endpoint": "beta"}}, headers=headers).json()["matching_tasks"] == 2
+
+# Only beta's completed tasks are purged; alpha's survive.
+purged = client.delete("/tasks/completed", params={{"endpoint": "/beta"}}, headers=headers).json()
+assert purged["deleted"] == 2, purged
+assert purged["remaining_tasks"] == 3, purged
+assert client.get("/tasks", params={{"endpoint": "/alpha"}}, headers=headers).json()["matching_tasks"] == 1
+
+# A different endpoint's failed tasks are untouched by a scoped purge.
+assert client.delete("/tasks/failed", params={{"endpoint": "alpha"}}, headers=headers).json()["deleted"] == 0
+failed = client.delete("/tasks/failed", params={{"endpoint": "boom"}}, headers=headers).json()
+assert failed["deleted"] == 2, failed
+assert failed["remaining_tasks"] == 1, failed
+
+# Unscoped behavior is unchanged.
+assert client.delete("/tasks/completed", headers=headers).json()["deleted"] == 1
+assert client.get("/tasks", headers=headers).json()["matching_tasks"] == 0
+
+print("TASK_PURGE_ENDPOINT_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "TASK_PURGE_ENDPOINT_E2E_OK" in proc.stdout
