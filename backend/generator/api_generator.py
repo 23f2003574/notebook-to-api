@@ -2634,6 +2634,26 @@ def generate_fastapi_code(
     lines.append("        return _json_safe(value.to_dict(), _depth + 1)")
     lines.append("    if hasattr(value, 'tolist'):")
     lines.append("        return _json_safe(value.tolist(), _depth + 1)")
+    # Dataclass and plain-object instances: jsonable_encoder serializes them
+    # field by field (asdict / vars()) but *after* this function ran, so a
+    # field holding bytes, a complex, a numpy value or a generator still made
+    # the whole response a 500. Their fields are normalized here the same
+    # way, producing the same {field: value} object the encoder would have.
+    # Pydantic models and Enum members (which also carry a __dict__) are left
+    # to the encoder, which already handles them.
+    lines.append("    import dataclasses as _dataclasses")
+    lines.append("    if _dataclasses.is_dataclass(value) and not isinstance(value, type):")
+    lines.append(
+        "        return {f.name: _json_safe(getattr(value, f.name), _depth + 1) "
+        "for f in _dataclasses.fields(value)}"
+    )
+    lines.append(
+        "    if hasattr(value, '__dict__') and not isinstance(value, type) "
+        "and type(value).__module__ != 'builtins' "
+        "and not hasattr(value, 'model_dump') and not hasattr(value, '__fields__') "
+        "and not hasattr(type(value), '__members__') and not callable(value):"
+    )
+    lines.append("        return {k: _json_safe(v, _depth + 1) for k, v in vars(value).items()}")
     lines.append("    return value")
     lines.append("")
     lines.append("_RESPONSE_CACHE = {}")

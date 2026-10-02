@@ -10473,3 +10473,81 @@ print("COMPLEX_JSON_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "COMPLEX_JSON_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_dataclass_and_plain_object_fields_are_normalized(tmp_path):
+    """Confirmed before this: a dataclass or plain object whose fields held
+    bytes, a complex number or a generator was a 500, because those fields
+    reached the encoder without the normalization a bare value gets."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "import dataclasses, enum\n"
+                    "from pydantic import BaseModel\n"
+                    "@dataclasses.dataclass\nclass Result:\n    z: complex\n    blob: bytes\n    rows: object\n\n"
+                    "class Plain:\n    def __init__(self):\n        self.score = float('nan')\n        self.raw = b'\\xff'\n        self.inner = Result(2j, b'ok', [])\n\n"
+                    "class Color(enum.Enum):\n    RED = 'red'\n\n"
+                    "class Model(BaseModel):\n    x: int\n\n"
+                    "def dc(n: int):\n    return Result(1j, b'\\xff', (i for i in range(n)))\n\n"
+                    "def plain(n: int):\n    return Plain()\n\n"
+                    "def mixed(n: int):\n    return {'c': Color.RED, 'm': Model(x=n), 'items': [Result(0j, b'a', None)]}\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def call(name):
+    response = client.post("/" + name, json={{"n": 2}}, headers=headers)
+    assert response.status_code == 200, (name, response.status_code, response.text)
+    return response.json()["result"]
+
+blob = "data:application/octet-stream;base64,/w=="
+assert call("dc") == {{"z": {{"real": 0.0, "imag": 1.0}}, "blob": blob, "rows": [0, 1]}}
+assert call("plain") == {{
+    "score": None, "raw": blob,
+    "inner": {{"z": {{"real": 0.0, "imag": 2.0}}, "blob": "ok", "rows": []}},
+}}
+# Enum members and pydantic models keep the encoder's own handling.
+assert call("mixed") == {{
+    "c": "red", "m": {{"x": 2}},
+    "items": [{{"z": {{"real": 0.0, "imag": 0.0}}, "blob": "a", "rows": None}}],
+}}
+print("OBJECT_FIELDS_JSON_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "OBJECT_FIELDS_JSON_E2E_OK" in proc.stdout
