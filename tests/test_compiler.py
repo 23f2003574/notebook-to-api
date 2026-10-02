@@ -3879,108 +3879,79 @@ def test_compiler_pipeline_rejects_notebook_function_named_verify_api_key(tmp_pa
         compile_notebook(str(notebook_path), str(output_dir))
 
 
-def test_compiler_pipeline_rejects_a_parameter_named_model_config(tmp_path):
-    """Confirmed exploitable before this fix, and the worst of three
-    distinct severities: generate_fastapi_code's own model-generation
-    code already reuses "model_config" for its own unrelated purpose
-    (setting the request model's own json_schema_extra example),
-    emitting `model_config: str = Field(...)` immediately followed by
-    `model_config = {...}` in the same class body -- the second
-    assignment wins, so Pydantic parses it as its own special ClassVar,
-    not a declared field at all. Verified against the real generated
-    model: model_fields came back completely empty (the field vanished)
-    and constructing one with a real "model_config" value returned the
-    *config dict* back, not the value actually sent -- an existing
-    caller's real request value silently discarded and replaced with no
-    error anywhere. compile_notebook must fail loudly instead of
-    producing that app.
-    """
-    from backend.generator.api_generator import ReservedParameterNameError
+def test_compiler_pipeline_accepts_parameters_named_like_pydantic_model_attributes(tmp_path):
+    """Parameters named json/schema/copy/dict/validate/model_config/
+    model_dump are ordinary in a notebook (`def convert(json)`), but can't be
+    Pydantic model fields. They used to be refused outright with a
+    ReservedParameterNameError; they now live under an aliased attribute so the
+    request body, schema and function call all keep the real name."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
 
-    notebook = nbformat.v4.new_notebook()
-
-    notebook.cells.append(
-        nbformat.v4.new_code_cell(
-            "def process(model_config: str) -> str:\n"
-            "    return model_config\n"
-        )
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "def convert(json: str, schema: int = 2, copy: bool = False, dict: list = [1],\n"
+                    "            validate: bool = True, model_config: str = 'm', *, model_dump: int = 5) -> str:\n"
+                    "    return f'{json}|{schema}|{copy}|{dict}|{validate}|{model_config}|{model_dump}'\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
     )
 
-    notebook_path = tmp_path / "reserved_param.ipynb"
+    script = f"""
+import sys
 
-    with open(notebook_path, "w", encoding="utf-8") as f:
-        nbformat.write(notebook, f)
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
 
-    output_dir = tmp_path / "generated"
+from backend.compiler import compile_notebook
 
-    with pytest.raises(ReservedParameterNameError):
-        compile_notebook(str(notebook_path), str(output_dir))
+compile_notebook({str(notebook_path)!r}, "generated")
 
+from generated.app import app
+from fastapi.testclient import TestClient
 
-def test_compiler_pipeline_rejects_a_parameter_named_model_dump(tmp_path):
-    """Confirmed exploitable before this fix: Pydantic itself refuses to
-    define a request model with a field named "model_dump" at all --
-    verified against the real generated app, Python raised "ValueError:
-    Field 'model_dump' conflicts with member ... of protected namespace
-    'model_dump'" the moment it tried to import the generated module,
-    taking down the *entire* app before it could serve a single request,
-    not merely this one endpoint. compile_notebook must fail loudly with
-    its own clean, actionable error instead of letting that raw Pydantic
-    failure surface later, at generated-module-import time.
-    """
-    from backend.generator.api_generator import ReservedParameterNameError
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
 
-    notebook = nbformat.v4.new_notebook()
+assert client.post("/convert", json={{"json": "j"}}, headers=headers).json() == {{"result": "j|2|False|[1]|True|m|5"}}
+full = {{"json": "j", "schema": 9, "copy": True, "dict": [3], "validate": False, "model_config": "x", "model_dump": 1}}
+assert client.post("/convert", json=full, headers=headers).json() == {{"result": "j|9|True|[3]|False|x|1"}}
+# `json` has no default, so it is still required.
+assert client.post("/convert", json={{}}, headers=headers).status_code == 422
 
-    notebook.cells.append(
-        nbformat.v4.new_code_cell(
-            "def process(model_dump: str) -> str:\n"
-            "    return model_dump\n"
-        )
+schema = client.get("/openapi.json").json()["components"]["schemas"]["ConvertRequest"]
+assert list(schema["properties"]) == ["json", "schema", "copy", "dict", "validate", "model_config", "model_dump"]
+print("RESERVED_PARAM_NAMES_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
 
-    notebook_path = tmp_path / "reserved_param_dump.ipynb"
-
-    with open(notebook_path, "w", encoding="utf-8") as f:
-        nbformat.write(notebook, f)
-
-    output_dir = tmp_path / "generated"
-
-    with pytest.raises(ReservedParameterNameError):
-        compile_notebook(str(notebook_path), str(output_dir))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "RESERVED_PARAM_NAMES_E2E_OK" in proc.stdout
 
 
-def test_compiler_pipeline_rejects_a_parameter_named_dict():
-    """The third, mildest of three confirmed severities: Pydantic still
-    builds the field, but permanently shadows BaseModel's own (Pydantic
-    v1-era, still present in v2) "dict" method with it -- a real request
-    model instance's own ".dict" is now this field's value, not a
-    callable at all. Checked directly against generate_fastapi_code
-    (not a real compile, since this notebook has no other content worth
-    round-tripping through the full pipeline for) since every other
-    severity in this same reserved set is already confirmed end to end
-    above.
-    """
-    from backend.generator.api_generator import (
-        generate_fastapi_code,
-        ReservedParameterNameError,
-    )
+def test_field_name_aliases_reserved_pydantic_names():
+    from backend.generator.api_generator import _field_name
 
-    functions = [{
-        "name": "process",
-        "args": [{
-            "name": "dict", "type": "str", "default": None,
-            "has_default": False, "kind": "positional", "description": None,
-        }],
-        "return_type": "str",
-        "is_async": False,
-        "docstring": None,
-        "example_payload": {"dict": ""},
-        "example_response": {"result": ""},
-    }]
-
-    with pytest.raises(ReservedParameterNameError):
-        generate_fastapi_code(functions, "testpkg")
+    assert _field_name({"name": "json"}) == "p_json"
+    assert _field_name({"name": "model_config"}) == "p_model_config"
+    assert _field_name({"name": "model_id"}) == "model_id"
+    assert _field_name({"name": "_x"}) == "p_x"
 
 
 def test_compiler_pipeline_allows_a_model_prefixed_parameter_name_that_does_not_collide(

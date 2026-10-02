@@ -793,6 +793,8 @@ def _field_name(arg):
     parameter's actual name.
     """
     name = arg["name"]
+    if name in RESERVED_PYDANTIC_FIELD_NAMES:
+        return f"p_{name}"
     return f"p{name}" if name.startswith("_") else name
 
 
@@ -1237,33 +1239,12 @@ def generate_fastapi_code(
             "notebook and recompile."
         )
 
-    # Checked here, before any of this function's own model/endpoint
-    # code is ever generated, for the identical "validate the notebook's
-    # own content before writing anything" reasoning the
-    # ReservedFunctionNameError check just above already established --
-    # a parameter name colliding with a real pydantic.BaseModel attribute
-    # is caught as this clean, actionable error instead of only
-    # surfacing later as Pydantic's own raw ValueError (a hard failure
-    # of the *entire* generated app) or, worse, the "model_config" case's
-    # silent field corruption with no error anywhere at all -- see
-    # RESERVED_PYDANTIC_FIELD_NAMES's own comment for both confirmed
-    # failure modes.
-    parameter_collisions = sorted(
-        (func["name"], arg["name"])
-        for func in functions
-        for arg in func.get("args", [])
-        if arg.get("name") in RESERVED_PYDANTIC_FIELD_NAMES
-    )
-    if parameter_collisions:
-        detail = ", ".join(
-            f"'{arg_name}' (in '{func_name}')"
-            for func_name, arg_name in parameter_collisions
-        )
-        raise ReservedParameterNameError(
-            f"Notebook function parameter(s) {detail} collide with an "
-            "attribute or method pydantic.BaseModel itself defines. "
-            "Rename the parameter(s) in the notebook and recompile."
-        )
+    # A parameter named like a pydantic.BaseModel attribute (`json`, `schema`,
+    # `copy`, `dict`, `validate`, `model_config`, ...) used to be refused with a
+    # ReservedParameterNameError, because it can't be a model field -- but such
+    # names are ordinary for notebook parameters (`def convert(json)`).
+    # _field_name stores them under a `p_`-prefixed attribute with the real name
+    # as the field's alias, so the request body, schema and SDKs keep using it.
 
     # GET /tasks below always needs Optional[str] for its own `status`
     # query param, regardless of whether any notebook function's own
