@@ -2584,6 +2584,17 @@ def generate_fastapi_code(
     lines.append("            return value")
     lines.append("    if isinstance(value, range):")
     lines.append("        return [_json_safe(v, _depth + 1) for v in value]")
+    # complex (an FFT bin, a polynomial root; numpy's complex128 subclasses
+    # it, and a complex array's tolist() yields it) and fractions.Fraction
+    # were a 500 "not JSON-serializable". A complex becomes {real, imag} --
+    # each part NaN/inf-cleaned below -- and a Fraction its float value.
+    lines.append("    if isinstance(value, complex):")
+    lines.append(
+        "        return {'real': _json_safe(value.real, _depth + 1), "
+        "'imag': _json_safe(value.imag, _depth + 1)}"
+    )
+    lines.append("    if type(value).__name__ == 'Fraction' and hasattr(value, 'limit_denominator'):")
+    lines.append("        return float(value)")
     lines.append("    if isinstance(value, float):")
     lines.append(
         "        return value if value == value and value not in "

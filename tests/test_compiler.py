@@ -3724,8 +3724,8 @@ def test_compiler_pipeline_sync_endpoint_with_unserializable_result_returns_a_cl
                         "metadata": {},
                         "outputs": [],
                         "source": (
-                            "def compute_stats(x: int) -> complex:\n"
-                            "    return complex(x, x * 2)\n"
+                            "def compute_stats(x: int) -> object:\n"
+                            "    return object()\n"
                         ),
                     }
                 ],
@@ -7321,8 +7321,8 @@ def test_compiler_pipeline_background_task_with_unserializable_result_is_reporte
                         "metadata": {},
                         "outputs": [],
                         "source": (
-                            "def process_data(x: int) -> complex:\n"
-                            "    return complex(x, x * 2)\n"
+                            "def process_data(x: int) -> object:\n"
+                            "    return object()\n"
                         ),
                     }
                 ],
@@ -10400,3 +10400,76 @@ print("ITERATOR_JSON_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "ITERATOR_JSON_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_complex_numbers_and_fractions_are_plain_json(tmp_path):
+    """Confirmed before this: returning a complex number (an FFT bin, a
+    polynomial root) or a fractions.Fraction was a 500 "not
+    JSON-serializable", and a numpy complex array crashed the same way."""
+    pytest.importorskip("numpy")
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "from fractions import Fraction\n"
+                    "import numpy as np\n"
+                    "def poly_root(n: int):\n    return complex(1, -2)\n\n"
+                    "def bad(n: int):\n    return complex(float('nan'), 1)\n\n"
+                    "def ratio(n: int):\n    return Fraction(1, 4)\n\n"
+                    "def spectrum(n: int):\n    return np.fft.fft([1.0, 0.0])\n\n"
+                    "def scalar(n: int):\n    return np.complex128(3 + 4j)\n\n"
+                    "def nested(n: int):\n    return {'z': [1j], 'f': Fraction(3, 2)}\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def call(name):
+    response = client.post("/" + name, json={{"n": 1}}, headers=headers)
+    assert response.status_code == 200, (name, response.status_code, response.text)
+    return response.json()["result"]
+
+assert call("poly_root") == {{"real": 1.0, "imag": -2.0}}
+assert call("bad") == {{"real": None, "imag": 1.0}}
+assert call("ratio") == 0.25
+assert call("spectrum") == [{{"real": 1.0, "imag": 0.0}}, {{"real": 1.0, "imag": 0.0}}]
+assert call("scalar") == {{"real": 3.0, "imag": 4.0}}
+assert call("nested") == {{"z": [{{"real": 0.0, "imag": 1.0}}], "f": 1.5}}
+print("COMPLEX_JSON_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "COMPLEX_JSON_E2E_OK" in proc.stdout
