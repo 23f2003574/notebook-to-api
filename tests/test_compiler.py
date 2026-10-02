@@ -8912,7 +8912,7 @@ def call(name, body):
     return response.json()["result"]
 
 assert call("scalar", {{"x": 1.5}}) == 3.0
-assert call("when", {{"ts": "2024-01-02"}}) == "2024-01-02"
+assert call("when", {{"ts": "2024-01-02"}}) == "2024-01-02 00:00:00"  # a real Timestamp
 assert call("custom", {{"m": {{"a": 1}}}}) == 1
 assert call("buffer", {{"b": "abc"}}) == 1
 # Types Pydantic *can* model are left exactly as they were: an Enum still
@@ -10925,3 +10925,86 @@ print("BINARY_PARAMS_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "BINARY_PARAMS_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_unmodeled_parameter_types_are_rebuilt_from_json(tmp_path):
+    """Confirmed before this: a parameter typed as a plain notebook class
+    (or numpy scalar / pandas Timestamp) degraded to Any and reached the
+    function as a raw dict/str, so `cfg.lr` / `ts.year` was a 500."""
+    pytest.importorskip("numpy")
+    pytest.importorskip("pandas")
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "import numpy as np\nimport pandas as pd\nfrom typing import Optional\n"
+                    "class Settings:\n    def __init__(self, lr: float, epochs: int = 3):\n"
+                    "        self.lr = lr\n        self.epochs = epochs\n\n"
+                    "class Point:\n    def __init__(self, x, y):\n        self.x, self.y = x, y\n\n"
+                    "class Bag:\n    pass\n\n"
+                    "def bag(b: Bag):\n    return b.k\n\n"
+                    "def plan(cfg: Settings):\n    return cfg.lr * cfg.epochs\n\n"
+                    "def norm(p: Point):\n    return p.x ** 2 + p.y ** 2\n\n"
+                    "def maybe(cfg: Optional[Settings] = None):\n    return None if cfg is None else cfg.epochs\n\n"
+                    "def year(ts: pd.Timestamp):\n    return ts.year\n\n"
+                    "def scaled(x: np.float64):\n    return float(x.round(1))\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def post(name, body):
+    return client.post("/" + name, json=body, headers=headers)
+
+def result(name, body):
+    r = post(name, body)
+    assert r.status_code == 200, (name, r.text)
+    return r.json()["result"]
+
+assert result("plan", {{"cfg": {{"lr": 0.5}}}}) == 1.5  # object -> keyword args
+assert result("norm", {{"p": [3, 4]}}) == 25  # array -> positional args
+assert result("bag", {{"b": {{"k": 2}}}}) == 2  # no __init__ -> attributes
+assert result("maybe", {{"cfg": {{"lr": 1, "epochs": 7}}}}) == 7
+assert result("maybe", {{}}) is None
+assert result("year", {{"ts": "2024-03-05"}}) == 2024  # scalar -> single arg
+assert result("scaled", {{"x": 1.26}}) == 1.3
+bad = post("plan", {{"cfg": {{"wrong": 1}}}})
+assert bad.status_code == 422 and "Settings" in bad.text, bad.text
+print("UNMODELED_PARAMS_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "UNMODELED_PARAMS_E2E_OK" in proc.stdout

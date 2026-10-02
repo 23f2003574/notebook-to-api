@@ -849,6 +849,10 @@ def _arg_value_expr(arg):
     binary = _binary_kind(arg.get("type"))
     if binary:
         return f"_coerce_binary(req.{_field_name(arg)}, {binary!r})"
+    if arg.get("type") and arg.get("kind") not in ("var_positional", "var_keyword"):
+        annotation, _ = _arg_annotation_source(arg)
+        if _needs_safe_annotation(annotation):
+            return f"_rebuild_unmodeled(req.{_field_name(arg)}, {annotation})"
     container = _array_like_container(arg.get("type"))
     if container:
         return (
@@ -4880,6 +4884,49 @@ def generate_fastapi_code(
     )
     lines.append("        return _AnyType")
     lines.append("    return tp")
+    lines.append("")
+    # _rebuild_unmodeled: a parameter whose type _safe_annotation had to
+    # degrade to Any (a plain notebook class, np.float64, pd.Timestamp)
+    # arrived as raw JSON, so `cfg.lr` / `ts.year` was a 500 AttributeError.
+    # The JSON is turned back into the annotated type the way a caller would
+    # build one by hand: an object as keyword arguments, an array as
+    # positional ones, a scalar as the single argument. Optional[T] unwraps
+    # to T; anything else (generics, unions) is passed through unchanged.
+    lines.append("_UNMODELED_TYPES = {}")
+    lines.append("")
+    lines.append("def _rebuild_unmodeled(value, tp):")
+    lines.append("    import types as _types")
+    lines.append("    import typing as _typing")
+    lines.append("    if _typing.get_origin(tp) in (_typing.Union, getattr(_types, 'UnionType', None)):")
+    lines.append("        members = [a for a in _typing.get_args(tp) if a is not type(None)]")
+    lines.append("        if len(members) != 1:")
+    lines.append("            return value")
+    lines.append("        tp = members[0]")
+    lines.append("    if value is None or not isinstance(tp, type) or _typing.is_typeddict(tp):")
+    lines.append("        return value")
+    lines.append("    if isinstance(value, tp):")
+    lines.append("        return value")
+    lines.append("    if tp not in _UNMODELED_TYPES:")
+    lines.append("        _UNMODELED_TYPES[tp] = _safe_annotation(tp) is _AnyType")
+    lines.append("    if not _UNMODELED_TYPES[tp]:")
+    lines.append("        return value")
+    lines.append("    try:")
+    # A class without its own __init__ can't take keyword arguments; its
+    # instance gets the object's keys as attributes instead.
+    lines.append("        if isinstance(value, dict) and tp.__init__ is object.__init__:")
+    lines.append("            instance = tp()")
+    lines.append("            instance.__dict__.update(value)")
+    lines.append("            return instance")
+    lines.append("        if isinstance(value, dict):")
+    lines.append("            return tp(**value)")
+    lines.append("        if isinstance(value, list):")
+    lines.append("            return tp(*value)")
+    lines.append("        return tp(value)")
+    lines.append("    except Exception as e:")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=422,")
+    lines.append("            detail=f'Could not build a {tp.__name__} from the request value: {e}',")
+    lines.append("        )")
     lines.append("")
     # Generate Pydantic models for request bodies
     for func in functions:
