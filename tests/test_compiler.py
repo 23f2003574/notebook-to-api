@@ -10129,3 +10129,24 @@ def test_compiled_app_can_limit_concurrent_notebook_calls(tmp_path):
     assert peak_concurrency({}) > 1
     assert peak_concurrency({"NOTEBOOK_API_MAX_CONCURRENT_CALLS": "1"}) == 1
     assert peak_concurrency({"NOTEBOOK_API_MAX_CONCURRENT_CALLS": "2"}) == 2
+
+
+def test_startup_warning_lines_describe_each_kind_of_startup_problem():
+    from backend.inspector import startup_warning_lines
+
+    data = {
+        "unrecognized_directives": [{"directive": "cahce", "line": "# notebook-to-api: cahce 5"}],
+        "cells_with_errors": [{"cell": 2, "line": 1, "error": "NameError", "message": "name 'x' is not defined"}],
+        "import_time_hazards": [
+            {"kind": "file_read", "call": "pd.read_csv", "path": "sales.csv", "cell": 1, "line": 2},
+            {"kind": "input", "call": "input", "path": None, "cell": 3, "line": 4},
+        ],
+    }
+
+    assert startup_warning_lines(data) == [
+        "Ignored directive: # notebook-to-api: cahce 5",
+        "Cell 2 raised NameError when last run (name 'x' is not defined) -- it runs again when the app starts",
+        "Cell 1, line 2: pd.read_csv('sales.csv') reads a data file the compiled app won't ship -- the app will fail on startup",
+        "Cell 3, line 4: input() waits on stdin, which the compiled app doesn't have -- the app will fail on startup",
+    ]
+    assert startup_warning_lines({}) == []

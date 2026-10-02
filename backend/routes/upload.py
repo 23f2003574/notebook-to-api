@@ -16566,6 +16566,11 @@ def compile_notebook_endpoint(
             "skipped_functions": data["skipped_functions"],
             "dependencies": data["dependencies"],
             "generated_files": data["generated_files"],
+            # Things that compile fine but will break or be ignored when the
+            # compiled app starts -- see POST /api/validate for each.
+            "unrecognized_directives": data["unrecognized_directives"],
+            "import_time_hazards": data["import_time_hazards"],
+            "cells_with_errors": data["cells_with_errors"],
             "message": "Notebook compiled successfully"
         }
 

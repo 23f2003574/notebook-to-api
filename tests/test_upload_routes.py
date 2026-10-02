@@ -35131,3 +35131,46 @@ def test_validate_reports_cells_that_errored_when_last_run_without_changing_stat
     assert [(c["cell"], c["error"]) for c in body["cells_with_errors"]] == [
         (2, "NameError"), (3, "ZeroDivisionError"),
     ]
+
+
+def test_compile_response_carries_startup_warnings_without_failing_the_compile():
+    import nbformat
+
+    client.delete("/api/notebooks?confirm=true")
+    notebook = nbformat.v4.new_notebook()
+    failed = nbformat.v4.new_code_cell("scratch_value\n")
+    failed.outputs = [nbformat.v4.new_output(
+        "error", ename="NameError", evalue="name 'scratch_value' is not defined", traceback=["---> 1 scratch_value"],
+    )]
+    notebook.cells = [
+        nbformat.v4.new_code_cell("import pandas as pd\ndf = pd.read_csv('sales.csv')\n"),
+        failed,
+        nbformat.v4.new_code_cell("# notebook-to-api: cahce 5\ndef total(a: int) -> int:\n    return a\n"),
+    ]
+    buffer = io.StringIO()
+    nbformat.write(notebook, buffer)
+    client.post(
+        "/api/upload",
+        files={"file": ("compile_warnings.ipynb", io.BytesIO(buffer.getvalue().encode()), "application/json")},
+    )
+
+    resp = client.post("/api/compile", json={"notebook_path": "compile_warnings.ipynb"})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "success"
+    assert [h["path"] for h in body["import_time_hazards"]] == ["sales.csv"]
+    assert [c["error"] for c in body["cells_with_errors"]] == ["NameError"]
+    assert [d["directive"] for d in body["unrecognized_directives"]] == ["cahce"]
+
+
+def test_compile_response_has_empty_warning_lists_for_a_clean_notebook():
+    client.delete("/api/notebooks?confirm=true")
+    client.post(
+        "/api/upload",
+        files={"file": ("compile_clean.ipynb", io.BytesIO(_notebook_bytes("def add(a: int) -> int:\n    return a\n")), "application/json")},
+    )
+
+    body = client.post("/api/compile", json={"notebook_path": "compile_clean.ipynb"}).json()
+
+    assert body["import_time_hazards"] == [] and body["cells_with_errors"] == [] and body["unrecognized_directives"] == []

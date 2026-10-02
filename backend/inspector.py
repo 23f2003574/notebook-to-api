@@ -837,6 +837,37 @@ def inspect_notebook_data(
     }
 
 
+def startup_warning_lines(data):
+    """Human-readable warnings for what inspect_notebook_data found that
+    compiles fine but will misbehave when the compiled app starts: a typo'd
+    or malformed directive (silently ignored), top-level `input()` / relative
+    data-file reads (fail on import), and cells that already errored the last
+    time the author ran them (they run again on import). `validate` has long
+    reported each of these, but `compile` -- where the harm actually happens,
+    and which is often run without validating first -- said nothing."""
+    lines = []
+    for item in data.get("unrecognized_directives", []):
+        lines.append(f"Ignored directive: {item['line']}")
+    for failed in data.get("cells_with_errors", []):
+        lines.append(
+            f"Cell {failed['cell']} raised {failed['error']} when last run "
+            f"({failed['message']}) -- it runs again when the app starts"
+        )
+    for hazard in data.get("import_time_hazards", []):
+        if hazard["kind"] == "input":
+            what = "input() waits on stdin, which the compiled app doesn't have"
+        else:
+            what = (
+                f"{hazard['call']}({hazard['path']!r}) reads a data file the "
+                "compiled app won't ship"
+            )
+        lines.append(
+            f"Cell {hazard['cell']}, line {hazard['line']}: {what} -- the app "
+            "will fail on startup"
+        )
+    return lines
+
+
 def print_compile_summary(notebook_path, output_dir="generated", only=None, exclude=None):
     """Print what compiling `notebook_path` into `output_dir` actually
     produced: its endpoints (flagging background/task_id-based ones the
@@ -909,6 +940,12 @@ def print_compile_summary(notebook_path, output_dir="generated", only=None, excl
         )
         for skipped in data["skipped_functions"]:
             print(f"  {skipped['name']}: {skipped['reason']}")
+
+    warnings = startup_warning_lines(data)
+    if warnings:
+        print("\nWarnings (the compiled app may not start or behave as written):")
+        for line in warnings:
+            print(f"  ⚠ {line}")
 
     if data["private_functions"]:
         print(

@@ -30696,3 +30696,42 @@ def test_remote_validate_command_prints_cells_that_errored_when_last_run(tmp_pat
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "⚠ Cell 4 raised KeyError when last run ('x')" in proc.stdout
+
+
+def test_compile_command_prints_startup_warnings(tmp_path):
+    import nbformat
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook = nbformat.v4.new_notebook()
+    failed = nbformat.v4.new_code_cell("scratch_value\n")
+    failed.outputs = [nbformat.v4.new_output(
+        "error", ename="NameError", evalue="name 'scratch_value' is not defined", traceback=["---> 1 scratch_value"],
+    )]
+    notebook.cells = [
+        nbformat.v4.new_code_cell("import pandas as pd\ndf = pd.read_csv('sales.csv')\n"),
+        failed,
+        nbformat.v4.new_code_cell("def total(a: int) -> int:\n    return a\n"),
+    ]
+    notebook_path = workdir / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    proc = _run_cli(["compile", str(notebook_path)], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Warnings (the compiled app may not start or behave as written):" in proc.stdout
+    assert "⚠ Cell 2 raised NameError when last run" in proc.stdout
+    assert "⚠ Cell 1, line 2: pd.read_csv('sales.csv') reads a data file" in proc.stdout
+
+
+def test_compile_command_prints_no_warning_section_for_a_clean_notebook(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(notebook_path, "def total(a: int) -> int:\n    return a\n")
+
+    proc = _run_cli(["compile", str(notebook_path)], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Warnings (the compiled app may not start" not in proc.stdout
