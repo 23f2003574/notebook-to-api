@@ -846,6 +846,12 @@ def _arg_value_expr(arg):
     kind = _array_like_kind(arg.get("type"))
     if kind:
         return f"_coerce_array_like(req.{_field_name(arg)}, {kind!r})"
+    container = _array_like_container(arg.get("type"))
+    if container:
+        return (
+            f"_coerce_array_like_items(req.{_field_name(arg)}, "
+            f"{container[0]!r}, {container[1]!r})"
+        )
     return f"req.{_field_name(arg)}"
 
 
@@ -870,7 +876,7 @@ def _call_arg_expr(arg):
     # `*args` (kind "var_positional"): its List field is spread back in as
     # separate positional values, the counterpart of **kwargs above.
     if arg.get("kind") == "var_positional":
-        return f"*req.{_field_name(arg)}"
+        return f"*{_arg_value_expr(arg)}"
     if arg.get("kind") == "keyword_only":
         return f"{arg['name']}={_arg_value_expr(arg)}"
     return _arg_value_expr(arg)
@@ -1140,6 +1146,54 @@ def _array_like_kind(type_str):
     return None
 
 
+_LIST_CONTAINER_NAMES = {"List", "list", "Sequence", "Iterable", "Collection"}
+_DICT_CONTAINER_NAMES = {"Dict", "dict", "Mapping"}
+
+
+def _array_like_container(type_str):
+    """("list" | "dict", kind) when `type_str` is a list/sequence of numpy
+    arrays or pandas frames/series (`List[np.ndarray]`, `*arrays:
+    np.ndarray` -- which the parser stores as `List[np.ndarray]`) or a
+    str-keyed dict of them (`Dict[str, pd.DataFrame]`), optionally made
+    Optional -- else None.
+
+    _array_like_kind only recognizes a bare array-like annotation, so these
+    reached the function as plain nested lists/dicts and `arr.sum()` /
+    `df.columns` raised AttributeError (a 500). Each item is now rebuilt
+    with _coerce_array_like instead.
+    """
+    if not type_str:
+        return None
+    try:
+        node = ast.parse(type_str, mode="eval").body
+    except SyntaxError:
+        return None
+    while True:
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+            sides = [side for side in (node.left, node.right)
+                     if not (isinstance(side, ast.Constant) and side.value is None)]
+            if len(sides) != 1:
+                return None
+            node = sides[0]
+            continue
+        if not isinstance(node, ast.Subscript):
+            return None
+        base = node.value
+        base_name = base.attr if isinstance(base, ast.Attribute) else getattr(base, "id", None)
+        if base_name == "Optional":
+            node = node.slice
+            continue
+        break
+    if base_name in _LIST_CONTAINER_NAMES:
+        kind = _array_like_kind(ast.unparse(node.slice))
+        return ("list", kind) if kind else None
+    if base_name in _DICT_CONTAINER_NAMES and isinstance(node.slice, ast.Tuple) \
+            and len(node.slice.elts) == 2:
+        kind = _array_like_kind(ast.unparse(node.slice.elts[1]))
+        return ("dict", kind) if kind else None
+    return None
+
+
 def _resolve_annotation_source(type_str, forward_refs=True):
     """Turn a raw `ast.unparse`d annotation string (as stored in
     arg["type"] by the parser) into source the generated app can actually
@@ -1158,6 +1212,16 @@ def _resolve_annotation_source(type_str, forward_refs=True):
 
     if _array_like_kind(type_str):
         return "Any", {"Any"}
+
+    container = _array_like_container(type_str)
+    if container:
+        source, names = (
+            ("List[Any]", {"List", "Any"}) if container[0] == "list"
+            else ("Dict[str, Any]", {"Dict", "Any"})
+        )
+        if "Optional[" in type_str or "None" in type_str:
+            return f"Optional[{source}]", names | {"Optional"}
+        return source, names
 
     try:
         tree = ast.parse(type_str, mode="eval")
@@ -2519,6 +2583,13 @@ def generate_fastapi_code(
     # notebook function annotated as one, from the plain JSON the request
     # model accepts (see _array_like_kind). A value that can't be turned
     # into one is a caller error, reported as 422 instead of a 500.
+    lines.append("def _coerce_array_like_items(value, container, kind):")
+    lines.append("    if value is None:")
+    lines.append("        return None")
+    lines.append("    if container == 'dict':")
+    lines.append("        return {k: _coerce_array_like(v, kind) for k, v in value.items()}")
+    lines.append("    return [_coerce_array_like(v, kind) for v in value]")
+    lines.append("")
     lines.append("def _coerce_array_like(value, kind):")
     lines.append("    if value is None:")
     lines.append("        return None")
@@ -2572,6 +2643,16 @@ def generate_fastapi_code(
     lines.append("            except Exception:")
     lines.append("                pass")
     lines.append("    return 'data:image/png;base64,' + _base64.b64encode(buffer.getvalue()).decode('ascii')")
+    lines.append("")
+    # Types jsonable_encoder already has a dedicated encoder for (datetime,
+    # Decimal, UUID, Path, ...). Some carry a __dict__ -- pandas' Timestamp
+    # is a datetime subclass that does -- and must not be flattened into
+    # their attributes by the plain-object branch of _json_safe below.
+    lines.append("from fastapi.encoders import encoders_by_class_tuples as _encoders_by_class_tuples")
+    lines.append(
+        "_ENCODER_HANDLED_TYPES = tuple(c for classes in "
+        "_encoders_by_class_tuples.values() for c in classes)"
+    )
     lines.append("")
     lines.append("def _json_safe(value, _depth=0):")
     lines.append("    if _depth > 50:")
@@ -2673,7 +2754,8 @@ def generate_fastapi_code(
         "    if hasattr(value, '__dict__') and not isinstance(value, type) "
         "and type(value).__module__ != 'builtins' "
         "and not hasattr(value, 'model_dump') and not hasattr(value, '__fields__') "
-        "and not hasattr(type(value), '__members__') and not callable(value):"
+        "and not hasattr(type(value), '__members__') and not callable(value) "
+        "and not isinstance(value, _ENCODER_HANDLED_TYPES):"
     )
     lines.append("        return {k: _json_safe(v, _depth + 1) for k, v in vars(value).items()}")
     lines.append("    return value")

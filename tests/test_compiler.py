@@ -10695,3 +10695,79 @@ print("ASYNC_GEN_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "ASYNC_GEN_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_lists_and_dicts_of_arrays_and_frames_are_rebuilt(tmp_path):
+    """Confirmed before this: List[np.ndarray], `*arrays: np.ndarray` and
+    Dict[str, pd.DataFrame] parameters reached the function as plain JSON
+    lists/dicts, so `arr.sum()` / `df.columns` was a 500 AttributeError."""
+    pytest.importorskip("numpy")
+    pytest.importorskip("pandas")
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "import numpy as np\nimport pandas as pd\nfrom typing import Dict, List, Optional\n"
+                    "def shapes(xs: List[np.ndarray]):\n    return [list(x.shape) for x in xs]\n\n"
+                    "def sums(*arrays: np.ndarray):\n    return [float(a.sum()) for a in arrays]\n\n"
+                    "def widths(frames: Dict[str, pd.DataFrame]):\n    return {k: len(f.columns) for k, f in frames.items()}\n\n"
+                    "def maybe(xs: Optional[list[pd.Series]] = None):\n    return None if xs is None else [float(s.mean()) for s in xs]\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def post(name, body):
+    return client.post("/" + name, json=body, headers=headers)
+
+def result(name, body):
+    r = post(name, body)
+    assert r.status_code == 200, (name, r.text)
+    return r.json()["result"]
+
+assert result("shapes", {{"xs": [[1, 2, 3], [[1], [2]]]}}) == [[3], [2, 1]]
+assert result("sums", {{"arrays": [[1, 2], [3]]}}) == [3.0, 3.0]
+assert result("sums", {{}}) == []
+assert result("widths", {{"frames": {{"a": {{"x": [1], "y": [2]}}, "b": [{{"z": 1}}]}}}}) == {{"a": 2, "b": 1}}
+assert result("maybe", {{"xs": [[1, 3]]}}) == [2.0]
+assert result("maybe", {{}}) is None
+assert post("shapes", {{"xs": 5}}).status_code == 422
+assert post("shapes", {{"xs": None}}).status_code == 422  # not Optional
+print("ARRAY_CONTAINERS_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ARRAY_CONTAINERS_E2E_OK" in proc.stdout
