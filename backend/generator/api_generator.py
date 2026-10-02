@@ -16,7 +16,7 @@ from pathlib import Path
 # anywhere. Rejecting these outright avoids ever emitting that endpoint
 # ordering trap.
 RESERVED_INFRASTRUCTURE_NAMES = frozenset({
-    "app", "TASKS", "API_KEYS", "API_KEY_HEADER_NAME", "START_TIME",
+    "app", "TASKS", "API_KEYS", "API_KEY_HEADER_NAME", "DEFAULT_API_KEY", "USING_DEFAULT_API_KEY", "REQUIRE_CUSTOM_API_KEY", "START_TIME",
     "GENERATED_AT", "PYTHON_VERSION", "NOTEBOOK_TO_API_VERSION", "ALLOWED_ORIGINS",
     "PUBLIC_URL", "DISABLE_DOCS",
     "MAX_REQUEST_BODY_BYTES", "MaxRequestBodySizeMiddleware",
@@ -596,6 +596,20 @@ GENERATED_APP_ENV_VARS = [
             "http://localhost:8000 no matter where the app is actually "
             "deployed, failing every one of them from a browser that "
             "isn't itself on the same machine."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_REQUIRE_CUSTOM_KEY",
+        "default": "false",
+        "description": (
+            "Set to \"true\" to refuse to start while NOTEBOOK_API_KEY is "
+            "unset (or still lists the built-in default key). Without it an "
+            "app deployed with no key configured silently accepts the "
+            "default key, which is published in this project's own source "
+            "-- so anyone who knows the project can call the deployment. "
+            "The app logs a warning and reports \"using_default_api_key\" "
+            "from GET /auth/status either way; this makes it a hard stop "
+            "for production deployments."
         ),
     },
     {
@@ -2186,6 +2200,26 @@ def generate_fastapi_code(
         ')'
     )
     lines.append("API_KEY_HEADER_NAME = 'X-API-Key'")
+    lines.append(f"DEFAULT_API_KEY = {_generated_app_env_var_default('NOTEBOOK_API_KEY')!r}")
+    lines.append("USING_DEFAULT_API_KEY = DEFAULT_API_KEY in API_KEYS")
+    lines.append(
+        'REQUIRE_CUSTOM_API_KEY = os.getenv('
+        '"NOTEBOOK_API_REQUIRE_CUSTOM_KEY", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_REQUIRE_CUSTOM_KEY")}"'
+        ').strip().lower() in ("true", "1", "yes", "on")'
+    )
+    lines.append("if USING_DEFAULT_API_KEY:")
+    lines.append("    if REQUIRE_CUSTOM_API_KEY:")
+    lines.append("        raise RuntimeError(")
+    lines.append("            'NOTEBOOK_API_REQUIRE_CUSTOM_KEY is set but NOTEBOOK_API_KEY is '")
+    lines.append("            'unset or still includes the built-in default key; set a secret key.'")
+    lines.append("        )")
+    lines.append("    import logging as _logging")
+    lines.append("    _logging.getLogger('uvicorn.error').warning(")
+    lines.append("        'Using the built-in default API key, which is public; set '")
+    lines.append("        'NOTEBOOK_API_KEY before exposing this app (or set '")
+    lines.append("        'NOTEBOOK_API_REQUIRE_CUSTOM_KEY=true to refuse to start without one).'")
+    lines.append("    )")
     lines.append("")
     # Tracked per API key (not globally, and not per-IP): a shared global
     # counter would let one heavy, legitimate key starve every other
@@ -2887,7 +2921,8 @@ def generate_fastapi_code(
 
     lines.append("    return {")
     lines.append("        'authentication': 'enabled',")
-    lines.append("        'api_key_configured': bool(API_KEYS)")
+    lines.append("        'api_key_configured': bool(API_KEYS),")
+    lines.append("        'using_default_api_key': USING_DEFAULT_API_KEY")
     lines.append("    }")
 
     lines.append("")

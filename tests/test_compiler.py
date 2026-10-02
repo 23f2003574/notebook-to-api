@@ -9908,3 +9908,73 @@ def test_find_cells_with_error_outputs_is_empty_for_a_clean_notebook():
     clean = nbformat.v4.new_notebook()
     clean.cells = [nbformat.v4.new_code_cell("x = 1\n"), nbformat.v4.new_markdown_cell("hi")]
     assert _find_cells_with_error_outputs(clean) == []
+
+
+def test_compiled_app_flags_and_can_refuse_the_default_api_key(tmp_path):
+    """Confirmed before this: an app deployed with NOTEBOOK_API_KEY unset
+    silently accepted the built-in default key -- published in this project's
+    own source -- with no warning and no way to tell from the outside."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": "def add(a: int, b: int) -> int:\n    return a + b\n",
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    compile_script = (
+        f"import sys; sys.path.insert(0, {str(PROJECT_ROOT)!r}); "
+        "from backend.compiler import compile_notebook; "
+        f"compile_notebook({str(notebook_path)!r}, 'generated')"
+    )
+    compiled = subprocess.run(
+        [sys.executable, "-c", compile_script], cwd=str(workdir), capture_output=True, text=True, timeout=60,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+
+    def run_app(extra_env):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("NOTEBOOK_API_")}
+        env.update(extra_env)
+        env["PYTHONPATH"] = f"{PROJECT_ROOT}{os.pathsep}{workdir}"
+        probe = (
+            "from fastapi.testclient import TestClient\n"
+            "from generated.app import app\n"
+            "print('STATUS', TestClient(app).get('/auth/status').json()['using_default_api_key'])\n"
+        )
+        return subprocess.run(
+            [sys.executable, "-W", "ignore", "-c", probe],
+            cwd=str(workdir), capture_output=True, text=True, timeout=60, env=env,
+        )
+
+    # No key configured: starts, warns, and says so from /auth/status.
+    default = run_app({})
+    assert default.returncode == 0, default.stdout + default.stderr
+    assert "STATUS True" in default.stdout
+    assert "built-in default API key" in default.stderr
+
+    # A real key: no warning, flag false.
+    custom = run_app({"NOTEBOOK_API_KEY": "s3cret"})
+    assert "STATUS False" in custom.stdout
+    assert "built-in default API key" not in custom.stderr
+
+    # The default key still listed alongside a real one (rotation) is flagged.
+    rotating = run_app({"NOTEBOOK_API_KEY": "s3cret,notebook-to-api-dev-key"})
+    assert "STATUS True" in rotating.stdout
+
+    # REQUIRE_CUSTOM_KEY: a hard stop without a real key ...
+    refused = run_app({"NOTEBOOK_API_REQUIRE_CUSTOM_KEY": "true"})
+    assert refused.returncode != 0
+    assert "NOTEBOOK_API_REQUIRE_CUSTOM_KEY is set" in refused.stderr
+    # ... and fine with one.
+    allowed = run_app({"NOTEBOOK_API_REQUIRE_CUSTOM_KEY": "true", "NOTEBOOK_API_KEY": "s3cret"})
+    assert allowed.returncode == 0, allowed.stderr
+    assert "STATUS False" in allowed.stdout
