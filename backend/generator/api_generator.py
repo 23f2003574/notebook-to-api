@@ -2678,6 +2678,20 @@ def generate_fastapi_code(
         "and hasattr(value, 'size'):"
     )
     lines.append("        return _png_data_uri(lambda buf, **kw: value.save(buf, format='PNG'))")
+    # pandas Period (`pd.Period('2024-01')`, a PeriodIndex's items) came back
+    # as a silent `{}`, and Interval -- what every `pd.cut` bin is -- was a
+    # 500 "not iterable". A Period becomes its string form ('2024-01'); an
+    # Interval becomes {left, right, closed}.
+    lines.append("    if type(value).__name__ == 'Period' and hasattr(value, 'freqstr') and hasattr(value, 'start_time'):")
+    lines.append("        return str(value)")
+    lines.append(
+        "    if type(value).__name__ == 'Interval' and hasattr(value, 'left') "
+        "and hasattr(value, 'right') and hasattr(value, 'closed'):"
+    )
+    lines.append(
+        "        return {'left': _json_safe(value.left, _depth + 1), "
+        "'right': _json_safe(value.right, _depth + 1), 'closed': value.closed}"
+    )
     lines.append("    if isinstance(value, (bytes, bytearray, memoryview)):")
     lines.append("        return _bytes_json(value)")
     lines.append("    if hasattr(value, 'getvalue') and hasattr(value, 'seek') and hasattr(value, 'read'):")
@@ -2715,8 +2729,12 @@ def generate_fastapi_code(
     # columns, a Counter of pairs) made json.dumps fail -- or, before that,
     # "unhashable type" in the encoder. Scalars JSON already accepts stay as
     # they are; anything else is stringified.
+    # A datetime/Timestamp key (a time-indexed Series' to_dict()) is written
+    # in ISO format, matching how the same value is encoded as a *value*,
+    # instead of str()'s '2024-01-01 00:00:00'; a Period key as its string.
     lines.append(
         "        return {(k if k is None or isinstance(k, (str, int, float, bool)) "
+        "else k.isoformat() if hasattr(k, 'isoformat') and not hasattr(k, 'freqstr') "
         "else str(k)): _json_safe(v, _depth + 1) for k, v in value.items()}"
     )
     lines.append("    if isinstance(value, (list, tuple, set, frozenset)):")

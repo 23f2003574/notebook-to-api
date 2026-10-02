@@ -10771,3 +10771,78 @@ print("ARRAY_CONTAINERS_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "ARRAY_CONTAINERS_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_pandas_periods_intervals_and_datetime_keys_are_plain_json(tmp_path):
+    """Confirmed before this: a returned pd.Period came back as a silent `{}`,
+    a pd.Interval (every pd.cut bin) was a 500, and a time-indexed Series
+    had '2024-01-01 00:00:00' keys while its datetime values were ISO."""
+    pytest.importorskip("pandas")
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "import pandas as pd\n"
+                    "def month(n: int):\n    return pd.Period('2024-01', freq='M')\n\n"
+                    "def months(n: int):\n    return pd.period_range('2024-01', periods=2, freq='M')\n\n"
+                    "def interval(n: int):\n    return pd.Interval(0, 1.5)\n\n"
+                    "def bins(n: int):\n    return pd.cut([1, 5], bins=[0, 2, 6])\n\n"
+                    "def counts(n: int):\n    return pd.Series([1, 2], index=pd.date_range('2024-01-01', periods=2))\n\n"
+                    "def by_month(n: int):\n    return pd.Series([3], index=pd.period_range('2024-01', periods=1, freq='M'))\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def call(name):
+    response = client.post("/" + name, json={{"n": 1}}, headers=headers)
+    assert response.status_code == 200, (name, response.status_code, response.text)
+    return response.json()["result"]
+
+assert call("month") == "2024-01"
+assert call("months") == ["2024-01", "2024-02"]
+assert call("interval") == {{"left": 0, "right": 1.5, "closed": "right"}}
+assert call("bins") == [
+    {{"left": 0, "right": 2, "closed": "right"}},
+    {{"left": 2, "right": 6, "closed": "right"}},
+]
+assert call("counts") == {{"2024-01-01T00:00:00": 1, "2024-01-02T00:00:00": 2}}
+assert call("by_month") == {{"2024-01": 3}}
+print("PANDAS_SCALARS_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "PANDAS_SCALARS_E2E_OK" in proc.stdout
