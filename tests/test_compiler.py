@@ -11008,3 +11008,78 @@ print("UNMODELED_PARAMS_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "UNMODELED_PARAMS_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_dataframe_index_labels_are_kept_in_records(tmp_path):
+    """Confirmed before this: a returned groupby/agg or set_index DataFrame
+    lost its index -- the group keys -- because records drop the index."""
+    pytest.importorskip("pandas")
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "import pandas as pd\n"
+                    "df = pd.DataFrame({'team': ['a', 'a', 'b'], 'year': [1, 2, 1], 'pts': [1, 2, 3]})\n\n"
+                    "def by_team(n: int):\n    return df.groupby('team').agg(total=('pts', 'sum'))\n\n"
+                    "def by_two(n: int):\n    return df.groupby(['team', 'year'])[['pts']].sum()\n\n"
+                    "def labelled(n: int):\n    return pd.DataFrame({'v': [1]}, index=['x'])\n\n"
+                    "def filtered(n: int):\n    return df[df.pts > 1]\n\n"
+                    "def clash(n: int):\n    return df.set_index('team', drop=False)[['team']]\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def call(name):
+    response = client.post("/" + name, json={{"n": 1}}, headers=headers)
+    assert response.status_code == 200, (name, response.status_code, response.text)
+    return response.json()["result"]
+
+assert call("by_team") == [{{"team": "a", "total": 3}}, {{"team": "b", "total": 3}}]
+assert call("by_two") == [
+    {{"team": "a", "year": 1, "pts": 1}},
+    {{"team": "a", "year": 2, "pts": 2}},
+    {{"team": "b", "year": 1, "pts": 3}},
+]
+assert call("labelled") == [{{"index": "x", "v": 1}}]
+# An unnamed integer index (a fresh or filtered frame) is still dropped.
+assert call("filtered") == [{{"team": "a", "year": 2, "pts": 2}}, {{"team": "b", "year": 1, "pts": 3}}]
+assert call("clash") == [{{"team": "a"}}, {{"team": "a"}}, {{"team": "b"}}]
+print("FRAME_INDEX_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "FRAME_INDEX_E2E_OK" in proc.stdout

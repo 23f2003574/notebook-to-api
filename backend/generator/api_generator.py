@@ -2735,6 +2735,23 @@ def generate_fastapi_code(
         "_encoders_by_class_tuples.values() for c in classes)"
     )
     lines.append("")
+    # _frame_records: to_dict(orient='records') drops the index, so a
+    # groupby/agg, pivot_table, value_counts().to_frame() or set_index result
+    # -- whose index *is* the answer (the group keys, the dates) -- came back
+    # as rows with the keys silently missing. A named index, a MultiIndex,
+    # or non-integer labels become ordinary leading columns; a plain
+    # unnamed integer index (a fresh or filtered frame) is still dropped, as
+    # before. An index name clashing with a column keeps the old output.
+    lines.append("def _frame_records(frame):")
+    lines.append("    index = frame.index")
+    lines.append("    named = any(name is not None for name in getattr(index, 'names', [index.name]))")
+    lines.append("    if named or getattr(index, 'nlevels', 1) > 1 or getattr(index, 'inferred_type', 'integer') != 'integer':")
+    lines.append("        try:")
+    lines.append("            frame = frame.reset_index()")
+    lines.append("        except ValueError:")
+    lines.append("            pass")
+    lines.append("    return frame.to_dict(orient='records')")
+    lines.append("")
     lines.append("def _json_safe(value, _depth=0):")
     lines.append("    if _depth > 50:")
     lines.append("        return value")
@@ -2831,7 +2848,7 @@ def generate_fastapi_code(
     lines.append("    ):")
     lines.append("        return [_json_safe(v, _depth + 1) for v in value]")
     lines.append("    if hasattr(value, 'to_dict') and hasattr(value, 'columns'):")
-    lines.append("        return _json_safe(value.to_dict(orient='records'), _depth + 1)")
+    lines.append("        return _json_safe(_frame_records(value), _depth + 1)")
     lines.append("    if hasattr(value, 'to_dict') and hasattr(value, 'index'):")
     lines.append("        return _json_safe(value.to_dict(), _depth + 1)")
     lines.append("    if hasattr(value, 'tolist'):")
