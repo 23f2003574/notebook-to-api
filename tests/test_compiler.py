@@ -9684,3 +9684,98 @@ print("NON_JSON_DEFAULTS_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "NON_JSON_DEFAULTS_E2E_OK" in proc.stdout
+
+
+def test_endpoint_python_name_renames_only_builtin_named_handlers():
+    from backend.generator.api_generator import _endpoint_python_name
+
+    assert _endpoint_python_name("train_model") == "train_model"
+    assert _endpoint_python_name("list") == "_endpoint_list"
+    assert _endpoint_python_name("isinstance") == "_endpoint_isinstance"
+
+
+def test_compiler_pipeline_functions_named_like_builtins_do_not_break_the_app(tmp_path):
+    """Confirmed before this: a notebook function named list/int/set/range/
+    type/isinstance/getattr was defined under that name at the generated
+    app.py's module level, shadowing the builtin for the app's own code --
+    every endpoint then answered 500 (not just that one) and /openapi.json
+    too."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "def isinstance(x: int = 1) -> int:\n    return 11\n\n"
+                    "def list(x: int = 1) -> int:\n    return 12\n\n"
+                    "def int(x: str = '1') -> str:\n    return 'int:' + x\n\n"
+                    "def type(x: float = 1.0) -> float:\n    return x * 2\n\n"
+                    "# notebook-to-api: background\n"
+                    "def range(n: float = 1.0) -> float:\n    return n + 1\n\n"
+                    "def other(x: float = 1.0) -> float:\n    return x\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+import time
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def post(path, body):
+    return client.post(path, json=body, headers=headers)
+
+assert post("/isinstance", {{}}).json() == {{"result": 11}}
+assert post("/list", {{}}).json() == {{"result": 12}}
+assert post("/int", {{"x": "5"}}).json() == {{"result": "int:5"}}
+assert post("/type", {{"x": 2.5}}).json() == {{"result": 5.0}}
+# Unrelated endpoints and the schema are unaffected.
+assert post("/other", {{"x": 3.0}}).json() == {{"result": 3.0}}
+assert client.get("/openapi.json").status_code == 200
+paths = client.get("/openapi.json").json()["paths"]
+assert {{"/isinstance", "/list", "/int", "/type", "/range", "/other"}} <= set(paths)
+
+# A background endpoint with a builtin name works too.
+task_id = post("/range", {{"n": 4.0}}).json()["task_id"]
+deadline = time.time() + 10
+while True:
+    task = client.get("/tasks/" + task_id, headers=headers).json()
+    if task["status"] != "processing":
+        break
+    assert time.time() < deadline, "task never finished"
+    time.sleep(0.02)
+assert task["status"] == "completed" and task["result"] == 5.0, task
+
+print("BUILTIN_NAMES_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "BUILTIN_NAMES_E2E_OK" in proc.stdout

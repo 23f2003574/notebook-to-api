@@ -905,6 +905,19 @@ class _AnnotationNameQualifier(ast.NodeTransformer):
         )
 
 
+def _endpoint_python_name(func_name):
+    """The Python identifier an endpoint handler is defined under in the
+    generated app.py. Normally the notebook function's own name -- but a
+    function named like a Python builtin (`list`, `int`, `set`, `range`,
+    `type`, `isinstance`, `getattr`, ...) would, defined at app.py's module
+    level, shadow that builtin for the app's *own* code, which uses them: every
+    endpoint (not just that one) then failed with a 500, and /openapi.json
+    with them. The route path, operation id and summary all come from the
+    real name, so only the internal identifier changes.
+    """
+    return f"_endpoint_{func_name}" if func_name in _BUILTIN_NAMES else func_name
+
+
 def _build_model_names(functions):
     """Map each function's name to a Pydantic request-model class name,
     guaranteed unique even when two function names collide once reduced
@@ -4811,7 +4824,7 @@ def generate_fastapi_code(
                 f'responses={repr(task_responses)})'
             )
             lines.append(
-                f"def {func_name}(req: {model_name}, background_tasks: "
+                f"def {_endpoint_python_name(func_name)}(req: {model_name}, background_tasks: "
                 "BackgroundTasks, callback_url: Optional[str] = None, "
                 "idempotency_key: Optional[str] = "
                 'Header(None, alias="Idempotency-Key"), '
@@ -5154,7 +5167,7 @@ def generate_fastapi_code(
                 + ("" if endpoint_rate_limit else "_rl_response: Response = None, ")
                 if endpoint_cache_ttl else ""
             )
-            lines.append(f"async def {func_name}(req: {model_name}, {rate_limit_param}{cache_param}_: None = Depends(verify_api_key)):")
+            lines.append(f"async def {_endpoint_python_name(func_name)}(req: {model_name}, {rate_limit_param}{cache_param}_: None = Depends(verify_api_key)):")
             lines.extend(rate_limit_lines)
             if endpoint_cache_ttl:
                 # Checked after auth and the rate limit, so a cache hit is
