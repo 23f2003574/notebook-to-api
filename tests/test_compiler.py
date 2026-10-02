@@ -11083,3 +11083,82 @@ print("FRAME_INDEX_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "FRAME_INDEX_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_containers_of_unmodeled_types_rebuild_each_item(tmp_path):
+    """Confirmed before this: List[Settings], Dict[str, pd.Timestamp] and
+    Optional[List[...]] parameters degraded to Any as a whole, so every item
+    reached the function as raw JSON -- a 500 on `c.lr` / `ts.year`."""
+    pytest.importorskip("pandas")
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "import pandas as pd\nfrom typing import Dict, List, Optional, Tuple\n"
+                    "class Settings:\n    def __init__(self, lr: float):\n        self.lr = lr\n\n"
+                    "def rates(cfgs: List[Settings]):\n    return [c.lr for c in cfgs]\n\n"
+                    "def years(d: Dict[str, pd.Timestamp]):\n    return {k: v.year for k, v in d.items()}\n\n"
+                    "def maybe(c: Optional[List[Settings]] = None):\n    return None if c is None else sum(x.lr for x in c)\n\n"
+                    "def nested(groups: Dict[str, List[Settings]]):\n    return {k: [c.lr for c in v] for k, v in groups.items()}\n\n"
+                    "def pair(p: Tuple[Settings, int]):\n    return p[0].lr * p[1]\n\n"
+                    "def unique(s: set[pd.Timestamp]):\n    return sorted(t.month for t in s)\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def post(name, body):
+    return client.post("/" + name, json=body, headers=headers)
+
+def result(name, body):
+    r = post(name, body)
+    assert r.status_code == 200, (name, r.text)
+    return r.json()["result"]
+
+assert result("rates", {{"cfgs": [{{"lr": 0.1}}, {{"lr": 0.2}}]}}) == [0.1, 0.2]
+assert result("years", {{"d": {{"a": "2024-01-05", "b": "2021-06-01"}}}}) == {{"a": 2024, "b": 2021}}
+assert result("maybe", {{"c": [{{"lr": 1}}, {{"lr": 2}}]}}) == 3
+assert result("maybe", {{}}) is None
+assert result("nested", {{"groups": {{"g": [{{"lr": 5}}]}}}}) == {{"g": [5]}}
+assert result("pair", {{"p": [{{"lr": 2}}, 3]}}) == 6
+assert result("unique", {{"s": ["2024-03-01", "2024-01-01"]}}) == [1, 3]
+bad = post("rates", {{"cfgs": [{{"nope": 1}}]}})
+assert bad.status_code == 422 and "Settings" in bad.text, bad.text
+print("UNMODELED_CONTAINERS_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "UNMODELED_CONTAINERS_E2E_OK" in proc.stdout
