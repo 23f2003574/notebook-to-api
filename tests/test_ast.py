@@ -832,21 +832,34 @@ def f(*, priority=Priority.HIGH):
     assert args[0]["default"] == "Priority.HIGH"
 
 
-def test_function_extraction_excludes_function_with_var_args():
-    """*args can't be represented as a fixed set of Pydantic request
-    fields -- the generated endpoint would silently ignore whatever
-    callers actually put there. The whole function must be skipped,
-    same policy as class methods/nested functions.
+def test_function_extraction_includes_function_with_var_args_as_a_list_field():
+    """`*args` gets its own List request field ("kind": "var_positional"),
+    typed from its annotation, instead of the function being skipped; see
+    _call_arg_expr (api_generator.py) for how it's spread back in.
     """
 
     code = """
-def f(a, *args):
+def f(a, *values: int, scale=1, **kwargs):
     return a
+
+def g(*args):
+    return args
 """
 
     funcs = extract_functions_from_code(code)
 
-    assert funcs == []
+    assert [f["name"] for f in funcs] == ["f", "g"]
+    assert [a["name"] for a in funcs[0]["args"]] == ["a", "values", "scale", "kwargs"]
+    assert funcs[0]["args"][1] == {
+        "name": "values",
+        "type": "List[int]",
+        "default": [],
+        "default_is_literal": True,
+        "has_default": True,
+        "kind": "var_positional",
+        "description": None,
+    }
+    assert funcs[1]["args"][0]["type"] == "List[Any]"
 
 
 def test_function_extraction_includes_function_with_kwargs_as_a_dict_field():
@@ -911,42 +924,14 @@ def f(a, **kwargs):
     )
 
 
-def test_function_extraction_still_includes_sibling_function_beside_var_args_function():
-    """One function using *args must not cause the whole notebook's
-    other, perfectly representable functions to be dropped too.
-    """
+def test_extract_skipped_functions_does_not_report_a_var_args_function():
 
     code = """
-def unsupported(a, *args):
-    return a
-
-def add(a: int, b: int) -> int:
-    return a + b
-"""
-
-    funcs = extract_functions_from_code(code)
-
-    assert [f["name"] for f in funcs] == ["add"]
-
-
-def test_extract_skipped_functions_reports_var_args_with_a_reason():
-
-    code = """
-def f(a, *args):
+def f(a, *args, **kwargs):
     return a
 """
 
-    skipped = extract_skipped_functions_from_code(code)
-
-    assert skipped == [
-        {
-            "name": "f",
-            "reason": (
-                "uses *args, which can't be represented as a "
-                "fixed set of request fields"
-            ),
-        }
-    ]
+    assert extract_skipped_functions_from_code(code) == []
 
 
 def test_extract_skipped_functions_does_not_report_a_kwargs_only_function():
@@ -961,23 +946,6 @@ def f(a, **kwargs):
 """
 
     assert extract_skipped_functions_from_code(code) == []
-
-
-def test_extract_skipped_functions_reports_a_function_combining_args_and_kwargs():
-    """`*args` alone is still unrepresentable, so it still disqualifies
-    the whole function even when it's paired with a `**kwargs` that would
-    otherwise be fine on its own.
-    """
-
-    code = """
-def f(a, *args, **kwargs):
-    return a
-"""
-
-    skipped = extract_skipped_functions_from_code(code)
-
-    assert skipped[0]["name"] == "f"
-    assert "*args" in skipped[0]["reason"]
 
 
 def test_extract_skipped_functions_reports_class_methods():

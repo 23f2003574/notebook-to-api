@@ -10551,3 +10551,70 @@ print("OBJECT_FIELDS_JSON_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "OBJECT_FIELDS_JSON_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_var_args_functions_get_a_list_field_spread_into_the_call(tmp_path):
+    """Confirmed before this: a notebook function taking *args got no
+    endpoint at all (POST returned 404). Its extra positional values now
+    arrive as a JSON list, validated against the *args annotation."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "def total(*values):\n    return sum(values)\n\n"
+                    "def mixed(a: int, *rest: int, scale: int = 1, **opts):\n"
+                    "    return {'a': a, 'rest': [r * scale for r in rest], 'opts': opts}\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def post(name, body):
+    return client.post("/" + name, json=body, headers=headers)
+
+assert post("total", {{"values": [1, 2, 3]}}).json()["result"] == 6
+assert post("total", {{}}).json()["result"] == 0  # *args may be omitted
+r = post("mixed", {{"a": 1, "rest": [2, 3], "scale": 10, "opts": {{"k": "v"}}}})
+assert r.json()["result"] == {{"a": 1, "rest": [20, 30], "opts": {{"k": "v"}}}}, r.text
+assert post("mixed", {{"a": 1, "rest": ["x"]}}).status_code == 422
+assert post("total", {{"values": 5}}).status_code == 422
+schema = app.openapi()["components"]["schemas"]
+assert any(s.get("properties", {{}}).get("rest", {{}}).get("type") == "array" for s in schema.values())
+print("VAR_ARGS_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "VAR_ARGS_E2E_OK" in proc.stdout

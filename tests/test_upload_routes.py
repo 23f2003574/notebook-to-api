@@ -22497,7 +22497,7 @@ def test_compile_reports_skipped_functions():
 
     content = _notebook_bytes(
         "def add(a: int, b: int) -> int:\n    return a + b\n\n"
-        "def unsupported(a, *args):\n    return a\n"
+        "class Unsupported:\n    def unsupported(self, a):\n        return a\n"
     )
 
     upload_resp = client.post(
@@ -22523,8 +22523,8 @@ def test_compile_reports_skipped_functions():
         {
             "name": "unsupported",
             "reason": (
-                "uses *args, which can't be represented as a "
-                "fixed set of request fields"
+                "defined inside a class or nested function, so it isn't "
+                "callable as a standalone endpoint"
             ),
         }
     ]
@@ -23618,7 +23618,7 @@ def test_validate_reports_pass_for_a_clean_notebook():
 def test_validate_reports_warn_for_skipped_functions_without_strict():
 
     content = _notebook_bytes(
-        "def unsupported(a, *args):\n    return a\n\n"
+        "class Unsupported:\n    def unsupported(self, a):\n        return a\n\n"
         "def add(a: int, b: int) -> int:\n    return a + b\n"
     )
 
@@ -23646,7 +23646,7 @@ def test_validate_reports_warn_for_skipped_functions_without_strict():
 def test_validate_reports_fail_for_skipped_functions_with_strict():
 
     content = _notebook_bytes(
-        "def unsupported(a, *args):\n    return a\n"
+        "class Unsupported:\n    def unsupported(self, a):\n        return a\n"
     )
 
     upload_resp = client.post(
@@ -24077,7 +24077,7 @@ def test_validate_all_reports_pass_warn_and_fail_across_the_catalog():
         "def add(a: int, b: int) -> int:\n    return a + b\n"
     )
     warn_content = _notebook_bytes(
-        "def unsupported(a, *args):\n    return a\n\n"
+        "class Unsupported:\n    def unsupported(self, a):\n        return a\n\n"
         "def sub(a: int, b: int) -> int:\n    return a - b\n"
     )
     fail_content = _notebook_bytes(
@@ -24121,7 +24121,7 @@ def test_validate_all_csv_format_returns_a_csv_response():
         "def add(a: int, b: int) -> int:\n    return a + b\n"
     )
     warn_content = _notebook_bytes(
-        "def unsupported(a, *args):\n    return a\n\n"
+        "class Unsupported:\n    def unsupported(self, a):\n        return a\n\n"
         "def sub(a: int, b: int) -> int:\n    return a - b\n"
     )
     fail_content = _notebook_bytes(
@@ -24167,7 +24167,7 @@ def test_validate_all_csv_format_composes_with_tag_and_strict():
     client.delete("/api/notebooks?confirm=true")
 
     warn_content = _notebook_bytes(
-        "def unsupported(a, *args):\n    return a\n\n"
+        "class Unsupported:\n    def unsupported(self, a):\n        return a\n\n"
         "def sub(a: int, b: int) -> int:\n    return a - b\n"
     )
 
@@ -24198,7 +24198,7 @@ def _seed_validate_all_pass_warn_fail():
         ("va_status_pass.ipynb", "def add(a: int, b: int) -> int:\n    return a + b\n"),
         (
             "va_status_warn.ipynb",
-            "def unsupported(a, *args):\n    return a\n\n"
+            "class Unsupported:\n    def unsupported(self, a):\n        return a\n\n"
             "def sub(a: int, b: int) -> int:\n    return a - b\n",
         ),
         ("va_status_fail.ipynb", "def health_check() -> dict:\n    return {}\n"),
@@ -24696,7 +24696,7 @@ def test_validate_all_strict_turns_skipped_functions_into_a_failure():
     client.delete("/api/notebooks?confirm=true")
 
     warn_content = _notebook_bytes(
-        "def unsupported(a, *args):\n    return a\n"
+        "class Unsupported:\n    def unsupported(self, a):\n        return a\n"
     )
 
     resp = client.post(

@@ -13420,7 +13420,7 @@ def test_validate_command_warns_but_does_not_fail_on_skipped_functions(tmp_path)
     notebook_path = workdir / "nb.ipynb"
     _write_notebook_with_function(
         notebook_path,
-        "def unsupported(a, *args):\n    return a\n\n"
+        "class Unsupported:\n    def unsupported(self, a):\n        return a\n\n"
         "def add(a: int, b: int) -> int:\n    return a + b\n",
     )
 
@@ -13438,7 +13438,7 @@ def test_validate_command_strict_flag_fails_on_skipped_functions(tmp_path):
     workdir.mkdir()
     notebook_path = workdir / "nb.ipynb"
     _write_notebook_with_function(
-        notebook_path, "def unsupported(a, *args):\n    return a\n"
+        notebook_path, "class Unsupported:\n    def unsupported(self, a):\n        return a\n"
     )
 
     proc = _run_cli(["validate", str(notebook_path), "--strict"], cwd=workdir)

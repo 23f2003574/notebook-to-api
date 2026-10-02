@@ -867,6 +867,10 @@ def _call_arg_expr(arg):
     """
     if arg.get("kind") == "var_keyword":
         return f"**req.{_field_name(arg)}"
+    # `*args` (kind "var_positional"): its List field is spread back in as
+    # separate positional values, the counterpart of **kwargs above.
+    if arg.get("kind") == "var_positional":
+        return f"*req.{_field_name(arg)}"
     if arg.get("kind") == "keyword_only":
         return f"{arg['name']}={_arg_value_expr(arg)}"
     return _arg_value_expr(arg)
@@ -5237,7 +5241,7 @@ def generate_fastapi_code(
             # /tasks and GET /tasks/{task_id} above) -- this exists purely
             # for retry_task below to consume.
             replay_pos_args = "".join(
-                f"{_arg_value_expr(arg)}, "
+                f"{'*' if arg.get('kind') == 'var_positional' else ''}{_arg_value_expr(arg)}, "
                 for arg in args
                 if arg.get("kind") not in ("keyword_only", "var_keyword")
             )

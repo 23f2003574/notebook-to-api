@@ -378,19 +378,6 @@ def extract_functions_from_code(code):
 
     for node in _iter_module_level_statements(tree.body):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            # `*args` can't be represented as a fixed set of Pydantic
-            # request fields at all -- there's no name to give each
-            # caller-supplied positional value, and no way to know how
-            # many to expect. Skip the whole function (same policy already
-            # applied to class methods/nested functions) rather than
-            # generating an endpoint that quietly drops part of its own
-            # signature. `**kwargs` doesn't have that problem -- see the
-            # node.args.kwarg handling below, which gives it its own
-            # Dict[str, Any] request field instead of skipping the
-            # function.
-            if node.args.vararg:
-                continue
-
             args = []
 
             # Positional-only params (those before a bare `/`, e.g.
@@ -449,6 +436,27 @@ def extract_functions_from_code(code):
                         )
 
                 args.append(arg_info)
+
+            # `*args`: every extra positional value a caller wants to pass,
+            # as one List request field (typed from the `*args: T`
+            # annotation, else List[Any]) that the generated endpoint
+            # spreads back into the notebook call as `*req.<name>` (see
+            # _call_arg_expr, api_generator.py) -- the positional
+            # counterpart of the **kwargs Dict field below. Defaults to []
+            # so a caller with nothing extra to pass can omit it.
+            if node.args.vararg:
+                vararg = node.args.vararg
+                item_type = (
+                    ast.unparse(vararg.annotation) if vararg.annotation else "Any"
+                )
+                args.append({
+                    "name": vararg.arg,
+                    "type": f"List[{item_type}]",
+                    "default": [],
+                    "default_is_literal": True,
+                    "has_default": True,
+                    "kind": "var_positional"
+                })
 
             # Keyword-only args (those after a bare `*` or `*args`), e.g.
             # `def train(data, *, epochs=10, lr=0.01)`. These live in a
@@ -618,16 +626,6 @@ def extract_skipped_functions_from_code(code):
             continue
 
         if id(node) in module_level_ids:
-
-            if node.args.vararg:
-                skipped.append({
-                    "name": node.name,
-                    "reason": (
-                        "uses *args, which can't be represented as a "
-                        "fixed set of request fields"
-                    ),
-                })
-
             continue
 
         skipped.append({

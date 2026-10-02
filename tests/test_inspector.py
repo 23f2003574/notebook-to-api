@@ -1252,7 +1252,7 @@ def test_inspect_notebook_report_resolves_the_actual_distribution_name(tmp_path,
 def test_aggregate_skipped_functions_reports_unsupported_signatures():
 
     code_cells = [
-        "def unsupported(a, *args):\n    return a\n",
+        "class Unsupported:\n    def unsupported(self, a):\n        return a\n",
         "def add(a: int, b: int) -> int:\n    return a + b\n",
     ]
 
@@ -1271,7 +1271,7 @@ def test_aggregate_skipped_functions_omits_names_that_ended_up_exposed():
     """
 
     code_cells = [
-        "def add(a, *args):\n    return a\n",
+        "class Calc:\n    def add(self, a):\n        return a\n",
         "def add(a: int, b: int) -> int:\n    return a + b\n",
     ]
 
@@ -1298,7 +1298,7 @@ def test_inspect_notebook_data_reports_skipped_functions(tmp_path):
     _write_notebook(
         notebook_path,
         "def add(a: int, b: int) -> int:\n    return a + b\n\n"
-        "def unsupported(a, *args):\n    return a\n",
+        "class Unsupported:\n    def unsupported(self, a):\n        return a\n",
     )
 
     data = inspect_notebook_data(str(notebook_path), str(tmp_path / "generated"))
@@ -1307,8 +1307,8 @@ def test_inspect_notebook_data_reports_skipped_functions(tmp_path):
         {
             "name": "unsupported",
             "reason": (
-                "uses *args, which can't be represented as a "
-                "fixed set of request fields"
+                "defined inside a class or nested function, so it isn't "
+                "callable as a standalone endpoint"
             ),
         }
     ]
@@ -1368,7 +1368,7 @@ def test_print_compile_summary_lists_skipped_functions(tmp_path, capsys):
     _write_notebook(
         notebook_path,
         "def add(a: int, b: int) -> int:\n    return a + b\n\n"
-        "def unsupported(a, *args):\n    return a\n",
+        "class Unsupported:\n    def unsupported(self, a):\n        return a\n",
     )
 
     print_compile_summary(str(notebook_path), str(tmp_path / "generated"))
