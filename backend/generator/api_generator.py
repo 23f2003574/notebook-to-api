@@ -846,6 +846,9 @@ def _arg_value_expr(arg):
     kind = _array_like_kind(arg.get("type"))
     if kind:
         return f"_coerce_array_like(req.{_field_name(arg)}, {kind!r})"
+    binary = _binary_kind(arg.get("type"))
+    if binary:
+        return f"_coerce_binary(req.{_field_name(arg)}, {binary!r})"
     container = _array_like_container(arg.get("type"))
     if container:
         return (
@@ -1146,6 +1149,52 @@ def _array_like_kind(type_str):
     return None
 
 
+_BINARY_KINDS = {
+    "bytes": "bytes", "bytearray": "bytes",
+    "BytesIO": "bytesio", "BinaryIO": "bytesio",
+}
+
+
+def _binary_kind(type_str):
+    """"bytes" / "bytesio" when `type_str` is `bytes`/`bytearray` or a
+    binary file object (`io.BytesIO`, `typing.BinaryIO`, `IO[bytes]`),
+    optionally made Optional -- else None.
+
+    JSON has no bytes, so these arrive as a string. Before, a `bytes`
+    parameter got the UTF-8 bytes of whatever string was sent -- including
+    the `data:...;base64,` URI this same app returns for binary results, so
+    an image could not round-trip -- and a BytesIO parameter got the bare
+    str (a 500 on `.read()`). _coerce_binary decodes a data URI and wraps
+    the result in a BytesIO when the function asked for a file object.
+    """
+    if not type_str:
+        return None
+    try:
+        node = ast.parse(type_str, mode="eval").body
+    except SyntaxError:
+        return None
+    while True:
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+            sides = [side for side in (node.left, node.right)
+                     if not (isinstance(side, ast.Constant) and side.value is None)]
+            if len(sides) != 1:
+                return None
+            node = sides[0]
+            continue
+        if isinstance(node, ast.Subscript):
+            base = node.value
+            base_name = base.attr if isinstance(base, ast.Attribute) else getattr(base, "id", None)
+            if base_name == "Optional":
+                node = node.slice
+                continue
+            if base_name == "IO" and ast.unparse(node.slice) == "bytes":
+                return "bytesio"
+            return None
+        break
+    name = node.attr if isinstance(node, ast.Attribute) else getattr(node, "id", None)
+    return _BINARY_KINDS.get(name)
+
+
 _LIST_CONTAINER_NAMES = {"List", "list", "Sequence", "Iterable", "Collection"}
 _DICT_CONTAINER_NAMES = {"Dict", "dict", "Mapping"}
 
@@ -1212,6 +1261,11 @@ def _resolve_annotation_source(type_str, forward_refs=True):
 
     if _array_like_kind(type_str):
         return "Any", {"Any"}
+
+    if _binary_kind(type_str):
+        if "Optional[" in type_str or "None" in type_str:
+            return "Optional[str]", {"Optional"}
+        return "str", set()
 
     container = _array_like_container(type_str)
     if container:
@@ -2583,6 +2637,29 @@ def generate_fastapi_code(
     # notebook function annotated as one, from the plain JSON the request
     # model accepts (see _array_like_kind). A value that can't be turned
     # into one is a caller error, reported as 422 instead of a 500.
+    lines.append("def _coerce_binary(value, kind):")
+    lines.append("    if value is None:")
+    lines.append("        return None")
+    # A non-string value is the parameter's own default (b'...', a buffer).
+    lines.append("    if not isinstance(value, str):")
+    lines.append("        if kind == 'bytesio' and isinstance(value, (bytes, bytearray)):")
+    lines.append("            import io as _io")
+    lines.append("            return _io.BytesIO(bytes(value))")
+    lines.append("        return value")
+    lines.append("    if value.startswith('data:') and ';base64,' in value[:200]:")
+    lines.append("        import base64 as _base64")
+    lines.append("        import binascii as _binascii")
+    lines.append("        try:")
+    lines.append("            raw = _base64.b64decode(value.split(';base64,', 1)[1], validate=True)")
+    lines.append("        except (_binascii.Error, ValueError) as e:")
+    lines.append("            raise HTTPException(status_code=422, detail=f'Invalid base64 data URI: {e}')")
+    lines.append("    else:")
+    lines.append("        raw = value.encode('utf-8')")
+    lines.append("    if kind == 'bytesio':")
+    lines.append("        import io as _io")
+    lines.append("        return _io.BytesIO(raw)")
+    lines.append("    return raw")
+    lines.append("")
     lines.append("def _coerce_array_like_items(value, container, kind):")
     lines.append("    if value is None:")
     lines.append("        return None")

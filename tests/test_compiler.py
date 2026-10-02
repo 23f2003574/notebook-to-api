@@ -10846,3 +10846,82 @@ print("PANDAS_SCALARS_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "PANDAS_SCALARS_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_bytes_and_binary_file_parameters_accept_data_uris(tmp_path):
+    """Confirmed before this: a `bytes` parameter received the UTF-8 bytes of
+    the data URI string itself (so the app's own binary output could not be
+    sent back in), and an io.BytesIO parameter got a bare str -- a 500."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "import io\nfrom typing import BinaryIO, Optional\n"
+                    "def make_png(n: int):\n    return b'\\x89PNG\\r\\n\\x1a\\n' + bytes([n])\n\n"
+                    "def inspect_blob(blob: bytes):\n    return blob.hex()\n\n"
+                    "def read_file(f: io.BytesIO):\n    return f.read().hex()\n\n"
+                    "def read_binary(f: BinaryIO):\n    return len(f.read())\n\n"
+                    "def maybe_blob(blob: Optional[bytes] = None):\n    return None if blob is None else len(blob)\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def post(name, body):
+    return client.post("/" + name, json=body, headers=headers)
+
+def result(name, body):
+    r = post(name, body)
+    assert r.status_code == 200, (name, r.text)
+    return r.json()["result"]
+
+png_uri = result("make_png", {{"n": 7}})
+assert png_uri.startswith("data:image/png;base64,")
+# The app's own binary output round-trips back in as the original bytes.
+assert result("inspect_blob", {{"blob": png_uri}}) == "89504e470d0a1a0a07"
+assert result("read_file", {{"f": png_uri}}) == "89504e470d0a1a0a07"
+assert result("read_binary", {{"f": "abc"}}) == 3  # plain text stays UTF-8
+assert result("inspect_blob", {{"blob": "hi"}}) == "6869"
+assert result("maybe_blob", {{}}) is None
+assert result("maybe_blob", {{"blob": "data:application/octet-stream;base64,AAE="}}) == 2
+bad = post("inspect_blob", {{"blob": "data:image/png;base64,***"}})
+assert bad.status_code == 422 and "base64" in bad.text, bad.text
+assert post("inspect_blob", {{}}).status_code == 422
+print("BINARY_PARAMS_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "BINARY_PARAMS_E2E_OK" in proc.stdout
