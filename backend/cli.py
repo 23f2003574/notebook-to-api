@@ -1260,6 +1260,48 @@ def _extract_dashboard_error_detail(response):
     return response.text
 
 
+def _notebook_upload_bytes(notebook_path, strip_outputs=False):
+    """The bytes `upload` sends for `notebook_path`. With `strip_outputs`,
+    every cell's saved outputs, execution count and markdown attachments are
+    removed first.
+
+    A notebook that has been run carries its plots (base64 PNGs), rendered
+    tables and logs inside the file, which routinely pushes it past the
+    dashboard's upload size limit (NOTEBOOK_API_MAX_UPLOAD_BYTES, 10 MB by
+    default) -- though compiling only ever reads the *code*. A file that
+    isn't valid notebook JSON is sent untouched, so the dashboard reports its
+    own usual validation error instead of this command inventing one.
+    """
+    with open(notebook_path, "rb") as f:
+        raw = f.read()
+
+    if not strip_outputs:
+        return raw
+
+    try:
+        notebook = json.loads(raw)
+        cells = notebook["cells"]
+    except (ValueError, KeyError, TypeError):
+        return raw
+
+    for cell in cells:
+        if not isinstance(cell, dict):
+            continue
+        if cell.get("cell_type") == "code":
+            cell["outputs"] = []
+            cell["execution_count"] = None
+        cell.pop("attachments", None)
+
+    return json.dumps(notebook, indent=1, ensure_ascii=False).encode("utf-8")
+
+
+def _human_size(num_bytes):
+    for unit in ("B", "KB", "MB"):
+        if num_bytes < 1024 or unit == "MB":
+            return f"{num_bytes:.0f} {unit}" if unit == "B" else f"{num_bytes:.1f} {unit}"
+        num_bytes /= 1024
+
+
 def _dashboard_connection_error(exc, dashboard_url):
     """Translate an httpx transport-level failure reaching `dashboard_url`
     into the same clean, actionable RuntimeError every other core
@@ -2695,19 +2737,19 @@ def _dispatch_core_command(args):
 
             try:
 
-                with open(notebook_path, "rb") as f:
+                payload = _notebook_upload_bytes(notebook_path, args.strip_outputs)
 
-                    response = httpx.post(
-                        f"{dashboard_url}/api/upload",
-                        params=params,
-                        files={
-                            "file": (
-                                os.path.basename(notebook_path), f,
-                                "application/json",
-                            )
-                        },
-                        timeout=args.timeout,
-                    )
+                response = httpx.post(
+                    f"{dashboard_url}/api/upload",
+                    params=params,
+                    files={
+                        "file": (
+                            os.path.basename(notebook_path), payload,
+                            "application/json",
+                        )
+                    },
+                    timeout=args.timeout,
+                )
 
             except httpx.HTTPError as exc:
                 raise _dashboard_connection_error(exc, dashboard_url)
@@ -2727,6 +2769,9 @@ def _dispatch_core_command(args):
                 verb = "Would upload" if data.get("dry_run") else "Uploaded"
                 print(f"{verb} '{data.get('filename', notebook_path)}' to {dashboard_url}")
                 print(f"  path: {data.get('path')}")
+                if args.strip_outputs:
+                    original = os.path.getsize(notebook_path)
+                    print(f"  stripped outputs: {_human_size(original)} -> {_human_size(len(payload))}")
                 print(f"  overwritten: {data.get('overwritten')}")
                 print(f"  sha256: {data.get('sha256')}")
                 if data.get("was_currently_compiled"):
@@ -2739,43 +2784,35 @@ def _dispatch_core_command(args):
             # oversized file, ...) doesn't stop the rest from uploading,
             # unlike a plain shell loop over single-file `upload` calls,
             # which stops at the first non-zero exit.
-            opened_files = []
+            files_payload = [
+                (
+                    "files",
+                    (
+                        os.path.basename(notebook_path),
+                        _notebook_upload_bytes(notebook_path, args.strip_outputs),
+                        "application/json",
+                    ),
+                )
+                for notebook_path in args.notebook
+            ]
+
+            batch_params = {"overwrite": args.overwrite}
+            if args.tags:
+                batch_params["tags"] = args.tags
+            if args.description is not None:
+                batch_params["description"] = args.description
+            if args.dry_run:
+                batch_params["dry_run"] = True
 
             try:
-
-                for notebook_path in args.notebook:
-                    f = open(notebook_path, "rb")
-                    opened_files.append(f)
-
-                files_payload = [
-                    (
-                        "files",
-                        (os.path.basename(notebook_path), f, "application/json"),
-                    )
-                    for notebook_path, f in zip(args.notebook, opened_files)
-                ]
-
-                batch_params = {"overwrite": args.overwrite}
-                if args.tags:
-                    batch_params["tags"] = args.tags
-                if args.description is not None:
-                    batch_params["description"] = args.description
-                if args.dry_run:
-                    batch_params["dry_run"] = True
-
-                try:
-                    response = httpx.post(
-                        f"{dashboard_url}/api/upload/batch",
-                        params=batch_params,
-                        files=files_payload,
-                        timeout=args.timeout,
-                    )
-                except httpx.HTTPError as exc:
-                    raise _dashboard_connection_error(exc, dashboard_url)
-
-            finally:
-                for f in opened_files:
-                    f.close()
+                response = httpx.post(
+                    f"{dashboard_url}/api/upload/batch",
+                    params=batch_params,
+                    files=files_payload,
+                    timeout=args.timeout,
+                )
+            except httpx.HTTPError as exc:
+                raise _dashboard_connection_error(exc, dashboard_url)
 
             if response.status_code >= 400:
 
@@ -10741,6 +10778,18 @@ def main():
             "catch a corrupted transfer or the wrong file before it lands "
             "on the dashboard. Only valid when uploading a single "
             "notebook."
+        )
+    )
+    upload_parser.add_argument(
+        "--strip-outputs",
+        action="store_true",
+        dest="strip_outputs",
+        help=(
+            "Remove every cell's saved outputs, execution count and "
+            "markdown attachments before uploading -- compiling only reads "
+            "the code, but a notebook that has been run (plots, tables, "
+            "logs embedded in the file) often exceeds the dashboard's "
+            "upload size limit. The local file is not modified."
         )
     )
     upload_parser.add_argument(

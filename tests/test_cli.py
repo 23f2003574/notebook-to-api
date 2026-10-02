@@ -30556,3 +30556,105 @@ def test_remote_validate_command_prints_the_no_endpoints_warning(tmp_path, fake_
 
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "⚠ No endpoints: nothing in this notebook would be exposed" in proc.stdout
+
+
+def _notebook_with_heavy_outputs(path):
+    import nbformat
+
+    notebook = nbformat.v4.new_notebook()
+    code = nbformat.v4.new_code_cell("def add(a: int, b: int) -> int:\n    return a + b\n")
+    code.execution_count = 7
+    code.outputs = [nbformat.v4.new_output(
+        "display_data", data={"image/png": "A" * 50_000, "text/plain": "<Figure>"},
+    )]
+    markdown = nbformat.v4.new_markdown_cell("![plot](attachment:p.png)")
+    markdown["attachments"] = {"p.png": {"image/png": "B" * 20_000}}
+    notebook.cells = [markdown, code]
+    with open(path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+
+def test_notebook_upload_bytes_strips_outputs_execution_counts_and_attachments(tmp_path):
+    from backend.cli import _notebook_upload_bytes
+
+    path = tmp_path / "nb.ipynb"
+    _notebook_with_heavy_outputs(path)
+    original = path.read_bytes()
+
+    assert _notebook_upload_bytes(str(path)) == original  # untouched by default
+
+    stripped = _notebook_upload_bytes(str(path), strip_outputs=True)
+    assert len(stripped) < len(original) // 10
+    cells = json.loads(stripped)["cells"]
+    code = next(c for c in cells if c["cell_type"] == "code")
+    assert code["outputs"] == [] and code["execution_count"] is None
+    assert "".join(code["source"]) == "def add(a: int, b: int) -> int:\n    return a + b\n"
+    assert all("attachments" not in c for c in cells)
+    # The markdown text itself survives.
+    assert "".join(next(c for c in cells if c["cell_type"] == "markdown")["source"]) == "![plot](attachment:p.png)"
+    # The local file is not modified.
+    assert path.read_bytes() == original
+
+
+def test_notebook_upload_bytes_leaves_non_notebook_content_untouched(tmp_path):
+    from backend.cli import _notebook_upload_bytes
+
+    for content in (b"not json at all", b'{"no_cells": true}', b"[1, 2, 3]"):
+        path = tmp_path / "bad.ipynb"
+        path.write_bytes(content)
+        assert _notebook_upload_bytes(str(path), strip_outputs=True) == content
+
+
+def test_upload_command_strip_outputs_sends_a_much_smaller_notebook(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "filename": "nb.ipynb", "path": "/u/nb.ipynb", "overwritten": False}),
+        _json_response(200, {"status": "success", "filename": "nb.ipynb", "path": "/u/nb.ipynb", "overwritten": False}),
+    ]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _notebook_with_heavy_outputs(notebook_path)
+
+    plain = _run_cli(["upload", str(notebook_path), "--dashboard-url", dashboard_url], cwd=workdir)
+    stripped = _run_cli(
+        ["upload", str(notebook_path), "--strip-outputs", "--dashboard-url", dashboard_url], cwd=workdir,
+    )
+
+    assert plain.returncode == 0, plain.stdout + plain.stderr
+    assert stripped.returncode == 0, stripped.stdout + stripped.stderr
+    assert "stripped outputs:" not in plain.stdout
+    assert "stripped outputs:" in stripped.stdout
+    assert b"A" * 1000 in handler.bodies[0]
+    assert b"A" * 1000 not in handler.bodies[1]
+    assert len(handler.bodies[1]) < len(handler.bodies[0]) // 10
+
+
+def test_upload_command_strip_outputs_applies_to_every_notebook_in_a_batch(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success", "dry_run": False, "succeeded_count": 2, "failed_count": 0,
+            "results": [
+                {"status": "success", "filename": "a.ipynb", "overwritten": False},
+                {"status": "success", "filename": "b.ipynb", "overwritten": False},
+            ],
+        })
+    ]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    for name in ("a.ipynb", "b.ipynb"):
+        _notebook_with_heavy_outputs(workdir / name)
+
+    proc = _run_cli(
+        ["upload", str(workdir / "a.ipynb"), str(workdir / "b.ipynb"), "--strip-outputs",
+         "--dashboard-url", dashboard_url],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/upload/batch?overwrite=false"]
+    assert b"A" * 1000 not in handler.bodies[0] and b"B" * 1000 not in handler.bodies[0]
+    assert b"a.ipynb" in handler.bodies[0] and b"b.ipynb" in handler.bodies[0]
