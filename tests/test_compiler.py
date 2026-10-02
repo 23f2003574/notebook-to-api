@@ -10240,3 +10240,85 @@ print("FUTURE_IMPORT_STUBS_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "FUTURE_IMPORT_STUBS_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_bytes_buffers_and_non_string_dict_keys_are_plain_json(tmp_path):
+    """Confirmed before this: returning binary bytes (an image, a PDF) was a
+    500 "utf-8 codec can't decode", an io.BytesIO came back as a silent `{}`,
+    and a dict keyed by tuples crashed the encoder."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "import io\n"
+                    "def png(n: int):\n    return b'\\x89PNG\\r\\n\\x1a\\n' + b'\\x00' * 4\n\n"
+                    "def pdf(n: int):\n    return b'%PDF-1.4\\xff'\n\n"
+                    "def text(n: int):\n    return b'hello'\n\n"
+                    "def raw(n: int):\n    return bytearray(b'\\xff\\xfe')\n\n"
+                    "def buffer(n: int):\n    b = io.BytesIO()\n    b.write(b'\\xff\\xfe\\x00')\n    return b\n\n"
+                    "def text_buffer(n: int):\n    s = io.StringIO()\n    s.write('abc')\n    return s\n\n"
+                    "def pair_keys(n: int):\n    return {(1, 2): 'a', 3: 'b', None: 'c', 'k': 'd'}\n\n"
+                    "def nested(n: int):\n    return {'blob': b'\\xff\\x00', 'ok': 1}\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import base64
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def call(name):
+    response = client.post("/" + name, json={{"n": 1}}, headers=headers)
+    assert response.status_code == 200, (name, response.status_code, response.text)
+    return response.json()["result"]
+
+def decode(uri, mime):
+    prefix = "data:" + mime + ";base64,"
+    assert uri.startswith(prefix), uri
+    return base64.b64decode(uri[len(prefix):])
+
+assert decode(call("png"), "image/png") == b"\\x89PNG\\r\\n\\x1a\\n\\x00\\x00\\x00\\x00"
+assert decode(call("pdf"), "application/pdf") == b"%PDF-1.4\\xff"
+assert call("text") == "hello"  # valid UTF-8 stays text, as before
+assert decode(call("raw"), "application/octet-stream") == b"\\xff\\xfe"
+assert decode(call("buffer"), "application/octet-stream") == b"\\xff\\xfe\\x00"
+assert call("text_buffer") == "abc"
+assert call("pair_keys") == {{"(1, 2)": "a", "3": "b", "null": "c", "k": "d"}}
+nested = call("nested")
+assert decode(nested["blob"], "application/octet-stream") == b"\\xff\\x00" and nested["ok"] == 1
+print("BYTES_JSON_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "BYTES_JSON_E2E_OK" in proc.stdout

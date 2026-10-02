@@ -169,7 +169,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # 'req'", nothing to do with train_model's own logic at all.
     "_evict_expired_tasks", "_run_background_task", "_json_safe",
     "_coerce_array_like", "_safe_annotation", "_shield_exit",
-    "_png_data_uri", "_openapi_json_safe",
+    "_png_data_uri", "_bytes_json", "_openapi_json_safe",
     # Every name below is one of this file's own top-level `import`s --
     # never previously reserved at all, on the (never actually verified)
     # assumption that only names *this file itself defines* (a constant,
@@ -2514,6 +2514,28 @@ def generate_fastapi_code(
     lines.append("            detail=f'Could not build a {kind} from the request value: {e}',")
     lines.append("        )")
     lines.append("")
+    # _bytes_json: a function returning bytes -- an image from a BytesIO
+    # buffer, a PDF, a pickled model -- was a 500 unless the bytes happened to
+    # be valid UTF-8, and a BytesIO *object* came back as a silent `{}`. Text
+    # bytes stay text (as before); binary becomes a base64 data URI whose
+    # MIME type is sniffed from the common magic numbers.
+    lines.append("def _bytes_json(value):")
+    lines.append("    raw = bytes(value)")
+    lines.append("    try:")
+    lines.append("        return raw.decode('utf-8')")
+    lines.append("    except UnicodeDecodeError:")
+    lines.append("        pass")
+    lines.append("    import base64 as _base64")
+    lines.append("    mime = 'application/octet-stream'")
+    lines.append("    for magic, name in (")
+    lines.append("        (b'\\x89PNG\\r\\n\\x1a\\n', 'image/png'), (b'\\xff\\xd8\\xff', 'image/jpeg'),")
+    lines.append("        (b'GIF8', 'image/gif'), (b'%PDF-', 'application/pdf'), (b'PK\\x03\\x04', 'application/zip'),")
+    lines.append("    ):")
+    lines.append("        if raw.startswith(magic):")
+    lines.append("            mime = name")
+    lines.append("            break")
+    lines.append("    return 'data:' + mime + ';base64,' + _base64.b64encode(raw).decode('ascii')")
+    lines.append("")
     lines.append("def _png_data_uri(write, close=None):")
     lines.append("    import base64 as _base64")
     lines.append("    import io as _io")
@@ -2553,6 +2575,13 @@ def generate_fastapi_code(
         "and hasattr(value, 'size'):"
     )
     lines.append("        return _png_data_uri(lambda buf, **kw: value.save(buf, format='PNG'))")
+    lines.append("    if isinstance(value, (bytes, bytearray, memoryview)):")
+    lines.append("        return _bytes_json(value)")
+    lines.append("    if hasattr(value, 'getvalue') and hasattr(value, 'seek') and hasattr(value, 'read'):")
+    lines.append("        try:")
+    lines.append("            return _bytes_json(value.getvalue()) if isinstance(value.getvalue(), (bytes, bytearray)) else value.getvalue()")
+    lines.append("        except Exception:")
+    lines.append("            return value")
     lines.append("    if isinstance(value, range):")
     lines.append("        return [_json_safe(v, _depth + 1) for v in value]")
     lines.append("    if isinstance(value, float):")
@@ -2568,7 +2597,14 @@ def generate_fastapi_code(
     )
     lines.append("        return None")
     lines.append("    if isinstance(value, dict):")
-    lines.append("        return {k: _json_safe(v, _depth + 1) for k, v in value.items()}")
+    # JSON object keys must be strings: a tuple/other key (a groupby on two
+    # columns, a Counter of pairs) made json.dumps fail -- or, before that,
+    # "unhashable type" in the encoder. Scalars JSON already accepts stay as
+    # they are; anything else is stringified.
+    lines.append(
+        "        return {(k if k is None or isinstance(k, (str, int, float, bool)) "
+        "else str(k)): _json_safe(v, _depth + 1) for k, v in value.items()}"
+    )
     lines.append("    if isinstance(value, (list, tuple, set, frozenset)):")
     lines.append("        return [_json_safe(v, _depth + 1) for v in value]")
     lines.append("    if hasattr(value, 'to_dict') and hasattr(value, 'columns'):")
