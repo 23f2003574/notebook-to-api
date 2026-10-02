@@ -10047,3 +10047,85 @@ def test_compiled_app_can_reject_undeclared_request_fields(tmp_path):
     assert typo_body["detail"][0]["loc"] == ["body", "treshold"]
     assert good_body == {"result": 6.0}
     assert empty_status == 422
+
+
+def test_compiled_app_can_limit_concurrent_notebook_calls(tmp_path):
+    """Notebook code is rarely written for concurrency, yet every sync call
+    ran in a thread pool with no cap. NOTEBOOK_API_MAX_CONCURRENT_CALLS=1
+    serializes every call (and background task); unset keeps the old,
+    unlimited behavior."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "import threading, time\n"
+                    "_lock = threading.Lock()\n"
+                    "_running = 0\n"
+                    "PEAK = 0\n\n"
+                    "def _work(seconds):\n"
+                    "    global _running, PEAK\n"
+                    "    with _lock:\n"
+                    "        _running += 1\n"
+                    "        PEAK = max(PEAK, _running)\n"
+                    "    time.sleep(seconds)\n"
+                    "    with _lock:\n"
+                    "        _running -= 1\n\n"
+                    "def slow(n: int) -> int:\n    _work(0.3)\n    return n\n\n"
+                    "# notebook-to-api: background\n"
+                    "def train(n: int) -> int:\n    _work(0.3)\n    return n\n\n"
+                    "def peak() -> int:\n    return PEAK\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    compile_script = (
+        f"import sys; sys.path.insert(0, {str(PROJECT_ROOT)!r}); "
+        "from backend.compiler import compile_notebook; "
+        f"compile_notebook({str(notebook_path)!r}, 'generated')"
+    )
+    compiled = subprocess.run(
+        [sys.executable, "-c", compile_script], cwd=str(workdir), capture_output=True, text=True, timeout=60,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+
+    def peak_concurrency(extra_env):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("NOTEBOOK_API_")}
+        env.update(extra_env)
+        env["PYTHONPATH"] = f"{PROJECT_ROOT}{os.pathsep}{workdir}"
+        probe = (
+            "import time\n"
+            "from concurrent.futures import ThreadPoolExecutor\n"
+            "from fastapi.testclient import TestClient\n"
+            "from generated.app import app\n"
+            "H = {'X-API-Key': 'notebook-to-api-dev-key'}\n"
+            "with TestClient(app) as c:\n"
+            "    with ThreadPoolExecutor(4) as pool:\n"
+            "        results = list(pool.map(lambda n: c.post('/slow', json={'n': n}, headers=H).status_code, range(4)))\n"
+            "    assert results == [200] * 4, results\n"
+            "    ids = [c.post('/train', json={'n': n}, headers=H).json()['task_id'] for n in range(3)]\n"
+            "    deadline = time.time() + 20\n"
+            "    while any(c.get('/tasks/' + i, headers=H).json()['status'] == 'processing' for i in ids):\n"
+            "        assert time.time() < deadline, 'tasks never finished'\n"
+            "        time.sleep(0.05)\n"
+            "    print('PEAK', c.post('/peak', json={}, headers=H).json()['result'])\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-W", "ignore", "-c", probe],
+            cwd=str(workdir), capture_output=True, text=True, timeout=90, env=env,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        return int(result.stdout.split("PEAK")[-1].split()[0])
+
+    assert peak_concurrency({}) > 1
+    assert peak_concurrency({"NOTEBOOK_API_MAX_CONCURRENT_CALLS": "1"}) == 1
+    assert peak_concurrency({"NOTEBOOK_API_MAX_CONCURRENT_CALLS": "2"}) == 2

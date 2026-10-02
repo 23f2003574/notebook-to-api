@@ -75,6 +75,7 @@ def test_generated_app_env_vars_default_matches_the_actual_generated_code():
         "NOTEBOOK_API_WEBHOOK_RETRY_BACKOFF_SECONDS",
         "NOTEBOOK_API_PUBLIC_URL",
         "NOTEBOOK_API_DISABLE_DOCS",
+        "NOTEBOOK_API_MAX_CONCURRENT_CALLS",
         "NOTEBOOK_API_STRICT_FIELDS",
         "NOTEBOOK_API_REQUIRE_CUSTOM_KEY",
         "NOTEBOOK_API_REJECT_DEPRECATED",

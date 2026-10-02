@@ -16,7 +16,7 @@ from pathlib import Path
 # anywhere. Rejecting these outright avoids ever emitting that endpoint
 # ordering trap.
 RESERVED_INFRASTRUCTURE_NAMES = frozenset({
-    "app", "TASKS", "API_KEYS", "API_KEY_HEADER_NAME", "STRICT_REQUEST_FIELDS", "DEFAULT_API_KEY", "USING_DEFAULT_API_KEY", "REQUIRE_CUSTOM_API_KEY", "START_TIME",
+    "app", "TASKS", "API_KEYS", "API_KEY_HEADER_NAME", "STRICT_REQUEST_FIELDS", "MAX_CONCURRENT_CALLS", "_CALL_LIMITER", "_NoLimit", "_NO_LIMIT", "_call_slot", "DEFAULT_API_KEY", "USING_DEFAULT_API_KEY", "REQUIRE_CUSTOM_API_KEY", "START_TIME",
     "GENERATED_AT", "PYTHON_VERSION", "NOTEBOOK_TO_API_VERSION", "ALLOWED_ORIGINS",
     "PUBLIC_URL", "DISABLE_DOCS",
     "MAX_REQUEST_BODY_BYTES", "MaxRequestBodySizeMiddleware",
@@ -623,6 +623,21 @@ GENERATED_APP_ENV_VARS = [
             "parameter (\"treshold\" for \"threshold\") quietly runs the "
             "function with that parameter's default and returns a "
             "plausible-looking wrong answer."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_MAX_CONCURRENT_CALLS",
+        "default": "0",
+        "description": (
+            "Maximum number of notebook functions allowed to run at the same "
+            "time across every endpoint and background task; further calls "
+            "wait for a free slot. 0 (the default) means unlimited. Notebook "
+            "code is rarely written for concurrency -- a model held on one "
+            "GPU, a shared dataframe, module-level counters -- so an app "
+            "serving real traffic often needs this set (1 serializes every "
+            "call). A synchronous request that waits for a slot counts that "
+            "wait against NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS, so an "
+            "overloaded app answers 504 rather than queueing forever."
         ),
     },
     {
@@ -2121,6 +2136,33 @@ def generate_fastapi_code(
     # until killed. Converted into an ordinary RuntimeError in the same
     # thread/coroutine, so it becomes the usual 500 / failed-task with a
     # message naming what happened.
+    lines.append(
+        'MAX_CONCURRENT_CALLS = int(os.getenv('
+        '"NOTEBOOK_API_MAX_CONCURRENT_CALLS", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_MAX_CONCURRENT_CALLS")}"'
+        '))'
+    )
+    lines.append("_CALL_LIMITER = None")
+    lines.append("")
+    lines.append("class _NoLimit:")
+    lines.append("    async def __aenter__(self):")
+    lines.append("        return None")
+    lines.append("    async def __aexit__(self, *exc_info):")
+    lines.append("        return None")
+    lines.append("")
+    lines.append("_NO_LIMIT = _NoLimit()")
+    lines.append("")
+    # Created lazily, inside the running event loop. A synchronous call that is
+    # cancelled by its timeout frees its slot even though the abandoned thread
+    # may still be running -- the same unavoidable limit as the timeout itself.
+    lines.append("def _call_slot():")
+    lines.append("    global _CALL_LIMITER")
+    lines.append("    if MAX_CONCURRENT_CALLS <= 0:")
+    lines.append("        return _NO_LIMIT")
+    lines.append("    if _CALL_LIMITER is None:")
+    lines.append("        _CALL_LIMITER = anyio.CapacityLimiter(MAX_CONCURRENT_CALLS)")
+    lines.append("    return _CALL_LIMITER")
+    lines.append("")
     lines.append("def _shield_exit(func):")
     lines.append("    def _exit_error(e):")
     lines.append("        if isinstance(e, SystemExit):")
@@ -2146,9 +2188,10 @@ def generate_fastapi_code(
     lines.append("    call = _shield_exit(call)")
     lines.append("    limit = REQUEST_TIMEOUT_SECONDS if timeout is None else timeout")
     lines.append("    with anyio.fail_after(limit or None):")
-    lines.append("        if is_async:")
-    lines.append("            return await call()")
-    lines.append("        return await anyio.to_thread.run_sync(call, abandon_on_cancel=True)")
+    lines.append("        async with _call_slot():")
+    lines.append("            if is_async:")
+    lines.append("                return await call()")
+    lines.append("            return await anyio.to_thread.run_sync(call, abandon_on_cancel=True)")
     lines.append("")
     # Bounds _deliver_task_webhook's own single delivery attempt below --
     # a caller-supplied ?callback_url= pointing at a slow or unresponsive
@@ -4420,7 +4463,10 @@ def generate_fastapi_code(
     lines.append("        # orphaned thread itself still runs to completion")
     lines.append("        # afterward, an unavoidable limit of cooperatively")
     lines.append("        # cancelling arbitrary synchronous code at all.")
-    lines.append("        with anyio.fail_after(task_limit or None):")
+    # The slot is taken *outside* the execution timeout: time spent queued
+    # behind other calls doesn't count against the task's own limit.
+    lines.append("        async with _call_slot():")
+    lines.append("          with anyio.fail_after(task_limit or None):")
     lines.append("            if inspect.iscoroutinefunction(func):")
     lines.append("                result = await func(*args, **kwargs)")
     lines.append("            else:")
