@@ -9573,3 +9573,114 @@ print("UNANNOTATED_PARAMS_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "UNANNOTATED_PARAMS_E2E_OK" in proc.stdout
+
+
+def test_annotation_qualifier_leaves_lambda_and_comprehension_variables_alone():
+    from backend.generator.api_generator import _resolve_annotation_source
+
+    # Names bound by the lambda/comprehension are not notebook attributes.
+    assert _resolve_annotation_source("lambda v: v + OFFSET")[0] == "lambda v: v + notebook_module.OFFSET"
+    assert _resolve_annotation_source("[i * K for i in range(3)]")[0] == "[i * notebook_module.K for i in range(3)]"
+    assert _resolve_annotation_source("{k: v for k, v in PAIRS}")[0] == "{k: v for k, v in notebook_module.PAIRS}"
+    # Outside any inner scope a bare name is still the notebook's.
+    assert _resolve_annotation_source("v")[0] == "notebook_module.v"
+
+
+def test_json_safe_example_reduces_defaults_to_json_values():
+    import math
+
+    from backend.generator.api_generator import _json_safe_example
+
+    assert _json_safe_example({"s": {3, 1, 2}, "t": (1, 2), "b": b"ab", "n": float("nan"), "i": math.inf, "ok": 1.5}) == {
+        "s": [1, 2, 3], "t": [1, 2], "b": "ab", "n": None, "i": None, "ok": 1.5,
+    }
+    assert _json_safe_example({"mixed": {1, "a"}})["mixed"] in ([1, "a"], ["a", 1])
+
+
+def test_compiler_pipeline_non_json_parameter_defaults_no_longer_break_openapi(tmp_path):
+    """Confirmed before this: a default of np.nan / float('inf') / bytes / a
+    set / a custom object made GET /openapi.json answer 500 (so /docs,
+    export-openapi and every generated SDK broke) though calling the
+    endpoint worked; and a lambda default had its own parameter rewritten to
+    a nonexistent notebook attribute, failing every call."""
+    pytest.importorskip("numpy")
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "import numpy as np\n"
+                    "class Cfg:\n    pass\n"
+                    "CFG = Cfg()\n"
+                    "def nan_default(x: float = np.nan) -> str:\n    return str(x)\n\n"
+                    "def inf_default(x: float = float('inf')) -> str:\n    return str(x)\n\n"
+                    "def bytes_default(b: bytes = b'ab') -> int:\n    return len(b)\n\n"
+                    "def set_default(s: set = {1, 2}) -> int:\n    return len(s)\n\n"
+                    "def object_default(x: int, cfg=CFG) -> int:\n    return x\n\n"
+                    "def lambda_default(x: int, cb=lambda v: v * 2) -> int:\n    return cb(x)\n\n"
+                    "def comprehension_default(squares=[i * i for i in range(3)]) -> list:\n"
+                    "    return squares\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def call(name, body):
+    response = client.post("/" + name, json=body, headers=headers)
+    assert response.status_code == 200, (name, response.status_code, response.text)
+    return response.json()["result"]
+
+# The schema serves, and /docs' own source with it.
+response = client.get("/openapi.json")
+assert response.status_code == 200, response.text
+schemas = response.json()["components"]["schemas"]
+assert "Nan_defaultRequest" in schemas
+
+# The real defaults still reach the functions.
+assert call("nan_default", {{}}) == "nan"
+assert call("inf_default", {{}}) == "inf"
+assert call("bytes_default", {{}}) == 2
+assert call("set_default", {{}}) == 2
+assert call("set_default", {{"s": [1, 2, 3]}}) == 3
+assert call("object_default", {{"x": 5}}) == 5
+assert call("lambda_default", {{"x": 4}}) == 8
+assert call("comprehension_default", {{}}) == [0, 1, 4]
+
+print("NON_JSON_DEFAULTS_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "NON_JSON_DEFAULTS_E2E_OK" in proc.stdout

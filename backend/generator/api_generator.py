@@ -169,7 +169,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # 'req'", nothing to do with train_model's own logic at all.
     "_evict_expired_tasks", "_run_background_task", "_json_safe",
     "_coerce_array_like", "_safe_annotation", "_shield_exit",
-    "_png_data_uri",
+    "_png_data_uri", "_openapi_json_safe",
     # Every name below is one of this file's own top-level `import`s --
     # never previously reserved at all, on the (never actually verified)
     # assumption that only names *this file itself defines* (a constant,
@@ -853,8 +853,41 @@ class _AnnotationNameQualifier(ast.NodeTransformer):
 
     def __init__(self):
         self.typing_names = set()
+        # Names a lambda's parameters / a comprehension's targets bind: they
+        # belong to that inner scope, not the notebook module. A default like
+        # `cb=lambda v: v` or `[i for i in range(3)]` used to have its own `v`
+        # / `i` rewritten to notebook_module.v / .i, which don't exist.
+        self._bound = []
+
+    def visit_Lambda(self, node):
+        args = node.args
+        names = {a.arg for a in args.posonlyargs + args.args + args.kwonlyargs}
+        names |= {a.arg for a in (args.vararg, args.kwarg) if a}
+        self._bound.append(names)
+        try:
+            return self.generic_visit(node)
+        finally:
+            self._bound.pop()
+
+    def _visit_comprehension(self, node):
+        names = {
+            target.id
+            for generator in node.generators
+            for target in ast.walk(generator.target)
+            if isinstance(target, ast.Name)
+        }
+        self._bound.append(names)
+        try:
+            return self.generic_visit(node)
+        finally:
+            self._bound.pop()
+
+    visit_ListComp = visit_SetComp = visit_DictComp = visit_GeneratorExp = _visit_comprehension
 
     def visit_Name(self, node):
+        if any(node.id in names for names in self._bound):
+            return node
+
         if node.id in _TYPING_EXPORTS:
             self.typing_names.add(node.id)
             return node
@@ -898,6 +931,29 @@ def _build_model_names(functions):
         model_names[func_name] = candidate
 
     return model_names
+
+
+def _json_safe_example(value):
+    """`value` reduced to what JSON can carry, for the request model's
+    schema example: a set becomes a (sorted when possible) list, a tuple a
+    list, bytes a string, NaN/inf null. The example is built from parameter
+    defaults, and a raw set in it made Pydantic fail building the schema
+    ("unhashable type: 'set'") -- /openapi.json and /docs with it."""
+    if isinstance(value, dict):
+        return {str(k): _json_safe_example(v) for k, v in value.items()}
+    if isinstance(value, (set, frozenset)):
+        try:
+            items = sorted(value)
+        except TypeError:
+            items = list(value)
+        return [_json_safe_example(v) for v in items]
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_example(v) for v in value]
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
+        return None
+    return value
 
 
 _ARRAY_LIKE_ALIASES = {"np", "numpy", "pd", "pandas", "npt"}
@@ -2420,6 +2476,26 @@ def generate_fastapi_code(
     lines.append("")
     lines.append("from fastapi.openapi.utils import get_openapi")
     lines.append("")
+    # _openapi_json_safe: a notebook parameter whose default isn't valid JSON
+    # (float('nan')/np.nan/inf, bytes, an arbitrary object) made
+    # /openapi.json -- and so /docs, export-openapi and every generated SDK --
+    # answer 500, though calling the endpoint itself worked fine. Such a
+    # default is dropped from the *schema* only; the function still uses it.
+    lines.append("def _openapi_json_safe(node):")
+    lines.append("    if isinstance(node, dict):")
+    lines.append("        cleaned = {}")
+    lines.append("        for key, value in node.items():")
+    lines.append("            if key in ('default', 'example'):")
+    lines.append("                try:")
+    lines.append("                    json.dumps(value, allow_nan=False)")
+    lines.append("                except (TypeError, ValueError):")
+    lines.append("                    continue")
+    lines.append("            cleaned[key] = _openapi_json_safe(value)")
+    lines.append("        return cleaned")
+    lines.append("    if isinstance(node, list):")
+    lines.append("        return [_openapi_json_safe(value) for value in node]")
+    lines.append("    return node")
+    lines.append("")
     lines.append("def custom_openapi():")
     lines.append("    if app.openapi_schema:")
     lines.append("        return app.openapi_schema")
@@ -2596,6 +2672,7 @@ def generate_fastapi_code(
         "'example'] = _original_content['example']"
     )
     lines.append("")
+    lines.append("    openapi_schema = _openapi_json_safe(openapi_schema)")
     lines.append("    app.openapi_schema = openapi_schema")
     lines.append("    return app.openapi_schema")
     lines.append("")
@@ -4444,17 +4521,29 @@ def generate_fastapi_code(
                     # qualified source is embedded directly as a code
                     # expression rather than a string literal.
                     default_expr, _ = _resolve_annotation_source(default_value)
+                # Pydantic can't build a JSON schema for a set default
+                # ("unhashable type: 'set'"), which broke /openapi.json -- and
+                # with it /docs and SDK generation -- for the whole app. A
+                # default_factory is evaluated per request and left out of the
+                # schema, so the function still gets its set.
+                if (
+                    arg.get("default_is_literal", True)
+                    and isinstance(default_value, (set, frozenset))
+                ):
+                    default_kw = f"default_factory=lambda: {default_expr}"
+                else:
+                    default_kw = f"default={default_expr}"
                 if field_description is not None:
                     lines.append(
                         f'    {field_name}: {arg_type} = Field('
-                        f'default={default_expr}, '
+                        f'{default_kw}, '
                         f'description={repr(field_description)}{alias_part}'
                         f')'
                     )
                 else:
                     lines.append(
                         f'    {field_name}: {arg_type} = Field('
-                        f'default={default_expr}{alias_part}'
+                        f'{default_kw}{alias_part}'
                         f')'
                     )
             elif field_description is not None:
@@ -4481,7 +4570,7 @@ def generate_fastapi_code(
             lines.append("")
             lines.append("    model_config = {")
             lines.append(
-                f"        'json_schema_extra': {{'example': {repr(example_payload)}}}"
+                f"        'json_schema_extra': {{'example': {repr(_json_safe_example(example_payload))}}}"
             )
             lines.append("    }")
         lines.append("")
