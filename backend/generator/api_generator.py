@@ -16,7 +16,7 @@ from pathlib import Path
 # anywhere. Rejecting these outright avoids ever emitting that endpoint
 # ordering trap.
 RESERVED_INFRASTRUCTURE_NAMES = frozenset({
-    "app", "TASKS", "API_KEYS", "API_KEY_HEADER_NAME", "DEFAULT_API_KEY", "USING_DEFAULT_API_KEY", "REQUIRE_CUSTOM_API_KEY", "START_TIME",
+    "app", "TASKS", "API_KEYS", "API_KEY_HEADER_NAME", "STRICT_REQUEST_FIELDS", "DEFAULT_API_KEY", "USING_DEFAULT_API_KEY", "REQUIRE_CUSTOM_API_KEY", "START_TIME",
     "GENERATED_AT", "PYTHON_VERSION", "NOTEBOOK_TO_API_VERSION", "ALLOWED_ORIGINS",
     "PUBLIC_URL", "DISABLE_DOCS",
     "MAX_REQUEST_BODY_BYTES", "MaxRequestBodySizeMiddleware",
@@ -610,6 +610,19 @@ GENERATED_APP_ENV_VARS = [
             "The app logs a warning and reports \"using_default_api_key\" "
             "from GET /auth/status either way; this makes it a hard stop "
             "for production deployments."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_STRICT_FIELDS",
+        "default": "false",
+        "description": (
+            "Set to \"true\" to reject request bodies containing fields the "
+            "endpoint doesn't declare (422 \"Extra inputs are not "
+            "permitted\"). Off by default, requests carrying unknown fields "
+            "are accepted and the extras silently dropped -- so a misspelled "
+            "parameter (\"treshold\" for \"threshold\") quietly runs the "
+            "function with that parameter's default and returns a "
+            "plausible-looking wrong answer."
         ),
     },
     {
@@ -1414,6 +1427,12 @@ def generate_fastapi_code(
         'DISABLE_DOCS = os.getenv('
         '"NOTEBOOK_API_DISABLE_DOCS", '
         f'"{_generated_app_env_var_default("NOTEBOOK_API_DISABLE_DOCS")}"'
+        ').strip().lower() in ("true", "1", "yes", "on")'
+    )
+    lines.append(
+        'STRICT_REQUEST_FIELDS = os.getenv('
+        '"NOTEBOOK_API_STRICT_FIELDS", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_STRICT_FIELDS")}"'
         ').strip().lower() in ("true", "1", "yes", "on")'
     )
     lines.append("")
@@ -4670,13 +4689,16 @@ def generate_fastapi_code(
                     )
                 else:
                     lines.append(f'    {field_name}: {arg_type}')
+        # Every request model, with or without an example, carries the
+        # strict-fields switch (see NOTEBOOK_API_STRICT_FIELDS).
+        lines.append("")
+        lines.append("    model_config = {")
+        lines.append("        'extra': 'forbid' if STRICT_REQUEST_FIELDS else 'ignore',")
         if example_payload:
-            lines.append("")
-            lines.append("    model_config = {")
             lines.append(
                 f"        'json_schema_extra': {{'example': {repr(_json_safe_example(example_payload))}}}"
             )
-            lines.append("    }")
+        lines.append("    }")
         lines.append("")
     # Generate endpoints
     for func in functions:

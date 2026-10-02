@@ -9978,3 +9978,72 @@ def test_compiled_app_flags_and_can_refuse_the_default_api_key(tmp_path):
     allowed = run_app({"NOTEBOOK_API_REQUIRE_CUSTOM_KEY": "true", "NOTEBOOK_API_KEY": "s3cret"})
     assert allowed.returncode == 0, allowed.stderr
     assert "STATUS False" in allowed.stdout
+
+
+def test_compiled_app_can_reject_undeclared_request_fields(tmp_path):
+    """Confirmed before this: a request with a misspelled parameter
+    ({"treshold": 9}) was accepted, the extra silently dropped, and the
+    function run with that parameter's default -- a plausible-looking wrong
+    answer. NOTEBOOK_API_STRICT_FIELDS=true now answers 422 instead."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "def scale(threshold: float = 0.5, n: int = 1) -> float:\n    return threshold * n\n\n"
+                    "def nothing() -> int:\n    return 1\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    compile_script = (
+        f"import sys; sys.path.insert(0, {str(PROJECT_ROOT)!r}); "
+        "from backend.compiler import compile_notebook; "
+        f"compile_notebook({str(notebook_path)!r}, 'generated')"
+    )
+    compiled = subprocess.run(
+        [sys.executable, "-c", compile_script], cwd=str(workdir), capture_output=True, text=True, timeout=60,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+
+    def run_app(extra_env):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("NOTEBOOK_API_")}
+        env.update(extra_env)
+        env["PYTHONPATH"] = f"{PROJECT_ROOT}{os.pathsep}{workdir}"
+        probe = (
+            "import json\n"
+            "from fastapi.testclient import TestClient\n"
+            "from generated.app import app\n"
+            "c = TestClient(app); H = {'X-API-Key': 'notebook-to-api-dev-key'}\n"
+            "typo = c.post('/scale', json={'treshold': 9}, headers=H)\n"
+            "good = c.post('/scale', json={'threshold': 2, 'n': 3}, headers=H)\n"
+            "empty = c.post('/nothing', json={'x': 1}, headers=H)\n"
+            "print(json.dumps([typo.status_code, typo.json(), good.json(), empty.status_code]))\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-W", "ignore", "-c", probe],
+            cwd=str(workdir), capture_output=True, text=True, timeout=60, env=env,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        return json.loads(result.stdout.strip().splitlines()[-1])
+
+    # Default: unchanged behavior -- the extra is dropped, the default used.
+    typo_status, typo_body, good_body, empty_status = run_app({})
+    assert (typo_status, typo_body, good_body, empty_status) == (200, {"result": 0.5}, {"result": 6.0}, 200)
+
+    # Strict: undeclared fields are a 422 -- including on a no-parameter endpoint.
+    typo_status, typo_body, good_body, empty_status = run_app({"NOTEBOOK_API_STRICT_FIELDS": "true"})
+    assert typo_status == 422
+    assert typo_body["detail"][0]["type"] == "extra_forbidden"
+    assert typo_body["detail"][0]["loc"] == ["body", "treshold"]
+    assert good_body == {"result": 6.0}
+    assert empty_status == 422
