@@ -2866,6 +2866,29 @@ def generate_fastapi_code(
     # way, producing the same {field: value} object the encoder would have.
     # Pydantic models and Enum members (which also carry a __dict__) are left
     # to the encoder, which already handles them.
+    # Standard-library values the encoder mangled: a non-dict Mapping
+    # (ChainMap, UserDict, MappingProxyType) came back as its internals
+    # ({"maps": ...} / {"data": ...}) and a UserList as {"data": [...]}; a
+    # returned exception (a notebook's "report the failure" value) as a
+    # silent `{}`; and re.Match / slice were a 500. Each now has the plain
+    # JSON shape a caller would expect.
+    lines.append("    import collections.abc as _abc")
+    lines.append("    if isinstance(value, _abc.Mapping):")
+    lines.append("        return _json_safe(dict(value.items()), _depth + 1)")
+    lines.append("    if isinstance(value, _abc.Sequence) and not isinstance(value, (str, bytes, bytearray)):")
+    lines.append("        return [_json_safe(v, _depth + 1) for v in value]")
+    lines.append("    if isinstance(value, BaseException):")
+    lines.append("        return {'error': type(value).__name__, 'message': str(value)}")
+    lines.append("    if type(value).__name__ == 'Match' and hasattr(value, 'groups') and hasattr(value, 'span'):")
+    lines.append(
+        "        return {'match': value.group(0), 'groups': list(value.groups()), "
+        "'named': value.groupdict(), 'span': list(value.span())}"
+    )
+    lines.append("    if isinstance(value, slice):")
+    lines.append(
+        "        return {'start': _json_safe(value.start, _depth + 1), "
+        "'stop': _json_safe(value.stop, _depth + 1), 'step': _json_safe(value.step, _depth + 1)}"
+    )
     lines.append("    import dataclasses as _dataclasses")
     lines.append("    if _dataclasses.is_dataclass(value) and not isinstance(value, type):")
     lines.append(

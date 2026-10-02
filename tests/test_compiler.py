@@ -11232,3 +11232,80 @@ print("NAMEDTUPLE_JSON_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "NAMEDTUPLE_JSON_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_stdlib_mappings_sequences_exceptions_and_matches_are_plain_json(tmp_path):
+    """Confirmed before this: ChainMap/UserDict came back as {"maps": ...} /
+    {"data": ...}, a UserList as {"data": [...]}, a returned exception as a
+    silent {}, and a re.Match or slice was a 500."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "import collections, re, types\n"
+                    "def chained(n: int):\n    return collections.ChainMap({'a': 1}, {'a': 9, 'b': float('nan')})\n\n"
+                    "def user_dict(n: int):\n    return collections.UserDict({'k': [1]})\n\n"
+                    "def user_list(n: int):\n    return collections.UserList([float('inf'), 2])\n\n"
+                    "def frozen(n: int):\n    return types.MappingProxyType({'x': b'\\xff'})\n\n"
+                    "def failure(n: int):\n    return ValueError('bad input')\n\n"
+                    "def matched(n: int):\n    return re.match(r'(?P<num>\\d+)(x)', '42x!')\n\n"
+                    "def no_match(n: int):\n    return re.match(r'\\d', 'abc')\n\n"
+                    "def window(n: int):\n    return slice(1, n)\n\n"
+                    "def text(n: int):\n    return 'abc'\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def call(name):
+    response = client.post("/" + name, json={{"n": 5}}, headers=headers)
+    assert response.status_code == 200, (name, response.status_code, response.text)
+    return response.json()["result"]
+
+assert call("chained") == {{"a": 1, "b": None}}  # first map wins, as ChainMap lookups do
+assert call("user_dict") == {{"k": [1]}}
+assert call("user_list") == [None, 2]
+assert call("frozen") == {{"x": "data:application/octet-stream;base64,/w=="}}
+assert call("failure") == {{"error": "ValueError", "message": "bad input"}}
+assert call("matched") == {{"match": "42x", "groups": ["42", "x"], "named": {{"num": "42"}}, "span": [0, 3]}}
+assert call("no_match") is None
+assert call("window") == {{"start": 1, "stop": 5, "step": None}}
+assert call("text") == "abc"  # strings are not treated as sequences
+print("STDLIB_JSON_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "STDLIB_JSON_E2E_OK" in proc.stdout
