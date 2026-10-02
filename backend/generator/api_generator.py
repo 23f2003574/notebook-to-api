@@ -2172,6 +2172,11 @@ def generate_fastapi_code(
     lines.append("        if isinstance(e, SystemExit):")
     lines.append("            return RuntimeError(f'notebook function called sys.exit({e.code!r})')")
     lines.append("        return RuntimeError('notebook function raised KeyboardInterrupt')")
+    # Async generator functions are returned as-is: _drain_async_gen applies
+    # the same shielding while iterating, and callers must still be able to
+    # recognize them with inspect.isasyncgenfunction.
+    lines.append("    if inspect.isasyncgenfunction(func):")
+    lines.append("        return func")
     lines.append("    if inspect.iscoroutinefunction(func):")
     lines.append("        @functools.wraps(func)")
     lines.append("        async def _shielded(*args, **kwargs):")
@@ -2188,13 +2193,26 @@ def generate_fastapi_code(
     lines.append("                raise _exit_error(e) from None")
     lines.append("    return _shielded")
     lines.append("")
+    lines.append("async def _drain_async_gen(agen):")
+    lines.append("    try:")
+    lines.append("        return [item async for item in agen]")
+    lines.append("    except (SystemExit, KeyboardInterrupt) as e:")
+    lines.append("        raise RuntimeError(f'notebook function raised {type(e).__name__}') from None")
+    lines.append("")
     lines.append("async def _call_notebook_function(call, is_async=False, timeout=None):")
     lines.append("    call = _shield_exit(call)")
     lines.append("    limit = REQUEST_TIMEOUT_SECONDS if timeout is None else timeout")
     lines.append("    with anyio.fail_after(limit or None):")
     lines.append("        async with _call_slot():")
     lines.append("            if is_async:")
-    lines.append("                return await call()")
+    # An `async def` that yields is an async *generator* function: calling
+    # it returns an async generator, which can't be awaited ("object
+    # async_generator can't be used in 'await' expression" -- a 500). It is
+    # drained into a list instead, the async twin of a sync generator.
+    lines.append("                result = call()")
+    lines.append("                if inspect.isasyncgen(result):")
+    lines.append("                    return await _drain_async_gen(result)")
+    lines.append("                return await result")
     lines.append("            return await anyio.to_thread.run_sync(call, abandon_on_cancel=True)")
     lines.append("")
     # Bounds _deliver_task_webhook's own single delivery attempt below --
@@ -4548,7 +4566,9 @@ def generate_fastapi_code(
     # behind other calls doesn't count against the task's own limit.
     lines.append("        async with _call_slot():")
     lines.append("          with anyio.fail_after(task_limit or None):")
-    lines.append("            if inspect.iscoroutinefunction(func):")
+    lines.append("            if inspect.isasyncgenfunction(func):")
+    lines.append("                result = await _drain_async_gen(func(*args, **kwargs))")
+    lines.append("            elif inspect.iscoroutinefunction(func):")
     lines.append("                result = await func(*args, **kwargs)")
     lines.append("            else:")
     lines.append("                result = await anyio.to_thread.run_sync(")

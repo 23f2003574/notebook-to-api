@@ -10618,3 +10618,80 @@ print("VAR_ARGS_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "VAR_ARGS_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_async_generator_functions_return_their_items_as_a_list(tmp_path):
+    """Confirmed before this: an `async def` notebook function that yields
+    was a 500 "object async_generator can't be used in 'await' expression",
+    on both a regular endpoint and a background task."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "import asyncio\n"
+                    "async def stream(n: int):\n"
+                    "    for i in range(n):\n        await asyncio.sleep(0)\n"
+                    "        yield float('nan') if i == 1 else i\n\n"
+                    "async def broken(n: int):\n    yield 1\n    raise ValueError('bad row')\n\n"
+                    "async def plain(n: int):\n    return n * 2\n\n"
+                    "async def train_stream(n: int):\n    for i in range(n):\n        yield i * 10\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+import time
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def post(name):
+    return client.post("/" + name, json={{"n": 3}}, headers=headers)
+
+r = post("stream")
+assert r.status_code == 200 and r.json()["result"] == [0, None, 2], r.text
+r = post("broken")
+assert r.status_code == 500 and "bad row" in r.text, r.text
+assert post("plain").json()["result"] == 6  # plain coroutines unchanged
+
+task_id = post("train_stream").json()["task_id"]
+for _ in range(50):
+    task = client.get("/tasks/" + task_id, headers=headers).json()
+    if task["status"] != "processing":
+        break
+    time.sleep(0.05)
+assert task["status"] == "completed" and task["result"] == [0, 10, 20], task
+print("ASYNC_GEN_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ASYNC_GEN_E2E_OK" in proc.stdout
