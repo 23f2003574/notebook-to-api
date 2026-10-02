@@ -9750,3 +9750,119 @@ print("BUILTIN_NAMES_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "BUILTIN_NAMES_E2E_OK" in proc.stdout
+
+
+def test_annotation_qualifier_resolves_forward_references_but_not_literal_or_annotated_metadata():
+    from backend.generator.api_generator import _resolve_annotation_source
+
+    assert _resolve_annotation_source("'Later'")[0] == "notebook_module.Later"
+    assert _resolve_annotation_source("List['Node']")[0] == "List[notebook_module.Node]"
+    assert _resolve_annotation_source("Optional['int']")[0] == "Optional[int]"
+    # Quoted values inside Literal, and Annotated's metadata, are not types.
+    assert _resolve_annotation_source("Literal['a', 'Later']")[0] == "Literal['a', 'Later']"
+    assert _resolve_annotation_source("Annotated[int, Field(description='must be Later')]")[0] == (
+        "Annotated[int, Field(description='must be Later')]"
+    )
+    # Unparseable quoted text stays as it was.
+    assert _resolve_annotation_source("'not a type!'")[0] == "'not a type!'"
+
+
+def test_needs_safe_annotation_flags_only_risky_annotations():
+    from backend.generator.api_generator import _needs_safe_annotation
+
+    for risky in ("notebook_module.Item", "Iterator[int]", "re.Pattern", "np.float64",
+                  "typing.TypedDict", "List[notebook_module.Node]", "Optional[Awaitable[int]]"):
+        assert _needs_safe_annotation(risky), risky
+    for plain in ("int", "str", "List[float]", "Optional[str]", "Dict[str, Any]", "datetime.date",
+                  "pathlib.Path", "Literal['a', 'b']", "Any"):
+        assert not _needs_safe_annotation(plain), plain
+
+
+def test_compiler_pipeline_unmodelable_typing_annotations_and_forward_references_work(tmp_path):
+    """Confirmed before this: Iterator[int] and typing.TypedDict crashed the
+    whole generated app at import, re.Pattern broke /openapi.json, and a quoted
+    forward reference to a class defined later (`x: 'Later'`) failed every call."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "import re, typing\n"
+                    "from typing import Iterator, List, Literal, Annotated, Optional\n"
+                    "from pydantic import BaseModel, Field\n"
+                    "class Pt(typing.TypedDict):\n    x: int\n    y: int\n\n"
+                    "def stream(it: Iterator[int]) -> int:\n    return 1\n\n"
+                    "def matcher(p: re.Pattern) -> int:\n    return 2\n\n"
+                    "def points(p: Pt) -> int:\n    return p['x'] + p['y']\n\n"
+                    "def later(item: 'Later') -> int:\n    return 4\n\n"
+                    "def nested(items: List['Later']) -> int:\n    return len(items)\n\n"
+                    "class Later(BaseModel):\n    n: int = 0\n\n"
+                    "def mode(m: Literal['a', 'b'] = 'a') -> str:\n    return m\n\n"
+                    "def bounded(n: Annotated[int, Field(gt=0, description='positive')] = 1) -> int:\n"
+                    "    return n\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def post(path, body):
+    return client.post(path, json=body, headers=headers)
+
+assert client.get("/openapi.json").status_code == 200
+assert post("/stream", {{"it": [1, 2]}}).json() == {{"result": 1}}
+assert post("/matcher", {{"p": "a+"}}).json() == {{"result": 2}}
+assert post("/points", {{"p": {{"x": 1, "y": 2}}}}).json() == {{"result": 3}}
+assert post("/later", {{"item": {{"n": 1}}}}).json() == {{"result": 4}}
+assert post("/nested", {{"items": [{{}}, {{"n": 2}}]}}).json() == {{"result": 2}}
+
+# Types Pydantic *can* model keep validating exactly as before.
+assert post("/mode", {{"m": "b"}}).json() == {{"result": "b"}}
+assert post("/mode", {{"m": "Later"}}).status_code == 422
+assert post("/bounded", {{"n": 0}}).status_code == 422
+print("ANNOTATION_ROBUSTNESS_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ANNOTATION_ROBUSTNESS_E2E_OK" in proc.stdout
+
+
+def test_forward_reference_conversion_applies_to_annotations_not_default_expressions():
+    from backend.generator.api_generator import _resolve_annotation_source
+
+    # In a default value, a string argument is just a string.
+    assert _resolve_annotation_source("float('inf')", forward_refs=False)[0] == "float('inf')"
+    assert _resolve_annotation_source("os.environ.get('HOME', 'x')", forward_refs=False)[0] == (
+        "notebook_module.os.environ.get('HOME', 'x')"
+    )

@@ -853,8 +853,11 @@ class _AnnotationNameQualifier(ast.NodeTransformer):
     NameError/PydanticUserError when the model class is built.
     """
 
-    def __init__(self):
+    def __init__(self, forward_refs=True):
         self.typing_names = set()
+        # Quoted strings are forward references only in an annotation, never in
+        # a default-value expression (`float('inf')`).
+        self._forward_refs = forward_refs
         # Names a lambda's parameters / a comprehension's targets bind: they
         # belong to that inner scope, not the notebook module. A default like
         # `cb=lambda v: v` or `[i for i in range(3)]` used to have its own `v`
@@ -886,6 +889,38 @@ class _AnnotationNameQualifier(ast.NodeTransformer):
 
     visit_ListComp = visit_SetComp = visit_DictComp = visit_GeneratorExp = _visit_comprehension
 
+    @staticmethod
+    def _subscript_base_name(node):
+        base = node.value
+        return base.attr if isinstance(base, ast.Attribute) else getattr(base, "id", None)
+
+    def visit_Subscript(self, node):
+        # Literal["a", "b"] holds values, and Annotated[T, Field(...)] holds
+        # metadata -- strings there are not forward references.
+        base_name = self._subscript_base_name(node)
+        if base_name == "Literal":
+            node.value = self.visit(node.value)
+            return node
+        if base_name == "Annotated" and isinstance(node.slice, ast.Tuple) and node.slice.elts:
+            node.value = self.visit(node.value)
+            node.slice.elts[0] = self.visit(node.slice.elts[0])
+            return node
+        return self.generic_visit(node)
+
+    def visit_Constant(self, node):
+        # A quoted annotation -- `x: "Later"`, `List["Node"]` -- is a forward
+        # reference, which Pydantic can't resolve against the generated app's
+        # own namespace (the class lives in notebook_module): the schema, and
+        # so /openapi.json and every call, failed with a 500. Rewritten as
+        # the expression it names, qualified like any other annotation name.
+        if self._forward_refs and isinstance(node.value, str):
+            try:
+                inner = ast.parse(node.value, mode="eval").body
+            except SyntaxError:
+                return node
+            return self.visit(inner)
+        return node
+
     def visit_Name(self, node):
         if any(node.id in names for names in self._bound):
             return node
@@ -905,6 +940,42 @@ class _AnnotationNameQualifier(ast.NodeTransformer):
             ),
             node,
         )
+
+
+_SAFE_ANNOTATION_MODULES = (
+    "datetime.", "pathlib.", "decimal.", "uuid.", "typing.", "enum.",
+    "ipaddress.", "fractions.",
+)
+_RISKY_TYPING_NAMES = frozenset({
+    "Iterator", "AsyncIterator", "AsyncIterable", "Awaitable", "Coroutine",
+    "AsyncGenerator", "TypedDict",
+})
+
+
+def _needs_safe_annotation(annotation_source):
+    """Whether a resolved annotation could be a type Pydantic can't model --
+    anything from the notebook's own namespace, a dotted attribute of a
+    module other than a few well-supported stdlib ones (`re.Pattern`,
+    `np.float64`, ...), or a typing generic Pydantic has no schema for
+    (`Iterator[int]`, `typing.TypedDict` on Python < 3.12). Such a field is
+    wrapped in _safe_annotation; every other annotation is emitted exactly as
+    written."""
+    if "notebook_module." in annotation_source:
+        return True
+    try:
+        tree = ast.parse(annotation_source, mode="eval")
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in _RISKY_TYPING_NAMES:
+            return True
+        if isinstance(node, ast.Attribute):
+            dotted = ast.unparse(node)
+            if dotted.split(".")[-1] in _RISKY_TYPING_NAMES:
+                return True
+            if not dotted.startswith(_SAFE_ANNOTATION_MODULES):
+                return True
+    return False
 
 
 def _endpoint_python_name(func_name):
@@ -1023,7 +1094,7 @@ def _array_like_kind(type_str):
     return None
 
 
-def _resolve_annotation_source(type_str):
+def _resolve_annotation_source(type_str, forward_refs=True):
     """Turn a raw `ast.unparse`d annotation string (as stored in
     arg["type"] by the parser) into source the generated app can actually
     evaluate, plus the set of `typing` names it needs imported.
@@ -1047,7 +1118,7 @@ def _resolve_annotation_source(type_str):
     except SyntaxError:
         return type_str, set()
 
-    qualifier = _AnnotationNameQualifier()
+    qualifier = _AnnotationNameQualifier(forward_refs=forward_refs)
     rewritten = qualifier.visit(tree)
     ast.fix_missing_locations(rewritten)
 
@@ -1259,7 +1330,7 @@ def generate_fastapi_code(
                 "default_is_literal", True
             ):
                 _, default_typing_names = _resolve_annotation_source(
-                    arg.get("default")
+                    arg.get("default"), forward_refs=False
                 )
                 needed_typing_names |= default_typing_names
 
@@ -1293,8 +1364,9 @@ def generate_fastapi_code(
     lines.append("import time")
     lines.append("from pydantic import BaseModel, Field, TypeAdapter")
     lines.append(
-        "from pydantic.errors import "
-        "PydanticInvalidForJsonSchema, PydanticSchemaGenerationError"
+        "from pydantic.errors import PydanticInvalidForJsonSchema, "
+        "PydanticSchemaGenerationError, PydanticUndefinedAnnotation, "
+        "PydanticUserError"
     )
     lines.append("from typing import Any as _AnyType")
     if needed_typing_names:
@@ -4424,7 +4496,10 @@ def generate_fastapi_code(
     lines.append("def _safe_annotation(tp):")
     lines.append("    try:")
     lines.append("        TypeAdapter(tp).json_schema()")
-    lines.append("    except (PydanticSchemaGenerationError, PydanticInvalidForJsonSchema):")
+    lines.append(
+        "    except (PydanticSchemaGenerationError, PydanticInvalidForJsonSchema, "
+        "PydanticUndefinedAnnotation, PydanticUserError):"
+    )
     lines.append("        return _AnyType")
     lines.append("    return tp")
     lines.append("")
@@ -4455,7 +4530,7 @@ def generate_fastapi_code(
             # scalar, a notebook-defined class, ...) may be one Pydantic has
             # no schema for, which would otherwise crash the *whole* app at
             # import. _safe_annotation falls back to Any for those.
-            if "notebook_module." in arg_type:
+            if _needs_safe_annotation(arg_type):
                 arg_type = f"_safe_annotation({arg_type})"
 
             # repr()'d below (see description=repr(field_description)),
@@ -4514,7 +4589,7 @@ def generate_fastapi_code(
                     # it already does for type annotations, then the
                     # qualified source is embedded directly as a code
                     # expression rather than a string literal.
-                    default_expr, _ = _resolve_annotation_source(default_value)
+                    default_expr, _ = _resolve_annotation_source(default_value, forward_refs=False)
                 # Pydantic can't build a JSON schema for a set default
                 # ("unhashable type: 'set'"), which broke /openapi.json -- and
                 # with it /docs and SDK generation -- for the whole app. A
