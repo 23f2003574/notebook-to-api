@@ -2607,6 +2607,16 @@ def generate_fastapi_code(
     )
     lines.append("    if isinstance(value, (list, tuple, set, frozenset)):")
     lines.append("        return [_json_safe(v, _depth + 1) for v in value]")
+    # Lazy iterables: map/filter/zip/enumerate, dict views, itertools objects
+    # and generators (a function using `yield`). The first ones were a 500
+    # "vars() argument must have __dict__"; a generator got past the encoder
+    # but skipped this normalization, so NaN/bytes inside it still crashed.
+    # Materialized as a list. File-like objects (which also iterate) are left
+    # alone so a returned handle isn't silently read.
+    lines.append("    if isinstance(value, (type({}.keys()), type({}.values()), type({}.items()))) or (")
+    lines.append("        hasattr(value, '__next__') and hasattr(value, '__iter__') and not hasattr(value, 'read')")
+    lines.append("    ):")
+    lines.append("        return [_json_safe(v, _depth + 1) for v in value]")
     lines.append("    if hasattr(value, 'to_dict') and hasattr(value, 'columns'):")
     lines.append("        return _json_safe(value.to_dict(orient='records'), _depth + 1)")
     lines.append("    if hasattr(value, 'to_dict') and hasattr(value, 'index'):")

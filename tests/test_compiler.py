@@ -10322,3 +10322,81 @@ print("BYTES_JSON_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "BYTES_JSON_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_generators_and_lazy_iterators_are_plain_json(tmp_path):
+    """Confirmed before this: returning map/filter/zip/dict views/itertools
+    objects was a 500 "not iterable"/"vars() argument", and a generator
+    (a function using `yield`) skipped _json_safe, so NaN, bytes or a nested
+    generator inside it crashed serialization."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "import itertools\n"
+                    "def gen(n: int):\n    for i in range(n):\n        yield float('nan') if i == 1 else i\n\n"
+                    "def mapped(n: int):\n    return map(lambda x: x * 2, range(n))\n\n"
+                    "def filtered(n: int):\n    return filter(None, [0, 1, 2])\n\n"
+                    "def zipped(n: int):\n    return zip(['a', 'b'], [1, 2])\n\n"
+                    "def values(n: int):\n    return {'a': 1, 'b': float('inf')}.values()\n\n"
+                    "def keys(n: int):\n    return {'a': 1, 'b': 2}.keys()\n\n"
+                    "def chained(n: int):\n    return itertools.chain([1], (x for x in [b'\\xff']))\n\n"
+                    "def nested(n: int):\n    return {'rows': (i for i in range(n)), 'pairs': enumerate('ab')}\n\n"
+                    "def empty(n: int):\n    return iter([])\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def call(name):
+    response = client.post("/" + name, json={{"n": 3}}, headers=headers)
+    assert response.status_code == 200, (name, response.status_code, response.text)
+    return response.json()["result"]
+
+assert call("gen") == [0, None, 2]
+assert call("mapped") == [0, 2, 4]
+assert call("filtered") == [1, 2]
+assert call("zipped") == [["a", 1], ["b", 2]]
+assert call("values") == [1, None]
+assert call("keys") == ["a", "b"]
+assert call("chained") == [1, "data:application/octet-stream;base64,/w=="]
+assert call("nested") == {{"rows": [0, 1, 2], "pairs": [[0, "a"], [1, "b"]]}}
+assert call("empty") == []
+print("ITERATOR_JSON_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ITERATOR_JSON_E2E_OK" in proc.stdout
