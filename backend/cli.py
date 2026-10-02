@@ -5782,6 +5782,22 @@ def _dispatch_core_command(args):
                     if result.get("no_endpoints"):
                         print("    no endpoints: nothing would be exposed")
 
+                    for failed in result.get("cells_with_errors") or []:
+                        print(
+                            f"    cell {failed['cell']} raised {failed['error']} when last run "
+                            "(re-runs when the app starts)"
+                        )
+
+                    for hazard in result.get("import_time_hazards") or []:
+                        target = (
+                            f"{hazard['call']}({hazard['path']!r})"
+                            if hazard.get("path") else f"{hazard['call']}()"
+                        )
+                        print(
+                            f"    import-time hazard: cell {hazard['cell']}, line "
+                            f"{hazard['line']}: {target} will fail on startup"
+                        )
+
                     for item in result.get("unrecognized_directives") or []:
                         print(f"    unrecognized directive: {item['line']}")
 

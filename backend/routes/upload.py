@@ -14506,6 +14506,8 @@ def validate_all_notebooks(
                 "requirements_conflict": None,
                 "unrecognized_directives": [],
                 "ignored_cache_directives": [],
+                "import_time_hazards": [],
+                "cells_with_errors": [],
                 "detail": f"Uploaded file is not a valid Jupyter notebook: {e}",
             }
             if checksums:
@@ -14605,6 +14607,8 @@ def validate_all_notebooks(
             # endpoint is otherwise silently ignored.
             "unrecognized_directives": inspection["unrecognized_directives"],
             "ignored_cache_directives": inspection["ignored_cache_directives"],
+            "import_time_hazards": inspection["import_time_hazards"],
+            "cells_with_errors": inspection["cells_with_errors"],
             "no_endpoints": no_endpoints,
             "detail": None,
         }

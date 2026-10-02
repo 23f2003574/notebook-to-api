@@ -35174,3 +35174,47 @@ def test_compile_response_has_empty_warning_lists_for_a_clean_notebook():
     body = client.post("/api/compile", json={"notebook_path": "compile_clean.ipynb"}).json()
 
     assert body["import_time_hazards"] == [] and body["cells_with_errors"] == [] and body["unrecognized_directives"] == []
+
+
+def test_validate_all_reports_import_time_hazards_and_error_cells_per_notebook():
+    import nbformat
+
+    from backend.routes import upload as upload_module
+
+    client.delete("/api/notebooks?confirm=true")
+
+    broken = nbformat.v4.new_notebook()
+    failed = nbformat.v4.new_code_cell("scratch_value\n")
+    failed.outputs = [nbformat.v4.new_output(
+        "error", ename="NameError", evalue="name 'scratch_value' is not defined", traceback=["---> 1 scratch_value"],
+    )]
+    broken.cells = [
+        nbformat.v4.new_code_cell("import pandas as pd\ndf = pd.read_csv('sales.csv')\n"),
+        failed,
+        nbformat.v4.new_code_cell("def total(a: int) -> int:\n    return a\n"),
+    ]
+    buffer = io.StringIO()
+    nbformat.write(broken, buffer)
+
+    for filename, content in (
+        ("va_broken.ipynb", buffer.getvalue().encode()),
+        ("va_clean.ipynb", _notebook_bytes("def add(a: int) -> int:\n    return a\n")),
+        ("va_malformed.ipynb", b"not json"),
+    ):
+        # The malformed one can't go through the upload API's own validation.
+        if filename == "va_malformed.ipynb":
+            (Path(upload_module.UPLOAD_DIR) / filename).write_bytes(content)
+        else:
+            client.post("/api/upload", files={"file": (filename, io.BytesIO(content), "application/json")})
+
+    results = {r["filename"]: r for r in client.get("/api/validate-all").json()["results"]}
+
+    assert [h["path"] for h in results["va_broken.ipynb"]["import_time_hazards"]] == ["sales.csv"]
+    assert [c["error"] for c in results["va_broken.ipynb"]["cells_with_errors"]] == ["NameError"]
+    # Informational only: the verdict is unchanged.
+    assert results["va_broken.ipynb"]["status"] == "pass"
+    assert results["va_clean.ipynb"]["import_time_hazards"] == []
+    assert results["va_clean.ipynb"]["cells_with_errors"] == []
+    # A notebook that can't even be parsed still has the same shape.
+    assert results["va_malformed.ipynb"]["status"] == "fail"
+    assert results["va_malformed.ipynb"]["import_time_hazards"] == []

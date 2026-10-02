@@ -30735,3 +30735,39 @@ def test_compile_command_prints_no_warning_section_for_a_clean_notebook(tmp_path
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "Warnings (the compiled app may not start" not in proc.stdout
+
+
+def test_validate_all_command_prints_hazards_and_error_cells_per_notebook(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "results": [
+                {
+                    "filename": "a.ipynb", "status": "pass",
+                    "reserved_name_conflicts": [], "skipped_functions": [], "detail": None,
+                    "import_time_hazards": [
+                        {"kind": "file_read", "call": "pd.read_csv", "path": "sales.csv", "cell": 1, "line": 2},
+                        {"kind": "input", "call": "input", "path": None, "cell": 3, "line": 1},
+                    ],
+                    "cells_with_errors": [{"cell": 2, "line": 1, "error": "NameError", "message": "x"}],
+                },
+                {
+                    "filename": "b.ipynb", "status": "pass",
+                    "reserved_name_conflicts": [], "skipped_functions": [], "detail": None,
+                },
+            ],
+            "pass_count": 2, "warn_count": 0, "fail_count": 0,
+        })
+    ]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["validate-all", "--dashboard-url", dashboard_url], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "    cell 2 raised NameError when last run (re-runs when the app starts)" in proc.stdout
+    assert "    import-time hazard: cell 1, line 2: pd.read_csv('sales.csv') will fail on startup" in proc.stdout
+    assert "    import-time hazard: cell 3, line 1: input() will fail on startup" in proc.stdout
+    assert proc.stdout.count("import-time hazard") == 2
