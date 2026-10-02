@@ -8951,8 +8951,7 @@ def test_jupyter_builtin_prelude_stubs_only_undefined_display_and_get_ipython():
     assert _jupyter_builtin_prelude("from IPython.display import display\ndisplay(1)\n") == ""
     assert _jupyter_builtin_prelude("def display(x):\n    pass\ndisplay(1)\n") == ""
     assert _jupyter_builtin_prelude("get_ipython = lambda: 1\nget_ipython()\n") == ""
-    # `from __future__` must stay first in the module; unparseable code is skipped.
-    assert _jupyter_builtin_prelude("from __future__ import annotations\ndisplay(1)\n") == ""
+    # Unparseable code is skipped.
     assert _jupyter_builtin_prelude("def broken(:\n") == ""
 
 
@@ -10150,3 +10149,94 @@ def test_startup_warning_lines_describe_each_kind_of_startup_problem():
         "Cell 3, line 4: input() waits on stdin, which the compiled app doesn't have -- the app will fail on startup",
     ]
     assert startup_warning_lines({}) == []
+
+
+def test_with_jupyter_prelude_keeps_future_imports_first():
+    from backend.compiler import _with_jupyter_prelude
+
+    # No stubs needed -> the code is returned unchanged.
+    plain = "from __future__ import annotations\nx = 1\n"
+    assert _with_jupyter_prelude(plain) == plain
+
+    # Nothing before the code: stubs go on top.
+    top = _with_jupyter_prelude("display(1)\n")
+    assert top.startswith("# Jupyter built-ins") and top.endswith("display(1)\n")
+
+    # After a docstring and several future imports, but before everything else.
+    code = '"""Doc."""\nfrom __future__ import annotations\nfrom __future__ import division\ndisplay(1)\nx = 1\n'
+    result = _with_jupyter_prelude(code)
+    lines = result.split("\n")
+    assert lines[:3] == ['"""Doc."""', "from __future__ import annotations", "from __future__ import division"]
+    assert result.index("def display(") < result.index("display(1)\nx = 1")
+    compile(result, "<runtime>", "exec")  # a future import after other code would be a SyntaxError
+
+    # Unparseable code is left alone.
+    assert _with_jupyter_prelude("def broken(:\n") == "def broken(:\n"
+
+
+def test_compiler_pipeline_future_import_notebooks_can_use_display_and_get_ipython(tmp_path):
+    """Confirmed before this: the stubs were skipped for any notebook using
+    `from __future__`, so a top-level display(...) still crashed the app."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [
+                {
+                    "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                    "source": (
+                        '"""Analysis notebook."""\n'
+                        "from __future__ import annotations\n"
+                        "FACTOR = 3\n"
+                        "display(FACTOR)\n"
+                        "NOT_IN_JUPYTER = get_ipython() is None\n"
+                    ),
+                },
+                {
+                    "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                    "source": (
+                        "def scale(x: int) -> int:\n    return x * FACTOR\n\n"
+                        "def outside() -> bool:\n    return NOT_IN_JUPYTER\n"
+                    ),
+                },
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+assert client.post("/scale", json={{"x": 2}}, headers=headers).json() == {{"result": 6}}
+assert client.post("/outside", json={{}}, headers=headers).json() == {{"result": True}}
+print("FUTURE_IMPORT_STUBS_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "FUTURE_IMPORT_STUBS_E2E_OK" in proc.stdout

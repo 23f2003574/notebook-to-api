@@ -356,15 +356,13 @@ def _jupyter_builtin_prelude(combined_code):
     module, taking every endpoint down. display() becomes a no-op and
     get_ipython() returns None -- IPython's own "not running under IPython"
     answer, so such guards take their non-IPython branch. A notebook that
-    defines or imports either name itself is left untouched, as is one using
-    `from __future__` (which must stay first in the module).
+    defines or imports either name itself is left untouched. Where the stubs
+    go -- after any `from __future__` imports, which must stay first in the
+    module -- is _with_jupyter_prelude's job.
     """
     try:
         tree = ast.parse(combined_code)
     except SyntaxError:
-        return ""
-
-    if "from __future__" in combined_code:
         return ""
 
     bound = set()
@@ -389,6 +387,43 @@ def _jupyter_builtin_prelude(combined_code):
     return "# Jupyter built-ins, stubbed outside Jupyter (notebook-to-api)\n" + "\n".join(stubs) + "\n\n"
 
 
+def _with_jupyter_prelude(combined_code):
+    """`combined_code` with _jupyter_builtin_prelude's stubs inserted -- at the
+    very top, or, for a notebook that opens with `from __future__` imports
+    (optionally after a module docstring), right after the last of them:
+    Python requires those to be the module's first statements, so a stub
+    placed above them is a SyntaxError. Such a notebook used to get no stubs
+    at all, and a top-level display(...) still crashed the app on import."""
+    prelude = _jupyter_builtin_prelude(combined_code)
+    if not prelude:
+        return combined_code
+
+    insert_after_line = 0
+    try:
+        body = ast.parse(combined_code).body
+    except SyntaxError:
+        return combined_code
+    index = 0
+    if (
+        body and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str)
+    ):
+        insert_after_line = body[0].end_lineno
+        index = 1
+    while (
+        index < len(body) and isinstance(body[index], ast.ImportFrom)
+        and body[index].module == "__future__"
+    ):
+        insert_after_line = body[index].end_lineno
+        index += 1
+
+    if insert_after_line == 0:
+        return prelude + combined_code
+
+    lines = combined_code.split("\n")
+    return "\n".join(lines[:insert_after_line]) + "\n" + prelude + "\n".join(lines[insert_after_line:])
+
+
 def write_runtime_module(code_cells, output_dir):
 
     runtime_path = Path(output_dir) / "runtime" / "notebook_module.py"
@@ -399,7 +434,7 @@ def write_runtime_module(code_cells, output_dir):
     )
 
     combined_code = "\n\n".join(code_cells)
-    combined_code = _jupyter_builtin_prelude(combined_code) + combined_code
+    combined_code = _with_jupyter_prelude(combined_code)
 
     with open(runtime_path, "w", encoding="utf-8") as f:
         f.write(combined_code)
