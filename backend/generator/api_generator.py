@@ -2835,6 +2835,12 @@ def generate_fastapi_code(
         "else k.isoformat() if hasattr(k, 'isoformat') and not hasattr(k, 'freqstr') "
         "else str(k)): _json_safe(v, _depth + 1) for k, v in value.items()}"
     )
+    # A namedtuple / typing.NamedTuple (a notebook's `Stats(mean, std)`,
+    # scipy's TtestResult, sklearn's Bunch-like tuples) is a tuple, so it
+    # came back as a bare list with every field name lost. It becomes an
+    # object keyed by its fields instead.
+    lines.append("    if isinstance(value, tuple) and isinstance(getattr(type(value), '_fields', None), tuple):")
+    lines.append("        return {name: _json_safe(v, _depth + 1) for name, v in zip(type(value)._fields, value)}")
     lines.append("    if isinstance(value, (list, tuple, set, frozenset)):")
     lines.append("        return [_json_safe(v, _depth + 1) for v in value]")
     # Lazy iterables: map/filter/zip/enumerate, dict views, itertools objects

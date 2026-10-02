@@ -11162,3 +11162,73 @@ print("UNMODELED_CONTAINERS_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "UNMODELED_CONTAINERS_E2E_OK" in proc.stdout
+
+
+def test_compiler_pipeline_named_tuples_are_returned_as_objects_keyed_by_field(tmp_path):
+    """Confirmed before this: a returned namedtuple / NamedTuple came back as
+    a bare list, losing every field name; plain tuples are unchanged."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "import collections\nfrom typing import NamedTuple\n"
+                    "Pair = collections.namedtuple('Pair', 'left right')\n"
+                    "class Stats(NamedTuple):\n    mean: float\n    std: float\n    tags: tuple\n\n"
+                    "def summary(n: int):\n    return Stats(float('nan'), 1.5, ('a', b'\\xff'))\n\n"
+                    "def pairs(n: int):\n    return [Pair(i, i * 2) for i in range(n)]\n\n"
+                    "def plain(n: int):\n    return (1, 2)\n\n"
+                    "def echo(s: Stats):\n    return s.std\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def call(name, body=None):
+    response = client.post("/" + name, json=body or {{"n": 2}}, headers=headers)
+    assert response.status_code == 200, (name, response.status_code, response.text)
+    return response.json()["result"]
+
+stats = call("summary")
+assert stats == {{"mean": None, "std": 1.5, "tags": ["a", "data:application/octet-stream;base64,/w=="]}}, stats
+assert call("pairs") == [{{"left": 0, "right": 0}}, {{"left": 1, "right": 2}}]
+assert call("plain") == [1, 2]
+# The object form feeds straight back into a NamedTuple parameter.
+assert call("echo", {{"s": {{"mean": 0, "std": 2.5, "tags": []}}}}) == 2.5
+print("NAMEDTUPLE_JSON_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "NAMEDTUPLE_JSON_E2E_OK" in proc.stdout
