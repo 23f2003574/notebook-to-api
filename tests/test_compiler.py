@@ -9866,3 +9866,45 @@ def test_forward_reference_conversion_applies_to_annotations_not_default_express
     assert _resolve_annotation_source("os.environ.get('HOME', 'x')", forward_refs=False)[0] == (
         "notebook_module.os.environ.get('HOME', 'x')"
     )
+
+
+def _notebook_with_error_cells():
+    import nbformat
+
+    notebook = nbformat.v4.new_notebook()
+    ok = nbformat.v4.new_code_cell("def add(a: int, b: int) -> int:\n    return a + b\n")
+    ok.outputs = [nbformat.v4.new_output("stream", name="stdout", text="fine\n")]
+    markdown = nbformat.v4.new_markdown_cell("not code")
+    broken = nbformat.v4.new_code_cell("x = 1\nscratch_value\n")
+    broken.outputs = [nbformat.v4.new_output(
+        "error", ename="NameError", evalue="name 'scratch_value' is not defined",
+        traceback=["\x1b[0;31m---> 2\x1b[0m scratch_value\n", "NameError: ..."],
+    )]
+    no_line = nbformat.v4.new_code_cell("1 / 0")
+    no_line.outputs = [nbformat.v4.new_output(
+        "error", ename="ZeroDivisionError", evalue="division by zero", traceback=[],
+    )]
+    notebook.cells = [ok, markdown, broken, no_line]
+    return notebook
+
+
+def test_find_cells_with_error_outputs_reports_cells_that_failed_when_last_run():
+    from backend.compiler import _find_cells_with_error_outputs
+
+    found = _find_cells_with_error_outputs(_notebook_with_error_cells())
+
+    # Numbered among *code* cells only (the markdown cell doesn't count).
+    assert found == [
+        {"cell": 2, "line": 2, "error": "NameError", "message": "name 'scratch_value' is not defined"},
+        {"cell": 3, "line": None, "error": "ZeroDivisionError", "message": "division by zero"},
+    ]
+
+
+def test_find_cells_with_error_outputs_is_empty_for_a_clean_notebook():
+    import nbformat
+
+    from backend.compiler import _find_cells_with_error_outputs
+
+    clean = nbformat.v4.new_notebook()
+    clean.cells = [nbformat.v4.new_code_cell("x = 1\n"), nbformat.v4.new_markdown_cell("hi")]
+    assert _find_cells_with_error_outputs(clean) == []

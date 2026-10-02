@@ -2161,6 +2161,7 @@ def _dispatch_core_command(args):
                     "ignored_cache_directives": data["ignored_cache_directives"],
                     "unrecognized_directives": data["unrecognized_directives"],
                     "import_time_hazards": data["import_time_hazards"],
+                    "cells_with_errors": data["cells_with_errors"],
                     "no_endpoints": no_endpoints,
                 },
                 indent=2,
@@ -2200,6 +2201,11 @@ def _dispatch_core_command(args):
             for item in data["unrecognized_directives"]:
                 print(
                     f"⚠ Unrecognized directive ignored: {item['line']}"
+                )
+            for failed in data["cells_with_errors"]:
+                print(
+                    f"⚠ Cell {failed['cell']} raised {failed['error']} when last run "
+                    f"({failed['message']}) -- it runs again when the app starts"
                 )
             for hazard in data["import_time_hazards"]:
                 if hazard["kind"] == "input":
@@ -5640,6 +5646,11 @@ def _dispatch_core_command(args):
                 print(f"\n{marker} No endpoints: nothing in this notebook would be exposed, so the compiled app has no routes.")
             for item in data.get("unrecognized_directives") or []:
                 print(f"⚠ Unrecognized directive ignored: {item['line']}")
+            for failed in data.get("cells_with_errors") or []:
+                print(
+                    f"⚠ Cell {failed['cell']} raised {failed['error']} when last run "
+                    f"({failed['message']}) -- it runs again when the app starts"
+                )
             for hazard in data.get("import_time_hazards") or []:
                 target = f"{hazard['call']}({hazard['path']!r})" if hazard.get("path") else hazard["call"] + "()"
                 print(

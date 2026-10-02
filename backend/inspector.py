@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 from backend.compiler import (
+    _find_cells_with_error_outputs,
     _find_import_time_hazards,
     _find_unrecognized_directives,
     _extract_timeout_overrides,
@@ -815,6 +816,9 @@ def inspect_notebook_data(
         # so crash the compiled app at startup -- see
         # _find_import_time_hazards.
         "import_time_hazards": _find_import_time_hazards(code_cells),
+        # Cells whose saved outputs hold an error: they re-run when the app
+        # starts -- see _find_cells_with_error_outputs.
+        "cells_with_errors": _find_cells_with_error_outputs(notebook),
         # Names defined more than once in the notebook's own raw
         # extraction (before deduplicate_functions_by_name, backend/
         # parser/ast_parser.py, silently collapses each down to its last

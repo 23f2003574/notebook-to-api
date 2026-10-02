@@ -14188,6 +14188,7 @@ def validate_notebook_endpoint(
         "ignored_cache_directives": inspection["ignored_cache_directives"],
         "unrecognized_directives": inspection["unrecognized_directives"],
         "import_time_hazards": inspection["import_time_hazards"],
+        "cells_with_errors": inspection["cells_with_errors"],
         "no_endpoints": no_endpoints,
     }
 

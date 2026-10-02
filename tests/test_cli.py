@@ -30658,3 +30658,41 @@ def test_upload_command_strip_outputs_applies_to_every_notebook_in_a_batch(tmp_p
     assert handler.requests == ["/api/upload/batch?overwrite=false"]
     assert b"A" * 1000 not in handler.bodies[0] and b"B" * 1000 not in handler.bodies[0]
     assert b"a.ipynb" in handler.bodies[0] and b"b.ipynb" in handler.bodies[0]
+
+
+def test_validate_command_warns_about_cells_that_errored_when_last_run(tmp_path):
+    import nbformat
+
+    from tests.test_compiler import _notebook_with_error_cells
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(_notebook_with_error_cells(), f)
+
+    proc = _run_cli(["validate", str(notebook_path)], cwd=workdir)
+    json_proc = _run_cli(["validate", str(notebook_path), "--json"], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "⚠ Cell 2 raised NameError when last run (name 'scratch_value' is not defined)" in proc.stdout
+    assert "it runs again when the app starts" in proc.stdout
+    assert [c["cell"] for c in json.loads(json_proc.stdout)["cells_with_errors"]] == [2, 3]
+
+
+def test_remote_validate_command_prints_cells_that_errored_when_last_run(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "pass", "notebook": "nb.ipynb", "reserved_name_conflicts": [], "skipped_functions": [],
+            "cells_with_errors": [{"cell": 4, "line": 1, "error": "KeyError", "message": "'x'"}],
+        })
+    ]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    proc = _run_cli(["remote-validate", "nb.ipynb", "--dashboard-url", dashboard_url], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "⚠ Cell 4 raised KeyError when last run ('x')" in proc.stdout

@@ -1129,6 +1129,42 @@ _FILE_READ_CALLS = frozenset({
 _FILE_LOAD_BASES = frozenset({"np", "numpy", "torch", "joblib"})
 
 
+def _find_cells_with_error_outputs(notebook):
+    """[{"cell", "line", "error", "message"}] for every code cell whose saved
+    outputs include an error -- a cell that raised when the author last ran it
+    (a NameError from a scratch cell, a failed read, an intentional demo
+    exception). Compiling inlines every code cell into the app's runtime
+    module, so a cell like that runs again when the app starts and fails the
+    same way, taking every endpoint down. `cell` is the 1-based position among
+    the notebook's code cells, the same numbering _find_import_time_hazards
+    uses; `line` is the traceback's own line number within that cell when
+    Jupyter recorded one, else null.
+    """
+    found = []
+    code_cell_number = 0
+    for cell in notebook.cells:
+        if cell.cell_type != "code":
+            continue
+        code_cell_number += 1
+        for output in cell.get("outputs", []):
+            if output.get("output_type") != "error":
+                continue
+            line = None
+            for traceback_line in output.get("traceback", []):
+                # Jupyter renders "----> 3 foo()" style arrows with ANSI codes.
+                match = re.search(r"-+>\s*(\d+)", re.sub(r"\x1b\[[0-9;]*m", "", traceback_line))
+                if match:
+                    line = int(match.group(1))
+            found.append({
+                "cell": code_cell_number,
+                "line": line,
+                "error": output.get("ename", "Error"),
+                "message": output.get("evalue", ""),
+            })
+            break
+    return found
+
+
 def _call_label(func):
     """("pd.read_csv", "read_csv", "pd") for a Call's `func` node."""
     if isinstance(func, ast.Attribute):

@@ -23610,6 +23610,7 @@ def test_validate_reports_pass_for_a_clean_notebook():
         "ignored_cache_directives": [],
         "unrecognized_directives": [],
         "import_time_hazards": [],
+        "cells_with_errors": [],
         "no_endpoints": False,
     }
 
@@ -35106,3 +35107,24 @@ def test_validate_warns_when_a_notebook_exposes_no_endpoints_and_fails_under_str
     assert results["va_empty.ipynb"]["status"] == "warn"
     assert results["va_empty.ipynb"]["no_endpoints"] is True
     assert results["va_ok.ipynb"]["no_endpoints"] is False
+
+
+def test_validate_reports_cells_that_errored_when_last_run_without_changing_status():
+    import nbformat
+
+    from tests.test_compiler import _notebook_with_error_cells
+
+    client.delete("/api/notebooks?confirm=true")
+    buffer = io.StringIO()
+    nbformat.write(_notebook_with_error_cells(), buffer)
+    client.post(
+        "/api/upload",
+        files={"file": ("validate_errors.ipynb", io.BytesIO(buffer.getvalue().encode()), "application/json")},
+    )
+
+    body = client.post("/api/validate", json={"notebook_path": "validate_errors.ipynb"}).json()
+
+    assert body["status"] == "pass"
+    assert [(c["cell"], c["error"]) for c in body["cells_with_errors"]] == [
+        (2, "NameError"), (3, "ZeroDivisionError"),
+    ]
