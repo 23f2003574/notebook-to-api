@@ -31120,3 +31120,49 @@ def test_validate_all_fail_on_startup_warnings_does_not_override_failure_exit_2(
     )
 
     assert proc.returncode == 2, proc.stdout + proc.stderr
+
+
+def test_remote_inspect_command_prints_startup_warnings(tmp_path, fake_dashboard):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "endpoints": [],
+            "unrecognized_directives": [{"line": "# api: ruote=/x"}],
+            "cells_with_errors": [{"cell": 2, "error": "ValueError", "message": "bad"}],
+            "import_time_hazards": [
+                {"kind": "input", "call": "input", "path": None, "cell": 1, "line": 3},
+                {"kind": "read", "call": "open", "path": "data.csv", "cell": 1, "line": 4},
+            ],
+        })
+    ]
+
+    proc = _run_cli(
+        ["remote-inspect", "nb.ipynb", "--dashboard-url", dashboard_url], cwd=tmp_path
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Startup Warnings" in proc.stdout
+    assert "Ignored directive: # api: ruote=/x" in proc.stdout
+    assert "Cell 2 raised ValueError" in proc.stdout
+    assert "input() waits on stdin" in proc.stdout
+    assert "open('data.csv') reads a data file" in proc.stdout
+
+
+def test_remote_inspect_command_omits_startup_warnings_when_clean_or_absent(
+    tmp_path, fake_dashboard
+):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"status": "success", "endpoints": []}),
+        _json_response(200, {
+            "status": "success", "endpoints": [],
+            "unrecognized_directives": [], "cells_with_errors": [], "import_time_hazards": [],
+        }),
+    ]
+
+    older = _run_cli(["remote-inspect", "nb.ipynb", "--dashboard-url", dashboard_url], cwd=tmp_path)
+    clean = _run_cli(["remote-inspect", "nb.ipynb", "--dashboard-url", dashboard_url], cwd=tmp_path)
+
+    assert older.returncode == 0 and "Startup Warnings" not in older.stdout
+    assert clean.returncode == 0 and "Startup Warnings" not in clean.stdout

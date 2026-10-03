@@ -38,6 +38,7 @@ from backend.inspector import (
     apply_drop_past_sunset,
     apply_tag_selection,
     past_sunset_functions,
+    startup_warning_lines,
     DEFAULT_DEV_API_KEY,
     classify_notebook_diff,
     diff_notebook_functions,
@@ -5655,6 +5656,16 @@ def _dispatch_core_command(args):
                 print("\n⚠ Skipped functions (no endpoint will be generated):")
                 for skipped in skipped_functions:
                     print(f"  - {skipped['name']}: {skipped['reason']}")
+
+            startup_warnings = startup_warning_lines({
+                key: data.get(key) or []
+                for key in ("unrecognized_directives", "cells_with_errors", "import_time_hazards")
+            })
+
+            if startup_warnings:
+                print("\n⚠ Startup Warnings (the compiled app may not start or behave as written):")
+                for line in startup_warnings:
+                    print(f"  - {line}")
 
             endpoints = data.get("endpoints", [])
 
