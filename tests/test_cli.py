@@ -30840,3 +30840,92 @@ def test_app_call_command_save_media_writes_files_and_prints_paths_not_base64(tm
     # --json shows the saved path in place of the base64 as well.
     assert as_json.returncode == 0, as_json.stdout + as_json.stderr
     assert json.loads(as_json.stdout)["result"].startswith("<saved: ")
+
+
+def test_read_data_argument_reads_inline_files_and_stdin(tmp_path, monkeypatch):
+    import io as io_module
+
+    from backend.cli import _read_data_argument
+
+    payload_file = tmp_path / "payload.json"
+    payload_file.write_text('{"a": 1}', encoding="utf-8")
+
+    assert _read_data_argument('{"inline": true}') == '{"inline": true}'
+    assert _read_data_argument(f"@{payload_file}") == '{"a": 1}'
+    monkeypatch.setattr("sys.stdin", io_module.StringIO('{"from": "stdin"}'))
+    assert _read_data_argument("@-") == '{"from": "stdin"}'
+    with pytest.raises(RuntimeError, match="--data could not read"):
+        _read_data_argument(f"@{tmp_path / 'missing.json'}")
+
+
+def test_payload_with_files_encodes_each_file_as_a_data_uri(tmp_path):
+    import base64 as b64
+
+    from backend.cli import _payload_with_files
+
+    png = tmp_path / "chart.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\n")
+    blob = tmp_path / "model.weights"
+    blob.write_bytes(b"\x00\x01")
+
+    merged = _payload_with_files(
+        {"keep": 1, "image": "replaced"}, [f"image={png}", f"weights={blob}"],
+    )
+
+    assert merged["keep"] == 1
+    assert merged["image"] == "data:image/png;base64," + b64.b64encode(b"\x89PNG\r\n\x1a\n").decode()
+    assert merged["weights"] == "data:application/octet-stream;base64," + b64.b64encode(b"\x00\x01").decode()
+    for bad in ("no-equals", "=path", "name="):
+        with pytest.raises(RuntimeError, match="NAME=PATH"):
+            _payload_with_files({}, [bad])
+    with pytest.raises(RuntimeError, match="could not read"):
+        _payload_with_files({}, [f"x={tmp_path / 'nope.bin'}"])
+    with pytest.raises(RuntimeError, match="JSON object"):
+        _payload_with_files([1, 2], [f"x={png}"])
+
+
+def test_app_call_command_sends_data_from_a_file_and_files_as_data_uris(tmp_path, fake_dashboard):
+    import base64 as b64
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    handler.responses = [_json_response(200, {"result": 1}) for _ in range(2)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+    (workdir / "payload.json").write_text('{"a": 5, "b": 6}', encoding="utf-8")
+    (workdir / "doc.pdf").write_bytes(b"%PDF-1.4")
+    base = ["app-call", str(notebook_path), "add", "--host", host, "--port", str(port)]
+
+    from_file = _run_cli(base + ["--data", f"@{workdir / 'payload.json'}"], cwd=workdir)
+    with_file = _run_cli(
+        base + ["--data", '{"a": 1}', "--file", f"document={workdir / 'doc.pdf'}"], cwd=workdir,
+    )
+
+    assert from_file.returncode == 0, from_file.stdout + from_file.stderr
+    assert json.loads(handler.bodies[0]) == {"a": 5, "b": 6}
+    assert with_file.returncode == 0, with_file.stdout + with_file.stderr
+    assert json.loads(handler.bodies[1]) == {
+        "a": 1, "document": "data:application/pdf;base64," + b64.b64encode(b"%PDF-1.4").decode(),
+    }
+
+
+def test_app_call_command_reports_a_missing_data_file_cleanly(tmp_path, fake_dashboard):
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    proc = _run_cli(
+        ["app-call", str(notebook_path), "add", "--host", host, "--port", str(port),
+         "--data", "@does-not-exist.json"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode != 0
+    assert "--data could not read 'does-not-exist.json'" in proc.stderr + proc.stdout
+    assert handler.requests == []

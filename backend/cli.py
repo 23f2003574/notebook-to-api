@@ -1305,6 +1305,47 @@ _MEDIA_EXTENSIONS = {
 }
 
 
+def _read_data_argument(value):
+    """`--data`'s text: the value itself, or -- curl style -- the contents of
+    the file it names after an "@" ("@payload.json"), or stdin for "@-". A
+    real input (a DataFrame as records, an array) is rarely something to
+    paste into a shell argument."""
+    if not value.startswith("@"):
+        return value
+    source = value[1:]
+    if source == "-":
+        return sys.stdin.read()
+    try:
+        with open(source, "r", encoding="utf-8") as f:
+            return f.read()
+    except OSError as exc:
+        raise RuntimeError(f"--data could not read {source!r}: {exc.strerror or exc}")
+
+
+def _payload_with_files(payload, file_specs):
+    """`payload` with each "NAME=PATH" in `file_specs` set to that file's
+    contents as a base64 data URI -- the form a compiled app's bytes /
+    io.BytesIO parameters decode. The MIME type is guessed from the file name
+    (application/octet-stream when unknown)."""
+    import mimetypes
+
+    if not isinstance(payload, dict):
+        raise RuntimeError("--file needs the request body to be a JSON object")
+    merged = dict(payload)
+    for spec in file_specs:
+        name, separator, path = spec.partition("=")
+        if not separator or not name or not path:
+            raise RuntimeError(f"--file expects NAME=PATH, got {spec!r}")
+        try:
+            with open(path, "rb") as f:
+                raw = f.read()
+        except OSError as exc:
+            raise RuntimeError(f"--file could not read {path!r}: {exc.strerror or exc}")
+        mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
+        merged[name] = f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
+    return merged
+
+
 def _save_media_from_result(result, directory, stem):
     """(result with each base64 data URI replaced by "<saved: PATH>", [paths]).
 
@@ -9452,12 +9493,16 @@ def _dispatch_core_command(args):
         is_background = bool(endpoint and endpoint["is_async"])
 
         if args.data is not None:
+            data_text = _read_data_argument(args.data)
             try:
-                payload = json.loads(args.data)
+                payload = json.loads(data_text)
             except ValueError as exc:
                 raise RuntimeError(f"--data is not valid JSON: {exc}")
         else:
             payload = functions_by_name[args.function].get("example_payload", {})
+
+        if args.file:
+            payload = _payload_with_files(payload, args.file)
 
         app_url = f"http://{args.host}:{args.port}"
         headers = {"X-API-Key": args.api_key}
@@ -18269,10 +18314,22 @@ def main():
         "--data",
         default=None,
         help=(
-            "JSON object to send as the request body. Defaults to "
+            "JSON object to send as the request body; \"@payload.json\" "
+            "reads it from a file and \"@-\" from stdin (curl style). Defaults to "
             "`function`'s own \"example_payload\" (the same default "
             "curl-preview/export-curl already use for their own generated "
             "commands) when omitted."
+        )
+    )
+    app_call_parser.add_argument(
+        "--file",
+        action="append",
+        default=None,
+        metavar="NAME=PATH",
+        help=(
+            "Send PATH's contents as the request field NAME, encoded as a "
+            "base64 data URI (the form a bytes / io.BytesIO parameter "
+            "decodes). Repeatable; merged over --data / the example payload."
         )
     )
     app_call_parser.add_argument(
