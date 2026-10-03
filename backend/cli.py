@@ -5966,11 +5966,23 @@ def _dispatch_core_command(args):
                         "date"
                     )
 
+        startup_problems = (
+            sum(_startup_problem_count(result) for result in results)
+            if args.fail_on_startup_warnings else 0
+        )
+        if startup_problems and not args.json_output:
+            print(
+                f"\n✗ {startup_problems} startup problem(s) found across "
+                "the notebooks and --fail-on-startup-warnings is set."
+            )
+
         if data.get("fail_count", 0) > 0:
             sys.exit(2)
         elif data.get("warn_count", 0) > 0:
             sys.exit(1)
         elif args.fail_on_past_sunset and data.get("past_sunset_notebook_count", 0) > 0:
+            sys.exit(1)
+        elif startup_problems:
             sys.exit(1)
     elif args.command == "requirements-preview":
         # See `upload` above for why this is imported here rather than at
@@ -14449,6 +14461,20 @@ def main():
             "-- a missed removal, caught from source before deploying. "
             "Never overrides the exit status 2 a failing notebook already "
             "produces."
+        )
+    )
+    validate_all_parser.add_argument(
+        "--fail-on-startup-warnings",
+        action="store_true",
+        dest="fail_on_startup_warnings",
+        help=(
+            "Exit with status 1 if any notebook has startup problems the "
+            "compile would accept but the compiled app would not survive: "
+            "a typo'd or malformed directive (silently ignored), a top-level "
+            "input() or relative data-file read, or a cell whose saved "
+            "output holds an error. Same gate `validate` and "
+            "`remote-validate` offer. Never overrides the exit status 2 a "
+            "failing notebook already produces."
         )
     )
     validate_all_parser.add_argument(

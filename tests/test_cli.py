@@ -31045,3 +31045,78 @@ def test_a_failing_notebook_keeps_exit_status_2_under_fail_on_startup_warnings(t
     proc = _run_cli(["validate", str(notebook_path), "--fail-on-startup-warnings"], cwd=workdir)
 
     assert proc.returncode == 2, proc.stdout + proc.stderr
+
+
+def _validate_all_startup_response(with_problems):
+    clean = {"filename": "a.ipynb", "status": "pass", "detail": None}
+    broken = {
+        "filename": "b.ipynb", "status": "pass", "detail": None,
+        "unrecognized_directives": [{"line": "# api: ruote=/x"}] if with_problems else [],
+        "cells_with_errors": [{"cell": 3, "error": "ValueError"}] if with_problems else [],
+    }
+    return _json_response(200, {
+        "status": "success",
+        "results": [clean, broken],
+        "pass_count": 2, "warn_count": 0, "fail_count": 0,
+    })
+
+
+def test_validate_all_fail_on_startup_warnings_exits_1_when_any_notebook_has_problems(
+    tmp_path, fake_dashboard
+):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_validate_all_startup_response(True)]
+
+    proc = _run_cli(
+        ["validate-all", "--fail-on-startup-warnings", "--dashboard-url", dashboard_url],
+        cwd=tmp_path,
+    )
+
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "2 startup problem(s) found across the notebooks" in proc.stdout
+
+
+def test_validate_all_fail_on_startup_warnings_is_opt_in_and_passes_when_clean(
+    tmp_path, fake_dashboard
+):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _validate_all_startup_response(True),
+        _validate_all_startup_response(False),
+        _validate_all_startup_response(False),
+    ]
+
+    ungated = _run_cli(["validate-all", "--dashboard-url", dashboard_url], cwd=tmp_path)
+    clean = _run_cli(
+        ["validate-all", "--fail-on-startup-warnings", "--dashboard-url", dashboard_url],
+        cwd=tmp_path,
+    )
+    as_json = _run_cli(
+        ["validate-all", "--fail-on-startup-warnings", "--json", "--dashboard-url", dashboard_url],
+        cwd=tmp_path,
+    )
+
+    assert ungated.returncode == 0, ungated.stdout + ungated.stderr
+    assert clean.returncode == 0, clean.stdout + clean.stderr
+    assert as_json.returncode == 0 and "startup problem" not in as_json.stdout
+
+
+def test_validate_all_fail_on_startup_warnings_does_not_override_failure_exit_2(
+    tmp_path, fake_dashboard
+):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_json_response(200, {
+        "status": "success",
+        "results": [{
+            "filename": "a.ipynb", "status": "fail", "detail": "boom",
+            "cells_with_errors": [{"cell": 1, "error": "KeyError"}],
+        }],
+        "pass_count": 0, "warn_count": 0, "fail_count": 1,
+    })]
+
+    proc = _run_cli(
+        ["validate-all", "--fail-on-startup-warnings", "--dashboard-url", dashboard_url],
+        cwd=tmp_path,
+    )
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
