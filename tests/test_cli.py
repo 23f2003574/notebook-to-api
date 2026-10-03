@@ -30771,3 +30771,72 @@ def test_validate_all_command_prints_hazards_and_error_cells_per_notebook(tmp_pa
     assert "    import-time hazard: cell 1, line 2: pd.read_csv('sales.csv') will fail on startup" in proc.stdout
     assert "    import-time hazard: cell 3, line 1: input() will fail on startup" in proc.stdout
     assert proc.stdout.count("import-time hazard") == 2
+
+
+def test_save_media_from_result_decodes_data_uris_and_leaves_everything_else(tmp_path):
+    import base64 as b64
+
+    from backend.cli import _save_media_from_result
+
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 4
+    result = {
+        "chart": "data:image/png;base64," + b64.b64encode(png).decode(),
+        "nested": [{"doc": "data:application/pdf;base64," + b64.b64encode(b"%PDF-1.4").decode()}],
+        "blob": "data:application/x-custom;base64," + b64.b64encode(b"\xff\x00").decode(),
+        "text": "hello",
+        "number": 3,
+        # Looks like a data URI but isn't valid base64 -> untouched.
+        "fake": "data:image/png;base64,!!!not base64!!!",
+    }
+
+    cleaned, saved = _save_media_from_result(result, str(tmp_path / "out"), "plot")
+
+    assert [Path(p).name for p in saved] == ["plot-1.png", "plot-2.pdf", "plot-3.bin"]
+    assert Path(saved[0]).read_bytes() == png
+    assert Path(saved[1]).read_bytes() == b"%PDF-1.4"
+    assert Path(saved[2]).read_bytes() == b"\xff\x00"
+    assert cleaned["chart"] == f"<saved: {saved[0]}>"
+    assert cleaned["nested"][0]["doc"] == f"<saved: {saved[1]}>"
+    assert cleaned["text"] == "hello" and cleaned["number"] == 3
+    assert cleaned["fake"] == result["fake"]
+
+
+def test_save_media_from_result_creates_nothing_when_there_is_no_media(tmp_path):
+    from backend.cli import _save_media_from_result
+
+    target = tmp_path / "never-created"
+    cleaned, saved = _save_media_from_result({"result": [1, 2, "x"]}, str(target), "f")
+
+    assert saved == [] and cleaned == {"result": [1, 2, "x"]}
+    assert not target.exists()
+
+
+def test_app_call_command_save_media_writes_files_and_prints_paths_not_base64(tmp_path, fake_dashboard):
+    import base64 as b64
+
+    app_url, handler = fake_dashboard
+    host, port = _host_and_port(app_url)
+    png = b"\x89PNG\r\n\x1a\n" + b"\x01" * 16
+    uri = "data:image/png;base64," + b64.b64encode(png).decode()
+    handler.responses = [_json_response(200, {"result": uri}) for _ in range(3)]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+    media_dir = workdir / "media"
+    base = ["app-call", str(notebook_path), "add", "--host", host, "--port", str(port)]
+
+    plain = _run_cli(base, cwd=workdir)
+    saved = _run_cli(base + ["--save-media", str(media_dir)], cwd=workdir)
+    as_json = _run_cli(base + ["--save-media", str(media_dir), "--json"], cwd=workdir)
+
+    assert plain.returncode == 0, plain.stdout + plain.stderr
+    assert uri in plain.stdout  # without the flag: unchanged
+    assert saved.returncode == 0, saved.stdout + saved.stderr
+    assert uri not in saved.stdout and "<saved:" in saved.stdout
+    assert "Saved 1 file(s)" in saved.stderr
+    assert (media_dir / "add-1.png").read_bytes() == png
+    # --json shows the saved path in place of the base64 as well.
+    assert as_json.returncode == 0, as_json.stdout + as_json.stderr
+    assert json.loads(as_json.stdout)["result"].startswith("<saved: ")

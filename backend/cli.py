@@ -3,7 +3,10 @@ import contextlib
 import hmac
 import importlib.util
 import io
+import base64
+import binascii
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -1293,6 +1296,55 @@ def _notebook_upload_bytes(notebook_path, strip_outputs=False):
         cell.pop("attachments", None)
 
     return json.dumps(notebook, indent=1, ensure_ascii=False).encode("utf-8")
+
+
+_DATA_URI_PATTERN = re.compile(r"^data:([A-Za-z0-9.+-]+/[A-Za-z0-9.+-]+);base64,([A-Za-z0-9+/=\s]*)$")
+_MEDIA_EXTENSIONS = {
+    "image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif",
+    "image/svg+xml": ".svg", "application/pdf": ".pdf", "application/zip": ".zip",
+}
+
+
+def _save_media_from_result(result, directory, stem):
+    """(result with each base64 data URI replaced by "<saved: PATH>", [paths]).
+
+    A compiled app returns a plot, image, PDF or any binary result as a
+    `data:<mime>;base64,...` string (see _bytes_json/_png_data_uri in the
+    generated app). `app-call` used to print it as one enormous line --
+    unusable in a terminal and useless to open. Each such string anywhere in
+    the result is decoded into `directory` as `<stem>-<n><ext>` (extension from
+    the MIME type, `.bin` when unknown) and replaced by the path it was saved
+    to. A string that merely looks like a data URI but isn't valid base64 is
+    left exactly as it was."""
+    saved = []
+
+    def walk(value):
+        if isinstance(value, str):
+            match = _DATA_URI_PATTERN.match(value)
+            if match:
+                try:
+                    raw = base64.b64decode(match.group(2), validate=False)
+                    if not raw and match.group(2).strip():
+                        return value
+                except (ValueError, binascii.Error):
+                    return value
+                os.makedirs(directory, exist_ok=True)
+                path = os.path.join(
+                    directory,
+                    f"{stem}-{len(saved) + 1}{_MEDIA_EXTENSIONS.get(match.group(1), '.bin')}",
+                )
+                with open(path, "wb") as f:
+                    f.write(raw)
+                saved.append(path)
+                return f"<saved: {path}>"
+            return value
+        if isinstance(value, list):
+            return [walk(item) for item in value]
+        if isinstance(value, dict):
+            return {key: walk(item) for key, item in value.items()}
+        return value
+
+    return walk(result), saved
 
 
 def _human_size(num_bytes):
@@ -9562,6 +9614,16 @@ def _dispatch_core_command(args):
                     )
 
                 time.sleep(args.poll_interval)
+
+        if args.save_media:
+            result, saved_media = _save_media_from_result(
+                result, args.save_media, args.function,
+            )
+            if saved_media:
+                print(
+                    f"Saved {len(saved_media)} file(s) to {args.save_media}",
+                    file=sys.stderr,
+                )
 
         if args.json_output:
             print(json.dumps(result, indent=2))
@@ -18295,6 +18357,19 @@ def main():
         default=60.0,
         dest="wait_timeout",
         help="Seconds to keep polling under --wait before giving up (default: 60)."
+    )
+    app_call_parser.add_argument(
+        "--save-media",
+        default=None,
+        metavar="DIR",
+        dest="save_media",
+        help=(
+            "Decode every base64 data URI in the result -- a returned plot, "
+            "image, PDF or other binary, which the compiled app sends as "
+            "\"data:<mime>;base64,...\" -- into DIR (named <function>-<n>."
+            "<ext>) and print the saved path in its place, instead of dumping "
+            "the base64 to the terminal."
+        )
     )
     app_call_parser.add_argument(
         "--poll-interval",
