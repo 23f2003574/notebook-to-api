@@ -27612,7 +27612,8 @@ def test_k8s_preview_requires_no_notebook_and_needs_no_body():
     assert body["status"] == "success"
     assert "kind: Deployment" in body["kubernetes_manifest"]
     assert "kind: Service" in body["kubernetes_manifest"]
-    assert "value: notebook-to-api-dev-key" in body["kubernetes_manifest"]
+    assert "notebook-to-api-dev-key" not in body["kubernetes_manifest"]
+    assert "secretKeyRef:" in body["kubernetes_manifest"]
 
 
 def test_k8s_preview_matches_what_an_actual_compile_writes():

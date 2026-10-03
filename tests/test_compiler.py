@@ -1159,7 +1159,14 @@ def test_kubernetes_manifest_content_lists_every_env_var_with_its_own_default():
     # backend/exporters/openapi_exporter.py); "10000" does, since an
     # unquoted "10000" would parse back as a YAML integer rather than the
     # string value a real container env var must always be.
-    assert '- name: NOTEBOOK_API_KEY\n              value: dev-key' in content
+    # NOTEBOOK_API_KEY is the one exception: a credential, so it is read from
+    # a Secret rather than written out as a literal.
+    assert 'value: dev-key' not in content
+    assert (
+        '- name: NOTEBOOK_API_KEY\n              valueFrom:\n'
+        '                secretKeyRef:\n                  name: generated-secrets\n'
+        '                  key: NOTEBOOK_API_KEY' in content
+    )
     assert (
         '- name: NOTEBOOK_API_MAX_TASKS\n              value: "10000"' in content
     )
@@ -1362,7 +1369,9 @@ def test_compiler_pipeline_generates_a_kubernetes_manifest_file(tmp_path):
 
     manifest = manifest_path.read_text(encoding="utf-8")
     assert "  name: generated\n" in manifest
-    assert "value: notebook-to-api-dev-key" in manifest
+    # The key is read from a Secret, never baked in as the public default.
+    assert "notebook-to-api-dev-key" not in manifest
+    assert "secretKeyRef:" in manifest
     assert "NOTEBOOK_API_KEY" in manifest
 
 
@@ -11309,3 +11318,39 @@ print("STDLIB_JSON_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "STDLIB_JSON_E2E_OK" in proc.stdout
+
+
+def test_kubernetes_manifest_reads_the_api_key_from_a_secret_and_requires_a_custom_key():
+    """Confirmed before this: the manifest shipped NOTEBOOK_API_KEY as a plain
+    literal set to the app's public default, so a cluster deployment applied
+    as generated was callable by anyone who knew this project's source."""
+    import yaml
+
+    from backend.generator.api_generator import GENERATED_APP_ENV_VARS
+    from backend.generator.kubernetes_generator import kubernetes_manifest_content
+
+    manifest = kubernetes_manifest_content("My_App", GENERATED_APP_ENV_VARS)
+    deployment = next(yaml.safe_load_all(manifest))
+    env = {e["name"]: e for e in deployment["spec"]["template"]["spec"]["containers"][0]["env"]}
+
+    assert env["NOTEBOOK_API_KEY"] == {
+        "name": "NOTEBOOK_API_KEY",
+        "valueFrom": {"secretKeyRef": {"name": "my-app-secrets", "key": "NOTEBOOK_API_KEY"}},
+    }
+    # The app refuses to start on the default key, so a missing/default
+    # Secret can't silently open the deployment.
+    assert env["NOTEBOOK_API_REQUIRE_CUSTOM_KEY"]["value"] == "true"
+    # Everything else is still a plain value with the app's own default.
+    assert env["PORT"]["value"] == "8000"
+    assert env["NOTEBOOK_API_STRICT_FIELDS"]["value"] == "false"
+    assert "notebook-to-api-dev-key" not in manifest
+    # The header tells the operator how to create the Secret, with the same name.
+    assert "kubectl create secret generic my-app-secrets" in manifest.splitlines()[1]
+
+
+def test_kubernetes_manifest_without_env_vars_has_no_secret_reference():
+    from backend.generator.kubernetes_generator import kubernetes_manifest_content
+
+    manifest = kubernetes_manifest_content("generated", [])
+    assert "secretKeyRef" not in manifest
+    assert "name: PORT" in manifest

@@ -193,14 +193,36 @@ def kubernetes_manifest_content(package_name="generated", env_vars=None, image=N
     image_scalar = _yaml_scalar(image)
 
     env_entries = [{"name": "PORT", "default": "8000"}] + list(env_vars)
+    resource_name = _k8s_resource_name(package_name)
+    secret_name = _yaml_scalar(f"{resource_name}-secrets")
 
-    env_lines = "\n".join(
-        f'            - name: {_yaml_scalar(entry["name"])}\n'
-        f'              value: {_yaml_scalar(entry["default"])}'
-        for entry in env_entries
-    )
+    def env_block(entry):
+        name = _yaml_scalar(entry["name"])
+        # The API key is a credential: shipping the app's public default as a
+        # literal in a manifest that gets `kubectl apply`'d left every cluster
+        # deployment callable by anyone who knows this project's source. It is
+        # read from a Secret instead (the pod won't start until one exists),
+        # and REQUIRE_CUSTOM_KEY makes the app itself refuse the default.
+        if entry["name"] == "NOTEBOOK_API_KEY":
+            return (
+                f"            - name: {name}\n"
+                f"              valueFrom:\n"
+                f"                secretKeyRef:\n"
+                f"                  name: {secret_name}\n"
+                f"                  key: NOTEBOOK_API_KEY"
+            )
+        value = "true" if entry["name"] == "NOTEBOOK_API_REQUIRE_CUSTOM_KEY" else entry["default"]
+        return (
+            f"            - name: {name}\n"
+            f"              value: {_yaml_scalar(value)}"
+        )
+
+    env_lines = "\n".join(env_block(entry) for entry in env_entries)
 
     return f"""\
+# NOTEBOOK_API_KEY comes from a Secret. Create it before applying this file:
+#   kubectl create secret generic {resource_name}-secrets \\
+#     --from-literal=NOTEBOOK_API_KEY="$(openssl rand -hex 32)"
 apiVersion: apps/v1
 kind: Deployment
 metadata:
