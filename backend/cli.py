@@ -5539,6 +5539,16 @@ def _dispatch_core_command(args):
             if dependencies:
                 print(f"\nDependencies: {', '.join(dependencies)}")
 
+            startup_warnings = startup_warning_lines({
+                key: data.get(key) or []
+                for key in ("unrecognized_directives", "cells_with_errors", "import_time_hazards")
+            })
+
+            if startup_warnings:
+                print("\n⚠ Startup Warnings (the compiled app may not start or behave as written):")
+                for line in startup_warnings:
+                    print(f"  - {line}")
+
             smoke_test = data.get("smoke_test")
 
             if smoke_test is not None:
@@ -5551,6 +5561,15 @@ def _dispatch_core_command(args):
                     )
 
         if data.get("smoke_test") is not None and not data["smoke_test"]["passed"]:
+            sys.exit(1)
+
+        startup_problems = _startup_problem_count(data) if args.fail_on_startup_warnings else 0
+        if startup_problems:
+            if not args.json_output:
+                print(
+                    f"\n✗ {startup_problems} startup problem(s) found and "
+                    "--fail-on-startup-warnings is set."
+                )
             sys.exit(1)
     elif args.command == "remote-inspect":
         # See `upload` above for why this is imported here rather than at
@@ -14224,6 +14243,19 @@ def main():
     _add_function_selection_arguments(remote_compile_parser)
     _add_tag_selection_argument(remote_compile_parser)
     _add_version_id_argument(remote_compile_parser, "POST /api/compile")
+    remote_compile_parser.add_argument(
+        "--fail-on-startup-warnings",
+        action="store_true",
+        dest="fail_on_startup_warnings",
+        help=(
+            "Exit with status 1 if the compiled notebook has startup "
+            "problems the compile accepted but the app would not survive: "
+            "a typo'd or malformed directive (silently ignored), a "
+            "top-level input() or relative data-file read, or a cell whose "
+            "saved output holds an error. They are reported either way; "
+            "this turns them into a CI gate."
+        )
+    )
     remote_compile_parser.add_argument(
         "--expected-sha256",
         default=None,

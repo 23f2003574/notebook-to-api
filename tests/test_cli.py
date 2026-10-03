@@ -31166,3 +31166,47 @@ def test_remote_inspect_command_omits_startup_warnings_when_clean_or_absent(
 
     assert older.returncode == 0 and "Startup Warnings" not in older.stdout
     assert clean.returncode == 0 and "Startup Warnings" not in clean.stdout
+
+
+def _remote_compile_response_with_startup_problems():
+    return _json_response(200, {
+        "status": "success",
+        "notebook": "nb.ipynb",
+        "endpoints": [],
+        "unrecognized_directives": [{"line": "# api: ruote=/x"}],
+        "cells_with_errors": [{"cell": 2, "error": "ValueError", "message": "bad"}],
+        "import_time_hazards": [],
+    })
+
+
+def test_remote_compile_command_prints_startup_warnings_without_gating(tmp_path, fake_dashboard):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_remote_compile_response_with_startup_problems()]
+
+    proc = _run_cli(["remote-compile", "nb.ipynb", "--dashboard-url", dashboard_url], cwd=tmp_path)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Startup Warnings" in proc.stdout
+    assert "Ignored directive: # api: ruote=/x" in proc.stdout
+    assert "Cell 2 raised ValueError" in proc.stdout
+
+
+def test_remote_compile_fail_on_startup_warnings_exits_1_only_when_problems_exist(
+    tmp_path, fake_dashboard
+):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _remote_compile_response_with_startup_problems(),
+        _json_response(200, {"status": "success", "notebook": "nb.ipynb", "endpoints": []}),
+        _remote_compile_response_with_startup_problems(),
+    ]
+    args = ["remote-compile", "nb.ipynb", "--fail-on-startup-warnings", "--dashboard-url", dashboard_url]
+
+    gated = _run_cli(args, cwd=tmp_path)
+    clean = _run_cli(args, cwd=tmp_path)
+    gated_json = _run_cli(args + ["--json"], cwd=tmp_path)
+
+    assert gated.returncode == 1, gated.stdout + gated.stderr
+    assert "2 startup problem(s) found" in gated.stdout
+    assert clean.returncode == 0, clean.stdout + clean.stderr
+    assert gated_json.returncode == 1 and "startup problem" not in gated_json.stdout
