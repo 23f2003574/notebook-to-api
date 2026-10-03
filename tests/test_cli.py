@@ -31247,3 +31247,26 @@ def test_compile_fail_on_startup_warnings_passes_for_a_clean_notebook(tmp_path):
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "startup problem" not in proc.stdout
+
+
+def test_inspect_fail_on_startup_warnings_gates_ci(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    broken = workdir / "broken.ipynb"
+    _write_notebook_with_startup_problem(broken)
+    clean = workdir / "clean.ipynb"
+    _write_notebook_with_function(clean, "def total(a: int) -> int:\n    return a\n")
+
+    informational = _run_cli(["inspect", str(broken)], cwd=workdir)
+    gated = _run_cli(["inspect", str(broken), "--fail-on-startup-warnings"], cwd=workdir)
+    gated_json = _run_cli(["inspect", str(broken), "--fail-on-startup-warnings", "--json"], cwd=workdir)
+    gated_clean = _run_cli(["inspect", str(clean), "--fail-on-startup-warnings"], cwd=workdir)
+
+    assert informational.returncode == 0, informational.stdout + informational.stderr
+    assert gated.returncode == 1, gated.stdout + gated.stderr
+    assert "Startup Warnings" in gated.stdout  # the report itself is still printed
+    assert "startup problem(s) found and --fail-on-startup-warnings is set" in gated.stdout
+    assert gated_json.returncode == 1
+    assert json.loads(gated_json.stdout)["import_time_hazards"]  # stdout stays pure JSON
+    assert gated_clean.returncode == 0, gated_clean.stdout + gated_clean.stderr
+    assert "startup problem" not in gated_clean.stdout

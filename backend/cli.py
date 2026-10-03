@@ -2152,11 +2152,24 @@ def _dispatch_core_command(args):
         # /api/inspect endpoint instead of the two disagreeing about
         # whether inspecting a notebook touches the filesystem.
         output_dir = Path(args.output)
+        data = None
         if args.json_output:
             data = inspect_notebook_data(notebook_path=args.notebook, output_dir=str(output_dir))
             print(json.dumps(data, indent=2))
         else:
             inspect_notebook(notebook_path=args.notebook, output_dir=str(output_dir))
+
+        if args.fail_on_startup_warnings:
+            if data is None:
+                data = inspect_notebook_data(notebook_path=args.notebook, output_dir=str(output_dir))
+            startup_problems = _startup_problem_count(data)
+            if startup_problems:
+                if not args.json_output:
+                    print(
+                        f"\n✗ {startup_problems} startup problem(s) found and "
+                        "--fail-on-startup-warnings is set."
+                    )
+                sys.exit(1)
     elif args.command == "validate":
         # Reuses inspect_notebook_data's own reserved_name_conflicts/
         # skipped_functions checks (backend/inspector.py) -- the tool
@@ -10338,6 +10351,18 @@ def main():
     # inspect command (show analysis report)
     inspect_parser = subparsers.add_parser("inspect", help="Inspect a notebook and display analysis report.")
     inspect_parser.add_argument("notebook", help="Path to the notebook file.")
+    inspect_parser.add_argument(
+        "--fail-on-startup-warnings",
+        action="store_true",
+        dest="fail_on_startup_warnings",
+        help=(
+            "Exit with status 1 if the notebook has startup problems the "
+            "compile would accept but the compiled app would not survive: "
+            "a typo'd or malformed directive (silently ignored), a "
+            "top-level input() or relative data-file read, or a cell whose "
+            "saved output holds an error. The report is printed either way."
+        )
+    )
     inspect_parser.add_argument(
         "--output",
         default="generated",
