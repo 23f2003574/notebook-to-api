@@ -31210,3 +31210,40 @@ def test_remote_compile_fail_on_startup_warnings_exits_1_only_when_problems_exis
     assert "2 startup problem(s) found" in gated.stdout
     assert clean.returncode == 0, clean.stdout + clean.stderr
     assert gated_json.returncode == 1 and "startup problem" not in gated_json.stdout
+
+
+def test_compile_fail_on_startup_warnings_exits_1_but_still_writes_the_app(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    broken = workdir / "broken.ipynb"
+    _write_notebook_with_startup_problem(broken)
+
+    ungated = _run_cli(["compile", str(broken), "--output", "plain"], cwd=workdir)
+    gated = _run_cli(
+        ["compile", str(broken), "--output", "gated", "--fail-on-startup-warnings"], cwd=workdir
+    )
+    gated_json = _run_cli(
+        ["compile", str(broken), "--output", "gj", "--fail-on-startup-warnings", "--json"],
+        cwd=workdir,
+    )
+
+    assert ungated.returncode == 0, ungated.stdout + ungated.stderr
+    assert gated.returncode == 1, gated.stdout + gated.stderr
+    assert "startup problem(s) found and --fail-on-startup-warnings is set" in gated.stdout
+    assert (workdir / "gated" / "app.py").exists()
+    assert gated_json.returncode == 1
+    assert json.loads(gated_json.stdout)["endpoints"] is not None
+
+
+def test_compile_fail_on_startup_warnings_passes_for_a_clean_notebook(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    clean = workdir / "clean.ipynb"
+    _write_notebook_with_function(clean, "def total(a: int) -> int:\n    return a\n")
+
+    proc = _run_cli(
+        ["compile", str(clean), "--output", "built", "--fail-on-startup-warnings"], cwd=workdir
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "startup problem" not in proc.stdout

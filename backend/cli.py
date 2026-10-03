@@ -2114,6 +2114,21 @@ def _dispatch_core_command(args):
 
         if smoke_test is not None and not smoke_test["passed"]:
             sys.exit(1)
+
+        if args.fail_on_startup_warnings:
+            # --json already inspected the notebook above; the text path
+            # only does it now, since print_compile_summary reports the
+            # same warnings but returns nothing to count.
+            if not args.json_output:
+                data = inspect_notebook_data(notebook_path=args.notebook)
+            startup_problems = _startup_problem_count(data)
+            if startup_problems:
+                if not args.json_output:
+                    print(
+                        f"\n✗ {startup_problems} startup problem(s) found and "
+                        "--fail-on-startup-warnings is set."
+                    )
+                sys.exit(1)
     elif args.command == "inspect":
         # Deliberately does NOT create output_dir the way "compile" above
         # does -- `inspect` is documented as a read-only "preview what
@@ -10200,6 +10215,19 @@ def main():
     # compile command
     compile_parser = subparsers.add_parser("compile", help="Compile a notebook to FastAPI app.")
     compile_parser.add_argument("notebook", help="Path to the notebook file.")
+    compile_parser.add_argument(
+        "--fail-on-startup-warnings",
+        action="store_true",
+        dest="fail_on_startup_warnings",
+        help=(
+            "After compiling, exit with status 1 if the notebook has "
+            "startup problems the compile accepted but the app would not "
+            "survive: a typo'd or malformed directive (silently ignored), "
+            "a top-level input() or relative data-file read, or a cell "
+            "whose saved output holds an error. The app is still written; "
+            "this turns the warnings into a CI gate."
+        )
+    )
     compile_parser.add_argument(
         "--drop-past-sunset",
         action="store_true",
