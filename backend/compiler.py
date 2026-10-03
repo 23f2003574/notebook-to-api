@@ -387,6 +387,66 @@ def _jupyter_builtin_prelude(combined_code):
     return "# Jupyter built-ins, stubbed outside Jupyter (notebook-to-api)\n" + "\n".join(stubs) + "\n\n"
 
 
+_IPYTHON_SHELL_METHODS = frozenset({
+    "run_line_magic", "run_cell_magic", "magic", "system", "getoutput", "run_cell",
+})
+
+
+def _neutralize_ipython_shell_calls(combined_code):
+    """`combined_code` with each `get_ipython().run_line_magic(...)` (and
+    `.run_cell_magic` / `.magic` / `.system` / `.getoutput` / `.run_cell`)
+    call replaced by `None`, keeping the line count.
+
+    That is how `jupytext` / `nbconvert --to python` write `%matplotlib
+    inline` or `!pip install x` -- an unguarded call on get_ipython()'s
+    result. Outside IPython the stub get_ipython() returns None, so every
+    such line raised AttributeError on import and took the app down; the
+    magic itself has nothing to do in a server, so the call becomes a
+    no-op. Only the outermost call is replaced, and an unparsable source
+    is returned untouched.
+    """
+    try:
+        tree = ast.parse(combined_code)
+    except SyntaxError:
+        return combined_code
+
+    spans = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in _IPYTHON_SHELL_METHODS
+            and isinstance(node.func.value, ast.Call)
+            and isinstance(node.func.value.func, ast.Name)
+            and node.func.value.func.id == "get_ipython"
+            and not node.func.value.args and not node.func.value.keywords
+        ):
+            spans.append((node.lineno, node.col_offset, node.end_lineno, node.end_col_offset))
+    if not spans:
+        return combined_code
+
+    spans.sort()
+    outermost = []
+    for span in spans:
+        if outermost and (span[0], span[1]) < (outermost[-1][2], outermost[-1][3]):
+            continue
+        outermost.append(span)
+
+    lines = [line.encode("utf-8") for line in combined_code.split("\n")]
+    for start_line, start_col, end_line, end_col in reversed(outermost):
+        head = lines[start_line - 1][:start_col]
+        tail = lines[end_line - 1][end_col:]
+        # Parenthesised, with the original newlines kept, so later line
+        # numbers (and tracebacks) still match the notebook.
+        replacement = [head + b"(None"] + [b""] * (end_line - start_line - 1)
+        if end_line > start_line:
+            replacement.append(b")" + tail)
+        else:
+            replacement[0] += b")" + tail
+        lines[start_line - 1:end_line] = replacement
+    return b"\n".join(lines).decode("utf-8")
+
+
 def _with_jupyter_prelude(combined_code):
     """`combined_code` with _jupyter_builtin_prelude's stubs inserted -- at the
     very top, or, for a notebook that opens with `from __future__` imports
@@ -397,6 +457,8 @@ def _with_jupyter_prelude(combined_code):
     prelude = _jupyter_builtin_prelude(combined_code)
     if not prelude:
         return combined_code
+    if "def get_ipython" in prelude:
+        combined_code = _neutralize_ipython_shell_calls(combined_code)
 
     insert_after_line = 0
     try:

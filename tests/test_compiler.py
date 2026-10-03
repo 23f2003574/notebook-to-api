@@ -11354,3 +11354,43 @@ def test_kubernetes_manifest_without_env_vars_has_no_secret_reference():
     manifest = kubernetes_manifest_content("generated", [])
     assert "secretKeyRef" not in manifest
     assert "name: PORT" in manifest
+
+
+def test_neutralize_ipython_shell_calls_replaces_unguarded_magic_calls_keeping_lines():
+    from backend.compiler import _neutralize_ipython_shell_calls
+
+    code = (
+        "get_ipython().run_line_magic('matplotlib', 'inline')\n"
+        "out = get_ipython().system('echo é')\n"
+        "get_ipython().run_cell_magic(\n    'time',\n    '',\n    'x = 1')\n"
+        "y = 2\n"
+        "get_ipython().run_line_magic('a', get_ipython().system('b'))\n"
+    )
+    result = _neutralize_ipython_shell_calls(code)
+
+    assert "get_ipython" not in result
+    assert result.count("\n") == code.count("\n")
+    namespace = {}
+    exec(result, namespace)
+    assert namespace["out"] is None and namespace["y"] == 2
+
+
+def test_neutralize_ipython_shell_calls_leaves_other_code_alone():
+    from backend.compiler import _neutralize_ipython_shell_calls
+
+    guarded = "if get_ipython() is not None:\n    pass\nget_ipython().kernel\n"
+    assert _neutralize_ipython_shell_calls(guarded) == guarded
+    assert _neutralize_ipython_shell_calls("def broken(:\n") == "def broken(:\n"
+    assert _neutralize_ipython_shell_calls("shell.run_line_magic('x', 'y')\n") == "shell.run_line_magic('x', 'y')\n"
+
+
+def test_with_jupyter_prelude_neutralizes_magic_calls_unless_notebook_defines_get_ipython():
+    from backend.compiler import _with_jupyter_prelude
+
+    stubbed = _with_jupyter_prelude("get_ipython().run_line_magic('matplotlib', 'inline')\nx = 1\n")
+    namespace = {}
+    exec(stubbed, namespace)
+    assert namespace["x"] == 1
+
+    own = "def get_ipython():\n    return 1\nget_ipython().run_line_magic('a', 'b')\n"
+    assert _with_jupyter_prelude(own) == own
