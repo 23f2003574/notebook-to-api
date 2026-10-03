@@ -2622,6 +2622,17 @@ def _dispatch_core_command(args):
             tags=_parse_comma_separated_names(args.tag),
         )
     elif args.command == "deploy":
+        if args.fail_on_startup_warnings:
+            # Checked before anything is compiled, built or pushed: an
+            # image whose app can't start is what this gate keeps out of
+            # the registry.
+            startup_data = inspect_notebook_data(notebook_path=args.notebook)
+            if _startup_problem_count(startup_data):
+                raise RuntimeError(
+                    "Refusing to deploy: the notebook has startup problems "
+                    "(--fail-on-startup-warnings is set):\n"
+                    + "\n".join(f"  - {line}" for line in startup_warning_lines(startup_data))
+                )
         output_dir = Path(args.output)
         output_dir.mkdir(parents=True, exist_ok=True)
         only = _parse_comma_separated_names(args.only)
@@ -10755,6 +10766,19 @@ def main():
     # deploy command (compile + build a Docker image)
     deploy_parser = subparsers.add_parser(
         "deploy", help="Compile a notebook and build a Docker image for the generated FastAPI app."
+    )
+    deploy_parser.add_argument(
+        "--fail-on-startup-warnings",
+        action="store_true",
+        dest="fail_on_startup_warnings",
+        help=(
+            "Refuse to build or push (exit status 1) if the notebook has "
+            "startup problems the compile would accept but the container "
+            "would not survive: a typo'd or malformed directive (silently "
+            "ignored), a top-level input() or relative data-file read, or "
+            "a cell whose saved output holds an error. Checked before "
+            "anything is compiled, so no image is built."
+        )
     )
     deploy_parser.add_argument("notebook", help="Path to the notebook file.")
     deploy_parser.add_argument(

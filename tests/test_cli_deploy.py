@@ -1406,3 +1406,60 @@ def test_deploy_drop_past_sunset_refuses_an_only_list_it_would_empty(tmp_path):
     assert proc.returncode != 0
     assert "left nothing to compile" in proc.stdout + proc.stderr
     assert not log_path.exists()  # never reached docker build
+
+
+def _write_notebook_with_import_time_hazard(path):
+    import nbformat
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells = [
+        nbformat.v4.new_code_cell("data = open('sales.csv').read()\n"),
+        nbformat.v4.new_code_cell("def total(a: int) -> int:\n    return a\n"),
+    ]
+    with open(path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+
+def test_deploy_fail_on_startup_warnings_refuses_before_compiling_or_building(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_import_time_hazard(notebook_path)
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker_recording_all_calls(bin_dir, log_path)
+
+    proc = _run_cli(
+        ["deploy", str(notebook_path), "--output", "built_api", "--fail-on-startup-warnings"],
+        cwd=workdir,
+        path_dirs=[str(bin_dir)],
+    )
+
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "Refusing to deploy" in proc.stderr
+    assert "sales.csv" in proc.stderr
+    assert not (workdir / "built_api").exists()
+    assert not log_path.exists()
+
+
+def test_deploy_fail_on_startup_warnings_is_opt_in_and_allows_clean_notebooks(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    broken = workdir / "broken.ipynb"
+    _write_notebook_with_import_time_hazard(broken)
+    clean = workdir / "nb.ipynb"
+    _write_notebook(clean)
+    bin_dir = tmp_path / "fakebin"
+    _install_fake_docker_recording_all_calls(bin_dir, tmp_path / "docker.log")
+
+    ungated = _run_cli(
+        ["deploy", str(broken), "--output", "a", "--dry-run"], cwd=workdir, path_dirs=[str(bin_dir)]
+    )
+    gated_clean = _run_cli(
+        ["deploy", str(clean), "--output", "b", "--dry-run", "--fail-on-startup-warnings"],
+        cwd=workdir, path_dirs=[str(bin_dir)],
+    )
+
+    assert ungated.returncode == 0, ungated.stdout + ungated.stderr
+    assert gated_clean.returncode == 0, gated_clean.stdout + gated_clean.stderr
+    assert "Would build Docker image 'b:latest'" in gated_clean.stdout
