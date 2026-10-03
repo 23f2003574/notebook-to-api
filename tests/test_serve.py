@@ -1,9 +1,29 @@
+from pathlib import Path
 import subprocess
 import sys
 
 import pytest
 
 from backend import serve as serve_module
+
+
+@pytest.fixture(autouse=True)
+def _cancel_leaked_recompile_timers(monkeypatch):
+    """A change inside the debounce window schedules a real trailing-recompile
+    timer. Cancel whatever a test leaves pending, so one test's timer can't
+    fire inside a later test that has monkeypatched compile_notebook."""
+    created = []
+    real_timer = serve_module.threading.Timer
+
+    def tracking_timer(*args, **kwargs):
+        timer = real_timer(*args, **kwargs)
+        created.append(timer)
+        return timer
+
+    monkeypatch.setattr(serve_module.threading, "Timer", tracking_timer)
+    yield
+    for timer in created:
+        timer.cancel()
 
 
 class _FakePopen:
@@ -1479,9 +1499,11 @@ def test_notebook_change_handler_reports_a_debounced_change_instead_of_staying_s
 
     assert compiled_calls == []
     output = capsys.readouterr().out
-    assert "changed again within 1.0s of the last recompile" in output
-    assert "0.5s left in the debounce window" in output
-    assert "Save again once the window has passed" in output
+    assert "changed within 1.0s of the last recompile" in output
+    assert "recompiling in 0.5s" in output
+    # The edit is no longer dropped: a trailing recompile is pending.
+    assert handler._pending_recompile is not None
+    handler._pending_recompile.cancel()
 
 
 def test_notebook_change_handler_does_not_report_debouncing_for_a_first_change(
@@ -1748,3 +1770,105 @@ def test_watch_notebook_initial_compile_honors_drop_past_sunset(tmp_path, monkey
         pass
 
     assert calls[0] == (None, ["old_add"])
+
+
+def _handler_with_recording_compile(tmp_path, monkeypatch, debounce_seconds):
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("v1", encoding="utf-8")
+    output_dir = tmp_path / "generated"
+
+    compiled_contents = []
+    monkeypatch.setattr(
+        serve_module, "compile_notebook",
+        lambda nb, out, **kwargs: compiled_contents.append(Path(nb).read_text(encoding="utf-8")),
+    )
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
+
+    handler = serve_module.NotebookChangeHandler(
+        str(notebook_path), str(output_dir), debounce_seconds=debounce_seconds,
+    )
+    event = type("Event", (), {"src_path": str(notebook_path)})()
+    return handler, notebook_path, event, compiled_contents
+
+
+def _wait_for(predicate, timeout=5.0):
+    import time as time_module
+
+    deadline = time_module.time() + timeout
+    while time_module.time() < deadline:
+        if predicate():
+            return True
+        time_module.sleep(0.01)
+    return predicate()
+
+
+def test_notebook_change_inside_the_debounce_window_is_recompiled_when_it_ends(tmp_path, monkeypatch, capsys):
+    """Before this, a save landing inside the debounce window was dropped
+    ("save again once the window has passed"), leaving the server on the
+    previous save's code until the author happened to save again."""
+    handler, notebook_path, event, compiled = _handler_with_recording_compile(tmp_path, monkeypatch, 0.3)
+
+    handler.last_compile_time = 0
+    handler.on_modified(event)  # outside the window: compiles at once
+    assert compiled == ["v1"]
+
+    notebook_path.write_text("v2", encoding="utf-8")
+    handler.on_modified(event)  # inside the window: deferred, not dropped
+
+    assert compiled == ["v1"]
+    assert "recompiling in" in capsys.readouterr().out
+    assert _wait_for(lambda: compiled == ["v1", "v2"]), compiled
+
+
+def test_several_changes_inside_the_window_share_one_trailing_recompile_of_the_latest_content(
+    tmp_path, monkeypatch, capsys,
+):
+    handler, notebook_path, event, compiled = _handler_with_recording_compile(tmp_path, monkeypatch, 0.3)
+    handler.last_compile_time = 0
+    handler.on_modified(event)
+    capsys.readouterr()
+
+    for content in ("v2", "v3", "v4"):
+        notebook_path.write_text(content, encoding="utf-8")
+        handler.on_modified(event)
+
+    out = capsys.readouterr().out
+    assert out.count("recompiling in") == 1
+    assert out.count("already scheduled will pick this edit up") == 2
+
+    assert _wait_for(lambda: len(compiled) == 2), compiled
+    assert compiled == ["v1", "v4"]  # the final state, compiled exactly once more
+
+    # Nothing further is pending: a later change outside the window compiles at once.
+    handler.last_compile_time = 0
+    notebook_path.write_text("v5", encoding="utf-8")
+    handler.on_modified(event)
+    assert compiled == ["v1", "v4", "v5"]
+
+
+def test_a_failed_trailing_recompile_is_reported_and_the_handler_keeps_working(tmp_path, monkeypatch, capsys):
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+    calls = []
+
+    def flaky_compile(nb, out, **kwargs):
+        calls.append(nb)
+        if len(calls) == 2:
+            raise ValueError("bad cell")
+
+    monkeypatch.setattr(serve_module, "compile_notebook", flaky_compile)
+    monkeypatch.setattr(serve_module, "print_compile_summary", lambda nb, out, **kwargs: None)
+
+    handler = serve_module.NotebookChangeHandler(str(notebook_path), str(tmp_path / "g"), debounce_seconds=0.2)
+    event = type("Event", (), {"src_path": str(notebook_path)})()
+    handler.last_compile_time = 0
+    handler.on_modified(event)
+    handler.on_modified(event)  # deferred; its recompile raises
+
+    seen = []
+    assert _wait_for(lambda: len(calls) == 2)
+    assert _wait_for(lambda: (seen.append(capsys.readouterr().out), "Compilation error: bad cell" in "".join(seen))[1])
+    # Still usable afterwards.
+    handler.last_compile_time = 0
+    handler.on_modified(event)
+    assert len(calls) == 3

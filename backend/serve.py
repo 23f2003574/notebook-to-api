@@ -1,3 +1,4 @@
+import threading
 import time
 import subprocess
 import sys
@@ -162,6 +163,12 @@ class NotebookChangeHandler(FileSystemEventHandler):
         self.debounce_seconds = debounce_seconds
         self.on_change = on_change
         self.last_compile_time = time.time()
+        # A change that lands inside the debounce window is not dropped: one
+        # trailing recompile is scheduled for when the window ends, and runs
+        # against whatever the notebook holds *then*. The lock keeps that
+        # timer thread and the watchdog thread from compiling at once.
+        self._compile_lock = threading.Lock()
+        self._pending_recompile = None
 
     def on_modified(self, event):
         self._handle_possible_notebook_change(event.src_path)
@@ -200,37 +207,41 @@ class NotebookChangeHandler(FileSystemEventHandler):
             )
 
     def _handle_possible_notebook_change(self, event_path):
-        # Only react to changes to the notebook file itself
         if event_path.endswith(".ipynb") and Path(event_path).resolve() == Path(self.notebook_path).resolve():
-            # Debounce: avoid multiple rapid recompiles
             current_time = time.time()
             if current_time - self.last_compile_time < self.debounce_seconds:
-                # Confirmed exploitable before this: this branch returned
-                # with no output of any kind -- the only silent branch
-                # anywhere in this handler (on_modified/on_created's own
-                # "not the watched notebook" no-op aside, which has
-                # nothing to report in the first place). An editor that
-                # writes a notebook's file more than once per logical save
-                # (this class' own docstring already gives the temp-file-
-                # then-rename example) is the common, harmless case this
-                # debounce exists to collapse -- but a genuinely distinct,
-                # separate edit saved within debounce_seconds of the
-                # previous recompile is silently skipped exactly the same
-                # way, with the compiled app left serving stale output and
-                # nothing here to tell a developer that happened. Without
-                # this print, that's indistinguishable from `serve`/
-                # `watch` already having picked the edit up.
                 remaining = self.debounce_seconds - (current_time - self.last_compile_time)
-                print(
-                    f"\n⏳ Notebook changed again within {self.debounce_seconds}s "
-                    f"of the last recompile ({remaining:.1f}s left in the "
-                    "debounce window) -- skipping this one. Save again "
-                    "once the window has passed if this edit should "
-                    "still be picked up."
-                )
+                # Dropping this event outright (as this used to) left the
+                # server running the *previous* save's code until the author
+                # happened to save again; schedule one recompile for when the
+                # window closes instead, covering every edit made inside it.
+                with self._compile_lock:
+                    if self._pending_recompile is not None:
+                        print(
+                            "\n⏳ Notebook changed again -- the recompile already "
+                            "scheduled will pick this edit up."
+                        )
+                        return
+                    print(
+                        f"\n⏳ Notebook changed within {self.debounce_seconds}s of "
+                        f"the last recompile -- recompiling in {remaining:.1f}s."
+                    )
+                    timer = threading.Timer(remaining, self._run_pending_recompile)
+                    timer.daemon = True
+                    self._pending_recompile = timer
+                    timer.start()
                 return
 
-            self.last_compile_time = current_time
+            self._recompile()
+
+    def _run_pending_recompile(self):
+        with self._compile_lock:
+            self._pending_recompile = None
+        self._recompile()
+
+    def _recompile(self):
+        with self._compile_lock:
+            self.last_compile_time = time.time()
 
             print("\n🔄 Notebook changed. Recompiling API...")
 
