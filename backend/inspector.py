@@ -552,6 +552,22 @@ def inspect_notebook(notebook_path, output_dir="generated"):
         for skipped in skipped_functions:
             print(f"- {skipped['name']}: {skipped['reason']}")
 
+    # The same startup problems `compile` and `validate` report -- inspect
+    # is where an author looks first, and it said nothing about a typo'd
+    # directive, a cell that errored when last run, or a top-level
+    # input()/data-file read that will fail when the app starts.
+    startup_warnings = startup_warning_lines({
+        "unrecognized_directives": _find_unrecognized_directives(code_cells),
+        "cells_with_errors": _find_cells_with_error_outputs(notebook),
+        "import_time_hazards": _find_import_time_hazards(code_cells),
+    })
+
+    if startup_warnings:
+        print("\n⚠ Startup Warnings (the compiled app may not start or behave as written):")
+        print("-" * 20)
+        for line in startup_warnings:
+            print(f"- {line}")
+
     print("\nFunctions Found:")
     print("-" * 20)
 

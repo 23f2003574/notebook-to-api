@@ -30929,3 +30929,45 @@ def test_app_call_command_reports_a_missing_data_file_cleanly(tmp_path, fake_das
     assert proc.returncode != 0
     assert "--data could not read 'does-not-exist.json'" in proc.stderr + proc.stdout
     assert handler.requests == []
+
+
+def test_inspect_command_reports_startup_warnings(tmp_path):
+    import nbformat
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook = nbformat.v4.new_notebook()
+    failed = nbformat.v4.new_code_cell("scratch_value\n")
+    failed.outputs = [nbformat.v4.new_output(
+        "error", ename="NameError", evalue="name 'scratch_value' is not defined", traceback=["---> 1 scratch_value"],
+    )]
+    notebook.cells = [
+        nbformat.v4.new_code_cell("import pandas as pd\ndf = pd.read_csv('sales.csv')\n"),
+        failed,
+        nbformat.v4.new_code_cell("# notebook-to-api: cahce 5\ndef total(a: int) -> int:\n    return a\n"),
+    ]
+    notebook_path = workdir / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    proc = _run_cli(["inspect", str(notebook_path), "--output", "built"], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "⚠ Startup Warnings (the compiled app may not start or behave as written):" in proc.stdout
+    assert "- Ignored directive: # notebook-to-api: cahce 5" in proc.stdout
+    assert "- Cell 2 raised NameError when last run" in proc.stdout
+    assert "pd.read_csv('sales.csv') reads a data file" in proc.stdout
+    # The section sits before the function listing.
+    assert proc.stdout.index("Startup Warnings") < proc.stdout.index("Functions Found:")
+
+
+def test_inspect_command_has_no_startup_warnings_section_for_a_clean_notebook(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(notebook_path, "def total(a: int) -> int:\n    return a\n")
+
+    proc = _run_cli(["inspect", str(notebook_path), "--output", "built"], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Startup Warnings" not in proc.stdout
