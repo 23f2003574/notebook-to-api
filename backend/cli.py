@@ -1388,6 +1388,16 @@ def _save_media_from_result(result, directory, stem):
     return walk(result), saved
 
 
+def _startup_problem_count(data):
+    """How many things compile accepts but the compiled app will choke on or
+    ignore: typo'd/malformed directives, top-level input()/data-file reads,
+    and cells that errored when last run (see startup_warning_lines)."""
+    return sum(
+        len(data.get(key) or [])
+        for key in ("unrecognized_directives", "import_time_hazards", "cells_with_errors")
+    )
+
+
 def _human_size(num_bytes):
     for unit in ("B", "KB", "MB"):
         if num_bytes < 1024 or unit == "MB":
@@ -2330,11 +2340,20 @@ def _dispatch_core_command(args):
             else:
                 print("\nValidation failed.")
 
+        startup_problems = _startup_problem_count(data) if args.fail_on_startup_warnings else 0
+        if startup_problems and not args.json_output:
+            print(
+                f"\n✗ {startup_problems} startup problem(s) found and "
+                "--fail-on-startup-warnings is set."
+            )
+
         if status == "fail":
             sys.exit(2)
         elif status == "warn":
             sys.exit(1)
         elif args.fail_on_past_sunset and past_sunset:
+            sys.exit(1)
+        elif startup_problems:
             sys.exit(1)
     elif args.command == "export-openapi":
         from backend.exporters.openapi_exporter import export_openapi_schema
@@ -5764,11 +5783,20 @@ def _dispatch_core_command(args):
             else:
                 print("\nValidation failed.")
 
+        startup_problems = _startup_problem_count(data) if args.fail_on_startup_warnings else 0
+        if startup_problems and not args.json_output:
+            print(
+                f"\n✗ {startup_problems} startup problem(s) found and "
+                "--fail-on-startup-warnings is set."
+            )
+
         if status == "fail":
             sys.exit(2)
         elif status == "warn":
             sys.exit(1)
         elif args.fail_on_past_sunset and data.get("past_sunset_functions"):
+            sys.exit(1)
+        elif startup_problems:
             sys.exit(1)
     elif args.command == "validate-all":
         # See `upload` above for why this is imported here rather than at
@@ -10264,6 +10292,20 @@ def main():
         )
     )
     validate_parser.add_argument(
+        "--fail-on-startup-warnings",
+        action="store_true",
+        dest="fail_on_startup_warnings",
+        help=(
+            "Exit with status 1 if the notebook has startup problems the "
+            "compile would accept but the compiled app would not survive: "
+            "a typo'd or malformed directive (silently ignored), a top-level "
+            "input() or relative data-file read, or a cell whose saved "
+            "output holds an error. These are reported either way; this "
+            "turns them into a CI gate. Never overrides the exit status 2 a "
+            "failing notebook already produces."
+        )
+    )
+    validate_parser.add_argument(
         "--strict",
         action="store_true",
         help=(
@@ -14295,6 +14337,20 @@ def main():
     )
     _add_dashboard_url_and_timeout_arguments(remote_validate_parser)
     _add_version_id_argument(remote_validate_parser, "POST /api/validate")
+    remote_validate_parser.add_argument(
+        "--fail-on-startup-warnings",
+        action="store_true",
+        dest="fail_on_startup_warnings",
+        help=(
+            "Exit with status 1 if the notebook has startup problems the "
+            "compile would accept but the compiled app would not survive: "
+            "a typo'd or malformed directive (silently ignored), a top-level "
+            "input() or relative data-file read, or a cell whose saved "
+            "output holds an error. These are reported either way; this "
+            "turns them into a CI gate. Never overrides the exit status 2 a "
+            "failing notebook already produces."
+        )
+    )
     remote_validate_parser.add_argument(
         "--fail-on-past-sunset",
         action="store_true",

@@ -30971,3 +30971,77 @@ def test_inspect_command_has_no_startup_warnings_section_for_a_clean_notebook(tm
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "Startup Warnings" not in proc.stdout
+
+
+def test_startup_problem_count_sums_the_three_startup_lists():
+    from backend.cli import _startup_problem_count
+
+    assert _startup_problem_count({}) == 0
+    assert _startup_problem_count({"unrecognized_directives": [], "import_time_hazards": None}) == 0
+    assert _startup_problem_count({
+        "unrecognized_directives": [1], "import_time_hazards": [1, 2], "cells_with_errors": [1],
+    }) == 4
+
+
+def _write_notebook_with_startup_problem(path):
+    import nbformat
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells = [
+        nbformat.v4.new_code_cell("import pandas as pd\ndf = pd.read_csv('sales.csv')\n"),
+        nbformat.v4.new_code_cell("def total(a: int) -> int:\n    return a\n"),
+    ]
+    with open(path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+
+def test_validate_command_fail_on_startup_warnings_gates_ci(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    broken = workdir / "broken.ipynb"
+    _write_notebook_with_startup_problem(broken)
+    clean = workdir / "clean.ipynb"
+    _write_notebook_with_function(clean, "def total(a: int) -> int:\n    return a\n")
+
+    informational = _run_cli(["validate", str(broken)], cwd=workdir)
+    gated = _run_cli(["validate", str(broken), "--fail-on-startup-warnings"], cwd=workdir)
+    gated_json = _run_cli(["validate", str(broken), "--fail-on-startup-warnings", "--json"], cwd=workdir)
+    gated_clean = _run_cli(["validate", str(clean), "--fail-on-startup-warnings"], cwd=workdir)
+
+    assert informational.returncode == 0, informational.stdout + informational.stderr  # reported, not failed
+    assert gated.returncode == 1, gated.stdout + gated.stderr
+    assert "✗ 1 startup problem(s) found and --fail-on-startup-warnings is set." in gated.stdout
+    assert gated_json.returncode == 1
+    assert json.loads(gated_json.stdout)["import_time_hazards"]  # pure JSON, no extra text line
+    assert gated_clean.returncode == 0, gated_clean.stdout + gated_clean.stderr
+
+
+def test_remote_validate_command_fail_on_startup_warnings_gates_ci(tmp_path, fake_dashboard):
+
+    dashboard_url, handler = fake_dashboard
+    problem = {
+        "status": "pass", "notebook": "nb.ipynb", "reserved_name_conflicts": [], "skipped_functions": [],
+        "import_time_hazards": [{"kind": "input", "call": "input", "path": None, "cell": 1, "line": 1}],
+    }
+    handler.responses = [_json_response(200, problem), _json_response(200, problem)]
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    base = ["remote-validate", "nb.ipynb", "--dashboard-url", dashboard_url]
+
+    plain = _run_cli(base, cwd=workdir)
+    gated = _run_cli(base + ["--fail-on-startup-warnings"], cwd=workdir)
+
+    assert plain.returncode == 0, plain.stdout + plain.stderr
+    assert gated.returncode == 1, gated.stdout + gated.stderr
+    assert "--fail-on-startup-warnings is set" in gated.stdout
+
+
+def test_a_failing_notebook_keeps_exit_status_2_under_fail_on_startup_warnings(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(notebook_path, "def health_check() -> dict:\n    return {}\n")
+
+    proc = _run_cli(["validate", str(notebook_path), "--fail-on-startup-warnings"], cwd=workdir)
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
