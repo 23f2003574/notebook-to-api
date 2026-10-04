@@ -1,3 +1,4 @@
+import os
 import threading
 import time
 import subprocess
@@ -8,6 +9,7 @@ from watchdog.events import FileSystemEventHandler
 
 from backend.compiler import (
     compile_notebook, find_local_modules, package_name_for_output_dir,
+    read_notebook_env_vars,
 )
 from backend.parser.ast_parser import extract_imports_from_code
 from backend.parser.notebook_parser import extract_code_cells, load_notebook
@@ -83,6 +85,29 @@ def run_on_change_hook(on_change):
         print("🪝 On-change hook succeeded.\n")
     else:
         print(f"🪝 On-change hook exited with code {result.returncode}.\n")
+
+
+def warn_unset_notebook_env_vars(output_dir, environ=None):
+    """Print a warning naming the environment variables the compiled
+    notebook reads with no fallback (`os.environ["X"]`, or `os.getenv("X")`
+    without a default) that aren't set in this shell, and return their names.
+
+    `serve` runs the app in this process's environment, so a missing API key
+    only showed up as a KeyError traceback from uvicorn's import (or as a
+    silent None) after the compile had already reported success."""
+    environ = os.environ if environ is None else environ
+    missing = [
+        entry["name"] for entry in read_notebook_env_vars(output_dir)
+        if entry["required"] and not environ.get(entry["name"])
+    ]
+    if missing:
+        print(
+            "\n⚠️  The notebook reads environment variable(s) with no fallback "
+            f"that aren't set in this shell: {', '.join(missing)}. The app will "
+            "fail to start or get None until they are set (restart `serve` "
+            "after exporting them).\n"
+        )
+    return missing
 
 
 def _local_module_change(notebook_path, event_path):
@@ -388,6 +413,7 @@ def serve_notebook(
     print_compile_summary(
         notebook_path, output_dir, only=initial_only, exclude=initial_exclude,
     )
+    warn_unset_notebook_env_vars(output_dir)
     if on_change:
         run_on_change_hook(on_change)
 

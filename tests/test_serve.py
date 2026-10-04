@@ -1924,3 +1924,51 @@ def test_editing_an_imported_local_module_triggers_a_recompile(tmp_path, monkeyp
     handler.on_modified(_module_event(tmp_path / "helpers.py"))
     assert len(compiled) == 1
     assert "Local module 'helpers' changed. Recompiling API" in capsys.readouterr().out
+
+
+def _compile_notebook_reading_env(tmp_path):
+    from backend.compiler import compile_notebook
+
+    notebook = tmp_path / "nb.ipynb"
+    _notebook_importing(
+        notebook,
+        "import os\nKEY = os.environ['SERVE_TEST_KEY']\nREGION = os.getenv('SERVE_TEST_REGION', 'us')\n"
+        "TOKEN = os.getenv('SERVE_TEST_TOKEN')\n\ndef run(a: int) -> int:\n    return a\n",
+    )
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+    return out
+
+
+def test_warn_unset_notebook_env_vars_names_only_missing_required_ones(tmp_path, capsys):
+    out = _compile_notebook_reading_env(tmp_path)
+    capsys.readouterr()
+
+    missing = serve_module.warn_unset_notebook_env_vars(out, environ={"SERVE_TEST_REGION": "eu"})
+
+    assert missing == ["SERVE_TEST_KEY", "SERVE_TEST_TOKEN"]
+    printed = capsys.readouterr().out
+    assert "SERVE_TEST_KEY, SERVE_TEST_TOKEN" in printed
+    assert "SERVE_TEST_REGION" not in printed
+
+
+def test_warn_unset_notebook_env_vars_is_silent_when_everything_is_set(tmp_path, capsys):
+    out = _compile_notebook_reading_env(tmp_path)
+    capsys.readouterr()
+
+    environ = {"SERVE_TEST_KEY": "k", "SERVE_TEST_TOKEN": "t"}
+
+    assert serve_module.warn_unset_notebook_env_vars(out, environ=environ) == []
+    assert capsys.readouterr().out == ""
+
+
+def test_warn_unset_notebook_env_vars_treats_empty_as_unset_and_tolerates_no_compile(
+    tmp_path, capsys
+):
+    out = _compile_notebook_reading_env(tmp_path)
+    capsys.readouterr()
+
+    assert serve_module.warn_unset_notebook_env_vars(
+        out, environ={"SERVE_TEST_KEY": "", "SERVE_TEST_TOKEN": "t"}
+    ) == ["SERVE_TEST_KEY"]
+    assert serve_module.warn_unset_notebook_env_vars(tmp_path / "never_compiled", environ={}) == []
