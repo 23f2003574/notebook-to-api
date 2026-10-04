@@ -11394,3 +11394,79 @@ def test_with_jupyter_prelude_neutralizes_magic_calls_unless_notebook_defines_ge
 
     own = "def get_ipython():\n    return 1\nget_ipython().run_line_magic('a', 'b')\n"
     assert _with_jupyter_prelude(own) == own
+
+
+def _write_notebook_importing(path, source):
+    import nbformat
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells = [nbformat.v4.new_code_cell(source)]
+    with open(path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+
+def test_find_local_modules_matches_sibling_modules_and_packages_only(tmp_path):
+    from backend.compiler import find_local_modules
+
+    (tmp_path / "helpers.py").write_text("X = 1\n")
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "__init__.py").write_text("")
+    (tmp_path / "plain_dir").mkdir()
+    notebook = tmp_path / "nb.ipynb"
+
+    found = find_local_modules(notebook, {"helpers", "pkg", "plain_dir", "numpy", "not an id"})
+
+    assert found == {"helpers": tmp_path / "helpers.py", "pkg": tmp_path / "pkg"}
+    assert find_local_modules(None, {"helpers"}) == {}
+
+
+def test_compile_ships_local_modules_and_keeps_them_out_of_requirements(tmp_path):
+    from backend.compiler import compile_notebook
+
+    (tmp_path / "helpers.py").write_text("def twice(x):\n    return x * 2\n")
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "__init__.py").write_text("VALUE = 3\n")
+    (tmp_path / "pkg" / "__pycache__").mkdir()
+    (tmp_path / "pkg" / "__pycache__" / "x.pyc").write_bytes(b"")
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "import helpers\nfrom pkg import VALUE\n\n"
+        "def run(a: int) -> int:\n    return helpers.twice(a) + VALUE\n",
+    )
+    out = tmp_path / "out"
+
+    compile_notebook(str(notebook), str(out))
+
+    requirements = (out / "requirements.txt").read_text()
+    assert "helpers" not in requirements and "pkg" not in requirements
+    assert (out / "runtime" / "helpers.py").read_text().startswith("def twice")
+    assert (out / "runtime" / "pkg" / "__init__.py").exists()
+    assert not (out / "runtime" / "pkg" / "__pycache__").exists()
+
+    module_source = (out / "runtime" / "notebook_module.py").read_text()
+    namespace = {"__file__": str(out / "runtime" / "notebook_module.py")}
+    import sys
+    saved_path = list(sys.path)
+    try:
+        exec(module_source, namespace)
+        assert namespace["run"](4) == 11
+    finally:
+        sys.path[:] = saved_path
+        sys.modules.pop("helpers", None)
+        sys.modules.pop("pkg", None)
+
+
+def test_compile_without_local_modules_adds_no_path_prelude_and_inspect_hides_them(tmp_path):
+    from backend.compiler import compile_notebook
+    from backend.inspector import inspect_notebook_data
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(notebook, "def run(a: int) -> int:\n    return a\n")
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+    assert "_nb_sys" not in (out / "runtime" / "notebook_module.py").read_text()
+
+    (tmp_path / "helpers.py").write_text("")
+    _write_notebook_importing(notebook, "import helpers\n\ndef run(a: int) -> int:\n    return a\n")
+    assert "helpers" not in inspect_notebook_data(str(notebook))["dependencies"]

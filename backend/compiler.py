@@ -447,7 +447,7 @@ def _neutralize_ipython_shell_calls(combined_code):
     return b"\n".join(lines).decode("utf-8")
 
 
-def _with_jupyter_prelude(combined_code):
+def _with_jupyter_prelude(combined_code, extra_prelude=""):
     """`combined_code` with _jupyter_builtin_prelude's stubs inserted -- at the
     very top, or, for a notebook that opens with `from __future__` imports
     (optionally after a module docstring), right after the last of them:
@@ -455,10 +455,11 @@ def _with_jupyter_prelude(combined_code):
     placed above them is a SyntaxError. Such a notebook used to get no stubs
     at all, and a top-level display(...) still crashed the app on import."""
     prelude = _jupyter_builtin_prelude(combined_code)
-    if not prelude:
-        return combined_code
     if "def get_ipython" in prelude:
         combined_code = _neutralize_ipython_shell_calls(combined_code)
+    prelude = extra_prelude + prelude
+    if not prelude:
+        return combined_code
 
     insert_after_line = 0
     try:
@@ -486,7 +487,28 @@ def _with_jupyter_prelude(combined_code):
     return "\n".join(lines[:insert_after_line]) + "\n" + prelude + "\n".join(lines[insert_after_line:])
 
 
-def write_runtime_module(code_cells, output_dir):
+def _ship_local_modules(local_modules, runtime_dir):
+    """Copy each local module/package into the runtime directory (replacing
+    a stale copy from an earlier compile), so the compiled app -- and the
+    Docker image, which copies the whole output directory -- carries them."""
+    for name, source in local_modules.items():
+        if source.is_dir():
+            target = runtime_dir / name
+            if target.exists():
+                shutil.rmtree(target)
+            shutil.copytree(source, target, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        else:
+            shutil.copyfile(source, runtime_dir / f"{name}.py")
+
+
+_LOCAL_MODULES_PATH_PRELUDE = (
+    "# Notebook-local modules ship beside this file (notebook-to-api)\n"
+    "import os as _nb_os, sys as _nb_sys\n"
+    "_nb_sys.path.insert(0, _nb_os.path.dirname(_nb_os.path.abspath(__file__)))\n\n"
+)
+
+
+def write_runtime_module(code_cells, output_dir, local_modules=None):
 
     runtime_path = Path(output_dir) / "runtime" / "notebook_module.py"
 
@@ -496,7 +518,12 @@ def write_runtime_module(code_cells, output_dir):
     )
 
     combined_code = "\n\n".join(code_cells)
-    combined_code = _with_jupyter_prelude(combined_code)
+    combined_code = _with_jupyter_prelude(
+        combined_code,
+        extra_prelude=_LOCAL_MODULES_PATH_PRELUDE if local_modules else "",
+    )
+    if local_modules:
+        _ship_local_modules(local_modules, runtime_path.parent)
 
     with open(runtime_path, "w", encoding="utf-8") as f:
         f.write(combined_code)
@@ -1488,7 +1515,34 @@ def _extract_deprecated_functions(code_cells):
     return deprecated
 
 
-def extract_third_party_imports(code_cells):
+def find_local_modules(notebook_path, import_names):
+    """{import name: Path} for each of `import_names` that is a module
+    (`name.py`) or package (`name/__init__.py`) sitting next to the notebook.
+
+    Jupyter finds those through the notebook's own directory, so a notebook
+    can `import helpers` freely -- but compiling listed `helpers` in
+    requirements.txt as if it were a PyPI package (a failing `pip install`
+    at best, a stranger's same-named package at worst) and never shipped the
+    file, so the app died on import with ModuleNotFoundError.
+    """
+    if not notebook_path:
+        return {}
+
+    directory = Path(notebook_path).resolve().parent
+    found = {}
+
+    for name in import_names:
+        if not str(name).isidentifier():
+            continue
+        if (directory / f"{name}.py").is_file():
+            found[name] = directory / f"{name}.py"
+        elif (directory / name / "__init__.py").is_file():
+            found[name] = directory / name
+
+    return found
+
+
+def extract_third_party_imports(code_cells, notebook_path=None):
     """The raw, STANDARD_LIBS-filtered import names `code_cells` (already
     filtered to parseable cells, as compile_notebook_to_api's own
     `code_cells` already is) collect -- before any distribution-name
@@ -1517,9 +1571,11 @@ def extract_third_party_imports(code_cells):
 
     excluded = _extract_excluded_imports(code_cells)
 
+    local = find_local_modules(notebook_path, imports)
+
     return [
         imp for imp in imports
-        if imp not in STANDARD_LIBS and imp not in excluded
+        if imp not in STANDARD_LIBS and imp not in excluded and imp not in local
     ]
 
 
@@ -2186,8 +2242,15 @@ def compile_notebook_to_api(
         # and there in no way that matters (code_cells is already fixed),
         # so recomputing costs nothing but a second, cheap pass over
         # already-parsed cells.
+        local_modules = find_local_modules(
+            source_notebook_path or notebook_path,
+            {
+                imp for cell in code_cells for imp in extract_imports_from_code(cell)
+                if imp not in STANDARD_LIBS
+            },
+        )
         resolve_requirements(
-            extract_third_party_imports(code_cells),
+            extract_third_party_imports(code_cells, source_notebook_path or notebook_path),
             explicit_requirements=explicit_requirements,
             excluded_imports=excluded_imports,
         )
@@ -2293,10 +2356,13 @@ def compile_notebook_to_api(
         # this can't just be left alone).
         clear_stale_export_artifacts(output_dir)
 
-        write_runtime_module(code_cells, output_dir)
+        if local_modules:
+            write_runtime_module(code_cells, output_dir, local_modules)
+        else:
+            write_runtime_module(code_cells, output_dir)
 
         write_requirements(
-            extract_third_party_imports(code_cells),
+            extract_third_party_imports(code_cells, source_notebook_path or notebook_path),
             output_dir,
             explicit_requirements=explicit_requirements,
             excluded_imports=excluded_imports,

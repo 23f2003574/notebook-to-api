@@ -18,6 +18,7 @@ from backend.compiler import (
     _extract_background_overrides,
     _extract_deprecated_functions,
     _extract_excluded_imports,
+    find_local_modules,
     _extract_explicit_apt_packages,
     _extract_private_function_names,
     _filter_functions_by_name,
@@ -507,6 +508,7 @@ def inspect_notebook(notebook_path, output_dir="generated"):
     # actually pinned by an ensuing compile.
     excluded_imports = _extract_excluded_imports(code_cells)
     all_imports -= excluded_imports
+    all_imports -= set(find_local_modules(notebook_path, all_imports))
 
     reserved_name_conflicts = _reserved_name_conflicts(all_functions)
 
@@ -712,6 +714,7 @@ def inspect_notebook_data(
     # (backend/compiler.py) actually excludes.
     excluded_imports = _extract_excluded_imports(code_cells)
     all_imports -= excluded_imports
+    all_imports -= set(find_local_modules(notebook_path, all_imports))
 
     # Same "# notebook-to-api: background"/"# notebook-to-api: sync"
     # directive compile_notebook_to_api (backend/compiler.py) already
