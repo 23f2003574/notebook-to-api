@@ -534,7 +534,9 @@ def write_runtime_module(code_cells, output_dir, local_modules=None, data_files=
     )
 
     combined_code = "\n\n".join(code_cells)
-    extra_prelude = _LOCAL_MODULES_PATH_PRELUDE if local_modules else ""
+    extra_prelude = _env_magic_prelude(_env_magic_values(code_cells))
+    if local_modules:
+        extra_prelude += _LOCAL_MODULES_PATH_PRELUDE
     if data_files:
         extra_prelude += _DATA_FILES_CHDIR_PRELUDE
     combined_code = _with_jupyter_prelude(combined_code, extra_prelude=extra_prelude)
@@ -1578,6 +1580,46 @@ def find_data_files(notebook_path, code_cells=None, hazards=None):
     return found
 
 
+_ENV_MAGIC_PATTERN = re.compile(
+    r"^[ \t]*#[ \t]*%(?:set_)?env[ \t]+(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
+    r"(?:[ \t]*=[ \t]*|[ \t]+)(?P<value>\S.*?)[ \t]*$",
+    re.MULTILINE,
+)
+
+
+def _env_magic_values(code_cells):
+    """{NAME: value} for the `%env NAME=value` / `%env NAME value` /
+    `%set_env` magics (the parser leaves each as a "# %env ..." comment), the
+    last assignment winning. A bare `%env NAME` only queries a variable, and
+    lines inside a multi-line string are text, not magics.
+
+    The magic sets the variable in Jupyter's process; commented out, the
+    compiled app never got it, so later os.environ reads failed.
+    """
+    values = {}
+    for cell in code_cells:
+        unsafe_lines = _lines_inside_multiline_strings(cell)
+        for match in _ENV_MAGIC_PATTERN.finditer(cell):
+            if cell.count("\n", 0, match.start()) + 1 in unsafe_lines:
+                continue
+            values[match.group("name")] = match.group("value")
+    return values
+
+
+def _env_magic_prelude(env_values):
+    """Module-top code applying `env_values` with setdefault, so a value the
+    deployment sets itself still wins."""
+    if not env_values:
+        return ""
+    lines = ["# %env magics from the notebook (notebook-to-api); deployment values win\n",
+             "import os as _nb_os4\n"]
+    lines += [
+        f"_nb_os4.environ.setdefault({name!r}, {value!r})\n"
+        for name, value in env_values.items()
+    ]
+    return "".join(lines) + "\n"
+
+
 def _find_notebook_env_vars(code_cells):
     """[{"name", "required"}] (sorted by name) for the environment variables
     the notebook reads by literal name: `os.environ["X"]`,
@@ -1638,7 +1680,12 @@ def _find_notebook_env_vars(code_cells):
                     )
                     record(first.value, not has_default)
 
-    return [{"name": name, "required": found[name]} for name in sorted(found)]
+    set_by_magic = _env_magic_values(code_cells)
+
+    return [
+        {"name": name, "required": found[name] and name not in set_by_magic}
+        for name in sorted(found)
+    ]
 
 
 def read_notebook_env_vars(output_dir):

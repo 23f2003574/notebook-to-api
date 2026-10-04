@@ -11879,3 +11879,55 @@ def test_import_time_hazards_flag_google_colab_imports():
     lines = startup_warning_lines({"import_time_hazards": hazards})
     assert "only exists inside Google Colab" in lines[0]
     assert "Cell 1, line 2" in lines[0]
+
+
+def test_env_magic_values_reads_assignments_and_ignores_queries_and_strings():
+    from backend.compiler import _env_magic_values
+    from backend.parser.notebook_parser import strip_magic_commands
+
+    raw = (
+        "%env REGION=eu-west-1\n"
+        "%env TOKEN abc def\n"
+        "%env QUERY_ONLY\n"
+        "%set_env LEVEL=debug\n"
+        "%env REGION=us-east-1\n"
+        'DOC = """\n%env IN_STRING=1\n"""\n'
+    )
+
+    assert _env_magic_values([strip_magic_commands(raw)]) == {
+        "REGION": "us-east-1", "TOKEN": "abc def", "LEVEL": "debug",
+    }
+
+
+def test_compile_applies_env_magics_with_setdefault_and_they_satisfy_required_reads(
+    tmp_path, monkeypatch
+):
+    from backend.compiler import compile_notebook, read_notebook_env_vars
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "%env MODEL_NAME=small\nimport os\nNAME = os.environ['MODEL_NAME']\n"
+        "OTHER = os.environ['STILL_REQUIRED']\n\ndef run(a: int) -> str:\n    return NAME\n",
+    )
+    out = tmp_path / "out"
+
+    compile_notebook(str(notebook), str(out))
+
+    source = (out / "runtime" / "notebook_module.py").read_text()
+    monkeypatch.setenv("MODEL_NAME", "placeholder")
+    monkeypatch.delenv("MODEL_NAME")  # restored to unset at teardown
+    monkeypatch.setenv("STILL_REQUIRED", "x")
+    namespace = {}
+    exec(source, namespace)
+    assert namespace["NAME"] == "small"
+
+    monkeypatch.setenv("MODEL_NAME", "from-deployment")
+    namespace = {}
+    exec(source, namespace)
+    assert namespace["NAME"] == "from-deployment"
+
+    assert read_notebook_env_vars(out) == [
+        {"name": "MODEL_NAME", "required": False},
+        {"name": "STILL_REQUIRED", "required": True},
+    ]
