@@ -11696,3 +11696,58 @@ def test_compile_and_read_notebook_env_vars_feed_the_kubernetes_manifest(tmp_pat
     )
     names = [e["name"] for e in deployment["spec"]["template"]["spec"]["containers"][0]["env"]]
     assert "DB_URL" in names
+
+
+def test_pip_install_specs_reads_pip_magic_and_shell_lines():
+    from backend.compiler import _pip_install_specs
+    from backend.parser.notebook_parser import strip_magic_commands
+
+    raw = (
+        "%pip install -q \"pandas>=1.0\" seaborn\n"
+        "!pip install --upgrade numpy==1.26.0 -r requirements.txt --index-url https://x/simple scipy\n"
+        "!python -m pip install seaborn==0.13.0 ./local_pkg git+https://github.com/o/r.git\n"
+        "! pip3 install Pillow  # imaging\n"
+        "!pip install seaborn\n"
+        "!pip uninstall -y torch\n"
+        "!pip list\n"
+        "x = 1\n"
+    )
+
+    specs = _pip_install_specs([strip_magic_commands(raw)])
+
+    assert specs == ["pandas>=1.0", "seaborn==0.13.0", "numpy==1.26.0", "scipy", "Pillow"]
+
+
+def test_pip_install_specs_ignores_lines_inside_strings():
+    from backend.compiler import _pip_install_specs
+
+    cell = 'DOC = """\n# !pip install not-a-real-dep\n"""\n# !pip install real-dep\n'
+
+    assert _pip_install_specs([cell]) == ["real-dep"]
+
+
+def test_explicit_requirements_include_pip_installs_but_directives_win_and_never_conflict():
+    from backend.compiler import _extract_explicit_requirements
+
+    cells = [
+        "# notebook-to-api: requires pandas==2.0.0\n# !pip install pandas==1.5.0 tqdm\n",
+        "# !pip install numpy==1.24.0\n# !pip install numpy==1.26.0\n",
+    ]
+
+    assert _extract_explicit_requirements(cells) == ["pandas==2.0.0", "tqdm", "numpy==1.24.0"]
+
+
+def test_compile_pins_packages_named_only_in_pip_install_cells(tmp_path):
+    from backend.compiler import compile_notebook
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "%pip install -q python-slugify tqdm\n\ndef run(a: int) -> int:\n    return a\n",
+    )
+    out = tmp_path / "out"
+
+    compile_notebook(str(notebook), str(out))
+
+    requirements = (out / "requirements.txt").read_text().splitlines()
+    assert "python-slugify" in requirements and "tqdm" in requirements

@@ -8,6 +8,7 @@ import json
 import keyword
 import os
 import re
+import shlex
 import shutil
 import sys
 import pathlib
@@ -790,7 +791,87 @@ def _extract_explicit_requirements(code_cells):
             seen.add(spec)
             specs.append(spec)
 
+    # A notebook's own `!pip install ...` / `%pip install ...` cells say what
+    # it needs -- including packages it never imports by name. An explicit
+    # directive for the same package wins.
+    for spec in _pip_install_specs(code_cells):
+        package_name = _explicit_requirement_package_name(spec)
+        if package_name is None or spec in seen:
+            continue
+        normalized_name = _normalize_distribution_name(package_name)
+        if normalized_name in spec_by_package_name:
+            continue
+        spec_by_package_name[normalized_name] = spec
+        seen.add(spec)
+        specs.append(spec)
+
     return specs
+
+
+_PIP_INSTALL_LINE_PATTERN = re.compile(
+    r"^\s*#\s*[!%]\s*(?:python[\d.]*\s+-m\s+)?pip[\d.]*\s+install\s+(?P<args>.+?)\s*$",
+    re.MULTILINE,
+)
+
+# pip options that take a value (the next token) rather than standing alone.
+_PIP_OPTIONS_WITH_VALUE = frozenset({
+    "-r", "--requirement", "-c", "--constraint", "-e", "--editable", "-i",
+    "--index-url", "--extra-index-url", "-f", "--find-links", "-t", "--target",
+    "--prefix", "--root", "--platform", "--python-version", "--implementation",
+    "--abi", "--only-binary", "--no-binary", "--progress-bar", "--timeout",
+    "--retries", "--proxy", "--cert", "--trusted-host", "--src", "--upgrade-strategy",
+})
+
+
+def _pip_install_specs(code_cells):
+    """The requirement specs named by `!pip install` / `%pip install` /
+    `!python -m pip install` lines (the notebook parser turns each into a
+    "# !pip install ..." comment), in first-seen order, one per package.
+
+    Options (`-q`, `--upgrade`, `-r file`, `--index-url ...`) and local
+    paths/URLs-without-a-name are skipped; a package named more than once
+    keeps the first spec that carries a version constraint, never raising
+    -- cells that install the same package twice are ordinary. Lines inside
+    a multi-line string are ignored.
+    """
+    by_name = {}
+    order = []
+
+    for cell in code_cells:
+        unsafe_lines = _lines_inside_multiline_strings(cell)
+        for match in _PIP_INSTALL_LINE_PATTERN.finditer(cell):
+            if cell.count("\n", 0, match.start()) + 1 in unsafe_lines:
+                continue
+            try:
+                tokens = shlex.split(match.group("args"), comments=True)
+            except ValueError:
+                continue
+
+            skip_next = False
+            for token in tokens:
+                if skip_next:
+                    skip_next = False
+                    continue
+                if token.startswith("-"):
+                    if "=" not in token and token in _PIP_OPTIONS_WITH_VALUE:
+                        skip_next = True
+                    continue
+                if token.startswith((".", "/", "~")) or token.endswith((".txt", ".whl", ".zip", ".tar.gz")):
+                    continue
+                package_name = _explicit_requirement_package_name(token)
+                if package_name is None:
+                    continue
+                key = _normalize_distribution_name(package_name)
+                has_version = any(op in token for op in ("==", ">=", "<=", "~=", "!=", ">", "<"))
+                if key not in by_name:
+                    by_name[key] = token
+                    order.append(key)
+                elif has_version and not any(
+                    op in by_name[key] for op in ("==", ">=", "<=", "~=", "!=", ">", "<")
+                ):
+                    by_name[key] = token
+
+    return [by_name[key] for key in order]
 
 
 # Recognizes a "# notebook-to-api: apt-requires <package>" comment
