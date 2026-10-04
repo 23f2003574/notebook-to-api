@@ -508,7 +508,20 @@ _LOCAL_MODULES_PATH_PRELUDE = (
 )
 
 
-def write_runtime_module(code_cells, output_dir, local_modules=None):
+# Data files the notebook reads at import time ship beside the runtime
+# module; relative paths resolve against the working directory, so the
+# import runs from there and the app's own working directory is restored
+# afterwards.
+_DATA_FILES_CHDIR_PRELUDE = (
+    "# Import-time data files ship beside this file (notebook-to-api)\n"
+    "import os as _nb_os2\n"
+    "_nb_previous_cwd = _nb_os2.getcwd()\n"
+    "_nb_os2.chdir(_nb_os2.path.dirname(_nb_os2.path.abspath(__file__)))\n\n"
+)
+_DATA_FILES_CHDIR_EPILOGUE = "_nb_os2.chdir(_nb_previous_cwd)\n"
+
+
+def write_runtime_module(code_cells, output_dir, local_modules=None, data_files=None):
 
     runtime_path = Path(output_dir) / "runtime" / "notebook_module.py"
 
@@ -518,12 +531,18 @@ def write_runtime_module(code_cells, output_dir, local_modules=None):
     )
 
     combined_code = "\n\n".join(code_cells)
-    combined_code = _with_jupyter_prelude(
-        combined_code,
-        extra_prelude=_LOCAL_MODULES_PATH_PRELUDE if local_modules else "",
-    )
+    extra_prelude = _LOCAL_MODULES_PATH_PRELUDE if local_modules else ""
+    if data_files:
+        extra_prelude += _DATA_FILES_CHDIR_PRELUDE
+    combined_code = _with_jupyter_prelude(combined_code, extra_prelude=extra_prelude)
+    if data_files:
+        combined_code = combined_code.rstrip("\n") + "\n\n" + _DATA_FILES_CHDIR_EPILOGUE
     if local_modules:
         _ship_local_modules(local_modules, runtime_path.parent)
+    for relative, source in (data_files or {}).items():
+        target = runtime_path.parent / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
 
     with open(runtime_path, "w", encoding="utf-8") as f:
         f.write(combined_code)
@@ -1323,7 +1342,7 @@ def _relative_literal_path(call):
     return path
 
 
-def _find_import_time_hazards(code_cells):
+def _find_import_time_hazards(code_cells, notebook_path=None):
     """[{"kind", "call", "path", "cell", "line"}] for top-level statements
     that run when the compiled app imports the notebook and can't succeed
     there: `input()` (EOFError -- nothing is attached to stdin), and reads of
@@ -1388,8 +1407,60 @@ def _find_import_time_hazards(code_cells):
             continue
         visit(tree.body, cell_number)
 
+    if notebook_path:
+        shipped = find_data_files(notebook_path, hazards=hazards)
+        hazards = [
+            item for item in hazards
+            if not (item["kind"] == "file_read" and item["path"] in shipped)
+        ]
+
     hazards.sort(key=lambda item: (item["cell"], item["line"]))
     return hazards
+
+
+# Files a compile will copy into the app so an import-time read of them
+# works; past this total the files stay behind and the read is still
+# reported as a hazard rather than bloating the image.
+MAX_SHIPPED_DATA_BYTES = 50 * 1024 * 1024
+
+
+def find_data_files(notebook_path, code_cells=None, hazards=None):
+    """{relative path as written: absolute Path} for the relative data files
+    the notebook reads at import time (`pd.read_csv("sales.csv")`,
+    `open("config.json")`) that exist beside the notebook -- what the
+    compile ships next to the runtime module. Paths that climb out of the
+    notebook's directory, directories, and anything past
+    MAX_SHIPPED_DATA_BYTES in total are left out.
+    """
+    if not notebook_path:
+        return {}
+    if hazards is None:
+        hazards = _find_import_time_hazards(code_cells or [])
+
+    directory = Path(notebook_path).resolve().parent
+    found = {}
+    total = 0
+
+    for item in hazards:
+        if item["kind"] != "file_read" or item["path"] in found:
+            continue
+        relative = Path(item["path"])
+        if ".." in relative.parts:
+            continue
+        candidate = (directory / relative).resolve()
+        try:
+            candidate.relative_to(directory)
+        except ValueError:
+            continue
+        if not candidate.is_file():
+            continue
+        size = candidate.stat().st_size
+        if total + size > MAX_SHIPPED_DATA_BYTES:
+            continue
+        total += size
+        found[item["path"]] = candidate
+
+    return found
 
 
 def _statement_calls(node):
@@ -2356,8 +2427,11 @@ def compile_notebook_to_api(
         # this can't just be left alone).
         clear_stale_export_artifacts(output_dir)
 
-        if local_modules:
-            write_runtime_module(code_cells, output_dir, local_modules)
+        data_files = find_data_files(source_notebook_path or notebook_path, code_cells)
+        if local_modules or data_files:
+            write_runtime_module(
+                code_cells, output_dir, local_modules, data_files=data_files
+            )
         else:
             write_runtime_module(code_cells, output_dir)
 

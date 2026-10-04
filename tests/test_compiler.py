@@ -11470,3 +11470,79 @@ def test_compile_without_local_modules_adds_no_path_prelude_and_inspect_hides_th
     (tmp_path / "helpers.py").write_text("")
     _write_notebook_importing(notebook, "import helpers\n\ndef run(a: int) -> int:\n    return a\n")
     assert "helpers" not in inspect_notebook_data(str(notebook))["dependencies"]
+
+
+def test_find_data_files_ships_only_existing_files_inside_the_notebook_directory(tmp_path):
+    from backend.compiler import find_data_files
+
+    (tmp_path / "sales.csv").write_text("a\n1\n")
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "cfg.json").write_text("{}")
+    (tmp_path.parent / "outside.csv").write_text("x\n")
+    cells = [
+        "import pandas as pd\n"
+        "a = pd.read_csv('sales.csv')\n"
+        "b = open('data/cfg.json').read()\n"
+        "c = pd.read_csv('missing.csv')\n"
+        "d = pd.read_csv('../outside.csv')\n"
+        "e = pd.read_csv('data')\n"
+    ]
+
+    found = find_data_files(tmp_path / "nb.ipynb", cells)
+
+    assert found == {
+        "sales.csv": tmp_path / "sales.csv",
+        "data/cfg.json": tmp_path / "data" / "cfg.json",
+    }
+    assert find_data_files(None, cells) == {}
+
+
+def test_find_data_files_stops_at_the_size_cap(tmp_path, monkeypatch):
+    import backend.compiler as compiler_module
+
+    monkeypatch.setattr(compiler_module, "MAX_SHIPPED_DATA_BYTES", 10)
+    (tmp_path / "small.csv").write_text("12345")
+    (tmp_path / "big.csv").write_text("x" * 50)
+    cells = ["import pandas as pd\npd.read_csv('big.csv')\npd.read_csv('small.csv')\n"]
+
+    assert list(compiler_module.find_data_files(tmp_path / "nb.ipynb", cells)) == ["small.csv"]
+
+
+def test_import_time_hazards_skip_files_that_will_ship_but_keep_missing_ones(tmp_path):
+    from backend.compiler import _find_import_time_hazards
+
+    (tmp_path / "sales.csv").write_text("a\n1\n")
+    cells = ["import pandas as pd\npd.read_csv('sales.csv')\npd.read_csv('missing.csv')\ninput()\n"]
+    notebook = tmp_path / "nb.ipynb"
+
+    without_path = _find_import_time_hazards(cells)
+    with_path = _find_import_time_hazards(cells, notebook)
+
+    assert len(without_path) == 3
+    assert [(h["kind"], h["path"]) for h in with_path] == [("file_read", "missing.csv"), ("input", None)]
+
+
+def test_compile_ships_import_time_data_files_and_restores_the_working_directory(tmp_path, monkeypatch):
+    from backend.compiler import compile_notebook
+
+    (tmp_path / "numbers.txt").write_text("41\n")
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "BASE = int(open('numbers.txt').read())\n\n"
+        "def bump(a: int) -> int:\n    return BASE + a\n",
+    )
+    out = tmp_path / "out"
+
+    compile_notebook(str(notebook), str(out))
+
+    assert (out / "runtime" / "numbers.txt").read_text() == "41\n"
+    source = (out / "runtime" / "notebook_module.py").read_text()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    namespace = {"__file__": str(out / "runtime" / "notebook_module.py")}
+    exec(source, namespace)
+
+    assert namespace["bump"](1) == 42
+    assert Path.cwd() == elsewhere.resolve()

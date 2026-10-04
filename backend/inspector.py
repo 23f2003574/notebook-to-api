@@ -561,7 +561,7 @@ def inspect_notebook(notebook_path, output_dir="generated"):
     startup_warnings = startup_warning_lines({
         "unrecognized_directives": _find_unrecognized_directives(code_cells),
         "cells_with_errors": _find_cells_with_error_outputs(notebook),
-        "import_time_hazards": _find_import_time_hazards(code_cells),
+        "import_time_hazards": _find_import_time_hazards(code_cells, notebook_path),
     })
 
     if startup_warnings:
@@ -834,7 +834,7 @@ def inspect_notebook_data(
         # Top-level input()/relative data-file reads that run on import and
         # so crash the compiled app at startup -- see
         # _find_import_time_hazards.
-        "import_time_hazards": _find_import_time_hazards(code_cells),
+        "import_time_hazards": _find_import_time_hazards(code_cells, notebook_path),
         # Cells whose saved outputs hold an error: they re-run when the app
         # starts -- see _find_cells_with_error_outputs.
         "cells_with_errors": _find_cells_with_error_outputs(notebook),
