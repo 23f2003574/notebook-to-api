@@ -11613,3 +11613,36 @@ def test_compose_and_env_example_are_unchanged_without_notebook_env_vars():
     assert docker_compose_content("pkg", env_vars) == docker_compose_content("pkg", env_vars, [])
     assert env_example_content(env_vars) == env_example_content(env_vars, None)
     assert "Read by the notebook" not in env_example_content(env_vars)
+
+
+def test_import_time_hazards_cover_more_readers_and_path_read_text(tmp_path):
+    from backend.compiler import _find_import_time_hazards, find_data_files
+
+    cells = [
+        "import pandas as pd, pathlib\n"
+        "from pathlib import Path\n"
+        "a = pd.read_xml('feed.xml')\n"
+        "b = pd.read_orc('t.orc')\n"
+        "c = Path('notes.txt').read_text()\n"
+        "d = pathlib.Path('blob.bin').read_bytes()\n"
+        "e = keras.models.load_model('model.h5')\n"
+        "f = text_obj.read_text('utf-8')\n"
+        "g = Path(some_var).read_text()\n"
+        "h = Path('x.txt').read_text(encoding='utf-8')\n"
+    ]
+
+    hazards = _find_import_time_hazards(cells)
+
+    assert [(h["call"], h["path"]) for h in hazards] == [
+        ("pd.read_xml", "feed.xml"),
+        ("pd.read_orc", "t.orc"),
+        ("read_text", "notes.txt"),
+        ("read_bytes", "blob.bin"),
+        ("load_model", "model.h5"),
+        ("read_text", "x.txt"),
+    ]
+
+    for name in ("feed.xml", "notes.txt", "model.h5"):
+        (tmp_path / name).write_text("x")
+    shipped = find_data_files(tmp_path / "nb.ipynb", cells)
+    assert sorted(shipped) == ["feed.xml", "model.h5", "notes.txt"]

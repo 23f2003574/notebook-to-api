@@ -1268,6 +1268,8 @@ _FILE_READ_CALLS = frozenset({
     "read_csv", "read_excel", "read_json", "read_parquet", "read_feather",
     "read_pickle", "read_table", "read_hdf", "loadtxt", "genfromtxt",
     "imread", "load_workbook", "open",
+    "read_fwf", "read_orc", "read_xml", "read_html", "read_stata", "read_sas",
+    "read_spss", "load_model", "fromfile", "read_text", "read_bytes",
 })
 _FILE_LOAD_BASES = frozenset({"np", "numpy", "torch", "joblib"})
 
@@ -1329,6 +1331,16 @@ def _is_main_guard(node):
 def _relative_literal_path(call):
     """The call's first-argument string literal when it's a relative local
     path (not absolute, `~`, or a URL), else None."""
+    func = call.func
+    if isinstance(func, ast.Attribute) and func.attr in ("read_text", "read_bytes"):
+        # Path("notes.txt").read_text(): the path is the Path(...) argument;
+        # any other receiver's first argument is an encoding, not a path.
+        if not isinstance(func.value, ast.Call):
+            return None
+        _, path_name, _ = _call_label(func.value.func)
+        if path_name not in ("Path", "PurePath") or not func.value.args:
+            return None
+        call = func.value
     arg = call.args[0] if call.args else next(
         (kw.value for kw in call.keywords
          if kw.arg in ("filepath_or_buffer", "io", "path", "file", "fname", "fp")),
