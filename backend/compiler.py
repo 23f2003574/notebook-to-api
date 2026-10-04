@@ -1538,6 +1538,18 @@ def _find_notebook_env_vars(code_cells):
     return [{"name": name, "required": found[name]} for name in sorted(found)]
 
 
+def read_notebook_env_vars(output_dir):
+    """_find_notebook_env_vars of the runtime module a compile already wrote
+    into `output_dir` ([] when there isn't one) -- for the places that
+    regenerate deployment files later (deploy tagging an image) without the
+    notebook's cells at hand."""
+    try:
+        source = (Path(output_dir) / "runtime" / "notebook_module.py").read_text(encoding="utf-8")
+    except OSError:
+        return []
+    return _find_notebook_env_vars([source])
+
+
 def _statement_calls(node):
     """Calls belonging to `node` itself, not to statements nested inside it
     (those are visited on their own) and not inside a lambda or
@@ -2596,7 +2608,8 @@ def compile_notebook_to_api(
             )
 
             generate_kubernetes_manifest(
-                kubernetes_manifest_path, package_name, GENERATED_APP_ENV_VARS
+                kubernetes_manifest_path, package_name, GENERATED_APP_ENV_VARS,
+                notebook_env_vars=notebook_env_vars,
             )
 
             readme_path = os.path.join(

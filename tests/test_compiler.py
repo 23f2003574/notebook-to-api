@@ -11646,3 +11646,53 @@ def test_import_time_hazards_cover_more_readers_and_path_read_text(tmp_path):
         (tmp_path / name).write_text("x")
     shipped = find_data_files(tmp_path / "nb.ipynb", cells)
     assert sorted(shipped) == ["feed.xml", "model.h5", "notes.txt"]
+
+
+def test_kubernetes_manifest_reads_notebook_env_vars_from_the_secret():
+    import yaml
+    from backend.generator.kubernetes_generator import kubernetes_manifest_content
+
+    manifest = kubernetes_manifest_content(
+        "pkg", [], None,
+        notebook_env_vars=[
+            {"name": "OPENAI_API_KEY", "required": True},
+            {"name": "REGION", "required": False},
+        ],
+    )
+
+    deployment = next(d for d in yaml.safe_load_all(manifest) if d["kind"] == "Deployment")
+    env = {e["name"]: e for e in deployment["spec"]["template"]["spec"]["containers"][0]["env"]}
+    required = env["OPENAI_API_KEY"]["valueFrom"]["secretKeyRef"]
+    optional = env["REGION"]["valueFrom"]["secretKeyRef"]
+    assert required == {"name": "pkg-secrets", "key": "OPENAI_API_KEY"}
+    assert optional == {"name": "pkg-secrets", "key": "REGION", "optional": True}
+    assert "--from-literal=OPENAI_API_KEY=<value>" in manifest
+    assert "Optional keys the notebook reads" in manifest and "REGION" in manifest.split("apiVersion")[0]
+
+
+def test_kubernetes_manifest_is_unchanged_without_notebook_env_vars():
+    from backend.generator.kubernetes_generator import kubernetes_manifest_content
+
+    assert kubernetes_manifest_content("pkg", []) == kubernetes_manifest_content("pkg", [], None, [])
+
+
+def test_compile_and_read_notebook_env_vars_feed_the_kubernetes_manifest(tmp_path):
+    import yaml
+    from backend.compiler import compile_notebook, read_notebook_env_vars
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "import os\nKEY = os.environ['DB_URL']\n\ndef run(a: int) -> int:\n    return a\n",
+    )
+    out = tmp_path / "out"
+
+    compile_notebook(str(notebook), str(out))
+
+    assert read_notebook_env_vars(out) == [{"name": "DB_URL", "required": True}]
+    assert read_notebook_env_vars(tmp_path / "missing") == []
+    deployment = next(
+        d for d in yaml.safe_load_all((out / "kubernetes.yaml").read_text()) if d["kind"] == "Deployment"
+    )
+    names = [e["name"] for e in deployment["spec"]["template"]["spec"]["containers"][0]["env"]]
+    assert "DB_URL" in names

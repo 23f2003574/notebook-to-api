@@ -2737,11 +2737,13 @@ def _dispatch_core_command(args):
                     from backend.generator.kubernetes_generator import (
                         generate_kubernetes_manifest,
                     )
+                    from backend.compiler import read_notebook_env_vars
                     generate_kubernetes_manifest(
                         str(output_dir / "kubernetes.yaml"),
                         package_name_for_output_dir(str(output_dir)),
                         GENERATED_APP_ENV_VARS,
                         image=tag,
+                        notebook_env_vars=read_notebook_env_vars(output_dir),
                     )
                     if args.smoke_test:
                         smoke_test_result = _run_local_deploy_smoke_test(tag, output_dir)
@@ -2796,11 +2798,13 @@ def _dispatch_core_command(args):
                 from backend.generator.kubernetes_generator import (
                     generate_kubernetes_manifest,
                 )
+                from backend.compiler import read_notebook_env_vars
                 generate_kubernetes_manifest(
                     str(output_dir / "kubernetes.yaml"),
                     package_name_for_output_dir(str(output_dir)),
                     GENERATED_APP_ENV_VARS,
                     image=tag,
+                    notebook_env_vars=read_notebook_env_vars(output_dir),
                 )
                 print(f"kubernetes.yaml updated to reference '{tag}'.")
 

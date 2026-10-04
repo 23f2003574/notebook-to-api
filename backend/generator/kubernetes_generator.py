@@ -50,7 +50,9 @@ def _k8s_resource_name(package_name):
     return name[:63].strip("-") or "generated"
 
 
-def kubernetes_manifest_content(package_name="generated", env_vars=None, image=None):
+def kubernetes_manifest_content(
+    package_name="generated", env_vars=None, image=None, notebook_env_vars=None,
+):
     """The exact kubernetes.yaml text generate_kubernetes_manifest (below)
     writes to disk, as a pure string -- no filesystem access at all. See
     dockerfile_content's own docstring (backend/generator/docker_generator.py)
@@ -219,10 +221,37 @@ def kubernetes_manifest_content(package_name="generated", env_vars=None, image=N
 
     env_lines = "\n".join(env_block(entry) for entry in env_entries)
 
+    # Variables the notebook itself reads (API keys, connection strings) come
+    # from the same Secret. A required one (no fallback in the notebook) is
+    # mandatory -- the pod fails to start with a clear "key not found" until
+    # it exists -- while an optional one is simply left unset when missing.
+    notebook_env_vars = list(notebook_env_vars or [])
+    for entry in notebook_env_vars:
+        env_lines += (
+            f"\n            - name: {_yaml_scalar(entry['name'])}\n"
+            f"              valueFrom:\n"
+            f"                secretKeyRef:\n"
+            f"                  name: {secret_name}\n"
+            f"                  key: {_yaml_scalar(entry['name'])}"
+        )
+        if not entry["required"]:
+            env_lines += "\n                  optional: true"
+
+    secret_comment = "".join(
+        f" \\\n#     --from-literal={entry['name']}=<value>"
+        for entry in notebook_env_vars if entry["required"]
+    )
+    optional_names = [entry["name"] for entry in notebook_env_vars if not entry["required"]]
+    optional_comment = (
+        "\n# Optional keys the notebook reads (add with --from-literal if needed): "
+        + ", ".join(optional_names)
+        if optional_names else ""
+    )
+
     return f"""\
 # NOTEBOOK_API_KEY comes from a Secret. Create it before applying this file:
 #   kubectl create secret generic {resource_name}-secrets \\
-#     --from-literal=NOTEBOOK_API_KEY="$(openssl rand -hex 32)"
+#     --from-literal=NOTEBOOK_API_KEY="$(openssl rand -hex 32)"{secret_comment}{optional_comment}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -278,6 +307,7 @@ def generate_kubernetes_manifest(
     package_name="generated",
     env_vars=None,
     image=None,
+    notebook_env_vars=None,
 ):
     """Write a kubernetes.yaml for the compiled app at `output_path`,
     alongside the Dockerfile/.dockerignore/docker-compose.yml/.env.example/
@@ -288,6 +318,6 @@ def generate_kubernetes_manifest(
     "image" (optional, defaulting identically) in particular.
     """
     with open(output_path, "w", encoding="utf-8") as f:
-        f.write(kubernetes_manifest_content(package_name, env_vars, image))
+        f.write(kubernetes_manifest_content(package_name, env_vars, image, notebook_env_vars))
 
     print(f"kubernetes.yaml generated at: {output_path}")
