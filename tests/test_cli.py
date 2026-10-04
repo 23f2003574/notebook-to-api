@@ -31270,3 +31270,17 @@ def test_inspect_fail_on_startup_warnings_gates_ci(tmp_path):
     assert json.loads(gated_json.stdout)["import_time_hazards"]  # stdout stays pure JSON
     assert gated_clean.returncode == 0, gated_clean.stdout + gated_clean.stderr
     assert "startup problem" not in gated_clean.stdout
+
+
+def test_validate_reports_and_gates_google_colab_imports(tmp_path):
+    notebook = tmp_path / "colab.ipynb"
+    _write_notebook_with_function(
+        notebook, "from google.colab import drive\n\ndef total(a: int) -> int:\n    return a\n"
+    )
+
+    plain = _run_cli(["validate", str(notebook)], cwd=tmp_path)
+    gated = _run_cli(["validate", str(notebook), "--fail-on-startup-warnings"], cwd=tmp_path)
+
+    assert plain.returncode == 0, plain.stdout + plain.stderr
+    assert "import google.colab" in plain.stdout and "only exists inside Google Colab" in plain.stdout
+    assert gated.returncode == 1, gated.stdout + gated.stderr

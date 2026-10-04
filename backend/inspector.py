@@ -879,6 +879,8 @@ def startup_warning_lines(data):
     for hazard in data.get("import_time_hazards", []):
         if hazard["kind"] == "input":
             what = "input() waits on stdin, which the compiled app doesn't have"
+        elif hazard["kind"] == "colab_import":
+            what = f"`{hazard['call']}` only exists inside Google Colab"
         else:
             what = (
                 f"{hazard['call']}({hazard['path']!r}) reads a data file the "

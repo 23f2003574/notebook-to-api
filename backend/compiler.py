@@ -1437,6 +1437,20 @@ def _relative_literal_path(call):
     return path
 
 
+def _colab_import(node):
+    """"google.colab[.x]" when `node` imports Google Colab's module, else None."""
+    if isinstance(node, ast.Import):
+        for alias in node.names:
+            if alias.name == "google.colab" or alias.name.startswith("google.colab."):
+                return alias.name
+    elif isinstance(node, ast.ImportFrom) and not node.level:
+        if node.module == "google.colab" or (node.module or "").startswith("google.colab."):
+            return node.module
+        if node.module == "google" and any(alias.name == "colab" for alias in node.names):
+            return "google.colab"
+    return None
+
+
 def _find_import_time_hazards(code_cells, notebook_path=None):
     """[{"kind", "call", "path", "cell", "line"}] for top-level statements
     that run when the compiled app imports the notebook and can't succeed
@@ -1464,6 +1478,12 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
             for child in ast.iter_child_nodes(node):
                 if isinstance(child, ast.stmt):
                     visit([child], cell_number)
+            colab_module = _colab_import(node)
+            if colab_module:
+                hazards.append({
+                    "kind": "colab_import", "call": f"import {colab_module}", "path": None,
+                    "cell": cell_number, "line": node.lineno,
+                })
             for call in _statement_calls(node):
                 label, name, base = _call_label(call.func)
                 if label is None:

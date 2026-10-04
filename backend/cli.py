@@ -2342,6 +2342,8 @@ def _dispatch_core_command(args):
             for hazard in data["import_time_hazards"]:
                 if hazard["kind"] == "input":
                     detail = "input() waits on stdin, which the compiled app doesn't have"
+                elif hazard["kind"] == "colab_import":
+                    detail = f"`{hazard['call']}` only exists inside Google Colab"
                 else:
                     detail = (
                         f"{hazard['call']}({hazard['path']!r}) reads a data file the "
@@ -5837,7 +5839,11 @@ def _dispatch_core_command(args):
                     f"({failed['message']}) -- it runs again when the app starts"
                 )
             for hazard in data.get("import_time_hazards") or []:
-                target = f"{hazard['call']}({hazard['path']!r})" if hazard.get("path") else hazard["call"] + "()"
+                target = (
+                    hazard["call"] if hazard.get("kind") == "colab_import"
+                    else f"{hazard['call']}({hazard['path']!r})" if hazard.get("path")
+                    else hazard["call"] + "()"
+                )
                 print(
                     f"⚠ Import-time hazard (cell {hazard['cell']}, line "
                     f"{hazard['line']}): {target} runs on startup and will fail"
@@ -5984,8 +5990,9 @@ def _dispatch_core_command(args):
 
                     for hazard in result.get("import_time_hazards") or []:
                         target = (
-                            f"{hazard['call']}({hazard['path']!r})"
-                            if hazard.get("path") else f"{hazard['call']}()"
+                            hazard["call"] if hazard.get("kind") == "colab_import"
+                            else f"{hazard['call']}({hazard['path']!r})" if hazard.get("path")
+                            else f"{hazard['call']}()"
                         )
                         print(
                             f"    import-time hazard: cell {hazard['cell']}, line "

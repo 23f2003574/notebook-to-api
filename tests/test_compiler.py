@@ -11855,3 +11855,27 @@ def test_compile_pins_the_real_google_distribution(tmp_path):
     names = [line.split("==")[0] for line in (out / "requirements.txt").read_text().splitlines()]
     assert "google-generativeai" in names
     assert "google" not in names
+
+
+def test_import_time_hazards_flag_google_colab_imports():
+    from backend.compiler import _find_import_time_hazards
+    from backend.inspector import startup_warning_lines
+
+    cells = [
+        "import os\nfrom google.colab import drive, userdata\n",
+        "import google.colab.files\nfrom google import colab\n"
+        "from google.cloud import storage\nimport google.generativeai\n",
+        "def f():\n    from google.colab import auth\n",
+        "if __name__ == '__main__':\n    from google.colab import files\n",
+    ]
+
+    hazards = _find_import_time_hazards(cells)
+
+    assert [(h["kind"], h["call"], h["cell"], h["line"]) for h in hazards] == [
+        ("colab_import", "import google.colab", 1, 2),
+        ("colab_import", "import google.colab.files", 2, 1),
+        ("colab_import", "import google.colab", 2, 2),
+    ]
+    lines = startup_warning_lines({"import_time_hazards": hazards})
+    assert "only exists inside Google Colab" in lines[0]
+    assert "Cell 1, line 2" in lines[0]
