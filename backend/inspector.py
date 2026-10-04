@@ -9,6 +9,7 @@ from urllib.parse import quote, urlsplit
 from backend.compiler import (
     _find_cells_with_error_outputs,
     _find_import_time_hazards,
+    _find_notebook_env_vars,
     _find_unrecognized_directives,
     _extract_timeout_overrides,
     _extract_rate_limit_overrides,
@@ -835,6 +836,9 @@ def inspect_notebook_data(
         # so crash the compiled app at startup -- see
         # _find_import_time_hazards.
         "import_time_hazards": _find_import_time_hazards(code_cells, notebook_path),
+        # Environment variables the notebook reads by name -- see
+        # _find_notebook_env_vars.
+        "notebook_env_vars": _find_notebook_env_vars(code_cells),
         # Cells whose saved outputs hold an error: they re-run when the app
         # starts -- see _find_cells_with_error_outputs.
         "cells_with_errors": _find_cells_with_error_outputs(notebook),
@@ -965,6 +969,11 @@ def print_compile_summary(notebook_path, output_dir="generated", only=None, excl
         print("\nWarnings (the compiled app may not start or behave as written):")
         for line in warnings:
             print(f"  ⚠ {line}")
+
+    if data.get("notebook_env_vars"):
+        print("\nEnvironment variables the notebook reads (set them where the app runs):")
+        for entry in data["notebook_env_vars"]:
+            print(f"  {entry['name']}" + ("  [required]" if entry["required"] else ""))
 
     if data["private_functions"]:
         print(

@@ -1463,6 +1463,69 @@ def find_data_files(notebook_path, code_cells=None, hazards=None):
     return found
 
 
+def _find_notebook_env_vars(code_cells):
+    """[{"name", "required"}] (sorted by name) for the environment variables
+    the notebook reads by literal name: `os.environ["X"]`,
+    `os.environ.get("X"[, default])` and `os.getenv("X"[, default])` (also
+    via `from os import environ, getenv`), anywhere in the code. `required`
+    is true for a subscript read, which raises KeyError when unset, and for
+    a get/getenv with no default, which hands the notebook None.
+
+    A notebook's API keys and connection strings live there, but nothing
+    carried them into the deployment files: docker-compose.yml and
+    .env.example named only the app's own NOTEBOOK_API_* variables, so the
+    container started without them. The app's own NOTEBOOK_API_* names are
+    left out.
+    """
+    found = {}
+
+    def is_environ(node):
+        return (
+            (isinstance(node, ast.Attribute) and node.attr == "environ"
+             and isinstance(node.value, ast.Name) and node.value.id == "os")
+            or (isinstance(node, ast.Name) and node.id == "environ")
+        )
+
+    def record(name, required):
+        if name.startswith("NOTEBOOK_API_") or not name.isidentifier():
+            return
+        found[name] = found.get(name, False) or required
+
+    for cell in code_cells:
+        try:
+            tree = ast.parse(cell)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load)
+                and is_environ(node.value)
+                and isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str)
+            ):
+                record(node.slice.value, True)
+            elif isinstance(node, ast.Call) and node.args:
+                func = node.func
+                is_get = (
+                    isinstance(func, ast.Attribute) and func.attr == "get" and is_environ(func.value)
+                )
+                is_getenv = (
+                    (isinstance(func, ast.Attribute) and func.attr == "getenv"
+                     and isinstance(func.value, ast.Name) and func.value.id == "os")
+                    or (isinstance(func, ast.Name) and func.id == "getenv")
+                )
+                first = node.args[0]
+                if (is_get or is_getenv) and isinstance(first, ast.Constant) and isinstance(first.value, str):
+                    default = node.args[1] if len(node.args) > 1 else next(
+                        (kw.value for kw in node.keywords if kw.arg == "default"), None
+                    )
+                    has_default = default is not None and not (
+                        isinstance(default, ast.Constant) and default.value is None
+                    )
+                    record(first.value, not has_default)
+
+    return [{"name": name, "required": found[name]} for name in sorted(found)]
+
+
 def _statement_calls(node):
     """Calls belonging to `node` itself, not to statements nested inside it
     (those are visited on their own) and not inside a lambda or
@@ -2498,8 +2561,11 @@ def compile_notebook_to_api(
                 "docker-compose.yml"
             )
 
+            notebook_env_vars = _find_notebook_env_vars(code_cells)
+
             generate_docker_compose(
-                docker_compose_path, package_name, GENERATED_APP_ENV_VARS
+                docker_compose_path, package_name, GENERATED_APP_ENV_VARS,
+                notebook_env_vars=notebook_env_vars,
             )
 
             env_example_path = os.path.join(
@@ -2507,7 +2573,10 @@ def compile_notebook_to_api(
                 ".env.example"
             )
 
-            generate_env_example(env_example_path, GENERATED_APP_ENV_VARS)
+            generate_env_example(
+                env_example_path, GENERATED_APP_ENV_VARS,
+                notebook_env_vars=notebook_env_vars,
+            )
 
             kubernetes_manifest_path = os.path.join(
                 output_dir,

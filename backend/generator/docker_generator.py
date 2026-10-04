@@ -195,7 +195,7 @@ def generate_dockerfile(
     print(f"Dockerfile generated at: {output_path}")
 
 
-def docker_compose_content(package_name="generated", env_vars=None):
+def docker_compose_content(package_name="generated", env_vars=None, notebook_env_vars=None):
     """The exact docker-compose.yml text generate_docker_compose (below)
     writes to disk, as a pure string -- no filesystem access at all. See
     dockerfile_content's own docstring above for why this split exists.
@@ -264,6 +264,17 @@ def docker_compose_content(package_name="generated", env_vars=None):
         for entry in env_vars
     )
 
+    notebook_lines = ""
+    if notebook_env_vars:
+        # The bare "- NAME" form passes the host's/.env's value through and
+        # leaves the variable unset when there isn't one, so a notebook's
+        # own "is it set?" logic behaves the same inside the container.
+        notebook_lines = (
+            "      # Read by the notebook itself (os.environ / os.getenv);\n"
+            "      # set them in your shell or .env.\n"
+            + "".join(f"      - {entry['name']}\n" for entry in notebook_env_vars)
+        )
+
     return (
         "services:\n"
         f"  {package_name}:\n"
@@ -274,6 +285,7 @@ def docker_compose_content(package_name="generated", env_vars=None):
         "    environment:\n"
         "      - PORT=${PORT:-8000}\n"
         f"{environment_lines}\n"
+        f"{notebook_lines}"
     )
 
 
@@ -281,6 +293,7 @@ def generate_docker_compose(
     output_path="generated/docker-compose.yml",
     package_name="generated",
     env_vars=None,
+    notebook_env_vars=None,
 ):
     """Write a docker-compose.yml for the compiled app at `output_path`,
     alongside the Dockerfile/.dockerignore generate_dockerfile/
@@ -289,12 +302,12 @@ def generate_docker_compose(
     what it contains.
     """
     with open(output_path, "w", encoding="utf-8") as f:
-        f.write(docker_compose_content(package_name, env_vars))
+        f.write(docker_compose_content(package_name, env_vars, notebook_env_vars))
 
     print(f"docker-compose.yml generated at: {output_path}")
 
 
-def env_example_content(env_vars=None):
+def env_example_content(env_vars=None, notebook_env_vars=None):
     """The exact .env.example text generate_env_example (below) writes to
     disk, as a pure string -- no filesystem access at all. See
     dockerfile_content's own docstring above for why this split exists.
@@ -359,10 +372,23 @@ def env_example_content(env_vars=None):
         lines.append(f"{entry['name']}={entry['default']}")
         lines.append("")
 
+    if notebook_env_vars:
+        lines.append("# Read by the notebook itself (os.environ / os.getenv). A value")
+        lines.append("# marked required must be filled in: the notebook has no fallback.")
+        for entry in notebook_env_vars:
+            if entry["required"]:
+                lines.append("# required")
+                lines.append(f"{entry['name']}=")
+            else:
+                lines.append(f"# {entry['name']}=")
+        lines.append("")
+
     return "\n".join(lines).rstrip("\n") + "\n"
 
 
-def generate_env_example(output_path="generated/.env.example", env_vars=None):
+def generate_env_example(
+    output_path="generated/.env.example", env_vars=None, notebook_env_vars=None,
+):
     """Write a .env.example for the compiled app at `output_path`,
     alongside the Dockerfile/.dockerignore/docker-compose.yml
     generate_dockerfile/generate_dockerignore/generate_docker_compose
@@ -370,7 +396,7 @@ def generate_env_example(output_path="generated/.env.example", env_vars=None):
     docstring above for why this exists and what it contains.
     """
     with open(output_path, "w", encoding="utf-8") as f:
-        f.write(env_example_content(env_vars))
+        f.write(env_example_content(env_vars, notebook_env_vars))
 
     print(f".env.example generated at: {output_path}")
 

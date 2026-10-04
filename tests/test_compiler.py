@@ -11546,3 +11546,70 @@ def test_compile_ships_import_time_data_files_and_restores_the_working_directory
 
     assert namespace["bump"](1) == 42
     assert Path.cwd() == elsewhere.resolve()
+
+
+def test_find_notebook_env_vars_reads_every_literal_access_form():
+    from backend.compiler import _find_notebook_env_vars
+
+    cells = [
+        "import os\nfrom os import environ, getenv\n"
+        "A = os.environ['API_KEY']\n"
+        "B = os.environ.get('MODEL')\n"
+        "C = os.getenv('REGION', 'us')\n"
+        "D = os.getenv('TIMEOUT', None)\n"
+        "E = environ['TOKEN']\n"
+        "F = getenv('EXTRA', default='x')\n"
+        "G = os.environ['NOTEBOOK_API_KEY']\n"
+        "H = os.environ[dynamic_name]\n"
+        "os.environ['WRITTEN'] = '1'\n"
+        "def f():\n    return os.environ['API_KEY'] + os.getenv('INSIDE')\n",
+        "def broken(:\n",
+    ]
+
+    assert _find_notebook_env_vars(cells) == [
+        {"name": "API_KEY", "required": True},
+        {"name": "EXTRA", "required": False},
+        {"name": "INSIDE", "required": True},
+        {"name": "MODEL", "required": True},
+        {"name": "REGION", "required": False},
+        {"name": "TIMEOUT", "required": True},
+        {"name": "TOKEN", "required": True},
+    ]
+
+
+def test_compile_lists_notebook_env_vars_in_compose_env_example_and_inspect(tmp_path):
+    from backend.compiler import compile_notebook
+    from backend.inspector import inspect_notebook_data
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "import os\nKEY = os.environ['OPENAI_API_KEY']\nREGION = os.getenv('REGION', 'us')\n\n"
+        "def run(a: int) -> int:\n    return a\n",
+    )
+    out = tmp_path / "out"
+
+    compile_notebook(str(notebook), str(out))
+
+    compose = (out / "docker-compose.yml").read_text()
+    assert "      - OPENAI_API_KEY\n" in compose
+    assert "      - REGION\n" in compose
+    import yaml
+    assert "OPENAI_API_KEY" in yaml.safe_load(compose)["services"]["out"]["environment"]
+
+    env_example = (out / ".env.example").read_text()
+    assert "# required\nOPENAI_API_KEY=\n" in env_example
+    assert "# REGION=\n" in env_example
+
+    names = [e["name"] for e in inspect_notebook_data(str(notebook))["notebook_env_vars"]]
+    assert names == ["OPENAI_API_KEY", "REGION"]
+
+
+def test_compose_and_env_example_are_unchanged_without_notebook_env_vars():
+    from backend.generator.docker_generator import docker_compose_content, env_example_content
+
+    env_vars = [{"name": "NOTEBOOK_API_X", "default": "1", "description": "x"}]
+
+    assert docker_compose_content("pkg", env_vars) == docker_compose_content("pkg", env_vars, [])
+    assert env_example_content(env_vars) == env_example_content(env_vars, None)
+    assert "Read by the notebook" not in env_example_content(env_vars)
