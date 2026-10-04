@@ -493,7 +493,9 @@ def _ship_local_modules(local_modules, runtime_dir):
     a stale copy from an earlier compile), so the compiled app -- and the
     Docker image, which copies the whole output directory -- carries them."""
     for name, source in local_modules.items():
-        if source.is_dir():
+        if isinstance(source, str):
+            (runtime_dir / f"{name}.py").write_text(source, encoding="utf-8")
+        elif source.is_dir():
             target = runtime_dir / name
             if target.exists():
                 shutil.rmtree(target)
@@ -1754,9 +1756,45 @@ def _extract_deprecated_functions(code_cells):
     return deprecated
 
 
-def find_local_modules(notebook_path, import_names):
-    """{import name: Path} for each of `import_names` that is a module
-    (`name.py`) or package (`name/__init__.py`) sitting next to the notebook.
+_WRITEFILE_LINE_PATTERN = re.compile(r"^#\s*%%writefile\s+(?:-a\s+)?(?P<target>\S+)\s*$")
+
+
+def _writefile_modules(code_cells):
+    """{module name: source text} for the `%%writefile name.py` cells.
+
+    The notebook parser comments such a cell out ("# %%writefile ..." plus
+    each body line behind "# "), so the module a later cell imports was
+    never shipped. Only a top-level `name.py` is recognised; `-a` appends,
+    a later write replaces an earlier one.
+    """
+    modules = {}
+
+    for cell in code_cells:
+        lines = cell.split("\n")
+        match = _WRITEFILE_LINE_PATTERN.match(lines[0]) if lines else None
+        if not match:
+            continue
+        target = match.group("target")
+        if not target.endswith(".py") or "/" in target or "\\" in target:
+            continue
+        name = target[:-3]
+        if not name.isidentifier():
+            continue
+        append = lines[0].split("%%writefile", 1)[1].split()[:1] == ["-a"]
+        body = "\n".join(
+            line[2:] if line.startswith("# ") else ("" if line.strip() in ("", "#") else line)
+            for line in lines[1:]
+        )
+        modules[name] = (modules.get(name, "") + body) if append and name in modules else body
+
+    return modules
+
+
+def find_local_modules(notebook_path, import_names, code_cells=None):
+    """{import name: Path | str} for each of `import_names` that is a module
+    (`name.py`) or package (`name/__init__.py`) sitting next to the notebook
+    (a Path), or that a `%%writefile name.py` cell in `code_cells` creates (its
+    source text, which wins -- the notebook rewrites the file when it runs).
 
     Jupyter finds those through the notebook's own directory, so a notebook
     can `import helpers` freely -- but compiling listed `helpers` in
@@ -1764,19 +1802,24 @@ def find_local_modules(notebook_path, import_names):
     at best, a stranger's same-named package at worst) and never shipped the
     file, so the app died on import with ModuleNotFoundError.
     """
-    if not notebook_path:
-        return {}
-
-    directory = Path(notebook_path).resolve().parent
     found = {}
 
-    for name in import_names:
-        if not str(name).isidentifier():
-            continue
-        if (directory / f"{name}.py").is_file():
-            found[name] = directory / f"{name}.py"
-        elif (directory / name / "__init__.py").is_file():
-            found[name] = directory / name
+    if notebook_path:
+        directory = Path(notebook_path).resolve().parent
+
+        for name in import_names:
+            if not str(name).isidentifier():
+                continue
+            if (directory / f"{name}.py").is_file():
+                found[name] = directory / f"{name}.py"
+            elif (directory / name / "__init__.py").is_file():
+                found[name] = directory / name
+
+    if code_cells:
+        written = _writefile_modules(code_cells)
+        for name in import_names:
+            if name in written:
+                found[name] = written[name]
 
     return found
 
@@ -1810,11 +1853,18 @@ def extract_third_party_imports(code_cells, notebook_path=None):
 
     excluded = _extract_excluded_imports(code_cells)
 
-    local = find_local_modules(notebook_path, imports)
+    local = find_local_modules(notebook_path, imports, code_cells)
+
+    # A %%writefile module's own imports live in commented-out text, so scan
+    # its source for the dependencies it needs.
+    written = _writefile_modules(code_cells)
+    for source in written.values():
+        imports.update(extract_imports_from_code(source))
 
     return [
         imp for imp in imports
         if imp not in STANDARD_LIBS and imp not in excluded and imp not in local
+        and imp not in written
     ]
 
 
@@ -2487,6 +2537,7 @@ def compile_notebook_to_api(
                 imp for cell in code_cells for imp in extract_imports_from_code(cell)
                 if imp not in STANDARD_LIBS
             },
+            code_cells,
         )
         resolve_requirements(
             extract_third_party_imports(code_cells, source_notebook_path or notebook_path),

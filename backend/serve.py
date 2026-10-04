@@ -139,7 +139,7 @@ def _local_module_change(notebook_path, event_path):
 
     local = find_local_modules(notebook_path, imports)
     for name, source in local.items():
-        if source.is_file() and source.resolve() == module_path:
+        if isinstance(source, Path) and source.is_file() and source.resolve() == module_path:
             return name
     return None
 

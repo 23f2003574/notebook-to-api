@@ -11751,3 +11751,64 @@ def test_compile_pins_packages_named_only_in_pip_install_cells(tmp_path):
 
     requirements = (out / "requirements.txt").read_text().splitlines()
     assert "python-slugify" in requirements and "tqdm" in requirements
+
+
+def test_writefile_modules_recovers_module_sources_from_commented_cells():
+    from backend.compiler import _writefile_modules
+    from backend.parser.notebook_parser import strip_magic_commands
+
+    cells = [
+        strip_magic_commands("%%writefile helpers.py\ndef twice(x):\n\n    return x * 2\n"),
+        strip_magic_commands("%%writefile -a helpers.py\nTHREE = 3\n"),
+        strip_magic_commands("%%writefile sub/other.py\nX = 1\n"),
+        strip_magic_commands("%%writefile data.csv\na,b\n"),
+        strip_magic_commands("%%writefile replaced.py\nA = 1\n"),
+        strip_magic_commands("%%writefile replaced.py\nA = 2\n"),
+        "x = 1\n",
+    ]
+
+    modules = _writefile_modules(cells)
+
+    assert sorted(modules) == ["helpers", "replaced"]
+    assert modules["helpers"] == "def twice(x):\n\n    return x * 2\nTHREE = 3\n"
+    assert modules["replaced"] == "A = 2\n"
+    compile(modules["helpers"], "helpers.py", "exec")
+
+
+def test_compile_ships_writefile_modules_and_their_dependencies(tmp_path):
+    import nbformat
+    from backend.compiler import compile_notebook
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells = [
+        nbformat.v4.new_code_cell(
+            "%%writefile mathlib.py\nimport yaml\n\ndef twice(x):\n    return x * 2\n"
+        ),
+        nbformat.v4.new_code_cell(
+            "import mathlib\n\ndef run(a: int) -> int:\n    return mathlib.twice(a)\n"
+        ),
+    ]
+    path = tmp_path / "nb.ipynb"
+    with open(path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+    out = tmp_path / "out"
+
+    compile_notebook(str(path), str(out))
+
+    assert (out / "runtime" / "mathlib.py").read_text().startswith("import yaml")
+    requirements = (out / "requirements.txt").read_text().splitlines()
+    assert "mathlib" not in requirements
+    assert any(line.startswith("PyYAML") for line in requirements)
+    assert "_nb_sys.path.insert" in (out / "runtime" / "notebook_module.py").read_text()
+
+
+def test_writefile_module_wins_over_a_stale_file_on_disk(tmp_path):
+    from backend.compiler import find_local_modules
+
+    (tmp_path / "helpers.py").write_text("OLD = 1\n")
+
+    found = find_local_modules(
+        tmp_path / "nb.ipynb", {"helpers"}, ["# %%writefile helpers.py\n# NEW = 2\n"]
+    )
+
+    assert found == {"helpers": "NEW = 2\n"}
