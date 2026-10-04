@@ -7776,3 +7776,43 @@ def test_typescript_sdk_list_tasks_can_filter_by_endpoint(tmp_path):
         "http://localhost:8000/tasks?endpoint=%2Ftrain_model",
         "http://localhost:8000/tasks",
     ]
+
+
+_TEMPLATED_BUILTIN_PATHS = {
+    "/add": {"post": {"operationId": "add"}},
+    "/tasks/{task_id}/retry": {"post": {"operationId": "retry_task_tasks_task_id_retry_post"}},
+    "/tasks/{task_id}/redeliver-webhook": {
+        "post": {"operationId": "redeliver_task_webhook_tasks_task_id_redeliver_webhook_post"}
+    },
+}
+
+
+def test_python_sdk_has_no_generic_method_for_templated_builtin_paths(tmp_path):
+    schema_path = _write_schema(tmp_path, _TEMPLATED_BUILTIN_PATHS)
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+    source = output_path.read_text(encoding="utf-8")
+
+    ast.parse(source)
+    # The broken generic methods referenced an undefined `task_id`.
+    assert "tasks_task_id" not in source
+    assert "TasksTaskId" not in source
+    # The purpose-built methods that take the id as an argument remain.
+    assert "def retry_task(self, task_id: str" in source
+    assert "def redeliver_task_webhook(self, task_id: str" in source
+    assert "def add(self, payload: AddRequest) -> AddResponse:" in source
+
+
+def test_typescript_sdk_never_posts_to_a_literal_templated_path(tmp_path):
+    schema_path = _write_schema(tmp_path, _TEMPLATED_BUILTIN_PATHS)
+    output_path = tmp_path / "client.ts"
+
+    generate_typescript_sdk(str(schema_path), str(output_path))
+    source = output_path.read_text(encoding="utf-8")
+
+    assert "tasks_task_id" not in source
+    assert 'this.request("/tasks/{task_id}' not in source
+    assert "async retryTask(taskId: string" in source
+    assert "async redeliverTaskWebhook(taskId: string" in source
+    assert "async add(payload: AddRequest)" in source

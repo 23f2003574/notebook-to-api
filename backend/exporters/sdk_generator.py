@@ -1107,6 +1107,15 @@ def _build_method_names(paths, reserved_names=frozenset()):
         if not methods.get("post"):
             continue
 
+        # A templated path ("/tasks/{task_id}/retry") is one of the app's
+        # built-in routes -- a notebook function's own path never holds a
+        # brace. The generic per-path method takes only a body, never the
+        # path parameter, so it sent the literal "{task_id}" (TypeScript)
+        # or raised NameError (Python) on every call; retry_task /
+        # redeliver_task_webhook already cover these properly.
+        if "{" in path:
+            continue
+
         base_name = _method_name_from_path(path)
         candidate = base_name
         suffix = 2
