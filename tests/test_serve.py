@@ -1872,3 +1872,55 @@ def test_a_failed_trailing_recompile_is_reported_and_the_handler_keeps_working(t
     handler.last_compile_time = 0
     handler.on_modified(event)
     assert len(calls) == 3
+
+
+def _notebook_importing(path, source):
+    import nbformat
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells = [nbformat.v4.new_code_cell(source)]
+    with open(path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+
+def _module_event(path):
+    return type("Event", (), {"src_path": str(path)})()
+
+
+def test_local_module_change_matches_only_imported_sibling_modules(tmp_path):
+    notebook = tmp_path / "nb.ipynb"
+    _notebook_importing(notebook, "import helpers\nimport numpy\n")
+    (tmp_path / "helpers.py").write_text("X = 1\n")
+    (tmp_path / "unused.py").write_text("X = 2\n")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "helpers.py").write_text("X = 3\n")
+
+    match = serve_module._local_module_change
+    assert match(str(notebook), str(tmp_path / "helpers.py")) == "helpers"
+    assert match(str(notebook), str(tmp_path / "unused.py")) is None
+    assert match(str(notebook), str(tmp_path / "sub" / "helpers.py")) is None
+    assert match(str(notebook), str(tmp_path / "helpers.txt")) is None
+
+
+def test_local_module_change_tolerates_an_unreadable_notebook(tmp_path):
+    notebook = tmp_path / "nb.ipynb"
+    notebook.write_text("{ not json", encoding="utf-8")
+    (tmp_path / "helpers.py").write_text("X = 1\n")
+
+    assert serve_module._local_module_change(str(notebook), str(tmp_path / "helpers.py")) is None
+
+
+def test_editing_an_imported_local_module_triggers_a_recompile(tmp_path, monkeypatch, capsys):
+    handler, notebook_path, _event, compiled = _handler_with_recording_compile(
+        tmp_path, monkeypatch, debounce_seconds=0
+    )
+    _notebook_importing(notebook_path, "import helpers\n")
+    (tmp_path / "helpers.py").write_text("X = 1\n")
+    (tmp_path / "other.py").write_text("X = 1\n")
+
+    handler.on_modified(_module_event(tmp_path / "other.py"))
+    assert compiled == []
+
+    handler.on_modified(_module_event(tmp_path / "helpers.py"))
+    assert len(compiled) == 1
+    assert "Local module 'helpers' changed. Recompiling API" in capsys.readouterr().out

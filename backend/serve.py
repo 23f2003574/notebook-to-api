@@ -6,7 +6,11 @@ from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-from backend.compiler import compile_notebook, package_name_for_output_dir
+from backend.compiler import (
+    compile_notebook, find_local_modules, package_name_for_output_dir,
+)
+from backend.parser.ast_parser import extract_imports_from_code
+from backend.parser.notebook_parser import extract_code_cells, load_notebook
 from backend.inspector import (
     apply_drop_past_sunset, apply_tag_selection, print_compile_summary,
 )
@@ -79,6 +83,40 @@ def run_on_change_hook(on_change):
         print("🪝 On-change hook succeeded.\n")
     else:
         print(f"🪝 On-change hook exited with code {result.returncode}.\n")
+
+
+def _local_module_change(notebook_path, event_path):
+    """The module name when `event_path` is a `.py` file beside the
+    notebook that the notebook actually imports, else None.
+
+    Compiling copies such modules into the app (see find_local_modules), so
+    editing one left the served app on the stale copy until the notebook
+    itself happened to be saved. Packages (subdirectories) aren't watched --
+    the observer is deliberately non-recursive. A notebook that can't be
+    read or parsed yet (mid-save) is simply not a match.
+    """
+    if not event_path.endswith(".py"):
+        return None
+
+    module_path = Path(event_path).resolve()
+    notebook_dir = Path(notebook_path).resolve().parent
+    if module_path.parent != notebook_dir:
+        return None
+
+    try:
+        imports = {
+            name
+            for cell in extract_code_cells(load_notebook(notebook_path))
+            for name in extract_imports_from_code(cell)
+        }
+    except Exception:
+        return None
+
+    local = find_local_modules(notebook_path, imports)
+    for name, source in local.items():
+        if source.is_file() and source.resolve() == module_path:
+            return name
+    return None
 
 
 class NotebookChangeHandler(FileSystemEventHandler):
@@ -207,7 +245,17 @@ class NotebookChangeHandler(FileSystemEventHandler):
             )
 
     def _handle_possible_notebook_change(self, event_path):
-        if event_path.endswith(".ipynb") and Path(event_path).resolve() == Path(self.notebook_path).resolve():
+        reason = "Notebook changed"
+        is_notebook = (
+            event_path.endswith(".ipynb")
+            and Path(event_path).resolve() == Path(self.notebook_path).resolve()
+        )
+        if not is_notebook:
+            module_name = _local_module_change(self.notebook_path, event_path)
+            if module_name is not None:
+                reason = f"Local module '{module_name}' changed"
+
+        if is_notebook or reason != "Notebook changed":
             current_time = time.time()
             if current_time - self.last_compile_time < self.debounce_seconds:
                 remaining = self.debounce_seconds - (current_time - self.last_compile_time)
@@ -226,24 +274,24 @@ class NotebookChangeHandler(FileSystemEventHandler):
                         f"\n⏳ Notebook changed within {self.debounce_seconds}s of "
                         f"the last recompile -- recompiling in {remaining:.1f}s."
                     )
-                    timer = threading.Timer(remaining, self._run_pending_recompile)
+                    timer = threading.Timer(remaining, self._run_pending_recompile, args=(reason,))
                     timer.daemon = True
                     self._pending_recompile = timer
                     timer.start()
                 return
 
-            self._recompile()
+            self._recompile(reason)
 
-    def _run_pending_recompile(self):
+    def _run_pending_recompile(self, reason="Notebook changed"):
         with self._compile_lock:
             self._pending_recompile = None
-        self._recompile()
+        self._recompile(reason)
 
-    def _recompile(self):
+    def _recompile(self, reason="Notebook changed"):
         with self._compile_lock:
             self.last_compile_time = time.time()
 
-            print("\n🔄 Notebook changed. Recompiling API...")
+            print(f"\n🔄 {reason}. Recompiling API...")
 
             try:
                 only, exclude = _effective_selection(
