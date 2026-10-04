@@ -11812,3 +11812,46 @@ def test_writefile_module_wins_over_a_stale_file_on_disk(tmp_path):
     )
 
     assert found == {"helpers": "NEW = 2\n"}
+
+
+def test_google_namespace_imports_resolve_to_their_real_distributions():
+    from backend.parser.ast_parser import extract_imports_from_code, google_distribution_for_module
+
+    code = (
+        "import google.generativeai as genai\n"
+        "from google.cloud import storage\n"
+        "from google.cloud.bigquery_storage import BigQueryReadClient\n"
+        "from google.protobuf import json_format\n"
+        "from google.oauth2 import service_account\n"
+        "from google import genai as newgenai\n"
+        "from google.colab import drive, userdata\n"
+        "import google\n"
+        "import numpy\n"
+    )
+
+    imports = extract_imports_from_code(code)
+    assert "google" not in imports
+    assert {"google-generativeai", "protobuf", "google-auth", "google-genai", "numpy"} <= imports
+    assert "google-cloud-bigquery-storage" in imports
+    assert not any("colab" in name for name in imports)
+    assert google_distribution_for_module("google.adk.agents") == "google-adk"
+    assert google_distribution_for_module("google.cloud") is None
+    assert google_distribution_for_module("google") is None
+
+
+def test_compile_pins_the_real_google_distribution(tmp_path):
+    from backend.compiler import compile_notebook
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "import google.generativeai as genai\nfrom google.colab import userdata\n\n"
+        "def run(a: int) -> int:\n    return a\n",
+    )
+    out = tmp_path / "out"
+
+    compile_notebook(str(notebook), str(out))
+
+    names = [line.split("==")[0] for line in (out / "requirements.txt").read_text().splitlines()]
+    assert "google-generativeai" in names
+    assert "google" not in names

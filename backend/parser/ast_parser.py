@@ -1115,14 +1115,61 @@ def extract_imports_from_code(code):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 base_module = alias.name.split(".")[0]
+                if base_module == "google":
+                    distribution = google_distribution_for_module(alias.name)
+                    if distribution:
+                        imports.add(distribution)
+                    continue
                 imports.add(pypi_mapping.get(base_module, base_module))
 
         elif isinstance(node, ast.ImportFrom):
             if node.module:
                 base_module = node.module.split(".")[0]
+                if base_module == "google" and not node.level:
+                    modules = (
+                        [f"{node.module}.{alias.name}" for alias in node.names]
+                        if node.module == "google" else [node.module]
+                    )
+                    for module in modules:
+                        distribution = google_distribution_for_module(module)
+                        if distribution:
+                            imports.add(distribution)
+                    continue
                 imports.add(pypi_mapping.get(base_module, base_module))
 
     return imports
+
+
+# google.<x> imports of google.protobuf / google.auth / ... are separate
+# PyPI distributions sharing one namespace package; "google" itself is a
+# different, unrelated project.
+_GOOGLE_DISTRIBUTIONS = {
+    "protobuf": "protobuf",
+    "auth": "google-auth",
+    "oauth2": "google-auth",
+    "generativeai": "google-generativeai",
+    "genai": "google-genai",
+    "api_core": "google-api-core",
+    "api": "googleapis-common-protos",
+    "rpc": "googleapis-common-protos",
+}
+
+
+def google_distribution_for_module(module):
+    """The PyPI distribution a `google.*` module belongs to, or None.
+
+    `import google.generativeai` / `from google.cloud import storage` used to
+    collapse to the bare name "google", which pip resolves to an unrelated
+    package -- the real one (google-generativeai, google-cloud-storage) was
+    never installed. `google.colab` exists only inside Colab and has no
+    distribution to install, and a bare `import google` names nothing.
+    """
+    parts = module.split(".")
+    if len(parts) < 2 or parts[0] != "google" or parts[1] == "colab":
+        return None
+    if parts[1] == "cloud":
+        return f"google-cloud-{parts[2].replace('_', '-')}" if len(parts) > 2 else None
+    return _GOOGLE_DISTRIBUTIONS.get(parts[1], f"google-{parts[1].replace('_', '-')}")
 
 
 if __name__ == "__main__":
