@@ -881,6 +881,11 @@ def startup_warning_lines(data):
             what = "input() waits on stdin, which the compiled app doesn't have"
         elif hazard["kind"] == "colab_import":
             what = f"`{hazard['call']}` only exists inside Google Colab"
+        elif hazard["kind"] == "shell_command":
+            what = (
+                f"`{hazard['call']}` ran in Jupyter's shell, not in the compiled app, "
+                "so what it fetched or unpacked won't exist"
+            )
         elif hazard["kind"] == "blocking_call":
             what = f"`{hazard['call']}(...)` never returns, so the app would hang while starting"
         else:

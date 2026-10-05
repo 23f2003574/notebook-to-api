@@ -12119,3 +12119,30 @@ def test_compile_adds_notebook_apt_installs_to_the_dockerfile(tmp_path):
     compile_notebook(str(notebook), str(out))
 
     assert "libgl1" in (out / "Dockerfile").read_text()
+
+
+def test_import_time_hazards_flag_shell_fetch_lines_that_never_ran_in_the_app():
+    from backend.compiler import _find_import_time_hazards
+    from backend.inspector import startup_warning_lines
+    from backend.parser.notebook_parser import strip_magic_commands
+
+    raw = (
+        "!wget -q https://example.com/data.zip -O data.zip\n"
+        "!unzip -o data.zip\n"
+        "! sudo git clone https://example.com/r.git\n"
+        "!ls -la\n"
+        "!pip install tqdm\n"
+        "!echo wget\n"
+        'DOC = """\n!curl https://in-string\n"""\n'
+        "!curl -O https://example.com/m.bin\n"
+    )
+
+    hazards = _find_import_time_hazards([strip_magic_commands(raw)])
+
+    assert [(h["kind"], h["call"], h["line"]) for h in hazards] == [
+        ("shell_command", "!wget", 1),
+        ("shell_command", "!unzip", 2),
+        ("shell_command", "!git", 3),
+        ("shell_command", "!curl", 10),
+    ]
+    assert "won't exist" in startup_warning_lines({"import_time_hazards": hazards[:1]})[0]

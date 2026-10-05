@@ -2344,6 +2344,11 @@ def _dispatch_core_command(args):
                     detail = "input() waits on stdin, which the compiled app doesn't have"
                 elif hazard["kind"] == "colab_import":
                     detail = f"`{hazard['call']}` only exists inside Google Colab"
+                elif hazard["kind"] == "shell_command":
+                    detail = (
+                        f"`{hazard['call']}` ran in Jupyter's shell, not in the compiled app, "
+                        "so what it fetched or unpacked won't exist"
+                    )
                 elif hazard["kind"] == "blocking_call":
                     detail = f"`{hazard['call']}(...)` never returns, so the app would hang while starting"
                 else:
@@ -5842,7 +5847,7 @@ def _dispatch_core_command(args):
                 )
             for hazard in data.get("import_time_hazards") or []:
                 target = (
-                    hazard["call"] if hazard.get("kind") == "colab_import"
+                    hazard["call"] if hazard.get("kind") in ("colab_import", "shell_command")
                     else f"{hazard['call']}({hazard['path']!r})" if hazard.get("path")
                     else hazard["call"] + "()"
                 )
@@ -5992,7 +5997,7 @@ def _dispatch_core_command(args):
 
                     for hazard in result.get("import_time_hazards") or []:
                         target = (
-                            hazard["call"] if hazard.get("kind") == "colab_import"
+                            hazard["call"] if hazard.get("kind") in ("colab_import", "shell_command")
                             else f"{hazard['call']}({hazard['path']!r})" if hazard.get("path")
                             else f"{hazard['call']}()"
                         )

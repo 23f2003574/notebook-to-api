@@ -1589,6 +1589,20 @@ def _is_blocking_call(label, name, call):
     return False
 
 
+# `!wget ...` style lines ran in Jupyter's shell and are only comments in the
+# compiled app, so whatever they downloaded or unpacked (a dataset, a model
+# checkpoint, a cloned repo) does not exist there -- the reads that follow
+# fail on startup. Reported, never executed.
+_SHELL_FETCH_COMMANDS = (
+    "wget", "curl", "gdown", "kaggle", "unzip", "tar", "git", "gsutil", "aws",
+    "huggingface-cli", "dvc", "7z", "gunzip",
+)
+_SHELL_FETCH_PATTERN = re.compile(
+    r"^#[ \t]*!(?:[ \t]*sudo)?[ \t]*(?P<command>" + "|".join(_SHELL_FETCH_COMMANDS) + r")\b.*$",
+    re.MULTILINE,
+)
+
+
 def _colab_import(node):
     """"google.colab[.x]" when `node` imports Google Colab's module, else None."""
     if isinstance(node, ast.Import):
@@ -1685,6 +1699,16 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
         except SyntaxError:
             continue
         visit(tree.body, cell_number)
+
+    for cell_number, cell in enumerate(code_cells, start=1):
+        unsafe_lines = _lines_inside_multiline_strings(cell)
+        for match in _SHELL_FETCH_PATTERN.finditer(cell):
+            line = cell.count("\n", 0, match.start()) + 1
+            if line not in unsafe_lines:
+                hazards.append({
+                    "kind": "shell_command", "call": f"!{match.group('command')}", "path": None,
+                    "cell": cell_number, "line": line,
+                })
 
     if notebook_path:
         shipped = find_data_files(notebook_path, hazards=hazards)

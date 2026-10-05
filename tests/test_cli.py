@@ -31298,3 +31298,17 @@ def test_validate_reports_and_gates_blocking_launch_calls(tmp_path):
     assert plain.returncode == 0, plain.stdout + plain.stderr
     assert "demo.launch" in plain.stdout and "never returns" in plain.stdout
     assert gated.returncode == 1, gated.stdout + gated.stderr
+
+
+def test_validate_reports_and_gates_shell_download_lines(tmp_path):
+    notebook = tmp_path / "dl.ipynb"
+    _write_notebook_with_function(
+        notebook, "!wget https://example.com/data.csv\n\ndef total(a: int) -> int:\n    return a\n"
+    )
+
+    plain = _run_cli(["validate", str(notebook)], cwd=tmp_path)
+    gated = _run_cli(["validate", str(notebook), "--fail-on-startup-warnings"], cwd=tmp_path)
+
+    assert plain.returncode == 0, plain.stdout + plain.stderr
+    assert "!wget" in plain.stdout and "won't exist" in plain.stdout
+    assert gated.returncode == 1, gated.stdout + gated.stderr
