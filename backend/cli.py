@@ -5738,6 +5738,13 @@ def _dispatch_core_command(args):
                 for line in startup_warnings:
                     print(f"  - {line}")
 
+            notebook_env_vars = data.get("notebook_env_vars") or []
+
+            if notebook_env_vars:
+                print("\nEnvironment variables the notebook reads (set them where the app runs):")
+                for entry in notebook_env_vars:
+                    print(f"  - {entry['name']}" + ("  [required]" if entry["required"] else ""))
+
             endpoints = data.get("endpoints", [])
 
             if endpoints:

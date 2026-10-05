@@ -571,6 +571,14 @@ def inspect_notebook(notebook_path, output_dir="generated"):
         for line in startup_warnings:
             print(f"- {line}")
 
+    notebook_env_vars = _find_notebook_env_vars(code_cells)
+
+    if notebook_env_vars:
+        print("\nEnvironment Variables the notebook reads (set them where the app runs):")
+        print("-" * 20)
+        for entry in notebook_env_vars:
+            print(f"- {entry['name']}" + ("  [required]" if entry["required"] else ""))
+
     print("\nFunctions Found:")
     print("-" * 20)
 

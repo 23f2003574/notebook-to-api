@@ -31312,3 +31312,47 @@ def test_validate_reports_and_gates_shell_download_lines(tmp_path):
     assert plain.returncode == 0, plain.stdout + plain.stderr
     assert "!wget" in plain.stdout and "won't exist" in plain.stdout
     assert gated.returncode == 1, gated.stdout + gated.stderr
+
+
+def test_inspect_text_lists_environment_variables_the_notebook_reads(tmp_path):
+    notebook = tmp_path / "env.ipynb"
+    _write_notebook_with_function(
+        notebook,
+        "import os\nKEY = os.environ['OPENAI_API_KEY']\nREGION = os.getenv('REGION', 'us')\n\n"
+        "def total(a: int) -> int:\n    return a\n",
+    )
+    plain = tmp_path / "plain.ipynb"
+    _write_notebook_with_function(plain, "def total(a: int) -> int:\n    return a\n")
+
+    proc = _run_cli(["inspect", str(notebook)], cwd=tmp_path)
+    clean = _run_cli(["inspect", str(plain)], cwd=tmp_path)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Environment Variables the notebook reads" in proc.stdout
+    assert "- OPENAI_API_KEY  [required]" in proc.stdout
+    assert "- REGION\n" in proc.stdout
+    assert "Environment Variables" not in clean.stdout
+
+
+def test_remote_inspect_text_lists_environment_variables_the_notebook_reads(tmp_path, fake_dashboard):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {
+            "status": "success",
+            "endpoints": [],
+            "notebook_env_vars": [
+                {"name": "DB_URL", "required": True},
+                {"name": "REGION", "required": False},
+            ],
+        }),
+        _json_response(200, {"status": "success", "endpoints": []}),
+    ]
+
+    with_vars = _run_cli(["remote-inspect", "nb.ipynb", "--dashboard-url", dashboard_url], cwd=tmp_path)
+    without = _run_cli(["remote-inspect", "nb.ipynb", "--dashboard-url", dashboard_url], cwd=tmp_path)
+
+    assert with_vars.returncode == 0, with_vars.stdout + with_vars.stderr
+    assert "Environment variables the notebook reads" in with_vars.stdout
+    assert "  - DB_URL  [required]" in with_vars.stdout
+    assert "  - REGION\n" in with_vars.stdout
+    assert without.returncode == 0 and "Environment variables" not in without.stdout
