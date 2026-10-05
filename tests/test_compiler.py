@@ -12054,3 +12054,32 @@ def test_run_magic_without_a_shipped_script_stays_a_comment(tmp_path):
     source = (out / "runtime" / "notebook_module.py").read_text()
     assert "_nb_run_script(" not in source
     assert "# %run missing.py" in source
+
+
+def test_import_time_hazards_flag_calls_that_never_return():
+    from backend.compiler import _find_import_time_hazards
+    from backend.inspector import startup_warning_lines
+
+    cells = [
+        "import gradio as gr, uvicorn, time\n"
+        "demo = gr.Interface(fn=lambda x: x, inputs='text', outputs='text')\n"
+        "demo.launch()\n"
+        "uvicorn.run(app, port=8000)\n"
+        "app.run(debug=True)\n"
+        "time.sleep(300)\n"
+        "time.sleep(2)\n"
+        "root.mainloop()\n",
+        "def serve():\n    demo.launch()\n",
+        "if __name__ == '__main__':\n    demo.launch()\n",
+    ]
+
+    hazards = _find_import_time_hazards(cells)
+
+    assert [(h["kind"], h["call"], h["line"]) for h in hazards] == [
+        ("blocking_call", "demo.launch", 3),
+        ("blocking_call", "uvicorn.run", 4),
+        ("blocking_call", "app.run", 5),
+        ("blocking_call", "time.sleep", 6),
+        ("blocking_call", "root.mainloop", 8),
+    ]
+    assert "never returns" in startup_warning_lines({"import_time_hazards": hazards[:1]})[0]

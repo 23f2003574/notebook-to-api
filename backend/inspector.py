@@ -881,6 +881,8 @@ def startup_warning_lines(data):
             what = "input() waits on stdin, which the compiled app doesn't have"
         elif hazard["kind"] == "colab_import":
             what = f"`{hazard['call']}` only exists inside Google Colab"
+        elif hazard["kind"] == "blocking_call":
+            what = f"`{hazard['call']}(...)` never returns, so the app would hang while starting"
         else:
             what = (
                 f"{hazard['call']}({hazard['path']!r}) reads a data file the "

@@ -1516,6 +1516,33 @@ def _uses_colab_userdata(code_cells):
     return False
 
 
+# Calls that serve or wait forever. Run at module level they are what `import`
+# of the notebook is stuck on, so the compiled app never finishes starting:
+# a Gradio/Dash/Tk demo's launch line left at the bottom of the notebook, a
+# Flask/uvicorn dev server, or a long sleep.
+_BLOCKING_CALL_NAMES = frozenset({
+    "launch", "mainloop", "serve_forever", "run_forever", "run_server", "run_app",
+    "run_polling", "start_polling",
+})
+_BLOCKING_CALL_LABELS = frozenset({
+    "uvicorn.run", "app.run", "hypercorn.run", "waitress.serve", "web.run_app",
+    "asyncio.get_event_loop().run_forever",
+})
+_LONG_SLEEP_SECONDS = 60
+
+
+def _is_blocking_call(label, name, call):
+    if name in _BLOCKING_CALL_NAMES or label in _BLOCKING_CALL_LABELS:
+        return True
+    if label == "time.sleep" and call.args:
+        arg = call.args[0]
+        return (
+            isinstance(arg, ast.Constant) and isinstance(arg.value, (int, float))
+            and arg.value >= _LONG_SLEEP_SECONDS
+        )
+    return False
+
+
 def _colab_import(node):
     """"google.colab[.x]" when `node` imports Google Colab's module, else None."""
     if isinstance(node, ast.Import):
@@ -1572,6 +1599,12 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
             for call in _statement_calls(node):
                 label, name, base = _call_label(call.func)
                 if label is None:
+                    continue
+                if _is_blocking_call(label, name, call):
+                    hazards.append({
+                        "kind": "blocking_call", "call": label, "path": None,
+                        "cell": cell_number, "line": call.lineno,
+                    })
                     continue
                 if name == "input" and base is None:
                     hazards.append({

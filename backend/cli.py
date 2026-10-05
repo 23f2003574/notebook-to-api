@@ -2344,6 +2344,8 @@ def _dispatch_core_command(args):
                     detail = "input() waits on stdin, which the compiled app doesn't have"
                 elif hazard["kind"] == "colab_import":
                     detail = f"`{hazard['call']}` only exists inside Google Colab"
+                elif hazard["kind"] == "blocking_call":
+                    detail = f"`{hazard['call']}(...)` never returns, so the app would hang while starting"
                 else:
                     detail = (
                         f"{hazard['call']}({hazard['path']!r}) reads a data file the "
