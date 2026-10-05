@@ -11324,7 +11324,7 @@ def test_kubernetes_manifest_reads_the_api_key_from_a_secret_and_requires_a_cust
     """Confirmed before this: the manifest shipped NOTEBOOK_API_KEY as a plain
     literal set to the app's public default, so a cluster deployment applied
     as generated was callable by anyone who knew this project's source."""
-    import yaml
+    yaml = pytest.importorskip("yaml")
 
     from backend.generator.api_generator import GENERATED_APP_ENV_VARS
     from backend.generator.kubernetes_generator import kubernetes_manifest_content
@@ -11594,7 +11594,7 @@ def test_compile_lists_notebook_env_vars_in_compose_env_example_and_inspect(tmp_
     compose = (out / "docker-compose.yml").read_text()
     assert "      - OPENAI_API_KEY\n" in compose
     assert "      - REGION\n" in compose
-    import yaml
+    yaml = pytest.importorskip("yaml")
     assert "OPENAI_API_KEY" in yaml.safe_load(compose)["services"]["out"]["environment"]
 
     env_example = (out / ".env.example").read_text()
@@ -11649,7 +11649,7 @@ def test_import_time_hazards_cover_more_readers_and_path_read_text(tmp_path):
 
 
 def test_kubernetes_manifest_reads_notebook_env_vars_from_the_secret():
-    import yaml
+    yaml = pytest.importorskip("yaml")
     from backend.generator.kubernetes_generator import kubernetes_manifest_content
 
     manifest = kubernetes_manifest_content(
@@ -11677,7 +11677,7 @@ def test_kubernetes_manifest_is_unchanged_without_notebook_env_vars():
 
 
 def test_compile_and_read_notebook_env_vars_feed_the_kubernetes_manifest(tmp_path):
-    import yaml
+    yaml = pytest.importorskip("yaml")
     from backend.compiler import compile_notebook, read_notebook_env_vars
 
     notebook = tmp_path / "nb.ipynb"
