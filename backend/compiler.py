@@ -535,6 +535,8 @@ def write_runtime_module(code_cells, output_dir, local_modules=None, data_files=
 
     combined_code = "\n\n".join(code_cells)
     extra_prelude = _env_magic_prelude(_env_magic_values(code_cells))
+    if _uses_colab_userdata(code_cells):
+        extra_prelude += _COLAB_USERDATA_SHIM
     if local_modules:
         extra_prelude += _LOCAL_MODULES_PATH_PRELUDE
     if data_files:
@@ -1439,13 +1441,83 @@ def _relative_literal_path(call):
     return path
 
 
+# Colab keeps API keys in "Secrets" read with `userdata.get("NAME")`. Outside
+# Colab that module doesn't exist, so the import failed on startup; this shim
+# answers the same call from the environment instead (and raises Colab's
+# SecretNotFoundError-style error when the variable is missing).
+_COLAB_USERDATA_SHIM = """\
+# google.colab.userdata, answered from environment variables (notebook-to-api)
+import os as _nb_os5
+import sys as _nb_sys5
+import types as _nb_types5
+
+if "google.colab" not in _nb_sys5.modules:
+    try:
+        import google.colab  # noqa: F401  (a real Colab runtime wins)
+    except ImportError:
+        class SecretNotFoundError(Exception):
+            pass
+
+        def _nb_userdata_get(name):
+            value = _nb_os5.environ.get(name)
+            if value is None:
+                raise SecretNotFoundError(
+                    f"Secret {name} does not exist: set the {name} environment variable"
+                )
+            return value
+
+        _nb_userdata = _nb_types5.ModuleType("google.colab.userdata")
+        _nb_userdata.get = _nb_userdata_get
+        _nb_userdata.SecretNotFoundError = SecretNotFoundError
+        _nb_colab = _nb_types5.ModuleType("google.colab")
+        _nb_colab.__path__ = []
+        _nb_colab.userdata = _nb_userdata
+        try:
+            import google as _nb_google
+        except ImportError:
+            _nb_google = _nb_types5.ModuleType("google")
+            _nb_google.__path__ = []
+            _nb_sys5.modules["google"] = _nb_google
+        _nb_google.colab = _nb_colab
+        _nb_sys5.modules["google.colab"] = _nb_colab
+        _nb_sys5.modules["google.colab.userdata"] = _nb_userdata
+
+"""
+
+
+def _uses_colab_userdata(code_cells):
+    """True when a cell imports Colab's `userdata` (and nothing the shim
+    can't answer is needed for that import to work)."""
+    for cell in code_cells:
+        try:
+            tree = ast.parse(cell)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and not node.level:
+                if node.module == "google.colab" and any(a.name == "userdata" for a in node.names):
+                    return True
+                if node.module == "google.colab.userdata":
+                    return True
+            elif isinstance(node, ast.Import):
+                if any(a.name == "google.colab.userdata" for a in node.names):
+                    return True
+    return False
+
+
 def _colab_import(node):
     """"google.colab[.x]" when `node` imports Google Colab's module, else None."""
     if isinstance(node, ast.Import):
         for alias in node.names:
+            if alias.name == "google.colab.userdata":
+                continue
             if alias.name == "google.colab" or alias.name.startswith("google.colab."):
                 return alias.name
     elif isinstance(node, ast.ImportFrom) and not node.level:
+        if node.module == "google.colab" and all(alias.name == "userdata" for alias in node.names):
+            return None  # the userdata shim covers this (see _COLAB_USERDATA_SHIM)
+        if node.module == "google.colab.userdata":
+            return None
         if node.module == "google.colab" or (node.module or "").startswith("google.colab."):
             return node.module
         if node.module == "google" and any(alias.name == "colab" for alias in node.names):
@@ -1671,6 +1743,12 @@ def _find_notebook_env_vars(code_cells):
                     or (isinstance(func, ast.Name) and func.id == "getenv")
                 )
                 first = node.args[0]
+                if (
+                    isinstance(func, ast.Attribute) and func.attr == "get"
+                    and isinstance(func.value, ast.Name) and func.value.id == "userdata"
+                    and isinstance(first, ast.Constant) and isinstance(first.value, str)
+                ):
+                    record(first.value, True)
                 if (is_get or is_getenv) and isinstance(first, ast.Constant) and isinstance(first.value, str):
                     default = node.args[1] if len(node.args) > 1 else next(
                         (kw.value for kw in node.keywords if kw.arg == "default"), None

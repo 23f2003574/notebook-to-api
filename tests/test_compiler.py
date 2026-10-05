@@ -11931,3 +11931,75 @@ def test_compile_applies_env_magics_with_setdefault_and_they_satisfy_required_re
         {"name": "MODEL_NAME", "required": False},
         {"name": "STILL_REQUIRED", "required": True},
     ]
+
+
+def test_colab_userdata_imports_are_supported_other_colab_imports_still_hazards():
+    from backend.compiler import _find_import_time_hazards
+
+    supported = ["from google.colab import userdata\nimport google.colab.userdata\n"
+                 "from google.colab.userdata import get\n"]
+    mixed = ["from google.colab import drive, userdata\n"]
+    other = ["from google.colab import files\n"]
+
+    assert _find_import_time_hazards(supported) == []
+    assert [h["call"] for h in _find_import_time_hazards(mixed)] == ["import google.colab"]
+    assert len(_find_import_time_hazards(other)) == 1
+
+
+def test_colab_userdata_shim_reads_secrets_from_the_environment(monkeypatch):
+    import sys
+    from backend.compiler import _COLAB_USERDATA_SHIM, _uses_colab_userdata
+
+    assert _uses_colab_userdata(["from google.colab import userdata\n"])
+    assert not _uses_colab_userdata(["from google.colab import drive\n", "x = 1\n"])
+
+    saved = {k: sys.modules.get(k) for k in ("google", "google.colab", "google.colab.userdata")}
+    for key in saved:
+        sys.modules.pop(key, None)
+    try:
+        monkeypatch.setenv("COLAB_TEST_SECRET", "s3cret")
+        monkeypatch.delenv("COLAB_TEST_MISSING", raising=False)
+        namespace = {}
+        exec(_COLAB_USERDATA_SHIM + "from google.colab import userdata\n", namespace)
+        userdata = namespace["userdata"]
+
+        assert userdata.get("COLAB_TEST_SECRET") == "s3cret"
+        with pytest.raises(userdata.SecretNotFoundError, match="COLAB_TEST_MISSING"):
+            userdata.get("COLAB_TEST_MISSING")
+    finally:
+        for key, module in saved.items():
+            sys.modules.pop(key, None)
+            if module is not None:
+                sys.modules[key] = module
+
+
+def test_compile_with_colab_userdata_starts_and_lists_its_secrets_as_env_vars(
+    tmp_path, monkeypatch
+):
+    import sys
+    from backend.compiler import compile_notebook, read_notebook_env_vars
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "from google.colab import userdata\nKEY = userdata.get('COLAB_E2E_KEY')\n\n"
+        "def run(a: int) -> str:\n    return KEY\n",
+    )
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+
+    assert read_notebook_env_vars(out) == [{"name": "COLAB_E2E_KEY", "required": True}]
+
+    saved = {k: sys.modules.get(k) for k in ("google", "google.colab", "google.colab.userdata")}
+    for key in saved:
+        sys.modules.pop(key, None)
+    try:
+        monkeypatch.setenv("COLAB_E2E_KEY", "abc")
+        namespace = {}
+        exec((out / "runtime" / "notebook_module.py").read_text(), namespace)
+        assert namespace["run"](1) == "abc"
+    finally:
+        for key, module in saved.items():
+            sys.modules.pop(key, None)
+            if module is not None:
+                sys.modules[key] = module
