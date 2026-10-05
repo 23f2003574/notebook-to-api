@@ -8,7 +8,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 from backend.compiler import (
-    compile_notebook, find_local_modules, package_name_for_output_dir,
+    compile_notebook, find_data_files, find_local_modules, package_name_for_output_dir,
     read_notebook_env_vars,
 )
 from backend.parser.ast_parser import extract_imports_from_code
@@ -141,6 +141,33 @@ def _local_module_change(notebook_path, event_path):
     for name, source in local.items():
         if isinstance(source, Path) and source.is_file() and source.resolve() == module_path:
             return name
+    return None
+
+
+def _shipped_data_change(notebook_path, event_path):
+    """The relative name when `event_path` is a data file or `%run` script
+    beside the notebook that a compile copies into the app (see
+    find_data_files), else None.
+
+    The copy in the app's runtime directory is only refreshed by a compile,
+    so editing `sales.csv` left the served app on the old data until the
+    notebook itself was saved. Files in subdirectories aren't watched (the
+    observer is non-recursive).
+    """
+    path = Path(event_path).resolve()
+    notebook_dir = Path(notebook_path).resolve().parent
+    if path.parent != notebook_dir or path.suffix == ".ipynb":
+        return None
+
+    try:
+        cells = extract_code_cells(load_notebook(notebook_path))
+        shipped = find_data_files(notebook_path, cells)
+    except Exception:
+        return None
+
+    for relative, source in shipped.items():
+        if source.resolve() == path:
+            return relative
     return None
 
 
@@ -279,6 +306,10 @@ class NotebookChangeHandler(FileSystemEventHandler):
             module_name = _local_module_change(self.notebook_path, event_path)
             if module_name is not None:
                 reason = f"Local module '{module_name}' changed"
+            else:
+                data_name = _shipped_data_change(self.notebook_path, event_path)
+                if data_name is not None:
+                    reason = f"Data file '{data_name}' changed"
 
         if is_notebook or reason != "Notebook changed":
             current_time = time.time()

@@ -1972,3 +1972,49 @@ def test_warn_unset_notebook_env_vars_treats_empty_as_unset_and_tolerates_no_com
         out, environ={"SERVE_TEST_KEY": "", "SERVE_TEST_TOKEN": "t"}
     ) == ["SERVE_TEST_KEY"]
     assert serve_module.warn_unset_notebook_env_vars(tmp_path / "never_compiled", environ={}) == []
+
+
+def test_shipped_data_change_matches_only_files_the_notebook_reads_or_runs(tmp_path):
+    notebook = tmp_path / "nb.ipynb"
+    _notebook_importing(
+        notebook,
+        "import pandas as pd\ndf = pd.read_csv('sales.csv')\nx = pd.read_csv('missing.csv')\n"
+        "%run setup.py\n",
+    )
+    (tmp_path / "sales.csv").write_text("a\n1\n")
+    (tmp_path / "setup.py").write_text("X = 1\n")
+    (tmp_path / "other.csv").write_text("a\n2\n")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "sales.csv").write_text("a\n3\n")
+
+    match = serve_module._shipped_data_change
+    assert match(str(notebook), str(tmp_path / "sales.csv")) == "sales.csv"
+    assert match(str(notebook), str(tmp_path / "setup.py")) == "setup.py"
+    assert match(str(notebook), str(tmp_path / "other.csv")) is None
+    assert match(str(notebook), str(tmp_path / "missing.csv")) is None
+    assert match(str(notebook), str(tmp_path / "sub" / "sales.csv")) is None
+    assert match(str(notebook), str(notebook)) is None
+
+
+def test_shipped_data_change_tolerates_an_unreadable_notebook(tmp_path):
+    notebook = tmp_path / "nb.ipynb"
+    notebook.write_text("{ not json", encoding="utf-8")
+    (tmp_path / "sales.csv").write_text("a\n")
+
+    assert serve_module._shipped_data_change(str(notebook), str(tmp_path / "sales.csv")) is None
+
+
+def test_editing_a_shipped_data_file_triggers_a_recompile(tmp_path, monkeypatch, capsys):
+    handler, notebook_path, _event, compiled = _handler_with_recording_compile(
+        tmp_path, monkeypatch, debounce_seconds=0
+    )
+    _notebook_importing(notebook_path, "import pandas as pd\ndf = pd.read_csv('sales.csv')\n")
+    (tmp_path / "sales.csv").write_text("a\n1\n")
+    (tmp_path / "notes.txt").write_text("unrelated")
+
+    handler.on_modified(_module_event(tmp_path / "notes.txt"))
+    assert compiled == []
+
+    handler.on_modified(_module_event(tmp_path / "sales.csv"))
+    assert len(compiled) == 1
+    assert "Data file 'sales.csv' changed. Recompiling API" in capsys.readouterr().out
