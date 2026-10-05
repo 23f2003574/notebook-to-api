@@ -12146,3 +12146,16 @@ def test_import_time_hazards_flag_shell_fetch_lines_that_never_ran_in_the_app():
         ("shell_command", "!curl", 10),
     ]
     assert "won't exist" in startup_warning_lines({"import_time_hazards": hazards[:1]})[0]
+
+
+def test_percent_percent_file_alias_ships_modules_like_writefile():
+    from backend.compiler import _writefile_modules
+    from backend.parser.notebook_parser import strip_magic_commands
+
+    cells = [
+        strip_magic_commands("%%file helpers.py\nA = 1\n"),
+        strip_magic_commands("%%file -a helpers.py\nB = 2\n"),
+        strip_magic_commands("%%python3\ndef not_a_module():\n    pass\n"),
+    ]
+
+    assert _writefile_modules(cells) == {"helpers": "A = 1\nB = 2\n"}

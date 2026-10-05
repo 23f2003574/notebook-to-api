@@ -50,6 +50,12 @@ _INTROSPECTION_SUFFIX_RE = re.compile(
 NON_PYTHON_BODY_CELL_MAGICS = frozenset({
     "writefile", "bash", "sh", "perl", "ruby", "script",
     "html", "HTML", "javascript", "js", "latex", "svg", "markdown",
+    # `%%file` is %%writefile's alias; %%python/%%python2/%%python3/%%pypy run
+    # their body in a *separate* interpreter (its definitions never reach the
+    # notebook's namespace); %%sx/%%cmd/%%powershell are shells; and
+    # %%sql/%%bigquery/%%R/%%julia/%%dot/%%mermaid hold another language.
+    "file", "python", "python2", "python3", "pypy", "sx", "cmd", "powershell",
+    "sql", "bigquery", "R", "r", "julia", "dot", "mermaid",
 })
 
 _NON_PYTHON_BODY_CELL_MAGIC_RE = re.compile(

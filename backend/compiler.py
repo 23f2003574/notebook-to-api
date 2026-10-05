@@ -2062,7 +2062,7 @@ def _extract_deprecated_functions(code_cells):
     return deprecated
 
 
-_WRITEFILE_LINE_PATTERN = re.compile(r"^#\s*%%writefile\s+(?:-a\s+)?(?P<target>\S+)\s*$")
+_WRITEFILE_LINE_PATTERN = re.compile(r"^#\s*%%(?:writefile|file)\s+(?:-a\s+)?(?P<target>\S+)\s*$")
 
 
 def _writefile_modules(code_cells):
@@ -2086,7 +2086,7 @@ def _writefile_modules(code_cells):
         name = target[:-3]
         if not name.isidentifier():
             continue
-        append = lines[0].split("%%writefile", 1)[1].split()[:1] == ["-a"]
+        append = lines[0].split("%%", 1)[1].split()[1:2] == ["-a"]
         body = "\n".join(
             line[2:] if line.startswith("# ") else ("" if line.strip() in ("", "#") else line)
             for line in lines[1:]

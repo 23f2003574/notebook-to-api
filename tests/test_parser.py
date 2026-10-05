@@ -549,3 +549,22 @@ def test_load_notebook_error_message_names_the_actual_language(tmp_path):
         load_notebook(str(path))
 
     assert "'r'" in str(exc_info.value)
+
+def test_cell_magics_whose_body_is_not_the_notebooks_python_are_commented_out():
+    from backend.parser.notebook_parser import strip_magic_commands
+
+    for magic in ("python", "python3", "pypy", "file x.py", "sql", "bigquery", "R", "julia", "sx", "cmd"):
+        source = f"%%{magic}\ndef leaked():\n    return 1\n"
+        cleaned = strip_magic_commands(source)
+
+        assert "def leaked" not in cleaned.replace("# def leaked", ""), magic
+        assert all(line.startswith("# ") or not line for line in cleaned.split("\n")), magic
+
+
+def test_cell_magics_that_run_their_body_in_the_notebook_still_compile():
+    from backend.parser.notebook_parser import strip_magic_commands
+
+    for magic in ("time", "timeit -n1", "capture out", "prun", "cython"):
+        cleaned = strip_magic_commands(f"%%{magic}\ndef kept():\n    return 1\n")
+
+        assert "\ndef kept():" in cleaned, magic
