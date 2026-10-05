@@ -12159,3 +12159,49 @@ def test_percent_percent_file_alias_ships_modules_like_writefile():
     ]
 
     assert _writefile_modules(cells) == {"helpers": "A = 1\nB = 2\n"}
+
+
+def test_compile_with_kaggle_secrets_starts_lists_secrets_and_skips_the_bogus_requirement(
+    tmp_path, monkeypatch
+):
+    import sys
+    from backend.compiler import compile_notebook, read_notebook_env_vars
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "from kaggle_secrets import UserSecretsClient\n"
+        "KEY = UserSecretsClient().get_secret('KAGGLE_E2E_KEY')\n\n"
+        "def run(a: int) -> str:\n    return KEY\n",
+    )
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+
+    names = [line.split("==")[0] for line in (out / "requirements.txt").read_text().splitlines()]
+    assert "kaggle_secrets" not in names and "kaggle-secrets" not in names
+    assert read_notebook_env_vars(out) == [{"name": "KAGGLE_E2E_KEY", "required": True}]
+
+    saved = sys.modules.pop("kaggle_secrets", None)
+    try:
+        monkeypatch.setenv("KAGGLE_E2E_KEY", "abc")
+        namespace = {}
+        source = (out / "runtime" / "notebook_module.py").read_text()
+        exec(source, namespace)
+        assert namespace["run"](1) == "abc"
+
+        monkeypatch.delenv("KAGGLE_E2E_KEY")
+        sys.modules.pop("kaggle_secrets", None)
+        with pytest.raises(Exception, match="KAGGLE_E2E_KEY"):
+            exec(source, {})
+    finally:
+        sys.modules.pop("kaggle_secrets", None)
+        if saved is not None:
+            sys.modules["kaggle_secrets"] = saved
+
+
+def test_kaggle_secrets_shim_only_added_when_the_notebook_imports_it():
+    from backend.compiler import _uses_kaggle_secrets
+
+    assert _uses_kaggle_secrets(["import kaggle_secrets\n"])
+    assert _uses_kaggle_secrets(["from kaggle_secrets import UserSecretsClient\n"])
+    assert not _uses_kaggle_secrets(["import os\n", "x = 'kaggle_secrets'\n"])

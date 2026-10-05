@@ -548,6 +548,8 @@ def write_runtime_module(code_cells, output_dir, local_modules=None, data_files=
         extra_prelude += _RUN_SCRIPT_HELPER
     if _uses_colab_userdata(code_cells):
         extra_prelude += _COLAB_USERDATA_SHIM
+    if _uses_kaggle_secrets(code_cells):
+        extra_prelude += _KAGGLE_SECRETS_SHIM
     if local_modules:
         extra_prelude += _LOCAL_MODULES_PATH_PRELUDE
     if data_files:
@@ -1542,6 +1544,45 @@ if "google.colab" not in _nb_sys5.modules:
 """
 
 
+# Kaggle notebooks read secrets with `UserSecretsClient().get_secret("NAME")`
+# from the `kaggle_secrets` module, which exists only on Kaggle (and is not a
+# PyPI package -- the compile used to list it in requirements.txt anyway).
+_KAGGLE_SECRETS_SHIM = """\
+# kaggle_secrets, answered from environment variables (notebook-to-api)
+import os as _nb_os6
+import sys as _nb_sys6
+import types as _nb_types6
+
+if "kaggle_secrets" not in _nb_sys6.modules:
+    try:
+        import kaggle_secrets  # noqa: F401  (a real Kaggle runtime wins)
+    except ImportError:
+        class BackendError(Exception):
+            pass
+
+        class UserSecretsClient:
+            def get_secret(self, label):
+                value = _nb_os6.environ.get(label)
+                if value is None:
+                    raise BackendError(
+                        f"Secret {label} does not exist: set the {label} environment variable"
+                    )
+                return value
+
+        _nb_kaggle = _nb_types6.ModuleType("kaggle_secrets")
+        _nb_kaggle.UserSecretsClient = UserSecretsClient
+        _nb_kaggle.BackendError = BackendError
+        _nb_sys6.modules["kaggle_secrets"] = _nb_kaggle
+
+"""
+
+
+def _uses_kaggle_secrets(code_cells):
+    return "kaggle_secrets" in {
+        name for cell in code_cells for name in extract_imports_from_code(cell)
+    }
+
+
 def _uses_colab_userdata(code_cells):
     """True when a cell imports Colab's `userdata` (and nothing the shim
     can't answer is needed for that import to work)."""
@@ -1905,6 +1946,11 @@ def _find_notebook_env_vars(code_cells):
                 )
                 first = node.args[0]
                 if (
+                    isinstance(func, ast.Attribute) and func.attr == "get_secret"
+                    and isinstance(first, ast.Constant) and isinstance(first.value, str)
+                ):
+                    record(first.value, True)
+                if (
                     isinstance(func, ast.Attribute) and func.attr == "get"
                     and isinstance(func.value, ast.Name) and func.value.id == "userdata"
                     and isinstance(first, ast.Constant) and isinstance(first.value, str)
@@ -2170,7 +2216,7 @@ def extract_third_party_imports(code_cells, notebook_path=None):
     return [
         imp for imp in imports
         if imp not in STANDARD_LIBS and imp not in excluded and imp not in local
-        and imp not in written
+        and imp not in written and imp != "kaggle_secrets"
     ]
 
 
