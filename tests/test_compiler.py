@@ -12003,3 +12003,54 @@ def test_compile_with_colab_userdata_starts_and_lists_its_secrets_as_env_vars(
             sys.modules.pop(key, None)
             if module is not None:
                 sys.modules[key] = module
+
+
+def test_run_magic_scripts_lists_relative_py_targets_only():
+    from backend.compiler import _run_magic_scripts
+    from backend.parser.notebook_parser import strip_magic_commands
+
+    raw = (
+        "%run helper.py\n%run -i ./sub/tool.py arg1 arg2\n%run other.ipynb\n"
+        "%run /abs/x.py\n%run ../up.py\n%run helper.py\n"
+        'DOC = """\n%run in_string.py\n"""\n'
+    )
+
+    assert _run_magic_scripts([strip_magic_commands(raw)]) == ["helper.py", "sub/tool.py"]
+
+
+def test_compile_ships_run_scripts_and_executes_them_in_the_notebook_namespace(tmp_path):
+    from backend.compiler import compile_notebook
+
+    (tmp_path / "defs.py").write_text("BASE = LIMIT * 2\n\ndef scale(x):\n    return x * BASE\n")
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "LIMIT = 5\n%run defs.py\n\ndef run(a: int) -> int:\n    return scale(a)\n",
+    )
+    out = tmp_path / "out"
+
+    compile_notebook(str(notebook), str(out))
+
+    assert (out / "runtime" / "defs.py").exists()
+    source = (out / "runtime" / "notebook_module.py").read_text()
+    assert "_nb_run_script('defs.py')" in source
+    namespace = {"__file__": str(out / "runtime" / "notebook_module.py")}
+    exec(source, namespace)
+    assert namespace["run"](3) == 30
+    assert "__builtins__" in namespace and namespace["BASE"] == 10
+
+
+def test_run_magic_without_a_shipped_script_stays_a_comment(tmp_path):
+    from backend.compiler import compile_notebook
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook, "%run missing.py\n\ndef run(a: int) -> int:\n    return a\n"
+    )
+    out = tmp_path / "out"
+
+    compile_notebook(str(notebook), str(out))
+
+    source = (out / "runtime" / "notebook_module.py").read_text()
+    assert "_nb_run_script(" not in source
+    assert "# %run missing.py" in source

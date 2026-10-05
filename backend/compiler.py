@@ -534,7 +534,18 @@ def write_runtime_module(code_cells, output_dir, local_modules=None, data_files=
     )
 
     combined_code = "\n\n".join(code_cells)
+    shipped_scripts = [p for p in _run_magic_scripts(code_cells) if p in (data_files or {})]
+    if shipped_scripts:
+        combined_code = _RUN_MAGIC_PATTERN.sub(
+            lambda m: (
+                f"_nb_run_script({_normalized_run_path(m.group('path'))!r})"
+                if _normalized_run_path(m.group("path")) in shipped_scripts else m.group(0)
+            ),
+            combined_code,
+        )
     extra_prelude = _env_magic_prelude(_env_magic_values(code_cells))
+    if shipped_scripts:
+        extra_prelude += _RUN_SCRIPT_HELPER
     if _uses_colab_userdata(code_cells):
         extra_prelude += _COLAB_USERDATA_SHIM
     if local_modules:
@@ -1630,11 +1641,15 @@ def find_data_files(notebook_path, code_cells=None, hazards=None):
     found = {}
     total = 0
 
-    for item in hazards:
-        if item["kind"] != "file_read" or item["path"] in found:
+    wanted = [item["path"] for item in hazards if item["kind"] == "file_read"]
+    # `%run script.py` files are shipped too (see _run_magic_scripts).
+    wanted += _run_magic_scripts(code_cells or [])
+
+    for path in wanted:
+        if path in found:
             continue
-        relative = Path(item["path"])
-        if ".." in relative.parts:
+        relative = Path(path)
+        if ".." in relative.parts or relative.is_absolute():
             continue
         candidate = (directory / relative).resolve()
         try:
@@ -1647,9 +1662,52 @@ def find_data_files(notebook_path, code_cells=None, hazards=None):
         if total + size > MAX_SHIPPED_DATA_BYTES:
             continue
         total += size
-        found[item["path"]] = candidate
+        found[path] = candidate
 
     return found
+
+
+# `%run script.py` executes the file in the notebook's own namespace. The
+# parser leaves it as a "# %run ..." comment, so the script's definitions
+# never existed in the compiled app.
+_RUN_MAGIC_PATTERN = re.compile(
+    r"^# %run(?:[ \t]+-\w+)*[ \t]+(?P<path>\S+\.py)(?:[ \t]+.*)?$", re.MULTILINE,
+)
+
+_RUN_SCRIPT_HELPER = """\
+# %run helper (notebook-to-api): run a shipped script in this module's namespace
+def _nb_run_script(relative):
+    import os as _os, runpy as _runpy
+    _ns = _runpy.run_path(
+        _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), relative),
+        init_globals=dict(globals()),
+    )
+    globals().update(
+        {k: v for k, v in _ns.items() if not (k.startswith("__") and k.endswith("__"))}
+    )
+
+"""
+
+
+def _normalized_run_path(path):
+    return path[2:] if path.startswith("./") else path
+
+
+def _run_magic_scripts(code_cells):
+    """Relative `.py` paths named by `%run` magics, first-seen order, unique;
+    absolute paths, `..` paths and lines inside strings are skipped."""
+    scripts = []
+    for cell in code_cells:
+        unsafe_lines = _lines_inside_multiline_strings(cell)
+        for match in _RUN_MAGIC_PATTERN.finditer(cell):
+            if cell.count("\n", 0, match.start()) + 1 in unsafe_lines:
+                continue
+            path = _normalized_run_path(match.group("path"))
+            if path.startswith(("/", "~")) or ".." in Path(path).parts:
+                continue
+            if path not in scripts:
+                scripts.append(path)
+    return scripts
 
 
 _ENV_MAGIC_PATTERN = re.compile(
