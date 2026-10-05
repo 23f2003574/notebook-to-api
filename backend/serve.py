@@ -111,21 +111,21 @@ def warn_unset_notebook_env_vars(output_dir, environ=None):
 
 
 def _local_module_change(notebook_path, event_path):
-    """The module name when `event_path` is a `.py` file beside the
-    notebook that the notebook actually imports, else None.
+    """The module/package name when `event_path` is a `.py` file beside the
+    notebook that the notebook imports, or any `.py` file inside an imported
+    local package, else None.
 
     Compiling copies such modules into the app (see find_local_modules), so
     editing one left the served app on the stale copy until the notebook
-    itself happened to be saved. Packages (subdirectories) aren't watched --
-    the observer is deliberately non-recursive. A notebook that can't be
-    read or parsed yet (mid-save) is simply not a match.
+    itself happened to be saved. A notebook that can't be read or parsed yet
+    (mid-save) is simply not a match.
     """
     if not event_path.endswith(".py"):
         return None
 
     module_path = Path(event_path).resolve()
     notebook_dir = Path(notebook_path).resolve().parent
-    if module_path.parent != notebook_dir:
+    if notebook_dir not in module_path.parents:
         return None
 
     try:
@@ -139,9 +139,39 @@ def _local_module_change(notebook_path, event_path):
 
     local = find_local_modules(notebook_path, imports)
     for name, source in local.items():
-        if isinstance(source, Path) and source.is_file() and source.resolve() == module_path:
+        if not isinstance(source, Path):
+            continue
+        if source.is_file() and source.resolve() == module_path:
+            return name
+        if source.is_dir() and source.resolve() in module_path.parents:
             return name
     return None
+
+
+def extra_watch_directories(notebook_path):
+    """[(directory, recursive)] beyond the notebook's own directory that a
+    compile copies files from: the subdirectories holding shipped data files
+    and `%run` scripts (watched one level) and each imported local package
+    (watched recursively). Computed once at startup; empty when the notebook
+    can't be read."""
+    notebook_dir = Path(notebook_path).resolve().parent
+    try:
+        cells = extract_code_cells(load_notebook(notebook_path))
+        imports = {n for cell in cells for n in extract_imports_from_code(cell)}
+        shipped = find_data_files(notebook_path, cells)
+        local = find_local_modules(notebook_path, imports)
+    except Exception:
+        return []
+
+    directories = {}
+    for source in shipped.values():
+        parent = source.resolve().parent
+        if parent != notebook_dir:
+            directories.setdefault(parent, False)
+    for source in local.values():
+        if isinstance(source, Path) and source.is_dir():
+            directories[source.resolve()] = True
+    return sorted(directories.items())
 
 
 def _shipped_data_change(notebook_path, event_path):
@@ -151,12 +181,11 @@ def _shipped_data_change(notebook_path, event_path):
 
     The copy in the app's runtime directory is only refreshed by a compile,
     so editing `sales.csv` left the served app on the old data until the
-    notebook itself was saved. Files in subdirectories aren't watched (the
-    observer is non-recursive).
+    notebook itself was saved.
     """
     path = Path(event_path).resolve()
     notebook_dir = Path(notebook_path).resolve().parent
-    if path.parent != notebook_dir or path.suffix == ".ipynb":
+    if notebook_dir not in path.parents or path.suffix == ".ipynb":
         return None
 
     try:
@@ -459,6 +488,8 @@ def serve_notebook(
     # Watch the directory containing the notebook
     notebook_dir = Path(notebook_path).parent.resolve()
     observer.schedule(handler, path=str(notebook_dir), recursive=False)
+    for extra_dir, recursive in extra_watch_directories(notebook_path):
+        observer.schedule(handler, path=str(extra_dir), recursive=recursive)
     observer.start()
 
     # "0.0.0.0" isn't itself a browsable address -- show "localhost" for
@@ -670,6 +701,8 @@ def watch_notebook(
 
     notebook_dir = Path(notebook_path).parent.resolve()
     observer.schedule(handler, path=str(notebook_dir), recursive=False)
+    for extra_dir, recursive in extra_watch_directories(notebook_path):
+        observer.schedule(handler, path=str(extra_dir), recursive=recursive)
     observer.start()
 
     print(f"\n👀 Watching {Path(notebook_path).resolve()} for changes.")

@@ -1898,7 +1898,7 @@ def test_local_module_change_matches_only_imported_sibling_modules(tmp_path):
     match = serve_module._local_module_change
     assert match(str(notebook), str(tmp_path / "helpers.py")) == "helpers"
     assert match(str(notebook), str(tmp_path / "unused.py")) is None
-    assert match(str(notebook), str(tmp_path / "sub" / "helpers.py")) is None
+    assert match(str(notebook), str(tmp_path / "sub" / "helpers.py")) is None  # not imported
     assert match(str(notebook), str(tmp_path / "helpers.txt")) is None
 
 
@@ -1992,7 +1992,7 @@ def test_shipped_data_change_matches_only_files_the_notebook_reads_or_runs(tmp_p
     assert match(str(notebook), str(tmp_path / "setup.py")) == "setup.py"
     assert match(str(notebook), str(tmp_path / "other.csv")) is None
     assert match(str(notebook), str(tmp_path / "missing.csv")) is None
-    assert match(str(notebook), str(tmp_path / "sub" / "sales.csv")) is None
+    assert match(str(notebook), str(tmp_path / "sub" / "sales.csv")) is None  # not read
     assert match(str(notebook), str(notebook)) is None
 
 
@@ -2018,3 +2018,49 @@ def test_editing_a_shipped_data_file_triggers_a_recompile(tmp_path, monkeypatch,
     handler.on_modified(_module_event(tmp_path / "sales.csv"))
     assert len(compiled) == 1
     assert "Data file 'sales.csv' changed. Recompiling API" in capsys.readouterr().out
+
+
+def test_local_package_and_subdirectory_data_changes_are_matched(tmp_path):
+    notebook = tmp_path / "nb.ipynb"
+    _notebook_importing(
+        notebook, "import mypkg\nimport pandas as pd\ndf = pd.read_csv('data/sales.csv')\n"
+    )
+    (tmp_path / "mypkg" / "inner").mkdir(parents=True)
+    (tmp_path / "mypkg" / "__init__.py").write_text("")
+    (tmp_path / "mypkg" / "inner" / "deep.py").write_text("X = 1\n")
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "sales.csv").write_text("a\n1\n")
+    (tmp_path / "data" / "unused.csv").write_text("a\n2\n")
+
+    assert serve_module._local_module_change(
+        str(notebook), str(tmp_path / "mypkg" / "inner" / "deep.py")
+    ) == "mypkg"
+    assert serve_module._local_module_change(str(notebook), str(tmp_path / "mypkg" / "__init__.py")) == "mypkg"
+    assert serve_module._shipped_data_change(
+        str(notebook), str(tmp_path / "data" / "sales.csv")
+    ) == "data/sales.csv"
+    assert serve_module._shipped_data_change(str(notebook), str(tmp_path / "data" / "unused.csv")) is None
+
+
+def test_extra_watch_directories_lists_data_subdirs_and_packages(tmp_path):
+    notebook = tmp_path / "nb.ipynb"
+    _notebook_importing(
+        notebook,
+        "import mypkg, helpers\nimport pandas as pd\n"
+        "a = pd.read_csv('data/sales.csv')\nb = pd.read_csv('top.csv')\n",
+    )
+    (tmp_path / "mypkg").mkdir()
+    (tmp_path / "mypkg" / "__init__.py").write_text("")
+    (tmp_path / "helpers.py").write_text("")
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "sales.csv").write_text("a\n")
+    (tmp_path / "top.csv").write_text("a\n")
+
+    assert serve_module.extra_watch_directories(str(notebook)) == [
+        (tmp_path.resolve() / "data", False),
+        (tmp_path.resolve() / "mypkg", True),
+    ]
+
+    broken = tmp_path / "broken.ipynb"
+    broken.write_text("{ nope", encoding="utf-8")
+    assert serve_module.extra_watch_directories(str(broken)) == []
