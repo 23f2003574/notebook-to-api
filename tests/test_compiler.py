@@ -12083,3 +12083,39 @@ def test_import_time_hazards_flag_calls_that_never_return():
         ("blocking_call", "root.mainloop", 8),
     ]
     assert "never returns" in startup_warning_lines({"import_time_hazards": hazards[:1]})[0]
+
+
+def test_apt_install_packages_reads_shell_install_lines_safely():
+    from backend.compiler import _apt_install_packages
+    from backend.parser.notebook_parser import strip_magic_commands
+
+    raw = (
+        "!apt-get install -y libgl1 libglib2.0-0\n"
+        "!sudo apt install -qq poppler-utils=22.12.0-2\n"
+        "!apt-get update && apt-get install -y ignored-after-operator\n"
+        "!apt-get install -y good-pkg && apt-get install -y later-pkg\n"
+        "!apt-get install -y 'bad;rm -rf /' $(evil) UpperCase libgl1\n"
+        "!apt-get remove -y something\n"
+        'DOC = """\n!apt-get install -y in-string\n"""\n'
+    )
+
+    assert _apt_install_packages([strip_magic_commands(raw)]) == [
+        "libgl1", "libglib2.0-0", "poppler-utils=22.12.0-2", "good-pkg",
+    ]
+
+
+def test_compile_adds_notebook_apt_installs_to_the_dockerfile(tmp_path):
+    from backend.compiler import _extract_explicit_apt_packages, compile_notebook
+
+    cells = ["# notebook-to-api: apt-requires libpq-dev\n# !apt-get install -y libgl1 libpq-dev\n"]
+    assert _extract_explicit_apt_packages(cells) == ["libpq-dev", "libgl1"]
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook, "!apt-get install -y libgl1\n\ndef run(a: int) -> int:\n    return a\n"
+    )
+    out = tmp_path / "out"
+
+    compile_notebook(str(notebook), str(out))
+
+    assert "libgl1" in (out / "Dockerfile").read_text()

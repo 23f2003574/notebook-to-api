@@ -968,6 +968,52 @@ def _extract_explicit_apt_packages(code_cells):
             seen.add(package)
             packages.append(package)
 
+    # `!apt-get install ...` lines in the notebook name the system libraries
+    # it needed in Jupyter's environment.
+    for package in _apt_install_packages(code_cells):
+        if package not in seen:
+            seen.add(package)
+            packages.append(package)
+
+    return packages
+
+
+_APT_INSTALL_LINE_PATTERN = re.compile(
+    r"^#\s*[!%]\s*(?:sudo\s+)?apt(?:-get)?\s+(?:-\S+\s+)*install\s+(?P<args>.+?)\s*$",
+    re.MULTILINE,
+)
+# The Dockerfile writes these into one `apt-get install` line, so only plain
+# Debian package names (optionally "=version") are accepted.
+_APT_PACKAGE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9+.\-]*(=[A-Za-z0-9.:~+\-]+)?$")
+_SHELL_OPERATORS = frozenset({"&&", "||", ";", "|", ">", ">>", "<", "&", "2>&1"})
+
+
+def _apt_install_packages(code_cells):
+    """Package names from `!apt-get install -y a b` / `!apt install a` /
+    `!sudo apt-get install a` lines (the notebook parser leaves each as a
+    "# !apt-get ..." comment), first-seen order, unique.
+
+    Options are skipped and parsing stops at the first shell operator, so
+    `apt-get install -y a && apt-get install b` yields `a` only -- and
+    anything that is not a plain package name is dropped.
+    """
+    packages = []
+    for cell in code_cells:
+        unsafe_lines = _lines_inside_multiline_strings(cell)
+        for match in _APT_INSTALL_LINE_PATTERN.finditer(cell):
+            if cell.count("\n", 0, match.start()) + 1 in unsafe_lines:
+                continue
+            try:
+                tokens = shlex.split(match.group("args"), comments=True)
+            except ValueError:
+                continue
+            for token in tokens:
+                if token in _SHELL_OPERATORS:
+                    break
+                if token.startswith("-") or not _APT_PACKAGE_PATTERN.match(token):
+                    continue
+                if token not in packages:
+                    packages.append(token)
     return packages
 
 
