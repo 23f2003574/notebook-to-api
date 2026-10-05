@@ -1466,6 +1466,41 @@ def _call_label(func):
     return None, None, None
 
 
+def _import_aliases(tree):
+    """{local name: dotted original} for the renamed imports in `tree`:
+    `import time as t` -> {"t": "time"}, `from getpass import getpass as ask`
+    -> {"ask": "getpass.getpass"}, `from time import sleep` ->
+    {"sleep": "time.sleep"}. A later import of the same name wins."""
+    aliases = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    aliases[alias.asname] = alias.name
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            for alias in node.names:
+                if alias.name != "*":
+                    aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+    return aliases
+
+
+def _resolve_import_alias(label, name, base, aliases):
+    """(label, name, base) with an imported alias replaced by what it
+    names, so `ask(...)` after `from getpass import getpass as ask` reads as
+    `getpass.getpass(...)` and `t.sleep(...)` after `import time as t` as
+    `time.sleep(...)`. Unaliased calls come back unchanged."""
+    if label is None or not aliases:
+        return label, name, base
+    if base is None and name in aliases and "." in aliases[name]:
+        module, _, attr = aliases[name].rpartition(".")
+        base = module.split(".")[-1]
+        return f"{base}.{attr}", attr, base
+    if base is not None and base in aliases:
+        module = aliases[base]
+        return f"{module.split('.')[-1]}.{name}", name, module.split(".")[-1]
+    return label, name, base
+
+
 def _is_main_guard(node):
     test = node.test if isinstance(node, ast.If) else None
     return (
@@ -1680,6 +1715,7 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
     `code_cells`, `line` the line within that cell.
     """
     hazards = []
+    current_aliases = [{}]
 
     def visit(statements, cell_number):
         for node in statements:
@@ -1701,7 +1737,12 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
                 label, name, base = _call_label(call.func)
                 if label is None:
                     continue
-                if _is_blocking_call(label, name, call):
+                # `label` stays as written (it is what gets reported); the
+                # resolved form only drives which calls are recognised.
+                resolved_label, name, base = _resolve_import_alias(
+                    label, name, base, current_aliases[0]
+                )
+                if _is_blocking_call(resolved_label, name, call):
                     hazards.append({
                         "kind": "blocking_call", "call": label, "path": None,
                         "cell": cell_number, "line": call.lineno,
@@ -1740,6 +1781,7 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
             tree = ast.parse(cell)
         except SyntaxError:
             continue
+        current_aliases[0] = _import_aliases(tree)
         visit(tree.body, cell_number)
 
     for cell_number, cell in enumerate(code_cells, start=1):

@@ -12225,8 +12225,50 @@ def test_import_time_hazards_flag_getpass_and_notebook_login():
     assert [(h["kind"], h["call"], h["line"]) for h in hazards] == [
         ("input", "getpass.getpass", 4),
         ("input", "getpass", 5),
+        ("input", "ask", 6),
         ("blocking_call", "notebook_login", 7),
     ]
     assert "getpass.getpass() waits on stdin" in startup_warning_lines(
         {"import_time_hazards": hazards[:1]}
     )[0]
+
+
+def test_import_time_hazards_see_through_import_aliases():
+    from backend.compiler import _find_import_time_hazards
+
+    cells = [
+        "import time as t\nimport getpass as gp\nimport uvicorn as uv\n"
+        "from getpass import getpass as ask\nfrom time import sleep\n"
+        "from numpy import load\nfrom pandas import read_csv as rc\n"
+        "t.sleep(120)\n"
+        "gp.getpass()\n"
+        "ask('key: ')\n"
+        "sleep(90)\n"
+        "sleep(1)\n"
+        "uv.run(app)\n"
+        "arr = load('weights.npy')\n"
+        "df = rc('sales.csv')\n"
+        "def f():\n    ask('inside a function')\n"
+    ]
+
+    hazards = _find_import_time_hazards(cells)
+
+    assert [(h["kind"], h["call"], h["path"]) for h in hazards] == [
+        ("blocking_call", "t.sleep", None),
+        ("input", "gp.getpass", None),
+        ("input", "ask", None),
+        ("blocking_call", "sleep", None),
+        ("blocking_call", "uv.run", None),
+        ("file_read", "load", "weights.npy"),
+        ("file_read", "rc", "sales.csv"),
+    ]
+
+
+def test_unaliased_hazard_detection_is_unchanged_by_alias_resolution():
+    from backend.compiler import _find_import_time_hazards
+
+    cells = ["import pandas as pd\ndf = pd.read_csv('a.csv')\nx = input()\nopen('b.txt').read()\n"]
+
+    assert [(h["kind"], h["call"]) for h in _find_import_time_hazards(cells)] == [
+        ("file_read", "pd.read_csv"), ("input", "input"), ("file_read", "open"),
+    ]
