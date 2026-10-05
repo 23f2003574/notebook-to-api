@@ -12205,3 +12205,28 @@ def test_kaggle_secrets_shim_only_added_when_the_notebook_imports_it():
     assert _uses_kaggle_secrets(["import kaggle_secrets\n"])
     assert _uses_kaggle_secrets(["from kaggle_secrets import UserSecretsClient\n"])
     assert not _uses_kaggle_secrets(["import os\n", "x = 'kaggle_secrets'\n"])
+
+
+def test_import_time_hazards_flag_getpass_and_notebook_login():
+    from backend.compiler import _find_import_time_hazards
+    from backend.inspector import startup_warning_lines
+
+    cells = [
+        "import getpass\nfrom getpass import getpass as ask\nfrom huggingface_hub import notebook_login\n"
+        "key = getpass.getpass('API key: ')\n"
+        "other = getpass('again: ')\n"
+        "third = ask('x')\n"
+        "notebook_login()\n"
+        "def f():\n    return getpass.getpass()\n"
+    ]
+
+    hazards = _find_import_time_hazards(cells)
+
+    assert [(h["kind"], h["call"], h["line"]) for h in hazards] == [
+        ("input", "getpass.getpass", 4),
+        ("input", "getpass", 5),
+        ("blocking_call", "notebook_login", 7),
+    ]
+    assert "getpass.getpass() waits on stdin" in startup_warning_lines(
+        {"import_time_hazards": hazards[:1]}
+    )[0]

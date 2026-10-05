@@ -1609,7 +1609,7 @@ def _uses_colab_userdata(code_cells):
 # Flask/uvicorn dev server, or a long sleep.
 _BLOCKING_CALL_NAMES = frozenset({
     "launch", "mainloop", "serve_forever", "run_forever", "run_server", "run_app",
-    "run_polling", "start_polling",
+    "run_polling", "start_polling", "notebook_login",
 })
 _BLOCKING_CALL_LABELS = frozenset({
     "uvicorn.run", "app.run", "hypercorn.run", "waitress.serve", "web.run_app",
@@ -1707,7 +1707,8 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
                         "cell": cell_number, "line": call.lineno,
                     })
                     continue
-                if name == "input" and base is None:
+                is_getpass = name == "getpass" and base in (None, "getpass")
+                if (name == "input" and base is None) or is_getpass:
                     hazards.append({
                         "kind": "input", "call": label, "path": None,
                         "cell": cell_number, "line": call.lineno,

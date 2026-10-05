@@ -2341,7 +2341,7 @@ def _dispatch_core_command(args):
                 )
             for hazard in data["import_time_hazards"]:
                 if hazard["kind"] == "input":
-                    detail = "input() waits on stdin, which the compiled app doesn't have"
+                    detail = f"{hazard['call']}() waits on stdin, which the compiled app doesn't have"
                 elif hazard["kind"] == "colab_import":
                     detail = f"`{hazard['call']}` only exists inside Google Colab"
                 elif hazard["kind"] == "shell_command":
