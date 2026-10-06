@@ -12954,3 +12954,31 @@ def test_compile_summary_lists_shipped_data_files(tmp_path, capsys):
     output = capsys.readouterr().out
     assert "Data files shipped with the app (1, 10 B of the 50.0 MB limit):" in output
     assert "  weights.bin  (10 B)" in output
+
+
+def test_hazard_message_covers_every_hazard_kind_without_generic_fallbacks():
+    from backend.inspector import hazard_message
+
+    base = {"cell": 1, "line": 2, "path": None}
+    cases = {
+        "gpu_call": dict(base, kind="gpu_call", call="model.cuda"),
+        "dir_read": dict(base, kind="dir_read", call="os.listdir", path="data/*", reason="no_matches"),
+        "request_read": dict(base, kind="request_read", call="open", path="x.txt",
+                             function="predict", reason="missing"),
+        "exit_call": dict(base, kind="exit_call", call="sys.exit"),
+        "file_read": dict(base, kind="file_read", call="open", path="big.bin", reason="size_limit"),
+    }
+
+    messages = {kind: hazard_message(hazard) for kind, hazard in cases.items()}
+
+    assert messages["gpu_call"][0] == "Import-time hazard"
+    assert "needs a CUDA GPU" in messages["gpu_call"][1]
+    assert "(nothing beside the notebook matches it)" in messages["dir_read"][1]
+    assert messages["request_read"][0] == "Request-time read"
+    assert "(it doesn't exist beside the notebook)" in messages["request_read"][1]
+    assert messages["request_read"][2] == "every call to predict() will fail"
+    assert messages["exit_call"] == (
+        "Process exit", "`sys.exit()` ends the process (Jupyter only warned and carried on)",
+        "the app will exit on startup",
+    )
+    assert "NOTEBOOK_TO_API_MAX_DATA_MB" in messages["file_read"][1]

@@ -26,8 +26,6 @@ from nbformat import ValidationError as NotebookValidationError
 # Import the compiler function
 from backend.compiler import (
     NOTEBOOK_TO_API_VERSION,
-    call_hazard_detail,
-    unshipped_reason_text,
     compile_notebook,
     compiling_python_version,
     _extract_explicit_requirements,
@@ -40,6 +38,7 @@ from backend.inspector import (
     apply_drop_past_sunset,
     apply_tag_selection,
     past_sunset_functions,
+    hazard_message,
     shipped_data_lines,
     startup_warning_lines,
     DEFAULT_DEV_API_KEY,
@@ -1392,12 +1391,6 @@ def _save_media_from_result(result, directory, stem):
     return walk(result), saved
 
 
-_CALL_HAZARD_LABELS = {
-    "debugger_call": "Debugger call", "exit_call": "Process exit",
-    "request_read": "Request-time read",
-}
-
-
 def _startup_problem_count(data):
     """How many things compile accepts but the compiled app will choke on or
     ignore: typo'd/malformed directives, top-level input()/data-file reads,
@@ -2349,43 +2342,10 @@ def _dispatch_core_command(args):
                     f"({failed['message']}) -- it runs again when the app starts"
                 )
             for hazard in data["import_time_hazards"]:
-                if hazard["kind"] in ("debugger_call", "exit_call", "request_read"):
-                    what, consequence = call_hazard_detail(hazard)
-                    print(
-                        f"⚠ {_CALL_HAZARD_LABELS[hazard['kind']]} "
-                        f"(cell {hazard['cell']}, line "
-                        f"{hazard['line']}): {what} -- {consequence}"
-                    )
-                    continue
-                if hazard["kind"] == "input":
-                    detail = f"{hazard['call']}() waits on stdin, which the compiled app doesn't have"
-                elif hazard["kind"] == "colab_import":
-                    detail = f"`{hazard['call']}` only exists inside Google Colab"
-                elif hazard["kind"] == "shell_command":
-                    detail = (
-                        f"`{hazard['call']}` ran in Jupyter's shell, not in the compiled app, "
-                        "so what it fetched or unpacked won't exist"
-                    )
-                elif hazard["kind"] == "blocking_call":
-                    detail = f"`{hazard['call']}(...)` never returns, so the app would hang while starting"
-                elif hazard["kind"] == "gpu_call":
-                    detail = (
-                        f"`{hazard['call']}(...)` needs a CUDA GPU, which the compiled app's image "
-                        "doesn't have -- guard it with torch.cuda.is_available()"
-                    )
-                elif hazard["kind"] == "dir_read":
-                    detail = (
-                        f"`{hazard['call']}(...)` lists {hazard['path']!r}, which matches no "
-                        f"files the compiled app ships{unshipped_reason_text(hazard)}"
-                    )
-                else:
-                    detail = (
-                        f"{hazard['call']}({hazard['path']!r}) reads a data file the "
-                        f"compiled app won't ship{unshipped_reason_text(hazard)}"
-                    )
+                label, what, consequence = hazard_message(hazard)
                 print(
-                    f"⚠ Import-time hazard (cell {hazard['cell']}, line "
-                    f"{hazard['line']}): {detail} -- the app will fail on startup"
+                    f"⚠ {label} (cell {hazard['cell']}, line "
+                    f"{hazard['line']}): {what} -- {consequence}"
                 )
             for name in data["ignored_cache_directives"]:
                 print(
@@ -5884,22 +5844,10 @@ def _dispatch_core_command(args):
                     f"({failed['message']}) -- it runs again when the app starts"
                 )
             for hazard in data.get("import_time_hazards") or []:
-                if hazard.get("kind") in ("debugger_call", "exit_call", "request_read"):
-                    what, consequence = call_hazard_detail(hazard)
-                    print(
-                        f"⚠ {_CALL_HAZARD_LABELS[hazard['kind']]} "
-                        f"(cell {hazard['cell']}, line "
-                        f"{hazard['line']}): {what} -- {consequence}"
-                    )
-                    continue
-                target = (
-                    hazard["call"] if hazard.get("kind") in ("colab_import", "shell_command")
-                    else f"{hazard['call']}({hazard['path']!r})" if hazard.get("path")
-                    else hazard["call"] + "()"
-                )
+                label, what, consequence = hazard_message(hazard)
                 print(
-                    f"⚠ Import-time hazard (cell {hazard['cell']}, line "
-                    f"{hazard['line']}): {target} runs on startup and will fail"
+                    f"⚠ {label} (cell {hazard['cell']}, line "
+                    f"{hazard['line']}): {what} -- {consequence}"
                 )
             for name in data.get("ignored_cache_directives") or []:
                 print(
@@ -6042,21 +5990,10 @@ def _dispatch_core_command(args):
                         )
 
                     for hazard in result.get("import_time_hazards") or []:
-                        if hazard.get("kind") in ("debugger_call", "exit_call", "request_read"):
-                            what, consequence = call_hazard_detail(hazard)
-                            print(
-                                f"    startup hazard: cell {hazard['cell']}, line "
-                                f"{hazard['line']}: {what} -- {consequence}"
-                            )
-                            continue
-                        target = (
-                            hazard["call"] if hazard.get("kind") in ("colab_import", "shell_command")
-                            else f"{hazard['call']}({hazard['path']!r})" if hazard.get("path")
-                            else f"{hazard['call']}()"
-                        )
+                        label, what, consequence = hazard_message(hazard)
                         print(
-                            f"    import-time hazard: cell {hazard['cell']}, line "
-                            f"{hazard['line']}: {target} will fail on startup"
+                            f"    {label.lower()}: cell {hazard['cell']}, line "
+                            f"{hazard['line']}: {what} -- {consequence}"
                         )
 
                     for item in result.get("unrecognized_directives") or []:

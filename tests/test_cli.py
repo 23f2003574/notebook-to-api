@@ -30518,8 +30518,14 @@ def test_remote_validate_command_prints_import_time_hazards(tmp_path, fake_dashb
     )
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "⚠ Import-time hazard (cell 2, line 4): pd.read_csv('sales.csv') runs on startup" in proc.stdout
-    assert "⚠ Import-time hazard (cell 3, line 1): input() runs on startup" in proc.stdout
+    assert (
+        "⚠ Import-time hazard (cell 2, line 4): pd.read_csv('sales.csv') reads a data file "
+        "the compiled app won't ship -- the app will fail on startup"
+    ) in proc.stdout
+    assert (
+        "⚠ Import-time hazard (cell 3, line 1): input() waits on stdin, which the compiled "
+        "app doesn't have -- the app will fail on startup"
+    ) in proc.stdout
 
 
 def test_validate_command_warns_when_nothing_would_be_exposed(tmp_path):
@@ -30768,8 +30774,14 @@ def test_validate_all_command_prints_hazards_and_error_cells_per_notebook(tmp_pa
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "    cell 2 raised NameError when last run (re-runs when the app starts)" in proc.stdout
-    assert "    import-time hazard: cell 1, line 2: pd.read_csv('sales.csv') will fail on startup" in proc.stdout
-    assert "    import-time hazard: cell 3, line 1: input() will fail on startup" in proc.stdout
+    assert (
+        "    import-time hazard: cell 1, line 2: pd.read_csv('sales.csv') reads a data file "
+        "the compiled app won't ship -- the app will fail on startup"
+    ) in proc.stdout
+    assert (
+        "    import-time hazard: cell 3, line 1: input() waits on stdin, which the compiled "
+        "app doesn't have -- the app will fail on startup"
+    ) in proc.stdout
     assert proc.stdout.count("import-time hazard") == 2
 
 
@@ -31356,3 +31368,25 @@ def test_remote_inspect_text_lists_environment_variables_the_notebook_reads(tmp_
     assert "  - DB_URL  [required]" in with_vars.stdout
     assert "  - REGION\n" in with_vars.stdout
     assert without.returncode == 0 and "Environment variables" not in without.stdout
+
+
+def test_inspect_command_describes_new_hazard_kinds_precisely(tmp_path):
+    notebook = tmp_path / "nb.ipynb"
+    notebook.write_text(json.dumps({
+        "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+        "cells": [{
+            "cell_type": "code", "metadata": {}, "execution_count": None, "outputs": [],
+            "source": (
+                "import os, torch\nmodel = torch.nn.Linear(1, 1).cuda()\nnames = os.listdir('inbox')\n\n"
+                "def predict(x: int) -> int:\n    return len(open('weights.txt').read()) + x\n"
+            ),
+        }],
+    }))
+
+    proc = _run_cli(["inspect", str(notebook)], cwd=tmp_path)
+
+    assert "runs on startup and will fail" not in proc.stdout
+    assert "`cuda(...)` needs a CUDA GPU" in proc.stdout
+    assert "lists 'inbox/*', which matches no files the compiled app ships (nothing beside" in proc.stdout
+    assert "Cell 1, line 6: open('weights.txt') inside predict()" in proc.stdout
+    assert "-- every call to predict() will fail" in proc.stdout

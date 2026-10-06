@@ -875,6 +875,51 @@ def inspect_notebook_data(
     }
 
 
+_HAZARD_LABELS = {
+    "debugger_call": "Debugger call", "exit_call": "Process exit",
+    "request_read": "Request-time read",
+}
+
+
+def hazard_message(hazard):
+    """(label, what, consequence) for one _find_import_time_hazards entry --
+    the one wording `validate`, `inspect`, `compile` and the multi-notebook
+    reports all print, so a hazard kind added later can't be described
+    precisely in one of them and as a generic "will fail on startup" in
+    another."""
+    kind = hazard.get("kind")
+    if kind in _HAZARD_LABELS:
+        what, consequence = call_hazard_detail(hazard)
+        return _HAZARD_LABELS[kind], what, consequence
+    if kind == "input":
+        what = f"{hazard['call']}() waits on stdin, which the compiled app doesn't have"
+    elif kind == "colab_import":
+        what = f"`{hazard['call']}` only exists inside Google Colab"
+    elif kind == "shell_command":
+        what = (
+            f"`{hazard['call']}` ran in Jupyter's shell, not in the compiled app, "
+            "so what it fetched or unpacked won't exist"
+        )
+    elif kind == "blocking_call":
+        what = f"`{hazard['call']}(...)` never returns, so the app would hang while starting"
+    elif kind == "gpu_call":
+        what = (
+            f"`{hazard['call']}(...)` needs a CUDA GPU, which the compiled app's image "
+            "doesn't have -- guard it with torch.cuda.is_available()"
+        )
+    elif kind == "dir_read":
+        what = (
+            f"`{hazard['call']}(...)` lists {hazard['path']!r}, which matches no "
+            f"files the compiled app ships{unshipped_reason_text(hazard)}"
+        )
+    else:
+        what = (
+            f"{hazard['call']}({hazard['path']!r}) reads a data file the "
+            f"compiled app won't ship{unshipped_reason_text(hazard)}"
+        )
+    return "Import-time hazard", what, "the app will fail on startup"
+
+
 def startup_warning_lines(data):
     """Human-readable warnings for what inspect_notebook_data found that
     compiles fine but will misbehave when the compiled app starts: a typo'd
@@ -892,42 +937,8 @@ def startup_warning_lines(data):
             f"({failed['message']}) -- it runs again when the app starts"
         )
     for hazard in data.get("import_time_hazards", []):
-        if hazard["kind"] in ("debugger_call", "exit_call", "request_read"):
-            what, consequence = call_hazard_detail(hazard)
-            lines.append(
-                f"Cell {hazard['cell']}, line {hazard['line']}: {what} -- {consequence}"
-            )
-            continue
-        if hazard["kind"] == "input":
-            what = f"{hazard['call']}() waits on stdin, which the compiled app doesn't have"
-        elif hazard["kind"] == "colab_import":
-            what = f"`{hazard['call']}` only exists inside Google Colab"
-        elif hazard["kind"] == "shell_command":
-            what = (
-                f"`{hazard['call']}` ran in Jupyter's shell, not in the compiled app, "
-                "so what it fetched or unpacked won't exist"
-            )
-        elif hazard["kind"] == "blocking_call":
-            what = f"`{hazard['call']}(...)` never returns, so the app would hang while starting"
-        elif hazard["kind"] == "gpu_call":
-            what = (
-                f"`{hazard['call']}(...)` needs a CUDA GPU, which the compiled app's image "
-                "doesn't have -- guard it with torch.cuda.is_available()"
-            )
-        elif hazard["kind"] == "dir_read":
-            what = (
-                f"`{hazard['call']}(...)` lists {hazard['path']!r}, which matches no "
-                f"files the compiled app ships{unshipped_reason_text(hazard)}"
-            )
-        else:
-            what = (
-                f"{hazard['call']}({hazard['path']!r}) reads a data file the "
-                f"compiled app won't ship{unshipped_reason_text(hazard)}"
-            )
-        lines.append(
-            f"Cell {hazard['cell']}, line {hazard['line']}: {what} -- the app "
-            "will fail on startup"
-        )
+        _, what, consequence = hazard_message(hazard)
+        lines.append(f"Cell {hazard['cell']}, line {hazard['line']}: {what} -- {consequence}")
     return lines
 
 
