@@ -1535,6 +1535,79 @@ def _relative_literal_path(call):
     return path
 
 
+# Directory listings whose files the notebook then reads: `os.listdir("data")`,
+# `glob.glob("data/*.csv")`, `Path("imgs").rglob("*.png")`. A relative one
+# found nothing (or raised FileNotFoundError) in the compiled app, which used
+# to ship only files named outright. Each is reduced to a glob pattern
+# relative to the notebook's directory.
+_DIR_LISTING_PATTERNS = {"os.listdir": "{}/*", "os.scandir": "{}/*", "os.walk": "{}/**/*"}
+_GLOB_CALL_LABELS = frozenset({"glob.glob", "glob.iglob"})
+
+
+def _relative_listing_pattern(label, call):
+    """The relative glob pattern a top-level directory listing covers, else
+    None (non-literal, absolute, climbing out with "..", or the notebook's
+    whole directory)."""
+    func = call.func
+    if (
+        isinstance(func, ast.Attribute) and func.attr in ("iterdir", "glob", "rglob")
+        and isinstance(func.value, ast.Call)
+    ):
+        _, path_name, _ = _call_label(func.value.func)
+        if path_name not in ("Path", "PurePath"):
+            return None
+        directory = _relative_literal_path(func.value)
+        if func.attr == "iterdir":
+            pattern = "*"
+        else:
+            pattern = _relative_literal_path(call)
+            if pattern is None:
+                return None
+            if func.attr == "rglob":
+                pattern = f"**/{pattern}"
+        if directory is None:
+            return None
+        pattern = f"{directory.rstrip('/')}/{pattern}"
+    elif label in _DIR_LISTING_PATTERNS:
+        directory = _relative_literal_path(call)
+        if directory is None:
+            return None
+        pattern = _DIR_LISTING_PATTERNS[label].format(directory.rstrip("/"))
+    elif label in _GLOB_CALL_LABELS:
+        pattern = _relative_literal_path(call)
+    else:
+        return None
+    if not pattern:
+        return None
+    parts = Path(pattern).parts
+    if ".." in parts or parts[0] in ("*", "**"):
+        return None
+    if pattern.startswith("./"):
+        pattern = pattern[2:]
+    if not pattern or pattern.split("/", 1)[0] == ".":
+        return None
+    return pattern
+
+
+def _expand_listing_pattern(directory, pattern):
+    """{relative posix path: absolute Path} for the files `pattern` matches
+    under `directory` (checkpoint copies left out)."""
+    found = {}
+    try:
+        matches = sorted(directory.glob(pattern))
+    except (ValueError, NotImplementedError):
+        return found
+    for match in matches:
+        if ".ipynb_checkpoints" in match.parts or not match.is_file():
+            continue
+        try:
+            relative = match.resolve().relative_to(directory)
+        except ValueError:
+            continue
+        found[relative.as_posix()] = match.resolve()
+    return found
+
+
 # Colab keeps API keys in "Secrets" read with `userdata.get("NAME")`. Outside
 # Colab that module doesn't exist, so the import failed on startup; this shim
 # answers the same call from the environment instead (and raises Colab's
@@ -1846,6 +1919,13 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
                         "cell": cell_number, "line": call.lineno,
                     })
                     continue
+                pattern = _relative_listing_pattern(resolved_label, call)
+                if pattern is not None:
+                    hazards.append({
+                        "kind": "dir_read", "call": label, "path": pattern,
+                        "cell": cell_number, "line": call.lineno,
+                    })
+                    continue
                 is_read = name in _FILE_READ_CALLS or (
                     name == "load" and base in _FILE_LOAD_BASES
                 )
@@ -1891,10 +1971,17 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
 
     if notebook_path:
         shipped = find_data_files(notebook_path, hazards=hazards)
-        hazards = [
-            item for item in hazards
-            if not (item["kind"] == "file_read" and item["path"] in shipped)
-        ]
+        directory = Path(notebook_path).resolve().parent
+
+        def fully_shipped(item):
+            if item["kind"] == "file_read":
+                return item["path"] in shipped
+            if item["kind"] == "dir_read":
+                files = _expand_listing_pattern(directory, item["path"])
+                return bool(files) and all(path in shipped for path in files)
+            return False
+
+        hazards = [item for item in hazards if not fully_shipped(item)]
 
     hazards.sort(key=lambda item: (item["cell"], item["line"]))
     return hazards
@@ -1926,6 +2013,10 @@ def find_data_files(notebook_path, code_cells=None, hazards=None):
     wanted = [item["path"] for item in hazards if item["kind"] == "file_read"]
     # `%run script.py` files are shipped too (see _run_magic_scripts).
     wanted += _run_magic_scripts(code_cells or [])
+    # So are the files a top-level directory listing finds.
+    for item in hazards:
+        if item["kind"] == "dir_read":
+            wanted += list(_expand_listing_pattern(directory, item["path"]))
 
     for path in wanted:
         if path in found:

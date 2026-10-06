@@ -903,6 +903,11 @@ def startup_warning_lines(data):
             )
         elif hazard["kind"] == "blocking_call":
             what = f"`{hazard['call']}(...)` never returns, so the app would hang while starting"
+        elif hazard["kind"] == "dir_read":
+            what = (
+                f"`{hazard['call']}(...)` lists {hazard['path']!r}, which matches no "
+                "files the compiled app ships"
+            )
         else:
             what = (
                 f"{hazard['call']}({hazard['path']!r}) reads a data file the "

@@ -2360,6 +2360,11 @@ def _dispatch_core_command(args):
                     )
                 elif hazard["kind"] == "blocking_call":
                     detail = f"`{hazard['call']}(...)` never returns, so the app would hang while starting"
+                elif hazard["kind"] == "dir_read":
+                    detail = (
+                        f"`{hazard['call']}(...)` lists {hazard['path']!r}, which matches no "
+                        "files the compiled app ships"
+                    )
                 else:
                     detail = (
                         f"{hazard['call']}({hazard['path']!r}) reads a data file the "

@@ -12375,3 +12375,89 @@ def test_exit_hazard_wording():
     )
     assert lines[1].startswith("Cell 2, line 3: `raise SystemExit` ends the process")
     assert lines[1].endswith("-- the app will exit on startup")
+
+
+def test_relative_directory_listings_are_reported_as_glob_patterns():
+    from backend.compiler import _find_import_time_hazards
+
+    cells = [
+        "import os, glob\nfrom pathlib import Path\nfrom glob import glob as g\n"
+        "names = os.listdir('data')\n"
+        "walked = list(os.walk('corpus/'))\n"
+        "csvs = glob.glob('data/*.csv')\n"
+        "pngs = g('./imgs/*.png')\n"
+        "deep = list(Path('imgs').rglob('*.jpg'))\n"
+        "items = list(Path('models').iterdir())\n"
+        "pq = list(Path('data').glob('*.parquet'))\n"
+        "here = os.listdir('.')\n"
+        "everything = glob.glob('*')\n"
+        "up = os.listdir('../shared')\n"
+        "absolute = os.listdir('/srv/data')\n"
+        "dynamic = os.listdir(folder)\n"
+        "def later():\n    return os.listdir('data')\n",
+    ]
+
+    assert [(h["kind"], h["call"], h["path"]) for h in _find_import_time_hazards(cells)] == [
+        ("dir_read", "os.listdir", "data/*"),
+        ("dir_read", "os.walk", "corpus/**/*"),
+        ("dir_read", "glob.glob", "data/*.csv"),
+        ("dir_read", "g", "imgs/*.png"),
+        ("dir_read", "rglob", "imgs/**/*.jpg"),
+        ("dir_read", "iterdir", "models/*"),
+        ("dir_read", "glob", "data/*.parquet"),
+    ]
+
+
+def test_directory_listing_files_are_shipped_and_the_hazard_cleared(tmp_path):
+    from backend.compiler import _find_import_time_hazards, find_data_files
+
+    (tmp_path / "data" / "nested").mkdir(parents=True)
+    (tmp_path / "data" / "a.csv").write_text("1\n")
+    (tmp_path / "data" / "b.txt").write_text("x\n")
+    (tmp_path / "data" / "nested" / "c.csv").write_text("3\n")
+    (tmp_path / "data" / ".ipynb_checkpoints").mkdir()
+    (tmp_path / "data" / ".ipynb_checkpoints" / "a-checkpoint.csv").write_text("old\n")
+    (tmp_path / "empty").mkdir()
+    notebook = tmp_path / "nb.ipynb"
+    cells = [
+        "import glob, os\n"
+        "csvs = glob.glob('data/*.csv')\n"
+        "tree = list(os.walk('data'))\n"
+        "nothing = os.listdir('empty')\n"
+        "missing = os.listdir('absent')\n"
+    ]
+
+    shipped = find_data_files(str(notebook), cells)
+    hazards = _find_import_time_hazards(cells, str(notebook))
+
+    assert sorted(shipped) == ["data/a.csv", "data/b.txt", "data/nested/c.csv"]
+    assert [(h["kind"], h["path"]) for h in hazards] == [
+        ("dir_read", "empty/*"), ("dir_read", "absent/*"),
+    ]
+
+
+def test_compile_ships_listed_directory_so_import_time_listing_works(tmp_path, monkeypatch):
+    from backend.compiler import compile_notebook
+
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "one.txt").write_text("1")
+    (tmp_path / "data" / "two.txt").write_text("2")
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "import os\n"
+        "TOTAL = sum(int(open(os.path.join('data', n)).read()) for n in os.listdir('data'))\n\n"
+        "def total(a: int) -> int:\n    return TOTAL + a\n",
+    )
+    out = tmp_path / "out"
+
+    compile_notebook(str(notebook), str(out))
+
+    assert (out / "runtime" / "data" / "two.txt").read_text() == "2"
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    namespace = {"__file__": str(out / "runtime" / "notebook_module.py")}
+    exec((out / "runtime" / "notebook_module.py").read_text(), namespace)
+
+    assert namespace["total"](0) == 3
