@@ -12461,3 +12461,62 @@ def test_compile_ships_listed_directory_so_import_time_listing_works(tmp_path, m
     exec((out / "runtime" / "notebook_module.py").read_text(), namespace)
 
     assert namespace["total"](0) == 3
+
+
+def test_literal_path_expressions_are_resolved_for_data_file_reads():
+    from backend.compiler import _find_import_time_hazards
+
+    cells = [
+        "import os\nimport pandas as pd\nfrom pathlib import Path\n"
+        "DATA = 'data'\n"
+        "a = pd.read_csv(os.path.join('data', 'sales.csv'))\n"
+        "b = open(Path('config') / 'settings.json').read()\n"
+        "c = (Path('notes') / 'readme.txt').read_text()\n"
+        "d = pd.read_parquet(Path('data', 'big.parquet'))\n"
+        "e = open(f'labels.txt').read()\n"
+        "f = pd.read_csv(os.path.join('./raw', 'x.csv'))\n"
+        "g = pd.read_csv(os.path.join(DATA, 'dynamic.csv'))\n"
+        "h = open(f'{DATA}/y.txt').read()\n"
+        "i = open(Path('/srv') / 'abs.txt').read()\n"
+        "j = open(Path('data') / '/etc/passwd').read()\n"
+        "k = os.listdir(Path('imgs') / 'train')\n",
+    ]
+
+    assert [(h["kind"], h["path"]) for h in _find_import_time_hazards(cells)] == [
+        ("file_read", "data/sales.csv"),
+        ("file_read", "config/settings.json"),
+        ("file_read", "notes/readme.txt"),
+        ("file_read", "data/big.parquet"),
+        ("file_read", "labels.txt"),
+        ("file_read", "raw/x.csv"),
+        ("dir_read", "imgs/train/*"),
+    ]
+
+
+def test_compile_ships_files_read_through_joined_paths(tmp_path, monkeypatch):
+    from backend.compiler import compile_notebook
+
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "base.txt").write_text("40")
+    (tmp_path / "data" / "step.txt").write_text("2")
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "import os\nfrom pathlib import Path\n"
+        "BASE = int(open(os.path.join('data', 'base.txt')).read())\n"
+        "STEP = int((Path('data') / 'step.txt').read_text())\n\n"
+        "def answer(a: int) -> int:\n    return BASE + STEP + a\n",
+    )
+    out = tmp_path / "out"
+
+    compile_notebook(str(notebook), str(out))
+
+    assert (out / "runtime" / "data" / "base.txt").read_text() == "40"
+    assert (out / "runtime" / "data" / "step.txt").read_text() == "2"
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    namespace = {"__file__": str(out / "runtime" / "notebook_module.py")}
+    exec((out / "runtime" / "notebook_module.py").read_text(), namespace)
+
+    assert namespace["answer"](0) == 42

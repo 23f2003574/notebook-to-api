@@ -1509,30 +1509,70 @@ def _is_main_guard(node):
     )
 
 
+def _literal_path_value(node):
+    """The string a path expression built only from literals evaluates to:
+    "x.csv", `os.path.join("data", "x.csv")`, `Path("data") / "x.csv"`,
+    `Path("data", "x.csv")`, `f"data/x.csv"` (no placeholders). None for
+    anything that depends on a runtime value."""
+    if isinstance(node, ast.Constant):
+        return node.value if isinstance(node.value, str) else None
+    if isinstance(node, ast.JoinedStr):
+        if all(isinstance(v, ast.Constant) for v in node.values):
+            return "".join(v.value for v in node.values)
+        return None
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        left, right = _literal_path_value(node.left), _literal_path_value(node.right)
+        if left is None or right is None:
+            return None
+        return right if right.startswith("/") else f"{left.rstrip('/')}/{right}"
+    if isinstance(node, ast.Call) and not node.keywords and node.args:
+        _, name, _ = _call_label(node.func)
+        dotted = ast.unparse(node.func)
+        if dotted in ("os.path.join", "path.join", "osp.join") or name in ("Path", "PurePath", "PosixPath"):
+            parts = [_literal_path_value(arg) for arg in node.args]
+            if any(part is None for part in parts):
+                return None
+            joined = parts[0]
+            for part in parts[1:]:
+                joined = part if part.startswith("/") else f"{joined.rstrip('/')}/{part}"
+            return joined
+    return None
+
+
+def _is_relative_path(path):
+    return bool(path) and not (
+        path.startswith(("/", "~")) or "://" in path or (len(path) > 1 and path[1] == ":")
+    )
+
+
 def _relative_literal_path(call):
-    """The call's first-argument string literal when it's a relative local
-    path (not absolute, `~`, or a URL), else None."""
+    """The call's first-argument path when it's built only from literals
+    (see _literal_path_value) and is a relative local path (not absolute,
+    `~`, or a URL), else None."""
     func = call.func
     if isinstance(func, ast.Attribute) and func.attr in ("read_text", "read_bytes"):
-        # Path("notes.txt").read_text(): the path is the Path(...) argument;
-        # any other receiver's first argument is an encoding, not a path.
-        if not isinstance(func.value, ast.Call):
+        # Path("notes.txt").read_text(): the path is the receiver; any other
+        # receiver's first argument is an encoding, not a path.
+        receiver = func.value
+        if isinstance(receiver, ast.Call):
+            _, path_name, _ = _call_label(receiver.func)
+            if path_name not in ("Path", "PurePath"):
+                return None
+        elif not isinstance(receiver, ast.BinOp):
             return None
-        _, path_name, _ = _call_label(func.value.func)
-        if path_name not in ("Path", "PurePath") or not func.value.args:
-            return None
-        call = func.value
+        path = _literal_path_value(receiver)
+        if path is not None and path.startswith("./"):
+            path = path[2:]
+        return path if _is_relative_path(path) else None
     arg = call.args[0] if call.args else next(
         (kw.value for kw in call.keywords
          if kw.arg in ("filepath_or_buffer", "io", "path", "file", "fname", "fp")),
         None,
     )
-    if not (isinstance(arg, ast.Constant) and isinstance(arg.value, str)):
-        return None
-    path = arg.value
-    if not path or path.startswith(("/", "~")) or "://" in path or (len(path) > 1 and path[1] == ":"):
-        return None
-    return path
+    path = _literal_path_value(arg) if arg is not None else None
+    if path is not None and path.startswith("./") and not isinstance(arg, ast.Constant):
+        path = path[2:]
+    return path if _is_relative_path(path) else None
 
 
 # Directory listings whose files the notebook then reads: `os.listdir("data")`,
