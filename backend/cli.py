@@ -40,6 +40,7 @@ from backend.inspector import (
     apply_drop_past_sunset,
     apply_tag_selection,
     past_sunset_functions,
+    shipped_data_lines,
     startup_warning_lines,
     DEFAULT_DEV_API_KEY,
     classify_notebook_diff,
@@ -5763,6 +5764,10 @@ def _dispatch_core_command(args):
                 print("\n⚠ Startup Warnings (the compiled app may not start or behave as written):")
                 for line in startup_warnings:
                     print(f"  - {line}")
+
+            data_lines = shipped_data_lines(data)
+            if data_lines:
+                print("\n" + "\n".join(data_lines))
 
             notebook_env_vars = data.get("notebook_env_vars") or []
 

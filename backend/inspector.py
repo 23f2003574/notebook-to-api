@@ -11,6 +11,8 @@ from backend.compiler import (
     _find_import_time_hazards,
     call_hazard_detail,
     unshipped_reason_text,
+    find_data_files,
+    max_shipped_data_bytes,
     _find_notebook_env_vars,
     _find_unrecognized_directives,
     _extract_timeout_overrides,
@@ -846,6 +848,9 @@ def inspect_notebook_data(
         # so crash the compiled app at startup -- see
         # _find_import_time_hazards.
         "import_time_hazards": _find_import_time_hazards(code_cells, notebook_path),
+        # The data files (and `%run` scripts) a compile copies into the app,
+        # with their sizes -- see find_data_files and shipped_data_lines.
+        "shipped_data_files": _shipped_data_files(notebook_path, code_cells),
         # Environment variables the notebook reads by name -- see
         # _find_notebook_env_vars.
         "notebook_env_vars": _find_notebook_env_vars(code_cells),
@@ -922,6 +927,54 @@ def startup_warning_lines(data):
         lines.append(
             f"Cell {hazard['cell']}, line {hazard['line']}: {what} -- the app "
             "will fail on startup"
+        )
+    return lines
+
+
+def _shipped_data_files(notebook_path, code_cells):
+    """[{"path", "bytes"}] for what find_data_files ships, sorted by path."""
+    shipped = find_data_files(notebook_path, code_cells) if notebook_path else {}
+    found = []
+    for relative, source in sorted(shipped.items()):
+        try:
+            size = source.stat().st_size
+        except OSError:
+            continue
+        found.append({"path": relative, "bytes": size})
+    return found
+
+
+def _format_bytes(num_bytes):
+    for unit in ("B", "KB", "MB"):
+        if num_bytes < 1024 or unit == "MB":
+            return f"{num_bytes:.0f} {unit}" if unit == "B" else f"{num_bytes:.1f} {unit}"
+        num_bytes /= 1024
+
+
+# Past this share of the size limit, say so: the next file the notebook
+# starts reading may not fit, and the image is carrying a lot of data.
+_NEAR_DATA_LIMIT_SHARE = 0.8
+
+
+def shipped_data_lines(data):
+    """Report lines for data["shipped_data_files"]: a heading with the count
+    and total against the size limit, then one line per file. Every data file
+    a compile ships ends up in the Docker image, and nothing said which ones
+    -- a whole listed folder or a large model file was baked in silently."""
+    files = data.get("shipped_data_files") or []
+    if not files:
+        return []
+    total = sum(item["bytes"] for item in files)
+    limit = max_shipped_data_bytes()
+    lines = [
+        f"Data files shipped with the app ({len(files)}, {_format_bytes(total)} "
+        f"of the {_format_bytes(limit)} limit):"
+    ]
+    lines += [f"  {item['path']}  ({_format_bytes(item['bytes'])})" for item in files]
+    if total >= limit * _NEAR_DATA_LIMIT_SHARE:
+        lines.append(
+            "  ⓘ Close to the data size limit: files past it stay behind "
+            "(raise it with NOTEBOOK_TO_API_MAX_DATA_MB)"
         )
     return lines
 
@@ -1004,6 +1057,10 @@ def print_compile_summary(notebook_path, output_dir="generated", only=None, excl
         print("\nWarnings (the compiled app may not start or behave as written):")
         for line in warnings:
             print(f"  ⚠ {line}")
+
+    data_lines = shipped_data_lines(data)
+    if data_lines:
+        print("\n" + "\n".join(data_lines))
 
     if data.get("notebook_env_vars"):
         print("\nEnvironment variables the notebook reads (set them where the app runs):")

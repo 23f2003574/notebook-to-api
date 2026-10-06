@@ -12893,3 +12893,64 @@ def test_data_size_limit_can_be_raised_from_the_environment(tmp_path, monkeypatc
     assert compiler_module.max_shipped_data_bytes() == 512 * 1024
     assert list(compiler_module.find_data_files(notebook, cells)) == ["big.csv"]
     assert compiler_module._find_import_time_hazards(cells, notebook) == []
+
+
+def test_inspect_reports_shipped_data_files_with_sizes(tmp_path):
+    from backend.inspector import inspect_notebook_data, shipped_data_lines
+
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "a.csv").write_text("x" * 2048)
+    (tmp_path / "config.json").write_text("{}")
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "import os, json\nNAMES = os.listdir('data')\nCFG = json.load(open('config.json'))\n\n"
+        "def f(a: int) -> int:\n    return a\n",
+    )
+
+    data = inspect_notebook_data(notebook_path=str(notebook), output_dir=str(tmp_path / "out"))
+
+    assert data["shipped_data_files"] == [
+        {"path": "config.json", "bytes": 2}, {"path": "data/a.csv", "bytes": 2048},
+    ]
+    assert shipped_data_lines(data) == [
+        "Data files shipped with the app (2, 2.0 KB of the 50.0 MB limit):",
+        "  config.json  (2 B)",
+        "  data/a.csv  (2.0 KB)",
+    ]
+
+
+def test_shipped_data_lines_flag_a_total_near_the_limit(monkeypatch):
+    import backend.compiler as compiler_module
+    from backend.inspector import shipped_data_lines
+
+    monkeypatch.setattr(compiler_module, "MAX_SHIPPED_DATA_BYTES", 1000)
+    monkeypatch.delenv(compiler_module.MAX_SHIPPED_DATA_ENV, raising=False)
+
+    assert shipped_data_lines({}) == []
+    assert shipped_data_lines({"shipped_data_files": []}) == []
+    under = shipped_data_lines({"shipped_data_files": [{"path": "a", "bytes": 799}]})
+    near = shipped_data_lines({"shipped_data_files": [{"path": "a", "bytes": 800}]})
+    assert not any("Close to the data size limit" in line for line in under)
+    assert near[-1].startswith("  ⓘ Close to the data size limit")
+
+
+def test_compile_summary_lists_shipped_data_files(tmp_path, capsys):
+    from backend.compiler import compile_notebook
+    from backend.inspector import print_compile_summary
+
+    (tmp_path / "weights.bin").write_bytes(b"0" * 10)
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "W = open('weights.bin', 'rb').read()\n\ndef size(a: int) -> int:\n    return len(W) + a\n",
+    )
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+    capsys.readouterr()
+
+    print_compile_summary(str(notebook), str(out))
+
+    output = capsys.readouterr().out
+    assert "Data files shipped with the app (1, 10 B of the 50.0 MB limit):" in output
+    assert "  weights.bin  (10 B)" in output
