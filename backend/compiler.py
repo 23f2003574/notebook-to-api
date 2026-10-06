@@ -2121,7 +2121,7 @@ def call_hazard_detail(hazard):
         return (
             f"{hazard['call']}({hazard['path']!r}) inside {hazard['function']}() reads a file "
             "relative to the working directory, which the compiled app can't point at a "
-            "shipped copy",
+            f"shipped copy{unshipped_reason_text(hazard)}",
             f"every call to {hazard['function']}() will fail",
         )
     call = hazard["call"] if hazard["call"].startswith("raise ") else f"{hazard['call']}()"
@@ -2364,6 +2364,10 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
             return False
 
         hazards = [item for item in hazards if not fully_shipped(item)]
+        for item in hazards:
+            reason = _unshipped_reason(item, directory, shipped)
+            if reason:
+                item["reason"] = reason
 
     hazards.sort(key=lambda item: (item["cell"], item["line"]))
     return hazards
@@ -2373,6 +2377,64 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
 # works; past this total the files stay behind and the read is still
 # reported as a hazard rather than bloating the image.
 MAX_SHIPPED_DATA_BYTES = 50 * 1024 * 1024
+
+# Raise (or lower) the cap for one compile without code changes -- a notebook
+# whose model file is 120 MB otherwise had no way to ship it at all.
+MAX_SHIPPED_DATA_ENV = "NOTEBOOK_TO_API_MAX_DATA_MB"
+
+
+def max_shipped_data_bytes():
+    """MAX_SHIPPED_DATA_BYTES, or NOTEBOOK_TO_API_MAX_DATA_MB megabytes when
+    that's set to a positive number (an unusable value is ignored)."""
+    raw = os.environ.get(MAX_SHIPPED_DATA_ENV, "").strip()
+    try:
+        megabytes = float(raw)
+    except ValueError:
+        return MAX_SHIPPED_DATA_BYTES
+    return int(megabytes * 1024 * 1024) if megabytes > 0 else MAX_SHIPPED_DATA_BYTES
+
+
+_UNSHIPPED_REASON_TEXT = {
+    "missing": "it doesn't exist beside the notebook",
+    "outside": "it's outside the notebook's directory",
+    "directory": "it's a directory, not a file",
+    "size_limit": (
+        "shipping it would pass the data size limit "
+        f"(raise it with {MAX_SHIPPED_DATA_ENV})"
+    ),
+    "no_matches": "nothing beside the notebook matches it",
+    "not_redirectable": (
+        "its path isn't a string literal or a read-only path constant, "
+        "so it can't be pointed at the shipped copy"
+    ),
+}
+
+
+def unshipped_reason_text(hazard):
+    """" (<why>)" for a data hazard carrying a "reason", else ""."""
+    text = _UNSHIPPED_REASON_TEXT.get(hazard.get("reason"))
+    return f" ({text})" if text else ""
+
+
+def _unshipped_reason(item, directory, shipped):
+    """Why a data-file hazard's file didn't ship (see _UNSHIPPED_REASON_TEXT),
+    or None for a hazard that isn't about a data file."""
+    if item["kind"] == "dir_read":
+        files = _expand_listing_pattern(directory, item["path"])
+        return "size_limit" if files else "no_matches"
+    if item["kind"] not in ("file_read", "request_read"):
+        return None
+    if item["kind"] == "request_read" and item["path"] in shipped:
+        return "not_redirectable"
+    relative = Path(item["path"])
+    candidate = (directory / relative).resolve()
+    if ".." in relative.parts or (candidate != directory and directory not in candidate.parents):
+        return "outside"
+    if candidate.is_dir():
+        return "directory"
+    if not candidate.is_file():
+        return "missing"
+    return "size_limit"
 
 
 def find_data_files(notebook_path, code_cells=None, hazards=None):
@@ -2400,6 +2462,7 @@ def find_data_files(notebook_path, code_cells=None, hazards=None):
         if item["kind"] == "dir_read":
             wanted += list(_expand_listing_pattern(directory, item["path"]))
 
+    limit = max_shipped_data_bytes()
     for path in wanted:
         if path in found:
             continue
@@ -2414,7 +2477,7 @@ def find_data_files(notebook_path, code_cells=None, hazards=None):
         if not candidate.is_file():
             continue
         size = candidate.stat().st_size
-        if total + size > MAX_SHIPPED_DATA_BYTES:
+        if total + size > limit:
             continue
         total += size
         found[path] = candidate

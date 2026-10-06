@@ -27,6 +27,7 @@ from nbformat import ValidationError as NotebookValidationError
 from backend.compiler import (
     NOTEBOOK_TO_API_VERSION,
     call_hazard_detail,
+    unshipped_reason_text,
     compile_notebook,
     compiling_python_version,
     _extract_explicit_requirements,
@@ -2374,12 +2375,12 @@ def _dispatch_core_command(args):
                 elif hazard["kind"] == "dir_read":
                     detail = (
                         f"`{hazard['call']}(...)` lists {hazard['path']!r}, which matches no "
-                        "files the compiled app ships"
+                        f"files the compiled app ships{unshipped_reason_text(hazard)}"
                     )
                 else:
                     detail = (
                         f"{hazard['call']}({hazard['path']!r}) reads a data file the "
-                        "compiled app won't ship"
+                        f"compiled app won't ship{unshipped_reason_text(hazard)}"
                     )
                 print(
                     f"⚠ Import-time hazard (cell {hazard['cell']}, line "

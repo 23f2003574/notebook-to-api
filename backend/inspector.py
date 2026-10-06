@@ -10,6 +10,7 @@ from backend.compiler import (
     _find_cells_with_error_outputs,
     _find_import_time_hazards,
     call_hazard_detail,
+    unshipped_reason_text,
     _find_notebook_env_vars,
     _find_unrecognized_directives,
     _extract_timeout_overrides,
@@ -911,12 +912,12 @@ def startup_warning_lines(data):
         elif hazard["kind"] == "dir_read":
             what = (
                 f"`{hazard['call']}(...)` lists {hazard['path']!r}, which matches no "
-                "files the compiled app ships"
+                f"files the compiled app ships{unshipped_reason_text(hazard)}"
             )
         else:
             what = (
                 f"{hazard['call']}({hazard['path']!r}) reads a data file the "
-                "compiled app won't ship"
+                f"compiled app won't ship{unshipped_reason_text(hazard)}"
             )
         lines.append(
             f"Cell {hazard['cell']}, line {hazard['line']}: {what} -- the app "

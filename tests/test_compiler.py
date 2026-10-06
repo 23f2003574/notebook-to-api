@@ -12830,3 +12830,66 @@ def test_stale_cleanup_drops_emptied_directories_and_ignores_a_bad_manifest(tmp_
     (runtime / SHIPPED_DATA_MANIFEST).write_text("not json")
     _sync_shipped_data_files({"top.txt": source}, runtime)
     assert (runtime / "top.txt").read_text() == "x"
+
+
+def test_unshipped_data_hazards_say_why_the_file_stayed_behind(tmp_path, monkeypatch):
+    import backend.compiler as compiler_module
+
+    monkeypatch.setattr(compiler_module, "MAX_SHIPPED_DATA_BYTES", 10)
+    monkeypatch.delenv(compiler_module.MAX_SHIPPED_DATA_ENV, raising=False)
+    (tmp_path / "big.csv").write_text("x" * 50)  # outside the notebook's directory
+    notebook = tmp_path / "nb" / "nb.ipynb"
+    notebook.parent.mkdir()
+    (notebook.parent / "big.csv").write_text("x" * 50)
+    (notebook.parent / "used.txt").write_text("u")
+    (notebook.parent / "folder.csv").mkdir()
+    (notebook.parent / "empty").mkdir()
+    cells = [
+        "import os\nimport pandas as pd\nUSED = 'used.txt'\nprint(USED)\n"
+        "a = pd.read_csv('big.csv')\n"
+        "b = pd.read_csv('folder.csv')\n"
+        "c = pd.read_csv('gone.csv')\n"
+        "d = pd.read_csv('../big.csv')\n"
+        "e = os.listdir('empty')\n"
+        "def f():\n    return open(USED).read()\n",
+    ]
+
+    hazards = compiler_module._find_import_time_hazards(cells, str(notebook))
+
+    assert [(h["path"], h.get("reason")) for h in hazards] == [
+        ("big.csv", "size_limit"),
+        ("folder.csv", "directory"),
+        ("gone.csv", "missing"),
+        ("../big.csv", "outside"),
+        ("empty/*", "no_matches"),
+        ("used.txt", "not_redirectable"),
+    ]
+
+    from backend.inspector import startup_warning_lines
+    text = startup_warning_lines({"import_time_hazards": hazards})
+    assert text[0].endswith(
+        "won't ship (shipping it would pass the data size limit (raise it with "
+        "NOTEBOOK_TO_API_MAX_DATA_MB)) -- the app will fail on startup"
+    )
+    assert "(it doesn't exist beside the notebook)" in text[2]
+    assert "(nothing beside the notebook matches it)" in text[4]
+    assert "(its path isn't a string literal or a read-only path constant" in text[5]
+
+
+def test_data_size_limit_can_be_raised_from_the_environment(tmp_path, monkeypatch):
+    import backend.compiler as compiler_module
+
+    monkeypatch.setattr(compiler_module, "MAX_SHIPPED_DATA_BYTES", 10)
+    (tmp_path / "big.csv").write_text("x" * 50)
+    cells = ["import pandas as pd\npd.read_csv('big.csv')\n"]
+    notebook = tmp_path / "nb.ipynb"
+
+    for value in ("", "abc", "0", "-5"):
+        monkeypatch.setenv(compiler_module.MAX_SHIPPED_DATA_ENV, value)
+        assert compiler_module.max_shipped_data_bytes() == 10
+        assert compiler_module.find_data_files(notebook, cells) == {}
+
+    monkeypatch.setenv(compiler_module.MAX_SHIPPED_DATA_ENV, "0.5")
+    assert compiler_module.max_shipped_data_bytes() == 512 * 1024
+    assert list(compiler_module.find_data_files(notebook, cells)) == ["big.csv"]
+    assert compiler_module._find_import_time_hazards(cells, notebook) == []
