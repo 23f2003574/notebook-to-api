@@ -2064,3 +2064,78 @@ def test_extra_watch_directories_lists_data_subdirs_and_packages(tmp_path):
     broken = tmp_path / "broken.ipynb"
     broken.write_text("{ nope", encoding="utf-8")
     assert serve_module.extra_watch_directories(str(broken)) == []
+
+
+def test_deleting_a_shipped_data_file_triggers_a_recompile(tmp_path, monkeypatch, capsys):
+    import json
+    from backend.compiler import SHIPPED_DATA_MANIFEST
+
+    handler, notebook_path, _event, compiled = _handler_with_recording_compile(
+        tmp_path, monkeypatch, debounce_seconds=0
+    )
+    runtime = tmp_path / "generated" / "runtime"
+    runtime.mkdir(parents=True)
+    (runtime / SHIPPED_DATA_MANIFEST).write_text(json.dumps(["data/a.csv"]))
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "b.csv").write_text("still here")
+
+    handler.on_deleted(_module_event(tmp_path / "data" / "unshipped.csv"))
+    handler.on_deleted(_module_event(tmp_path / "data" / "b.csv"))  # exists: not a removal
+    assert compiled == []
+
+    handler.on_deleted(_module_event(tmp_path / "data" / "a.csv"))
+    assert len(compiled) == 1
+    assert "Data file 'data/a.csv' removed. Recompiling API" in capsys.readouterr().out
+
+    moved = type("Event", (), {
+        "src_path": str(tmp_path / "data" / "a.csv"), "dest_path": str(tmp_path / "elsewhere.csv"),
+    })()
+    handler.on_moved(moved)
+    assert len(compiled) == 2
+
+
+def test_departed_data_file_ignores_missing_or_bad_manifests(tmp_path):
+    notebook = tmp_path / "nb.ipynb"
+    output = tmp_path / "generated"
+    gone = str(tmp_path / "a.csv")
+
+    assert serve_module._departed_data_file(str(notebook), str(output), gone) is None
+    (output / "runtime").mkdir(parents=True)
+    (output / "runtime" / ".shipped_data.json").write_text("{not json")
+    assert serve_module._departed_data_file(str(notebook), str(output), gone) is None
+    (output / "runtime" / ".shipped_data.json").write_text('{"a.csv": 1}')
+    assert serve_module._departed_data_file(str(notebook), str(output), gone) is None
+    (output / "runtime" / ".shipped_data.json").write_text('["a.csv"]')
+    assert serve_module._departed_data_file(str(notebook), str(output), gone) == "a.csv"
+    assert serve_module._departed_data_file(str(notebook), str(output), "/elsewhere/a.csv") is None
+
+
+def test_listed_directories_are_watched_even_when_empty(tmp_path):
+    notebook = tmp_path / "nb.ipynb"
+    _notebook_importing(
+        notebook,
+        "import os, glob\nnames = os.listdir('inbox')\n"
+        "imgs = glob.glob('imgs/**/*.png')\nmissing = os.listdir('absent')\n"
+        "tops = glob.glob('*.csv')\n",
+    )
+    (tmp_path / "inbox").mkdir()
+    (tmp_path / "imgs").mkdir()
+
+    assert serve_module.extra_watch_directories(str(notebook)) == [
+        ((tmp_path / "imgs").resolve(), True),
+        ((tmp_path / "inbox").resolve(), False),
+    ]
+
+
+def test_a_new_file_in_a_listed_directory_triggers_a_recompile(tmp_path, monkeypatch, capsys):
+    handler, notebook_path, _event, compiled = _handler_with_recording_compile(
+        tmp_path, monkeypatch, debounce_seconds=0
+    )
+    _notebook_importing(notebook_path, "import os\nnames = os.listdir('inbox')\n")
+    (tmp_path / "inbox").mkdir()
+    (tmp_path / "inbox" / "new.txt").write_text("hello")
+
+    handler.on_created(_module_event(tmp_path / "inbox" / "new.txt"))
+
+    assert len(compiled) == 1
+    assert "Data file 'inbox/new.txt' changed" in capsys.readouterr().out

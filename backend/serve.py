@@ -1,3 +1,4 @@
+import json
 import os
 import threading
 import time
@@ -8,7 +9,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 from backend.compiler import (
-    compile_notebook, find_data_files, find_local_modules, package_name_for_output_dir,
+    SHIPPED_DATA_MANIFEST, _find_import_time_hazards, compile_notebook, find_data_files, find_local_modules, package_name_for_output_dir,
     read_notebook_env_vars,
 )
 from backend.parser.ast_parser import extract_imports_from_code
@@ -168,10 +169,58 @@ def extra_watch_directories(notebook_path):
         parent = source.resolve().parent
         if parent != notebook_dir:
             directories.setdefault(parent, False)
+    for directory, recursive in _listed_directories(notebook_dir, cells):
+        if directory != notebook_dir or recursive:
+            directories[directory] = directories.get(directory, False) or recursive
     for source in local.values():
         if isinstance(source, Path) and source.is_dir():
             directories[source.resolve()] = True
     return sorted(directories.items())
+
+
+def _listed_directories(notebook_dir, cells):
+    """[(directory, recursive)] for the existing folders the notebook's
+    top-level directory listings cover (`os.listdir("data")`,
+    `glob.glob("imgs/**/*.png")`): the pattern's fixed leading part, watched
+    recursively when the pattern descends with "**" or a wildcard folder. A
+    file added there is shipped by the next compile, but only an event from
+    a watched folder triggers one -- and an empty folder ships nothing, so
+    the shipped-file parents alone never covered it."""
+    found = []
+    for hazard in _find_import_time_hazards(cells):
+        if hazard["kind"] != "dir_read":
+            continue
+        parts = Path(hazard["path"]).parts
+        fixed = []
+        for part in parts:
+            if any(ch in part for ch in "*?["):
+                break
+            fixed.append(part)
+        directory = (notebook_dir.joinpath(*fixed)).resolve()
+        if notebook_dir != directory and notebook_dir not in directory.parents:
+            continue
+        if directory.is_dir():
+            found.append((directory, len(parts) - len(fixed) > 1))
+    return found
+
+
+def _departed_data_file(notebook_path, output_dir, event_path):
+    """The relative name when `event_path` -- just deleted or renamed away --
+    is a data file the last compile shipped into `output_dir` (per its
+    shipped-data manifest), else None. The deleted file's runtime copy is
+    only removed by a compile, so without this the served app kept serving
+    it until the notebook itself was saved."""
+    notebook_dir = Path(notebook_path).resolve().parent
+    path = Path(event_path).resolve()
+    if notebook_dir not in path.parents or path.exists():
+        return None
+    manifest = Path(output_dir) / "runtime" / SHIPPED_DATA_MANIFEST
+    try:
+        shipped = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    relative = path.relative_to(notebook_dir).as_posix()
+    return relative if isinstance(shipped, list) and relative in shipped else None
 
 
 def _shipped_data_change(notebook_path, event_path):
@@ -305,9 +354,14 @@ class NotebookChangeHandler(FileSystemEventHandler):
         # handler watches, the same "no longer here" condition on_deleted
         # (below) reports for a hard delete instead of a rename.
         self._handle_possible_notebook_departure(event.src_path)
+        if not event.src_path.endswith(".ipynb"):
+            self._handle_possible_notebook_change(event.src_path)
 
     def on_deleted(self, event):
         self._handle_possible_notebook_departure(event.src_path)
+        if not event.src_path.endswith(".ipynb"):
+            # A shipped data file going away (see _departed_data_file).
+            self._handle_possible_notebook_change(event.src_path)
 
     def _handle_possible_notebook_departure(self, event_path):
         # Only react to the notebook file itself disappearing from the
@@ -339,6 +393,10 @@ class NotebookChangeHandler(FileSystemEventHandler):
                 data_name = _shipped_data_change(self.notebook_path, event_path)
                 if data_name is not None:
                     reason = f"Data file '{data_name}' changed"
+                else:
+                    departed = _departed_data_file(self.notebook_path, self.output_dir, event_path)
+                    if departed is not None:
+                        reason = f"Data file '{departed}' removed"
 
         if is_notebook or reason != "Notebook changed":
             current_time = time.time()
