@@ -1903,6 +1903,44 @@ def call_hazard_detail(hazard):
     return what, "the app will hang on startup"
 
 
+# Hard-coded CUDA placement. It worked on the author's GPU machine; the
+# compiled app's Docker image (python:*-slim) has no CUDA, so on a CPU-only
+# host `model.cuda()` / `.to("cuda")` / `torch.device("cuda")` raise as the
+# notebook is imported. Code behind a `torch.cuda.is_available()` check (or a
+# try block) is left alone -- it already copes.
+_GPU_AVAILABILITY_CHECKS = frozenset({"is_available", "device_count"})
+
+
+def _is_cuda_literal(node):
+    return (
+        isinstance(node, ast.Constant) and isinstance(node.value, str)
+        and node.value.split(":")[0].lower() == "cuda"
+    )
+
+
+def _checks_gpu_availability(calls):
+    return any(
+        isinstance(call.func, ast.Attribute) and call.func.attr in _GPU_AVAILABILITY_CHECKS
+        for call in calls
+    )
+
+
+def _is_gpu_call(label, name, call):
+    """True for a call that puts something on a CUDA device unconditionally."""
+    func = call.func
+    if name == "cuda" and isinstance(func, ast.Attribute):
+        return True
+    if isinstance(func, ast.Attribute) and ast.unparse(func) == "torch.cuda.set_device":
+        return True
+    device = call.args[0] if call.args else None
+    keywords = {kw.arg: kw.value for kw in call.keywords if kw.arg}
+    if name == "to" and isinstance(func, ast.Attribute):
+        return _is_cuda_literal(device) or _is_cuda_literal(keywords.get("device"))
+    if label == "torch.device":
+        return _is_cuda_literal(device)
+    return _is_cuda_literal(keywords.get("map_location"))
+
+
 def _is_blocking_call(label, name, call):
     if name in _BLOCKING_CALL_NAMES or label in _BLOCKING_CALL_LABELS:
         return True
@@ -1967,6 +2005,7 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
     hazards = []
     current_aliases = [{}]
     notebook_aliases = {}
+    gpu_guard = [0]
 
     def visit(statements, cell_number):
         for node in statements:
@@ -1975,9 +2014,16 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
             if isinstance(node, ast.If) and _is_main_guard(node):
                 visit(node.orelse, cell_number)
                 continue
+            guards_gpu = isinstance(node, ast.Try) or (
+                isinstance(node, (ast.If, ast.While))
+                and _checks_gpu_availability(_statement_calls(node))
+            )
+            gpu_guard[0] += guards_gpu
             for child in ast.iter_child_nodes(node):
                 if isinstance(child, ast.stmt):
                     visit([child], cell_number)
+            gpu_guard[0] -= guards_gpu
+            statement_checks_gpu = _checks_gpu_availability(_statement_calls(node))
             if isinstance(node, ast.Raise) and _raises_system_exit(node):
                 hazards.append({
                     "kind": "exit_call", "call": "raise SystemExit", "path": None,
@@ -1998,6 +2044,14 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
                 resolved_label, name, base = _resolve_import_alias(
                     label, name, base, current_aliases[0]
                 )
+                if (
+                    not gpu_guard[0] and not statement_checks_gpu
+                    and _is_gpu_call(resolved_label, name, call)
+                ):
+                    hazards.append({
+                        "kind": "gpu_call", "call": label, "path": None,
+                        "cell": cell_number, "line": call.lineno,
+                    })
                 kind = _call_hazard_kind(resolved_label, name, base)
                 if kind:
                     hazards.append({

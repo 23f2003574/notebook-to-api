@@ -12578,3 +12578,51 @@ def test_compile_ships_files_read_through_path_constants(tmp_path, monkeypatch):
     exec((out / "runtime" / "notebook_module.py").read_text(), namespace)
 
     assert namespace["answer"](1) == 42
+
+
+def test_unguarded_cuda_placement_is_reported_as_a_startup_hazard():
+    from backend.compiler import _find_import_time_hazards
+
+    cells = [
+        "import torch\n"
+        "model = Net().cuda()\n"
+        "model.to('cuda')\n"
+        "x = torch.zeros(3).to(device='cuda:0')\n"
+        "dev = torch.device('cuda')\n"
+        "state = torch.load('w.pt', map_location='cuda')\n"
+        "torch.cuda.set_device(0)\n",
+        "import torch\n"
+        "if torch.cuda.is_available():\n    model.cuda()\nelse:\n    model.to('cpu')\n"
+        "device = 'cuda' if torch.cuda.is_available() else 'cpu'\n"
+        "m = model.cuda() if torch.cuda.device_count() else model\n"
+        "try:\n    model.to('cuda')\nexcept RuntimeError:\n    pass\n"
+        "model.to('cpu')\nmodel.to(device)\ncpu = torch.device('cpu')\n"
+        "def later():\n    return model.cuda()\n"
+        "if __name__ == '__main__':\n    model.cuda()\n",
+    ]
+
+    hazards = _find_import_time_hazards(cells)
+
+    assert [(h["kind"], h["call"], h["line"]) for h in hazards if h["kind"] == "gpu_call"] == [
+        ("gpu_call", "cuda", 2),
+        ("gpu_call", "model.to", 3),
+        ("gpu_call", "to", 4),
+        ("gpu_call", "torch.device", 5),
+        ("gpu_call", "torch.load", 6),
+        ("gpu_call", "set_device", 7),
+    ]
+    assert ("file_read", "torch.load", "w.pt") in [(h["kind"], h["call"], h["path"]) for h in hazards]
+
+
+def test_gpu_hazard_wording():
+    from backend.inspector import startup_warning_lines
+
+    lines = startup_warning_lines({"import_time_hazards": [
+        {"kind": "gpu_call", "call": "model.cuda", "path": None, "cell": 2, "line": 4},
+    ]})
+
+    assert lines == [
+        "Cell 2, line 4: `model.cuda(...)` needs a CUDA GPU, which the compiled app's "
+        "image doesn't have -- guard it with torch.cuda.is_available() -- the app will "
+        "fail on startup"
+    ]

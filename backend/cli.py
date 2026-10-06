@@ -2360,6 +2360,11 @@ def _dispatch_core_command(args):
                     )
                 elif hazard["kind"] == "blocking_call":
                     detail = f"`{hazard['call']}(...)` never returns, so the app would hang while starting"
+                elif hazard["kind"] == "gpu_call":
+                    detail = (
+                        f"`{hazard['call']}(...)` needs a CUDA GPU, which the compiled app's image "
+                        "doesn't have -- guard it with torch.cuda.is_available()"
+                    )
                 elif hazard["kind"] == "dir_read":
                     detail = (
                         f"`{hazard['call']}(...)` lists {hazard['path']!r}, which matches no "
