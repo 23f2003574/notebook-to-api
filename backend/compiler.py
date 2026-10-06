@@ -533,7 +533,7 @@ def write_runtime_module(code_cells, output_dir, local_modules=None, data_files=
         exist_ok=True
     )
 
-    rewritten_cells = [_rewrite_function_data_reads(cell, data_files or {}) for cell in code_cells]
+    rewritten_cells = _rewrite_request_time_reads(code_cells, data_files or {})
     reads_at_request_time = rewritten_cells != list(code_cells)
     combined_code = "\n\n".join(rewritten_cells)
     shipped_scripts = [p for p in _run_magic_scripts(code_cells) if p in (data_files or {})]
@@ -1888,21 +1888,70 @@ def _file_read_path(name, base, call, constants=None):
     return _relative_literal_path(call, constants)
 
 
-def _path_constant_node(call):
-    """The string literal a read's path is written as (`open("x.csv")`,
-    `Path("x.csv").read_text()`), else None -- the one form the compile can
-    point at the shipped copy without changing what the code means."""
+def _path_arg_node(call):
+    """The expression a read's path is passed as: `open(<node>)`,
+    `pd.read_csv(filepath_or_buffer=<node>)`, `Path(<node>).read_text()`."""
     func = call.func
     if isinstance(func, ast.Attribute) and func.attr in ("read_text", "read_bytes"):
         receiver = func.value
-        node = receiver.args[0] if isinstance(receiver, ast.Call) and len(receiver.args) == 1 else None
-    else:
-        node = call.args[0] if call.args else next(
-            (kw.value for kw in call.keywords
-             if kw.arg in ("filepath_or_buffer", "io", "path", "file", "fname", "fp")),
-            None,
-        )
-    return node if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+        return receiver.args[0] if isinstance(receiver, ast.Call) and len(receiver.args) == 1 else None
+    return call.args[0] if call.args else next(
+        (kw.value for kw in call.keywords
+         if kw.arg in ("filepath_or_buffer", "io", "path", "file", "fname", "fp")),
+        None,
+    )
+
+
+def _redirectable_path_constants(trees):
+    """{name: its assigned string literal node} for module-level path
+    constants (see _module_path_constants) written as a one-line string
+    literal and used *only* as the path of data-file reads anywhere in the
+    notebook: `LABELS = "labels.txt"` with every `LABELS` an `open(LABELS)`
+    or `pd.read_csv(LABELS)`. Pointing such an assignment at the shipped copy
+    changes nothing but where those reads look; a name also printed, written
+    to, compared or passed elsewhere is left alone."""
+    constants = _module_path_constants(trees)
+    aliases = {}
+    for tree in trees:
+        aliases.update(_import_aliases(tree))
+    read_args = set()
+    for tree in trees:
+        for call in ast.walk(tree):
+            if not isinstance(call, ast.Call):
+                continue
+            label, name, base = _call_label(call.func)
+            if label is None:
+                continue
+            _, name, base = _resolve_import_alias(label, name, base, aliases)
+            arg = _path_arg_node(call)
+            if isinstance(arg, ast.Name) and _file_read_path(name, base, call, constants):
+                read_args.add(id(arg))
+    other_uses = {
+        node.id for tree in trees for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+        and id(node) not in read_args
+    }
+    found = {}
+    for tree in trees:
+        for node in tree.body:
+            if (
+                isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id in constants
+                and node.targets[0].id not in other_uses
+                and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
+                and node.value.lineno == node.value.end_lineno
+            ):
+                found[node.targets[0].id] = node.value
+    return found
+
+
+def _request_read_is_redirectable(call, redirectable):
+    arg = _path_arg_node(call)
+    return (
+        isinstance(arg, ast.Constant) and isinstance(arg.value, str)
+        or isinstance(arg, ast.Name) and arg.id in redirectable
+    )
 
 
 def _function_data_reads(tree, aliases, constants):
@@ -1944,27 +1993,55 @@ def _nb_data_path(relative):
 """
 
 
-def _rewrite_function_data_reads(cell, shipped):
-    """`cell` with each function-scope read of a shipped file through a
-    string literal rewritten to `_nb_data_path("<literal>")`."""
-    try:
-        tree = ast.parse(cell)
-    except SyntaxError:
-        return cell
-    targets = []
-    for _, call, path in _function_data_reads(tree, _import_aliases(tree), {}):
-        node = _path_constant_node(call)
-        if node is not None and path in shipped and node.lineno == node.end_lineno:
-            targets.append(node)
-    if not targets:
-        return cell
-    lines = cell.splitlines(keepends=True)
-    for node in sorted(targets, key=lambda n: (n.lineno, n.col_offset), reverse=True):
-        raw = lines[node.lineno - 1].encode("utf-8")
-        replacement = f"_nb_data_path({node.value!r})".encode("utf-8")
-        raw = raw[:node.col_offset] + replacement + raw[node.end_col_offset:]
-        lines[node.lineno - 1] = raw.decode("utf-8")
-    return "".join(lines)
+def _rewrite_request_time_reads(code_cells, shipped):
+    """`code_cells` with each function-scope read of a shipped file pointed
+    at `_nb_data_path("<path>")`: the string literal it reads, or the
+    one-line assignment of the path constant it reads through (see
+    _redirectable_path_constants). Unparseable cells come back unchanged."""
+    parsed = {}
+    for index, cell in enumerate(code_cells):
+        try:
+            parsed[index] = ast.parse(cell)
+        except SyntaxError:
+            continue
+    trees = list(parsed.values())
+    constants = _module_path_constants(trees)
+    redirectable = _redirectable_path_constants(trees)
+    aliases = {}
+    for tree in trees:
+        aliases.update(_import_aliases(tree))
+    targets = {index: [] for index in parsed}
+    redirected = set()
+    for index, tree in parsed.items():
+        for _, call, path in _function_data_reads(tree, aliases, constants):
+            if path not in shipped:
+                continue
+            node = _path_arg_node(call)
+            if isinstance(node, ast.Constant) and node.lineno == node.end_lineno:
+                targets[index].append(node)
+            elif isinstance(node, ast.Name) and node.id in redirectable:
+                redirected.add(node.id)
+    for index, tree in parsed.items():
+        for node in tree.body:
+            if (
+                isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id in redirected
+                and redirectable[node.targets[0].id] is node.value
+            ):
+                targets[index].append(node.value)
+
+    cells = list(code_cells)
+    for index, nodes in targets.items():
+        if not nodes:
+            continue
+        lines = cells[index].splitlines(keepends=True)
+        for node in sorted(nodes, key=lambda n: (n.lineno, n.col_offset), reverse=True):
+            raw = lines[node.lineno - 1].encode("utf-8")
+            replacement = f"_nb_data_path({node.value!r})".encode("utf-8")
+            raw = raw[:node.col_offset] + replacement + raw[node.end_col_offset:]
+            lines[node.lineno - 1] = raw.decode("utf-8")
+        cells[index] = "".join(lines)
+    return cells
 
 
 def _find_function_call_hazards(tree, aliases, cell_number):
@@ -2202,6 +2279,7 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
         except SyntaxError:
             continue
     path_constants = _module_path_constants([tree for _, tree in parsed])
+    redirectable_constants = _redirectable_path_constants([tree for _, tree in parsed])
 
     for cell_number, tree in parsed:
         current_aliases[0] = _import_aliases(tree)
@@ -2214,7 +2292,7 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
             hazards.append({
                 "kind": "request_read", "call": _call_label(call.func)[0], "path": path,
                 "cell": cell_number, "line": call.lineno, "function": function,
-                "rewritable": _path_constant_node(call) is not None,
+                "rewritable": _request_read_is_redirectable(call, redirectable_constants),
             })
 
     for cell_number, cell in enumerate(code_cells, start=1):

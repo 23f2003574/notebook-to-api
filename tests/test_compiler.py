@@ -12652,7 +12652,7 @@ def test_function_scope_relative_reads_are_reported_with_their_function():
 
     assert found == [
         ("joblib.load", "model.pkl", "predict", True),
-        ("open", "labels.txt", "predict", False),
+        ("open", "labels.txt", "predict", True),
         ("read_text", "notes.md", "notes", True),
     ]
 
@@ -12673,7 +12673,7 @@ def test_shipped_literal_request_reads_are_cleared_and_others_stay_reported(tmp_
     assert sorted(find_data_files(str(notebook), cells)) == ["labels.txt", "model.txt"]
     assert [
         (h["function"], h["path"]) for h in _find_import_time_hazards(cells, str(notebook))
-    ] == [("b", "labels.txt"), ("c", "missing.txt")]
+    ] == [("c", "missing.txt")]
 
 
 def test_compile_points_request_time_reads_at_the_shipped_copy(tmp_path, monkeypatch):
@@ -12717,3 +12717,53 @@ def test_request_read_hazard_wording():
         "working directory, which the compiled app can't point at a shipped copy -- "
         "every call to predict() will fail"
     ]
+
+
+def test_path_constants_used_only_as_read_paths_are_redirectable():
+    import ast
+    from backend.compiler import _redirectable_path_constants
+
+    cells = [
+        "import pandas as pd\nfrom pathlib import Path\n"
+        "LABELS = 'labels.txt'\nMODEL = 'model.pkl'\nREPORT = 'report.txt'\n"
+        "DATA_DIR = Path('data')\nTEXT = 'notes.md'\n"
+        "LONG = (\n    'multi'\n    '.txt'\n)\n",
+        "def a():\n    return open(LABELS).read()\n"
+        "def b():\n    print(MODEL)\n    return pd.read_pickle(MODEL)\n"
+        "def c():\n    open(REPORT, 'w').write('x')\n    return open(REPORT).read()\n"
+        "def d():\n    return Path(TEXT).read_text() + open(DATA_DIR / 'x').read()\n"
+        "def e():\n    return open(LONG).read()\n",
+    ]
+
+    assert sorted(_redirectable_path_constants([ast.parse(c) for c in cells])) == ["LABELS", "TEXT"]
+
+
+def test_compile_redirects_request_time_reads_through_path_constants(tmp_path, monkeypatch):
+    from backend.compiler import _find_import_time_hazards, compile_notebook
+
+    (tmp_path / "labels.txt").write_text("cat,dog")
+    (tmp_path / "shown.txt").write_text("s")
+    notebook = tmp_path / "nb.ipynb"
+    body = (
+        "LABELS = 'labels.txt'\nSHOWN = 'shown.txt'\nprint(SHOWN)\n\n"
+        "def labels(i: int) -> str:\n    return open(LABELS).read().split(',')[i]\n\n"
+        "def shown(a: int) -> str:\n    return open(SHOWN).read()\n"
+    )
+    _write_notebook_importing(notebook, body)
+    out = tmp_path / "out"
+
+    compile_notebook(str(notebook), str(out))
+
+    source = (out / "runtime" / "notebook_module.py").read_text()
+    assert "LABELS = _nb_data_path('labels.txt')" in source
+    assert "SHOWN = 'shown.txt'" in source
+    assert [
+        (h["function"], h["path"]) for h in _find_import_time_hazards([body], str(notebook))
+    ] == [("shown", "shown.txt")]
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    namespace = {"__file__": str(out / "runtime" / "notebook_module.py")}
+    exec(source, namespace)
+
+    assert namespace["labels"](1) == "dog"
