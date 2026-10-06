@@ -1390,6 +1390,12 @@ def _save_media_from_result(result, directory, stem):
     return walk(result), saved
 
 
+_CALL_HAZARD_LABELS = {
+    "debugger_call": "Debugger call", "exit_call": "Process exit",
+    "request_read": "Request-time read",
+}
+
+
 def _startup_problem_count(data):
     """How many things compile accepts but the compiled app will choke on or
     ignore: typo'd/malformed directives, top-level input()/data-file reads,
@@ -2341,10 +2347,10 @@ def _dispatch_core_command(args):
                     f"({failed['message']}) -- it runs again when the app starts"
                 )
             for hazard in data["import_time_hazards"]:
-                if hazard["kind"] in ("debugger_call", "exit_call"):
+                if hazard["kind"] in ("debugger_call", "exit_call", "request_read"):
                     what, consequence = call_hazard_detail(hazard)
                     print(
-                        f"⚠ {'Process exit' if hazard['kind'] == 'exit_call' else 'Debugger call'} "
+                        f"⚠ {_CALL_HAZARD_LABELS[hazard['kind']]} "
                         f"(cell {hazard['cell']}, line "
                         f"{hazard['line']}): {what} -- {consequence}"
                     )
@@ -5872,10 +5878,10 @@ def _dispatch_core_command(args):
                     f"({failed['message']}) -- it runs again when the app starts"
                 )
             for hazard in data.get("import_time_hazards") or []:
-                if hazard.get("kind") in ("debugger_call", "exit_call"):
+                if hazard.get("kind") in ("debugger_call", "exit_call", "request_read"):
                     what, consequence = call_hazard_detail(hazard)
                     print(
-                        f"⚠ {'Process exit' if hazard['kind'] == 'exit_call' else 'Debugger call'} "
+                        f"⚠ {_CALL_HAZARD_LABELS[hazard['kind']]} "
                         f"(cell {hazard['cell']}, line "
                         f"{hazard['line']}): {what} -- {consequence}"
                     )
@@ -6030,7 +6036,7 @@ def _dispatch_core_command(args):
                         )
 
                     for hazard in result.get("import_time_hazards") or []:
-                        if hazard.get("kind") in ("debugger_call", "exit_call"):
+                        if hazard.get("kind") in ("debugger_call", "exit_call", "request_read"):
                             what, consequence = call_hazard_detail(hazard)
                             print(
                                 f"    startup hazard: cell {hazard['cell']}, line "

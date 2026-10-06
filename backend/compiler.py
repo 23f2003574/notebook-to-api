@@ -533,7 +533,9 @@ def write_runtime_module(code_cells, output_dir, local_modules=None, data_files=
         exist_ok=True
     )
 
-    combined_code = "\n\n".join(code_cells)
+    rewritten_cells = [_rewrite_function_data_reads(cell, data_files or {}) for cell in code_cells]
+    reads_at_request_time = rewritten_cells != list(code_cells)
+    combined_code = "\n\n".join(rewritten_cells)
     shipped_scripts = [p for p in _run_magic_scripts(code_cells) if p in (data_files or {})]
     if shipped_scripts:
         combined_code = _RUN_MAGIC_PATTERN.sub(
@@ -552,6 +554,8 @@ def write_runtime_module(code_cells, output_dir, local_modules=None, data_files=
         extra_prelude += _KAGGLE_SECRETS_SHIM
     if local_modules:
         extra_prelude += _LOCAL_MODULES_PATH_PRELUDE
+    if reads_at_request_time:
+        extra_prelude += _DATA_PATH_HELPER
     if data_files:
         extra_prelude += _DATA_FILES_CHDIR_PRELUDE
     combined_code = _with_jupyter_prelude(combined_code, extra_prelude=extra_prelude)
@@ -1866,6 +1870,103 @@ def _call_hazard_kind(label, name, base):
     return None
 
 
+def _file_read_path(name, base, call, constants=None):
+    """The relative path a data-file read (`pd.read_csv(...)`, read-mode
+    `open(...)`, `np.load(...)`, ...) reads, else None."""
+    is_read = name in _FILE_READ_CALLS or (name == "load" and base in _FILE_LOAD_BASES)
+    if not is_read:
+        return None
+    if name == "open" and base is None:
+        mode = call.args[1] if len(call.args) > 1 else next(
+            (kw.value for kw in call.keywords if kw.arg == "mode"), None
+        )
+        if (
+            isinstance(mode, ast.Constant) and isinstance(mode.value, str)
+            and set(mode.value) & set("wax+")
+        ):
+            return None
+    return _relative_literal_path(call, constants)
+
+
+def _path_constant_node(call):
+    """The string literal a read's path is written as (`open("x.csv")`,
+    `Path("x.csv").read_text()`), else None -- the one form the compile can
+    point at the shipped copy without changing what the code means."""
+    func = call.func
+    if isinstance(func, ast.Attribute) and func.attr in ("read_text", "read_bytes"):
+        receiver = func.value
+        node = receiver.args[0] if isinstance(receiver, ast.Call) and len(receiver.args) == 1 else None
+    else:
+        node = call.args[0] if call.args else next(
+            (kw.value for kw in call.keywords
+             if kw.arg in ("filepath_or_buffer", "io", "path", "file", "fname", "fp")),
+            None,
+        )
+    return node if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+
+def _function_data_reads(tree, aliases, constants):
+    """[(function name, call, path)] for relative data-file reads inside
+    function bodies, each attributed to its outermost function."""
+    found = []
+    seen = set()
+    for func in ast.walk(tree):
+        if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for call in ast.walk(func):
+            if not isinstance(call, ast.Call) or id(call) in seen:
+                continue
+            seen.add(id(call))
+            label, name, base = _call_label(call.func)
+            if label is None:
+                continue
+            _, name, base = _resolve_import_alias(label, name, base, aliases)
+            path = _file_read_path(name, base, call, constants)
+            if path is not None:
+                found.append((func.name, call, path))
+    return found
+
+
+# A read inside a function runs when an endpoint is called, long after the
+# import-time chdir (see _DATA_FILES_CHDIR_PRELUDE) was undone, so a relative
+# path resolves against wherever the app was launched (/app in the generated
+# Dockerfile) and every call fails. Shipped files read through a plain string
+# literal are pointed at their shipped copy instead.
+_DATA_PATH_HELPER = """\
+# Request-time data files ship beside this file (notebook-to-api)
+import os as _nb_os7
+_NB_DATA_DIR = _nb_os7.path.dirname(_nb_os7.path.abspath(__file__))
+
+
+def _nb_data_path(relative):
+    return _nb_os7.path.join(_NB_DATA_DIR, relative)
+
+"""
+
+
+def _rewrite_function_data_reads(cell, shipped):
+    """`cell` with each function-scope read of a shipped file through a
+    string literal rewritten to `_nb_data_path("<literal>")`."""
+    try:
+        tree = ast.parse(cell)
+    except SyntaxError:
+        return cell
+    targets = []
+    for _, call, path in _function_data_reads(tree, _import_aliases(tree), {}):
+        node = _path_constant_node(call)
+        if node is not None and path in shipped and node.lineno == node.end_lineno:
+            targets.append(node)
+    if not targets:
+        return cell
+    lines = cell.splitlines(keepends=True)
+    for node in sorted(targets, key=lambda n: (n.lineno, n.col_offset), reverse=True):
+        raw = lines[node.lineno - 1].encode("utf-8")
+        replacement = f"_nb_data_path({node.value!r})".encode("utf-8")
+        raw = raw[:node.col_offset] + replacement + raw[node.end_col_offset:]
+        lines[node.lineno - 1] = raw.decode("utf-8")
+    return "".join(lines)
+
+
 def _find_function_call_hazards(tree, aliases, cell_number):
     """Debugger hazards inside function bodies, attributed to the outermost
     enclosing function (each call reported once). Exit calls there are not
@@ -1893,7 +1994,15 @@ def _find_function_call_hazards(tree, aliases, cell_number):
 
 
 def call_hazard_detail(hazard):
-    """(what, consequence) wording for a "debugger_call" or "exit_call" hazard."""
+    """(what, consequence) wording for a "debugger_call", "exit_call" or
+    "request_read" hazard."""
+    if hazard["kind"] == "request_read":
+        return (
+            f"{hazard['call']}({hazard['path']!r}) inside {hazard['function']}() reads a file "
+            "relative to the working directory, which the compiled app can't point at a "
+            "shipped copy",
+            f"every call to {hazard['function']}() will fail",
+        )
     call = hazard["call"] if hazard["call"].startswith("raise ") else f"{hazard['call']}()"
     if hazard["kind"] == "exit_call":
         return f"`{call}` ends the process (Jupyter only warned and carried on)", "the app will exit on startup"
@@ -2079,21 +2188,7 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
                         "cell": cell_number, "line": call.lineno,
                     })
                     continue
-                is_read = name in _FILE_READ_CALLS or (
-                    name == "load" and base in _FILE_LOAD_BASES
-                )
-                if not is_read:
-                    continue
-                if name == "open" and base is None:
-                    mode = call.args[1] if len(call.args) > 1 else next(
-                        (kw.value for kw in call.keywords if kw.arg == "mode"), None
-                    )
-                    if (
-                        isinstance(mode, ast.Constant) and isinstance(mode.value, str)
-                        and set(mode.value) & set("wax+")
-                    ):
-                        continue
-                path = _relative_literal_path(call, path_constants)
+                path = _file_read_path(name, base, call, path_constants)
                 if path is not None:
                     hazards.append({
                         "kind": "file_read", "call": label, "path": path,
@@ -2115,6 +2210,12 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
         # cell are in scope for them.
         notebook_aliases.update(current_aliases[0])
         hazards.extend(_find_function_call_hazards(tree, notebook_aliases, cell_number))
+        for function, call, path in _function_data_reads(tree, notebook_aliases, path_constants):
+            hazards.append({
+                "kind": "request_read", "call": _call_label(call.func)[0], "path": path,
+                "cell": cell_number, "line": call.lineno, "function": function,
+                "rewritable": _path_constant_node(call) is not None,
+            })
 
     for cell_number, cell in enumerate(code_cells, start=1):
         unsafe_lines = _lines_inside_multiline_strings(cell)
@@ -2133,6 +2234,8 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
         def fully_shipped(item):
             if item["kind"] == "file_read":
                 return item["path"] in shipped
+            if item["kind"] == "request_read":
+                return item["rewritable"] and item["path"] in shipped
             if item["kind"] == "dir_read":
                 files = _expand_listing_pattern(directory, item["path"])
                 return bool(files) and all(path in shipped for path in files)
@@ -2167,7 +2270,7 @@ def find_data_files(notebook_path, code_cells=None, hazards=None):
     found = {}
     total = 0
 
-    wanted = [item["path"] for item in hazards if item["kind"] == "file_read"]
+    wanted = [item["path"] for item in hazards if item["kind"] in ("file_read", "request_read")]
     # `%run script.py` files are shipped too (see _run_magic_scripts).
     wanted += _run_magic_scripts(code_cells or [])
     # So are the files a top-level directory listing finds.

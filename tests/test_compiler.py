@@ -9271,7 +9271,10 @@ def test_find_import_time_hazards_reports_only_import_time_failures():
         "def broken(:\n",
     ]
 
-    found = [(h["cell"], h["line"], h["kind"], h["call"], h["path"]) for h in _find_import_time_hazards(cells)]
+    found = [
+        (h["cell"], h["line"], h["kind"], h["call"], h["path"])
+        for h in _find_import_time_hazards(cells) if h["kind"] != "request_read"
+    ]
 
     assert found == [
         (1, 2, "file_read", "pd.read_csv", "data.csv"),
@@ -12543,7 +12546,10 @@ def test_module_level_path_constants_resolve_data_file_reads():
         "def f():\n    return pd.read_csv(SALES)\n",
     ]
 
-    assert [(h["kind"], h["call"], h["path"]) for h in _find_import_time_hazards(cells)] == [
+    assert [
+        (h["kind"], h["call"], h["path"]) for h in _find_import_time_hazards(cells)
+        if h["kind"] != "request_read"
+    ] == [
         ("file_read", "pd.read_csv", "data/sales.csv"),
         ("file_read", "open", "data/model.pkl"),
         ("file_read", "open", "data/cfg.json"),
@@ -12625,4 +12631,89 @@ def test_gpu_hazard_wording():
         "Cell 2, line 4: `model.cuda(...)` needs a CUDA GPU, which the compiled app's "
         "image doesn't have -- guard it with torch.cuda.is_available() -- the app will "
         "fail on startup"
+    ]
+
+
+def test_function_scope_relative_reads_are_reported_with_their_function():
+    from backend.compiler import _find_import_time_hazards
+
+    cells = [
+        "import joblib\nimport pandas as pd\nfrom pathlib import Path\nLABELS = 'labels.txt'\n",
+        "def predict(x):\n    model = joblib.load('model.pkl')\n"
+        "    def helper():\n        return open(LABELS).read()\n    return model\n"
+        "async def notes():\n    return Path('notes.md').read_text()\n"
+        "def save(df):\n    open('out.txt', 'w').write('x')\n    pd.read_csv('/abs/x.csv')\n",
+    ]
+
+    found = [
+        (h["call"], h["path"], h["function"], h["rewritable"])
+        for h in _find_import_time_hazards(cells) if h["kind"] == "request_read"
+    ]
+
+    assert found == [
+        ("joblib.load", "model.pkl", "predict", True),
+        ("open", "labels.txt", "predict", False),
+        ("read_text", "notes.md", "notes", True),
+    ]
+
+
+def test_shipped_literal_request_reads_are_cleared_and_others_stay_reported(tmp_path):
+    from backend.compiler import _find_import_time_hazards, find_data_files
+
+    (tmp_path / "model.txt").write_text("m")
+    (tmp_path / "labels.txt").write_text("l")
+    notebook = tmp_path / "nb.ipynb"
+    cells = [
+        "LABELS = 'labels.txt'\n"
+        "def a():\n    return open('model.txt').read()\n"
+        "def b():\n    return open(LABELS).read()\n"
+        "def c():\n    return open('missing.txt').read()\n"
+    ]
+
+    assert sorted(find_data_files(str(notebook), cells)) == ["labels.txt", "model.txt"]
+    assert [
+        (h["function"], h["path"]) for h in _find_import_time_hazards(cells, str(notebook))
+    ] == [("b", "labels.txt"), ("c", "missing.txt")]
+
+
+def test_compile_points_request_time_reads_at_the_shipped_copy(tmp_path, monkeypatch):
+    from backend.compiler import compile_notebook
+
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "scale.txt").write_text("10")
+    (tmp_path / "greeting.txt").write_text("hi")
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "from pathlib import Path\n\n"
+        "def scaled(a: int) -> int:\n    return a * int(open('data/scale.txt').read())\n\n"
+        "def greet(name: str) -> str:\n    return Path('greeting.txt').read_text() + ' ' + name\n",
+    )
+    out = tmp_path / "out"
+
+    compile_notebook(str(notebook), str(out))
+
+    source = (out / "runtime" / "notebook_module.py").read_text()
+    assert "open(_nb_data_path('data/scale.txt'))" in source
+    assert (out / "runtime" / "data" / "scale.txt").read_text() == "10"
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    namespace = {"__file__": str(out / "runtime" / "notebook_module.py")}
+    exec(source, namespace)
+
+    assert namespace["scaled"](4) == 40
+    assert namespace["greet"]("ann") == "hi ann"
+
+
+def test_request_read_hazard_wording():
+    from backend.inspector import startup_warning_lines
+
+    assert startup_warning_lines({"import_time_hazards": [
+        {"kind": "request_read", "call": "open", "path": "x.txt", "cell": 1, "line": 3,
+         "function": "predict", "rewritable": False},
+    ]}) == [
+        "Cell 1, line 3: open('x.txt') inside predict() reads a file relative to the "
+        "working directory, which the compiled app can't point at a shipped copy -- "
+        "every call to predict() will fail"
     ]

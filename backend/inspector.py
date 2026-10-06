@@ -886,7 +886,7 @@ def startup_warning_lines(data):
             f"({failed['message']}) -- it runs again when the app starts"
         )
     for hazard in data.get("import_time_hazards", []):
-        if hazard["kind"] in ("debugger_call", "exit_call"):
+        if hazard["kind"] in ("debugger_call", "exit_call", "request_read"):
             what, consequence = call_hazard_detail(hazard)
             lines.append(
                 f"Cell {hazard['cell']}, line {hazard['line']}: {what} -- {consequence}"
