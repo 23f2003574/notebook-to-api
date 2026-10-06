@@ -12272,3 +12272,55 @@ def test_unaliased_hazard_detection_is_unchanged_by_alias_resolution():
     assert [(h["kind"], h["call"]) for h in _find_import_time_hazards(cells)] == [
         ("file_read", "pd.read_csv"), ("input", "input"), ("file_read", "open"),
     ]
+
+
+def test_debugger_calls_are_reported_at_module_level_and_inside_functions():
+    from backend.compiler import _find_import_time_hazards
+
+    cells = [
+        "import pdb\nimport ipdb as dbg\nfrom IPython import embed\n"
+        "from IPython.core.debugger import set_trace\n"
+        "breakpoint()\n"
+        "pdb.set_trace()\n"
+        "embed()\n"
+        "if __name__ == '__main__':\n    breakpoint()\n",
+        "def predict(x):\n    dbg.set_trace()\n    def inner():\n        set_trace()\n    return x\n"
+        "class Model:\n    def score(self):\n        breakpoint()\n",
+    ]
+
+    hazards = _find_import_time_hazards(cells)
+
+    assert [(h["kind"], h["call"], h["cell"], h["line"], h.get("function")) for h in hazards] == [
+        ("debugger_call", "breakpoint", 1, 5, None),
+        ("debugger_call", "pdb.set_trace", 1, 6, None),
+        ("debugger_call", "embed", 1, 7, None),
+        ("debugger_call", "dbg.set_trace", 2, 2, "predict"),
+        ("debugger_call", "set_trace", 2, 4, "predict"),
+        ("debugger_call", "breakpoint", 2, 8, "score"),
+    ]
+
+
+def test_non_debugger_lookalikes_are_not_reported():
+    from backend.compiler import _find_import_time_hazards
+
+    cells = [
+        "import mylib\nmylib.set_trace()\nembed = lambda: 1\nembed()\n"
+        "def f(breakpoint):\n    return breakpoint\n"
+        "def g(obj):\n    obj.breakpoint()\n",
+    ]
+
+    assert _find_import_time_hazards(cells) == []
+
+
+def test_debugger_hazard_wording_distinguishes_startup_and_request_hangs():
+    from backend.inspector import startup_warning_lines
+
+    lines = startup_warning_lines({"import_time_hazards": [
+        {"kind": "debugger_call", "call": "breakpoint", "path": None, "cell": 1, "line": 3},
+        {"kind": "debugger_call", "call": "pdb.set_trace", "path": None, "cell": 2, "line": 4,
+         "function": "predict"},
+    ]})
+
+    assert lines[0].startswith("Cell 1, line 3: `breakpoint()` opens an interactive debugger")
+    assert lines[0].endswith("-- the app will hang on startup")
+    assert lines[1].endswith("-- every call to predict() will hang")

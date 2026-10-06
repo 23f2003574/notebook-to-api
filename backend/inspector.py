@@ -9,6 +9,7 @@ from urllib.parse import quote, urlsplit
 from backend.compiler import (
     _find_cells_with_error_outputs,
     _find_import_time_hazards,
+    debugger_hazard_detail,
     _find_notebook_env_vars,
     _find_unrecognized_directives,
     _extract_timeout_overrides,
@@ -885,6 +886,12 @@ def startup_warning_lines(data):
             f"({failed['message']}) -- it runs again when the app starts"
         )
     for hazard in data.get("import_time_hazards", []):
+        if hazard["kind"] == "debugger_call":
+            what, consequence = debugger_hazard_detail(hazard)
+            lines.append(
+                f"Cell {hazard['cell']}, line {hazard['line']}: {what} -- {consequence}"
+            )
+            continue
         if hazard["kind"] == "input":
             what = f"{hazard['call']}() waits on stdin, which the compiled app doesn't have"
         elif hazard["kind"] == "colab_import":

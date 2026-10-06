@@ -1653,6 +1653,53 @@ _BLOCKING_CALL_LABELS = frozenset({
 _LONG_SLEEP_SECONDS = 60
 
 
+# Interactive debugger entry points left in from debugging the notebook. They
+# stop and wait on a debugger prompt over stdin, which the compiled app
+# doesn't have: at module level the app never finishes starting, and inside
+# an endpoint's function every request to it hangs (or dies with BdbQuit).
+_DEBUGGER_CALL_LABELS = frozenset({
+    "pdb.set_trace", "pdb.post_mortem", "pdb.pm", "ipdb.set_trace",
+    "ipdb.post_mortem", "ipdb.pm", "pudb.set_trace", "debugger.set_trace",
+    "IPython.embed", "embed.embed", "code.interact", "IPython.start_ipython",
+})
+
+
+def _is_debugger_call(label, name, base):
+    return (name == "breakpoint" and base is None) or label in _DEBUGGER_CALL_LABELS
+
+
+def _find_function_debugger_calls(tree, aliases, cell_number):
+    """Debugger hazards inside function bodies, attributed to the outermost
+    enclosing function (each call reported once)."""
+    hazards = []
+    seen = set()
+    for func in ast.walk(tree):
+        if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for call in ast.walk(func):
+            if not isinstance(call, ast.Call) or id(call) in seen:
+                continue
+            seen.add(id(call))
+            label, name, base = _call_label(call.func)
+            if label is None:
+                continue
+            resolved_label, name, base = _resolve_import_alias(label, name, base, aliases)
+            if _is_debugger_call(resolved_label, name, base):
+                hazards.append({
+                    "kind": "debugger_call", "call": label, "path": None,
+                    "cell": cell_number, "line": call.lineno, "function": func.name,
+                })
+    return hazards
+
+
+def debugger_hazard_detail(hazard):
+    """(what, consequence) wording for a "debugger_call" hazard."""
+    what = f"`{hazard['call']}()` opens an interactive debugger on stdin, which the compiled app doesn't have"
+    if hazard.get("function"):
+        return what, f"every call to {hazard['function']}() will hang"
+    return what, "the app will hang on startup"
+
+
 def _is_blocking_call(label, name, call):
     if name in _BLOCKING_CALL_NAMES or label in _BLOCKING_CALL_LABELS:
         return True
@@ -1716,6 +1763,7 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
     """
     hazards = []
     current_aliases = [{}]
+    notebook_aliases = {}
 
     def visit(statements, cell_number):
         for node in statements:
@@ -1742,6 +1790,12 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
                 resolved_label, name, base = _resolve_import_alias(
                     label, name, base, current_aliases[0]
                 )
+                if _is_debugger_call(resolved_label, name, base):
+                    hazards.append({
+                        "kind": "debugger_call", "call": label, "path": None,
+                        "cell": cell_number, "line": call.lineno,
+                    })
+                    continue
                 if _is_blocking_call(resolved_label, name, call):
                     hazards.append({
                         "kind": "blocking_call", "call": label, "path": None,
@@ -1783,6 +1837,10 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
             continue
         current_aliases[0] = _import_aliases(tree)
         visit(tree.body, cell_number)
+        # Functions run after every cell has, so imports from any earlier
+        # cell are in scope for them.
+        notebook_aliases.update(current_aliases[0])
+        hazards.extend(_find_function_debugger_calls(tree, notebook_aliases, cell_number))
 
     for cell_number, cell in enumerate(code_cells, start=1):
         unsafe_lines = _lines_inside_multiline_strings(cell)

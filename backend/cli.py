@@ -26,6 +26,7 @@ from nbformat import ValidationError as NotebookValidationError
 # Import the compiler function
 from backend.compiler import (
     NOTEBOOK_TO_API_VERSION,
+    debugger_hazard_detail,
     compile_notebook,
     compiling_python_version,
     _extract_explicit_requirements,
@@ -2340,6 +2341,13 @@ def _dispatch_core_command(args):
                     f"({failed['message']}) -- it runs again when the app starts"
                 )
             for hazard in data["import_time_hazards"]:
+                if hazard["kind"] == "debugger_call":
+                    what, consequence = debugger_hazard_detail(hazard)
+                    print(
+                        f"⚠ Debugger call (cell {hazard['cell']}, line "
+                        f"{hazard['line']}): {what} -- {consequence}"
+                    )
+                    continue
                 if hazard["kind"] == "input":
                     detail = f"{hazard['call']}() waits on stdin, which the compiled app doesn't have"
                 elif hazard["kind"] == "colab_import":
@@ -5853,6 +5861,13 @@ def _dispatch_core_command(args):
                     f"({failed['message']}) -- it runs again when the app starts"
                 )
             for hazard in data.get("import_time_hazards") or []:
+                if hazard.get("kind") == "debugger_call":
+                    what, consequence = debugger_hazard_detail(hazard)
+                    print(
+                        f"⚠ Debugger call (cell {hazard['cell']}, line "
+                        f"{hazard['line']}): {what} -- {consequence}"
+                    )
+                    continue
                 target = (
                     hazard["call"] if hazard.get("kind") in ("colab_import", "shell_command")
                     else f"{hazard['call']}({hazard['path']!r})" if hazard.get("path")
@@ -6003,6 +6018,13 @@ def _dispatch_core_command(args):
                         )
 
                     for hazard in result.get("import_time_hazards") or []:
+                        if hazard.get("kind") == "debugger_call":
+                            _, consequence = debugger_hazard_detail(hazard)
+                            print(
+                                f"    debugger call: cell {hazard['cell']}, line "
+                                f"{hazard['line']}: {hazard['call']}() -- {consequence}"
+                            )
+                            continue
                         target = (
                             hazard["call"] if hazard.get("kind") in ("colab_import", "shell_command")
                             else f"{hazard['call']}({hazard['path']!r})" if hazard.get("path")
