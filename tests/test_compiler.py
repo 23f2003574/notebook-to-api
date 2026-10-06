@@ -12767,3 +12767,66 @@ def test_compile_redirects_request_time_reads_through_path_constants(tmp_path, m
     exec(source, namespace)
 
     assert namespace["labels"](1) == "dog"
+
+
+def test_recompile_removes_data_files_the_notebook_no_longer_ships(tmp_path):
+    from backend.compiler import compile_notebook
+
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "a.txt").write_text("1")
+    (tmp_path / "data" / "b.txt").write_text("2")
+    (tmp_path / "config.json").write_text("{}")
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "import os\nNAMES = sorted(os.listdir('data'))\nCFG = open('config.json').read()\n\n"
+        "def names(a: int) -> int:\n    return len(NAMES) + a\n",
+    )
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+    runtime = out / "runtime"
+    assert (runtime / "data" / "b.txt").exists() and (runtime / "config.json").exists()
+    (runtime / "data" / "kept-by-user.log").write_text("not ours")
+
+    (tmp_path / "data" / "b.txt").unlink()
+    _write_notebook_importing(
+        notebook,
+        "import os\nNAMES = sorted(os.listdir('data'))\n\n"
+        "def names(a: int) -> int:\n    return len(NAMES) + a\n",
+    )
+    compile_notebook(str(notebook), str(out))
+
+    assert (runtime / "data" / "a.txt").exists()
+    assert not (runtime / "data" / "b.txt").exists()
+    assert not (runtime / "config.json").exists()
+    assert (runtime / "data" / "kept-by-user.log").exists()
+    assert json.loads((runtime / ".shipped_data.json").read_text()) == ["data/a.txt"]
+
+
+def test_stale_cleanup_drops_emptied_directories_and_ignores_a_bad_manifest(tmp_path):
+    from backend.compiler import SHIPPED_DATA_MANIFEST, _sync_shipped_data_files
+
+    source = tmp_path / "src.txt"
+    source.write_text("x")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    _sync_shipped_data_files({"deep/nested/x.txt": source, "./top.txt": source}, runtime)
+    assert json.loads((runtime / SHIPPED_DATA_MANIFEST).read_text()) == ["deep/nested/x.txt", "top.txt"]
+    (runtime / "notebook_module.py").write_text("")
+
+    manifest = json.loads((runtime / SHIPPED_DATA_MANIFEST).read_text())
+    (runtime / SHIPPED_DATA_MANIFEST).write_text(
+        json.dumps(manifest + ["../outside.txt", "notebook_module.py", 7])
+    )
+    (tmp_path / "outside.txt").write_text("keep")
+    _sync_shipped_data_files({}, runtime)
+
+    assert not (runtime / "deep").exists()
+    assert not (runtime / "top.txt").exists()
+    assert not (runtime / SHIPPED_DATA_MANIFEST).exists()
+    assert (runtime / "notebook_module.py").exists()
+    assert (tmp_path / "outside.txt").read_text() == "keep"
+
+    (runtime / SHIPPED_DATA_MANIFEST).write_text("not json")
+    _sync_shipped_data_files({"top.txt": source}, runtime)
+    assert (runtime / "top.txt").read_text() == "x"

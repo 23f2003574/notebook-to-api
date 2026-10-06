@@ -504,6 +504,53 @@ def _ship_local_modules(local_modules, runtime_dir):
             shutil.copyfile(source, runtime_dir / f"{name}.py")
 
 
+# Which data files the last compile copied into the runtime directory, so the
+# next one can remove those it no longer ships. Without it a deleted or
+# renamed data file lived on in every later build: `os.listdir("data")` in the
+# app still listed it, and the Docker image kept carrying it.
+SHIPPED_DATA_MANIFEST = ".shipped_data.json"
+
+
+def _sync_shipped_data_files(data_files, runtime_dir):
+    """Copy `data_files` ({relative path: source}) into `runtime_dir` and
+    delete the files a previous compile shipped that this one doesn't (plus
+    any directories that leaves empty). Only paths recorded in the manifest
+    are ever deleted, never anything outside `runtime_dir`, and never a .py
+    file (a former `%run` script may now be a shipped local module)."""
+    runtime_dir = Path(runtime_dir).resolve()
+    manifest_path = runtime_dir / SHIPPED_DATA_MANIFEST
+    try:
+        previous = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(previous, list):
+            previous = []
+    except (OSError, ValueError):
+        previous = []
+
+    current = []
+    for relative, source in (data_files or {}).items():
+        target = runtime_dir / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        current.append(Path(os.path.normpath(relative)).as_posix())
+
+    for relative in previous:
+        if not isinstance(relative, str) or relative in current:
+            continue
+        stale = (runtime_dir / relative).resolve()
+        if runtime_dir not in stale.parents or stale.suffix == ".py" or not stale.is_file():
+            continue
+        stale.unlink()
+        parent = stale.parent
+        while parent != runtime_dir and not any(parent.iterdir()):
+            parent.rmdir()
+            parent = parent.parent
+
+    if current:
+        manifest_path.write_text(json.dumps(sorted(set(current)), indent=2) + "\n", encoding="utf-8")
+    else:
+        manifest_path.unlink(missing_ok=True)
+
+
 _LOCAL_MODULES_PATH_PRELUDE = (
     "# Notebook-local modules ship beside this file (notebook-to-api)\n"
     "import os as _nb_os, sys as _nb_sys\n"
@@ -563,10 +610,7 @@ def write_runtime_module(code_cells, output_dir, local_modules=None, data_files=
         combined_code = combined_code.rstrip("\n") + "\n\n" + _DATA_FILES_CHDIR_EPILOGUE
     if local_modules:
         _ship_local_modules(local_modules, runtime_path.parent)
-    for relative, source in (data_files or {}).items():
-        target = runtime_path.parent / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, target)
+    _sync_shipped_data_files(data_files, runtime_path.parent)
 
     with open(runtime_path, "w", encoding="utf-8") as f:
         f.write(combined_code)
