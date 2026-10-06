@@ -35077,7 +35077,8 @@ def test_validate_reports_import_time_hazards_without_changing_status():
 
     assert body["status"] == "pass"
     assert body["import_time_hazards"] == [
-        {"kind": "file_read", "call": "pd.read_csv", "path": "sales.csv", "cell": 1, "line": 2}
+        {"kind": "file_read", "call": "pd.read_csv", "path": "sales.csv", "cell": 1, "line": 2,
+         "reason": "missing"}
     ]
 
 
