@@ -12468,7 +12468,7 @@ def test_literal_path_expressions_are_resolved_for_data_file_reads():
 
     cells = [
         "import os\nimport pandas as pd\nfrom pathlib import Path\n"
-        "DATA = 'data'\n"
+        "DATA = os.environ['DATA_DIR']\n"
         "a = pd.read_csv(os.path.join('data', 'sales.csv'))\n"
         "b = open(Path('config') / 'settings.json').read()\n"
         "c = (Path('notes') / 'readme.txt').read_text()\n"
@@ -12520,3 +12520,61 @@ def test_compile_ships_files_read_through_joined_paths(tmp_path, monkeypatch):
     exec((out / "runtime" / "notebook_module.py").read_text(), namespace)
 
     assert namespace["answer"](0) == 42
+
+
+def test_module_level_path_constants_resolve_data_file_reads():
+    from backend.compiler import _find_import_time_hazards
+
+    cells = [
+        "import os\nimport pandas as pd\nfrom pathlib import Path\n"
+        "DATA_DIR = Path('data')\n"
+        "SALES = 'data/sales.csv'\n"
+        "MODEL = DATA_DIR / 'model.pkl'\n",
+        "df = pd.read_csv(SALES)\n"
+        "blob = open(MODEL, 'rb').read()\n"
+        "cfg = open(f'{DATA_DIR}/cfg.json').read()\n"
+        "imgs = os.listdir(DATA_DIR / 'imgs')\n"
+        "notes = (DATA_DIR / 'notes.txt').read_text()\n",
+        "TWICE = 'a.csv'\nTWICE = 'b.csv'\nx = pd.read_csv(TWICE)\n"
+        "for LOOPED in ['c.csv']:\n    pass\nLOOPED = 'd.csv'\ny = pd.read_csv(LOOPED)\n"
+        "ENV = os.environ['P']\nz = pd.read_csv(ENV)\n"
+        "ABS = '/srv/x.csv'\nw = pd.read_csv(ABS)\n"
+        "FMT = 'data'\nv = open(f'{FMT!r}/x').read()\n"
+        "def f():\n    return pd.read_csv(SALES)\n",
+    ]
+
+    assert [(h["kind"], h["call"], h["path"]) for h in _find_import_time_hazards(cells)] == [
+        ("file_read", "pd.read_csv", "data/sales.csv"),
+        ("file_read", "open", "data/model.pkl"),
+        ("file_read", "open", "data/cfg.json"),
+        ("dir_read", "os.listdir", "data/imgs/*"),
+        ("file_read", "read_text", "data/notes.txt"),
+    ]
+
+
+def test_compile_ships_files_read_through_path_constants(tmp_path, monkeypatch):
+    from backend.compiler import compile_notebook
+
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "base.txt").write_text("41")
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "from pathlib import Path\n"
+        "DATA_DIR = Path('data')\n"
+        "BASE_FILE = DATA_DIR / 'base.txt'\n"
+        "BASE = int(open(BASE_FILE).read())\n\n"
+        "def answer(a: int) -> int:\n    return BASE + a\n",
+    )
+    out = tmp_path / "out"
+
+    compile_notebook(str(notebook), str(out))
+
+    assert (out / "runtime" / "data" / "base.txt").read_text() == "41"
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    namespace = {"__file__": str(out / "runtime" / "notebook_module.py")}
+    exec((out / "runtime" / "notebook_module.py").read_text(), namespace)
+
+    assert namespace["answer"](1) == 42

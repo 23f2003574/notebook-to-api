@@ -1509,19 +1509,33 @@ def _is_main_guard(node):
     )
 
 
-def _literal_path_value(node):
+def _literal_path_value(node, constants=None):
     """The string a path expression built only from literals evaluates to:
     "x.csv", `os.path.join("data", "x.csv")`, `Path("data") / "x.csv"`,
-    `Path("data", "x.csv")`, `f"data/x.csv"` (no placeholders). None for
-    anything that depends on a runtime value."""
+    `Path("data", "x.csv")`, `f"data/x.csv"`, and names in `constants`
+    (see _module_path_constants) inside any of these: `DATA_DIR / "x.csv"`,
+    `f"{DATA_DIR}/x.csv"`. None for anything that depends on a runtime value."""
     if isinstance(node, ast.Constant):
         return node.value if isinstance(node.value, str) else None
+    if isinstance(node, ast.Name):
+        return (constants or {}).get(node.id)
     if isinstance(node, ast.JoinedStr):
-        if all(isinstance(v, ast.Constant) for v in node.values):
-            return "".join(v.value for v in node.values)
-        return None
+        pieces = []
+        for value in node.values:
+            if isinstance(value, ast.Constant):
+                pieces.append(value.value)
+            elif (
+                isinstance(value, ast.FormattedValue) and value.conversion == -1
+                and value.format_spec is None
+                and isinstance(value.value, ast.Name)
+                and value.value.id in (constants or {})
+            ):
+                pieces.append(constants[value.value.id])
+            else:
+                return None
+        return "".join(pieces)
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
-        left, right = _literal_path_value(node.left), _literal_path_value(node.right)
+        left, right = _literal_path_value(node.left, constants), _literal_path_value(node.right, constants)
         if left is None or right is None:
             return None
         return right if right.startswith("/") else f"{left.rstrip('/')}/{right}"
@@ -1529,7 +1543,7 @@ def _literal_path_value(node):
         _, name, _ = _call_label(node.func)
         dotted = ast.unparse(node.func)
         if dotted in ("os.path.join", "path.join", "osp.join") or name in ("Path", "PurePath", "PosixPath"):
-            parts = [_literal_path_value(arg) for arg in node.args]
+            parts = [_literal_path_value(arg, constants) for arg in node.args]
             if any(part is None for part in parts):
                 return None
             joined = parts[0]
@@ -1539,13 +1553,58 @@ def _literal_path_value(node):
     return None
 
 
+def _module_store_counts(tree):
+    """{name: times it's bound at module level} for one cell, function and
+    class bodies left out (they bind their own scope)."""
+    counts = {}
+    stack = list(tree.body)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            counts[node.name] = counts.get(node.name, 0) + 1
+            continue
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            counts[node.id] = counts.get(node.id, 0) + 1
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                name = (alias.asname or alias.name).split(".")[0]
+                counts[name] = counts.get(name, 0) + 1
+        stack.extend(ast.iter_child_nodes(node))
+    return counts
+
+
+def _module_path_constants(trees):
+    """{name: path string} for module-level names bound exactly once in the
+    whole notebook, by a plain `NAME = <literal path expression>` (see
+    _literal_path_value): `DATA_PATH = "data/sales.csv"`,
+    `DATA_DIR = Path("data")`, `MODEL = DATA_DIR / "model.pkl"`. A name
+    rebound anywhere at module level (a loop variable, a second assignment,
+    an import) is left out, since its value at the read is unknown."""
+    counts = {}
+    for tree in trees:
+        for name, count in _module_store_counts(tree).items():
+            counts[name] = counts.get(name, 0) + count
+    constants = {}
+    for tree in trees:
+        for node in tree.body:
+            if not (
+                isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+            ) or counts.get(node.targets[0].id) != 1:
+                continue
+            value = _literal_path_value(node.value, constants)
+            if value is not None:
+                constants[node.targets[0].id] = value
+    return constants
+
+
 def _is_relative_path(path):
     return bool(path) and not (
         path.startswith(("/", "~")) or "://" in path or (len(path) > 1 and path[1] == ":")
     )
 
 
-def _relative_literal_path(call):
+def _relative_literal_path(call, constants=None):
     """The call's first-argument path when it's built only from literals
     (see _literal_path_value) and is a relative local path (not absolute,
     `~`, or a URL), else None."""
@@ -1560,7 +1619,7 @@ def _relative_literal_path(call):
                 return None
         elif not isinstance(receiver, ast.BinOp):
             return None
-        path = _literal_path_value(receiver)
+        path = _literal_path_value(receiver, constants)
         if path is not None and path.startswith("./"):
             path = path[2:]
         return path if _is_relative_path(path) else None
@@ -1569,8 +1628,8 @@ def _relative_literal_path(call):
          if kw.arg in ("filepath_or_buffer", "io", "path", "file", "fname", "fp")),
         None,
     )
-    path = _literal_path_value(arg) if arg is not None else None
-    if path is not None and path.startswith("./") and not isinstance(arg, ast.Constant):
+    path = _literal_path_value(arg, constants) if arg is not None else None
+    if path is not None and path.startswith("./") and not isinstance(arg, (ast.Constant, ast.Name)):
         path = path[2:]
     return path if _is_relative_path(path) else None
 
@@ -1584,7 +1643,7 @@ _DIR_LISTING_PATTERNS = {"os.listdir": "{}/*", "os.scandir": "{}/*", "os.walk": 
 _GLOB_CALL_LABELS = frozenset({"glob.glob", "glob.iglob"})
 
 
-def _relative_listing_pattern(label, call):
+def _relative_listing_pattern(label, call, constants=None):
     """The relative glob pattern a top-level directory listing covers, else
     None (non-literal, absolute, climbing out with "..", or the notebook's
     whole directory)."""
@@ -1596,11 +1655,11 @@ def _relative_listing_pattern(label, call):
         _, path_name, _ = _call_label(func.value.func)
         if path_name not in ("Path", "PurePath"):
             return None
-        directory = _relative_literal_path(func.value)
+        directory = _relative_literal_path(func.value, constants)
         if func.attr == "iterdir":
             pattern = "*"
         else:
-            pattern = _relative_literal_path(call)
+            pattern = _relative_literal_path(call, constants)
             if pattern is None:
                 return None
             if func.attr == "rglob":
@@ -1609,12 +1668,12 @@ def _relative_listing_pattern(label, call):
             return None
         pattern = f"{directory.rstrip('/')}/{pattern}"
     elif label in _DIR_LISTING_PATTERNS:
-        directory = _relative_literal_path(call)
+        directory = _relative_literal_path(call, constants)
         if directory is None:
             return None
         pattern = _DIR_LISTING_PATTERNS[label].format(directory.rstrip("/"))
     elif label in _GLOB_CALL_LABELS:
-        pattern = _relative_literal_path(call)
+        pattern = _relative_literal_path(call, constants)
     else:
         return None
     if not pattern:
@@ -1959,7 +2018,7 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
                         "cell": cell_number, "line": call.lineno,
                     })
                     continue
-                pattern = _relative_listing_pattern(resolved_label, call)
+                pattern = _relative_listing_pattern(resolved_label, call, path_constants)
                 if pattern is not None:
                     hazards.append({
                         "kind": "dir_read", "call": label, "path": pattern,
@@ -1980,18 +2039,22 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
                         and set(mode.value) & set("wax+")
                     ):
                         continue
-                path = _relative_literal_path(call)
+                path = _relative_literal_path(call, path_constants)
                 if path is not None:
                     hazards.append({
                         "kind": "file_read", "call": label, "path": path,
                         "cell": cell_number, "line": call.lineno,
                     })
 
+    parsed = []
     for cell_number, cell in enumerate(code_cells, start=1):
         try:
-            tree = ast.parse(cell)
+            parsed.append((cell_number, ast.parse(cell)))
         except SyntaxError:
             continue
+    path_constants = _module_path_constants([tree for _, tree in parsed])
+
+    for cell_number, tree in parsed:
         current_aliases[0] = _import_aliases(tree)
         visit(tree.body, cell_number)
         # Functions run after every cell has, so imports from any earlier
