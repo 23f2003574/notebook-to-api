@@ -1668,9 +1668,37 @@ def _is_debugger_call(label, name, base):
     return (name == "breakpoint" and base is None) or label in _DEBUGGER_CALL_LABELS
 
 
-def _find_function_debugger_calls(tree, aliases, cell_number):
+# Calls that end the process. Jupyter catches SystemExit and only warns, so a
+# notebook's `if df.empty: sys.exit()` guard (or a stray `exit()`) did no
+# harm there; run at module level when the compiled app imports the notebook,
+# it stops the server before it serves anything.
+_EXIT_CALL_LABELS = frozenset({"sys.exit", "os._exit", "os.abort"})
+
+
+def _is_exit_call(label, name, base):
+    return (name in ("exit", "quit") and base is None) or label in _EXIT_CALL_LABELS
+
+
+def _raises_system_exit(node):
+    """True for `raise SystemExit` / `raise SystemExit(...)`."""
+    exc = node.exc.func if isinstance(node.exc, ast.Call) else node.exc
+    return isinstance(exc, ast.Name) and exc.id == "SystemExit"
+
+
+def _call_hazard_kind(label, name, base):
+    """"debugger_call" / "exit_call" for a resolved call label, else None."""
+    if _is_debugger_call(label, name, base):
+        return "debugger_call"
+    if _is_exit_call(label, name, base):
+        return "exit_call"
+    return None
+
+
+def _find_function_call_hazards(tree, aliases, cell_number):
     """Debugger hazards inside function bodies, attributed to the outermost
-    enclosing function (each call reported once)."""
+    enclosing function (each call reported once). Exit calls there are not
+    reported: the generated endpoints already turn SystemExit into a failed
+    call."""
     hazards = []
     seen = set()
     for func in ast.walk(tree):
@@ -1692,9 +1720,12 @@ def _find_function_debugger_calls(tree, aliases, cell_number):
     return hazards
 
 
-def debugger_hazard_detail(hazard):
-    """(what, consequence) wording for a "debugger_call" hazard."""
-    what = f"`{hazard['call']}()` opens an interactive debugger on stdin, which the compiled app doesn't have"
+def call_hazard_detail(hazard):
+    """(what, consequence) wording for a "debugger_call" or "exit_call" hazard."""
+    call = hazard["call"] if hazard["call"].startswith("raise ") else f"{hazard['call']}()"
+    if hazard["kind"] == "exit_call":
+        return f"`{call}` ends the process (Jupyter only warned and carried on)", "the app will exit on startup"
+    what = f"`{call}` opens an interactive debugger on stdin, which the compiled app doesn't have"
     if hazard.get("function"):
         return what, f"every call to {hazard['function']}() will hang"
     return what, "the app will hang on startup"
@@ -1775,6 +1806,11 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
             for child in ast.iter_child_nodes(node):
                 if isinstance(child, ast.stmt):
                     visit([child], cell_number)
+            if isinstance(node, ast.Raise) and _raises_system_exit(node):
+                hazards.append({
+                    "kind": "exit_call", "call": "raise SystemExit", "path": None,
+                    "cell": cell_number, "line": node.lineno,
+                })
             colab_module = _colab_import(node)
             if colab_module:
                 hazards.append({
@@ -1790,9 +1826,10 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
                 resolved_label, name, base = _resolve_import_alias(
                     label, name, base, current_aliases[0]
                 )
-                if _is_debugger_call(resolved_label, name, base):
+                kind = _call_hazard_kind(resolved_label, name, base)
+                if kind:
                     hazards.append({
-                        "kind": "debugger_call", "call": label, "path": None,
+                        "kind": kind, "call": label, "path": None,
                         "cell": cell_number, "line": call.lineno,
                     })
                     continue
@@ -1840,7 +1877,7 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
         # Functions run after every cell has, so imports from any earlier
         # cell are in scope for them.
         notebook_aliases.update(current_aliases[0])
-        hazards.extend(_find_function_debugger_calls(tree, notebook_aliases, cell_number))
+        hazards.extend(_find_function_call_hazards(tree, notebook_aliases, cell_number))
 
     for cell_number, cell in enumerate(code_cells, start=1):
         unsafe_lines = _lines_inside_multiline_strings(cell)

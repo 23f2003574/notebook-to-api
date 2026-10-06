@@ -12324,3 +12324,54 @@ def test_debugger_hazard_wording_distinguishes_startup_and_request_hangs():
     assert lines[0].startswith("Cell 1, line 3: `breakpoint()` opens an interactive debugger")
     assert lines[0].endswith("-- the app will hang on startup")
     assert lines[1].endswith("-- every call to predict() will hang")
+
+
+def test_module_level_process_exit_calls_are_reported_but_not_inside_functions():
+    from backend.compiler import _find_import_time_hazards
+
+    cells = [
+        "import sys\nimport os as o\nfrom sys import exit as bail\n"
+        "if df_empty:\n    sys.exit('no data')\n"
+        "quit()\n"
+        "bail(1)\n"
+        "raise SystemExit(2)\n"
+        "if __name__ == '__main__':\n    sys.exit(main())\n",
+        "def predict(x):\n    if x is None:\n        raise SystemExit\n    o._exit(1)\n",
+    ]
+
+    hazards = _find_import_time_hazards(cells)
+
+    assert [(h["kind"], h["call"], h["cell"], h["line"], h.get("function")) for h in hazards] == [
+        ("exit_call", "sys.exit", 1, 5, None),
+        ("exit_call", "quit", 1, 6, None),
+        ("exit_call", "bail", 1, 7, None),
+        ("exit_call", "raise SystemExit", 1, 8, None),
+    ]
+
+
+def test_exit_lookalikes_are_not_reported():
+    from backend.compiler import _find_import_time_hazards
+
+    cells = [
+        "import atexit\natexit.register(print)\nsession.exit()\n"
+        "raise ValueError('bad')\n"
+        "def f(ctx):\n    ctx.quit()\n    raise KeyboardInterrupt\n",
+    ]
+
+    assert _find_import_time_hazards(cells) == []
+
+
+def test_exit_hazard_wording():
+    from backend.inspector import startup_warning_lines
+
+    lines = startup_warning_lines({"import_time_hazards": [
+        {"kind": "exit_call", "call": "sys.exit", "path": None, "cell": 1, "line": 2},
+        {"kind": "exit_call", "call": "raise SystemExit", "path": None, "cell": 2, "line": 3},
+    ]})
+
+    assert lines[0] == (
+        "Cell 1, line 2: `sys.exit()` ends the process (Jupyter only warned and "
+        "carried on) -- the app will exit on startup"
+    )
+    assert lines[1].startswith("Cell 2, line 3: `raise SystemExit` ends the process")
+    assert lines[1].endswith("-- the app will exit on startup")
