@@ -2139,3 +2139,43 @@ def test_a_new_file_in_a_listed_directory_triggers_a_recompile(tmp_path, monkeyp
 
     assert len(compiled) == 1
     assert "Data file 'inbox/new.txt' changed" in capsys.readouterr().out
+
+
+def test_directories_a_read_names_whole_are_watched_recursively(tmp_path):
+    notebook = tmp_path / "nb.ipynb"
+    _notebook_importing(
+        notebook,
+        "from tensorflow import keras\nimport pandas as pd\n"
+        "model = keras.models.load_model('saved_model')\n"
+        "empty = pd.read_parquet('parts')\n"
+        "gone = pd.read_parquet('absent')\n"
+        "outside = pd.read_parquet('../elsewhere')\n"
+        "def predict(x):\n    return pd.read_parquet('features')\n",
+    )
+    (tmp_path / "saved_model" / "variables").mkdir(parents=True)
+    (tmp_path / "saved_model" / "variables" / "w.bin").write_text("w")
+    (tmp_path / "parts").mkdir()
+    (tmp_path / "features").mkdir()
+    (tmp_path.parent / "elsewhere").mkdir(exist_ok=True)
+
+    assert serve_module.extra_watch_directories(str(notebook)) == [
+        ((tmp_path / "features").resolve(), True),
+        ((tmp_path / "parts").resolve(), True),
+        ((tmp_path / "saved_model").resolve(), True),
+    ]
+
+
+def test_a_new_file_deep_in_a_read_directory_triggers_a_recompile(tmp_path, monkeypatch, capsys):
+    handler, notebook_path, _event, compiled = _handler_with_recording_compile(
+        tmp_path, monkeypatch, debounce_seconds=0
+    )
+    _notebook_importing(
+        notebook_path, "import pandas as pd\nframe = pd.read_parquet('parts')\n"
+    )
+    (tmp_path / "parts" / "year=2024").mkdir(parents=True)
+    (tmp_path / "parts" / "year=2024" / "p0.parquet").write_text("data")
+
+    handler.on_created(_module_event(tmp_path / "parts" / "year=2024" / "p0.parquet"))
+
+    assert len(compiled) == 1
+    assert "Data file 'parts/year=2024/p0.parquet' changed" in capsys.readouterr().out

@@ -175,19 +175,34 @@ def extra_watch_directories(notebook_path):
     for source in local.values():
         if isinstance(source, Path) and source.is_dir():
             directories[source.resolve()] = True
-    return sorted(directories.items())
+    recursive_roots = [d for d, recursive in directories.items() if recursive]
+    return sorted(
+        (directory, recursive) for directory, recursive in directories.items()
+        if not any(root in directory.parents for root in recursive_roots)
+    )
 
 
 def _listed_directories(notebook_dir, cells):
     """[(directory, recursive)] for the existing folders the notebook's
     top-level directory listings cover (`os.listdir("data")`,
     `glob.glob("imgs/**/*.png")`): the pattern's fixed leading part, watched
-    recursively when the pattern descends with "**" or a wildcard folder. A
+    recursively when the pattern descends with "**" or a wildcard folder --
+    plus the folders a read names whole (`load_model("saved_model")`),
+    always watched recursively. A
     file added there is shipped by the next compile, but only an event from
     a watched folder triggers one -- and an empty folder ships nothing, so
     the shipped-file parents alone never covered it."""
     found = []
     for hazard in _find_import_time_hazards(cells):
+        if hazard["kind"] in ("file_read", "request_read"):
+            # A read naming a whole folder (`load_model("saved_model")`)
+            # ships everything under it, so a file added anywhere inside --
+            # or to it while still empty -- changes what the app ships.
+            directory = (notebook_dir / hazard["path"]).resolve()
+            inside = notebook_dir == directory or notebook_dir in directory.parents
+            if inside and directory != notebook_dir and directory.is_dir():
+                found.append((directory, True))
+            continue
         if hazard["kind"] != "dir_read":
             continue
         parts = Path(hazard["path"]).parts
