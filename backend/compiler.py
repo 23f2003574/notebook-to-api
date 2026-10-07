@@ -1,5 +1,6 @@
 import ast
 import datetime
+import fnmatch
 import functools
 import hashlib
 import importlib.metadata
@@ -2113,7 +2114,7 @@ def _call_hazard_kind(label, name, base):
     return None
 
 
-def _file_read_path(name, base, call, constants=None):
+def _file_read_path(name, base, call, constants=None, probe=False):
     """The relative path a data-file read (`pd.read_csv(...)`, read-mode
     `open(...)`, `np.load(...)`, ...) reads, else None."""
     label = f"{base}.{name}" if base else name
@@ -2134,6 +2135,8 @@ def _file_read_path(name, base, call, constants=None):
             and set(mode.value) & set("wax+")
         ):
             return None
+    if probe:  # only "is this a read call?"
+        return True
     path = _relative_literal_path(call, constants)
     return None if path in _NON_FILE_PATHS or (path or "").startswith("file:") else path
 
@@ -2200,6 +2203,7 @@ def _request_read_is_redirectable(call, redirectable):
     return (
         isinstance(arg, ast.Constant) and isinstance(arg.value, str)
         or isinstance(arg, ast.Name) and arg.id in redirectable
+        or isinstance(arg, ast.JoinedStr) and arg.lineno == arg.end_lineno
     )
 
 
@@ -2220,9 +2224,39 @@ def _function_data_reads(tree, aliases, constants):
                 continue
             _, name, base = _resolve_import_alias(label, name, base, aliases)
             path = _file_read_path(name, base, call, constants)
+            if path is None and _file_read_path(name, base, call, constants, probe=True):
+                path = _fstring_path_pattern(_path_arg_node(call))
             if path is not None:
                 found.append((func.name, call, path))
     return found
+
+
+def _fstring_path_pattern(node):
+    """A glob pattern for an f-string read path with a fixed leading folder
+    -- f"data/{city}.csv" -> "data/*.csv" -- so a read that picks its file
+    per request ships every candidate. None for other expressions, absolute
+    or climbing paths, or a pattern whose first folder isn't literal."""
+    if not isinstance(node, ast.JoinedStr):
+        return None
+    pattern = ""
+    for part in node.values:
+        if isinstance(part, ast.Constant) and isinstance(part.value, str):
+            if any(ch in part.value for ch in "*?[]"):
+                return None
+            pattern += part.value
+        elif not pattern.endswith("*"):
+            pattern += "*"
+    if pattern.startswith("./"):
+        pattern = pattern[2:]
+    head, slash, _ = pattern.partition("/")
+    if not slash or not head or "*" in head or ".." in pattern.split("/"):
+        return None
+    return pattern if _is_relative_path(pattern) else None
+
+
+def _path_pattern_matches(pattern, shipped):
+    """The shipped relative paths an f-string read pattern can name."""
+    return [path for path in shipped if fnmatch.fnmatchcase(path, pattern)]
 
 
 # A read inside a function runs when an endpoint is called, long after the
@@ -2263,10 +2297,13 @@ def _rewrite_request_time_reads(code_cells, shipped):
     redirected = set()
     for index, tree in parsed.items():
         for _, call, path in _function_data_reads(tree, aliases, constants):
-            if path not in shipped and not _shipped_as_directory(path, shipped):
+            if "*" in path:
+                if not _path_pattern_matches(path, shipped):
+                    continue
+            elif path not in shipped and not _shipped_as_directory(path, shipped):
                 continue
             node = _path_arg_node(call)
-            if isinstance(node, ast.Constant) and node.lineno == node.end_lineno:
+            if isinstance(node, (ast.Constant, ast.JoinedStr)) and node.lineno == node.end_lineno:
                 targets[index].append(node)
             elif isinstance(node, ast.Name) and node.id in redirectable:
                 redirected.add(node.id)
@@ -2286,7 +2323,11 @@ def _rewrite_request_time_reads(code_cells, shipped):
         lines = cells[index].splitlines(keepends=True)
         for node in sorted(nodes, key=lambda n: (n.lineno, n.col_offset), reverse=True):
             raw = lines[node.lineno - 1].encode("utf-8")
-            replacement = f"_nb_data_path({node.value!r})".encode("utf-8")
+            if isinstance(node, ast.JoinedStr):
+                source = raw[node.col_offset:node.end_col_offset].decode("utf-8")
+                replacement = f"_nb_data_path({source})".encode("utf-8")
+            else:
+                replacement = f"_nb_data_path({node.value!r})".encode("utf-8")
             raw = raw[:node.col_offset] + replacement + raw[node.end_col_offset:]
             lines[node.lineno - 1] = raw.decode("utf-8")
         cells[index] = "".join(lines)
@@ -2569,6 +2610,9 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
         def fully_shipped(item):
             if item["kind"] == "file_read":
                 return path_shipped(item["path"])
+            if item["kind"] == "request_read" and "*" in item["path"]:
+                files = _expand_listing_pattern(directory, item["path"])
+                return item["rewritable"] and bool(files) and all(f in shipped for f in files)
             if item["kind"] == "request_read":
                 return item["rewritable"] and path_shipped(item["path"])
             if item["kind"] == "dir_read":
@@ -2637,6 +2681,11 @@ def _unshipped_reason(item, directory, shipped):
         return "size_limit" if files else "no_matches"
     if item["kind"] not in ("file_read", "request_read"):
         return None
+    if "*" in item["path"]:
+        files = _expand_listing_pattern(directory, item["path"])
+        if not files:
+            return "no_matches"
+        return "not_redirectable" if all(f in shipped for f in files) else "size_limit"
     if item["kind"] == "request_read" and (
         item["path"] in shipped or _shipped_as_directory(item["path"], shipped)
     ):
@@ -2672,7 +2721,9 @@ def find_data_files(notebook_path, code_cells=None, hazards=None):
 
     wanted = []
     for item in hazards:
-        if item["kind"] in ("file_read", "request_read"):
+        if item["kind"] == "request_read" and "*" in item["path"]:
+            wanted += list(_expand_listing_pattern(directory, item["path"]))
+        elif item["kind"] in ("file_read", "request_read"):
             wanted += list(_directory_read_files(directory, item["path"])) or [item["path"]]
     # `%run script.py` files are shipped too (see _run_magic_scripts).
     wanted += _run_magic_scripts(code_cells or [])

@@ -2179,3 +2179,16 @@ def test_a_new_file_deep_in_a_read_directory_triggers_a_recompile(tmp_path, monk
 
     assert len(compiled) == 1
     assert "Data file 'parts/year=2024/p0.parquet' changed" in capsys.readouterr().out
+
+
+def test_fstring_request_read_folders_are_watched(tmp_path):
+    notebook = tmp_path / "nb.ipynb"
+    _notebook_importing(
+        notebook,
+        "def price(city):\n    return open(f'prices/{city}.txt').read()\n",
+    )
+    (tmp_path / "prices").mkdir()
+
+    assert serve_module.extra_watch_directories(str(notebook)) == [
+        ((tmp_path / "prices").resolve(), False),
+    ]

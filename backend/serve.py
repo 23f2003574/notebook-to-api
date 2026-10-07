@@ -194,7 +194,7 @@ def _listed_directories(notebook_dir, cells):
     the shipped-file parents alone never covered it."""
     found = []
     for hazard in _find_import_time_hazards(cells):
-        if hazard["kind"] in ("file_read", "request_read"):
+        if hazard["kind"] in ("file_read", "request_read") and "*" not in hazard["path"]:
             # A read naming a whole folder (`load_model("saved_model")`)
             # ships everything under it, so a file added anywhere inside --
             # or to it while still empty -- changes what the app ships.
@@ -203,7 +203,8 @@ def _listed_directories(notebook_dir, cells):
             if inside and directory != notebook_dir and directory.is_dir():
                 found.append((directory, True))
             continue
-        if hazard["kind"] != "dir_read":
+        # f-string reads like f"data/{city}.csv" ship their pattern's matches.
+        if hazard["kind"] not in ("dir_read", "request_read"):
             continue
         parts = Path(hazard["path"]).parts
         fixed = []

@@ -13350,3 +13350,70 @@ def test_dockerfile_without_language_data_is_unchanged():
 
     empty = {"spacy": [], "nltk": []}
     assert dockerfile_content("g", "3.12", language_data=empty) == dockerfile_content("g", "3.12")
+
+
+def test_fstring_path_pattern_needs_a_literal_leading_folder():
+    import ast as ast_module
+
+    from backend.compiler import _fstring_path_pattern
+
+    def pattern(expr):
+        return _fstring_path_pattern(ast_module.parse(expr, mode="eval").body)
+
+    assert pattern("f'data/{city}.csv'") == "data/*.csv"
+    assert pattern("f'./data/{a}_{b}.json'") == "data/*_*.json"
+    assert pattern("f'models/{name}/{v}.pkl'") == "models/*/*.pkl"
+    assert pattern("f'{folder}/x.csv'") is None
+    assert pattern("f'{name}.csv'") is None
+    assert pattern("f'/srv/{x}.csv'") is None
+    assert pattern("f'../data/{x}.csv'") is None
+    assert pattern("f'data/[{x}].csv'") is None
+    assert pattern("'data/x.csv'") is None
+
+
+def test_compile_ships_and_redirects_fstring_request_time_reads(tmp_path, monkeypatch):
+    from backend.compiler import _find_import_time_hazards, compile_notebook
+
+    (tmp_path / "prices").mkdir()
+    (tmp_path / "prices" / "paris.txt").write_text("3")
+    (tmp_path / "prices" / "rome.txt").write_text("4")
+    (tmp_path / "prices" / "notes.md").write_text("not shipped")
+    source = (
+        "def price(city: str) -> int:\n"
+        "    with open(f'prices/{city}.txt') as fh:\n"
+        "        return int(fh.read())\n"
+    )
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(notebook, source)
+    out = tmp_path / "out"
+
+    assert _find_import_time_hazards([source], str(notebook)) == []
+    compile_notebook(str(notebook), str(out))
+
+    runtime = out / "runtime"
+    assert sorted(p.name for p in (runtime / "prices").iterdir()) == ["paris.txt", "rome.txt"]
+    assert "open(_nb_data_path(f'prices/{city}.txt'))" in (runtime / "notebook_module.py").read_text()
+    monkeypatch.chdir(tmp_path.parent)
+    namespace = {"__file__": str(runtime / "notebook_module.py")}
+    exec((runtime / "notebook_module.py").read_text(), namespace)
+    assert namespace["price"]("rome") == 4
+
+
+def test_fstring_request_reads_with_nothing_to_ship_say_why(tmp_path):
+    from backend.compiler import _find_import_time_hazards
+
+    notebook = tmp_path / "nb.ipynb"
+    (tmp_path / "multi").mkdir()
+    (tmp_path / "multi" / "a.txt").write_text("a")
+    cells = [
+        "def a(x):\n    return open(f'missing/{x}.txt').read()\n"
+        "def b(x):\n    return open(\n        f'multi/'\n        f'{x}.txt'\n    ).read()\n"
+        "def c(x):\n    return open(f'{x}.txt').read()\n",
+    ]
+
+    hazards = _find_import_time_hazards(cells, str(notebook))
+
+    assert [(h["kind"], h["path"], h.get("reason")) for h in hazards] == [
+        ("request_read", "missing/*.txt", "no_matches"),
+        ("request_read", "multi/*.txt", "not_redirectable"),
+    ]
