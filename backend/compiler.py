@@ -2203,7 +2203,7 @@ def _request_read_is_redirectable(call, redirectable):
     return (
         isinstance(arg, ast.Constant) and isinstance(arg.value, str)
         or isinstance(arg, ast.Name) and arg.id in redirectable
-        or isinstance(arg, ast.JoinedStr) and arg.lineno == arg.end_lineno
+        or isinstance(arg, (ast.JoinedStr, ast.BinOp, ast.Call)) and arg.lineno == arg.end_lineno
     )
 
 
@@ -2225,33 +2225,67 @@ def _function_data_reads(tree, aliases, constants):
             _, name, base = _resolve_import_alias(label, name, base, aliases)
             path = _file_read_path(name, base, call, constants)
             if path is None and _file_read_path(name, base, call, constants, probe=True):
-                path = _fstring_path_pattern(_path_arg_node(call))
+                path = _dynamic_path_pattern(_path_arg_node(call), constants)
             if path is not None:
                 found.append((func.name, call, path))
     return found
 
 
-def _fstring_path_pattern(node):
-    """A glob pattern for an f-string read path with a fixed leading folder
-    -- f"data/{city}.csv" -> "data/*.csv" -- so a read that picks its file
-    per request ships every candidate. None for other expressions, absolute
-    or climbing paths, or a pattern whose first folder isn't literal."""
-    if not isinstance(node, ast.JoinedStr):
-        return None
-    pattern = ""
-    for part in node.values:
-        if isinstance(part, ast.Constant) and isinstance(part.value, str):
-            if any(ch in part.value for ch in "*?[]"):
+_PATH_JOIN_CALLS = ("os.path.join", "path.join", "osp.join")
+
+
+def _path_pattern_piece(node, constants):
+    """The glob piece a path expression contributes: literal text for
+    strings and known path constants, "*" for a runtime value, joined
+    through f-strings, `os.path.join(...)`, `Path(...)` and `/`. None when a
+    literal itself contains glob characters (it can't be told apart)."""
+    literal = _literal_path_value(node, constants)
+    if literal is not None:
+        return None if any(ch in literal for ch in "*?[]") else literal
+    if isinstance(node, ast.JoinedStr):
+        pieces = []
+        for part in node.values:
+            piece = _path_pattern_piece(part, constants) if isinstance(part, ast.Constant) else "*"
+            if piece is None:
                 return None
-            pattern += part.value
-        elif not pattern.endswith("*"):
-            pattern += "*"
+            pieces.append(piece)
+        return "".join(pieces)
+    parts = None
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        parts = [node.left, node.right]
+    elif isinstance(node, ast.Call) and not node.keywords and node.args:
+        _, name, _ = _call_label(node.func)
+        if ast.unparse(node.func) in _PATH_JOIN_CALLS or name in ("Path", "PurePath", "PosixPath"):
+            parts = node.args
+    if parts is None:
+        return "*"
+    pieces = [_path_pattern_piece(part, constants) for part in parts]
+    if any(piece is None or piece.startswith("/") for piece in pieces[1:]) or pieces[0] is None:
+        return None
+    return "/".join(piece.rstrip("/") for piece in pieces[:-1]) + "/" + pieces[-1]
+
+
+def _dynamic_path_pattern(node, constants=None):
+    """A glob pattern for a read path built partly at runtime with a fixed
+    leading folder -- f"data/{city}.csv", os.path.join("data", name),
+    Path("data") / f"{x}.json" -> "data/*.csv", "data/*", "data/*.json" -- so
+    a read that picks its file per request ships every candidate. None
+    when the path is fully literal (handled elsewhere), absolute or
+    climbing, or its first folder isn't literal."""
+    if node is None or _literal_path_value(node, constants) is not None:
+        return None
+    if not isinstance(node, (ast.JoinedStr, ast.BinOp, ast.Call)):
+        return None
+    pattern = _path_pattern_piece(node, constants)
+    if pattern is None:
+        return None
+    pattern = re.sub(r"\*+", "*", pattern)
     if pattern.startswith("./"):
         pattern = pattern[2:]
     head, slash, _ = pattern.partition("/")
     if not slash or not head or "*" in head or ".." in pattern.split("/"):
         return None
-    return pattern if _is_relative_path(pattern) else None
+    return pattern if "*" in pattern and _is_relative_path(pattern) else None
 
 
 def _path_pattern_matches(pattern, shipped):
@@ -2303,7 +2337,8 @@ def _rewrite_request_time_reads(code_cells, shipped):
             elif path not in shipped and not _shipped_as_directory(path, shipped):
                 continue
             node = _path_arg_node(call)
-            if isinstance(node, (ast.Constant, ast.JoinedStr)) and node.lineno == node.end_lineno:
+            dynamic = (ast.JoinedStr, ast.BinOp, ast.Call)
+            if isinstance(node, (ast.Constant,) + dynamic) and node.lineno == node.end_lineno:
                 targets[index].append(node)
             elif isinstance(node, ast.Name) and node.id in redirectable:
                 redirected.add(node.id)
@@ -2323,7 +2358,7 @@ def _rewrite_request_time_reads(code_cells, shipped):
         lines = cells[index].splitlines(keepends=True)
         for node in sorted(nodes, key=lambda n: (n.lineno, n.col_offset), reverse=True):
             raw = lines[node.lineno - 1].encode("utf-8")
-            if isinstance(node, ast.JoinedStr):
+            if not isinstance(node, ast.Constant):
                 source = raw[node.col_offset:node.end_col_offset].decode("utf-8")
                 replacement = f"_nb_data_path({source})".encode("utf-8")
             else:

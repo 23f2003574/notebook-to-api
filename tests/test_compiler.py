@@ -13355,10 +13355,10 @@ def test_dockerfile_without_language_data_is_unchanged():
 def test_fstring_path_pattern_needs_a_literal_leading_folder():
     import ast as ast_module
 
-    from backend.compiler import _fstring_path_pattern
+    from backend.compiler import _dynamic_path_pattern
 
     def pattern(expr):
-        return _fstring_path_pattern(ast_module.parse(expr, mode="eval").body)
+        return _dynamic_path_pattern(ast_module.parse(expr, mode="eval").body)
 
     assert pattern("f'data/{city}.csv'") == "data/*.csv"
     assert pattern("f'./data/{a}_{b}.json'") == "data/*_*.json"
@@ -13417,3 +13417,52 @@ def test_fstring_request_reads_with_nothing_to_ship_say_why(tmp_path):
         ("request_read", "missing/*.txt", "no_matches"),
         ("request_read", "multi/*.txt", "not_redirectable"),
     ]
+
+
+def test_dynamic_path_pattern_covers_joined_and_path_division_reads():
+    import ast as ast_module
+
+    from backend.compiler import _dynamic_path_pattern
+
+    def pattern(expr, constants=None):
+        return _dynamic_path_pattern(ast_module.parse(expr, mode="eval").body, constants)
+
+    assert pattern("os.path.join('data', name)") == "data/*"
+    assert pattern("os.path.join('data', f'{name}.csv')") == "data/*.csv"
+    assert pattern("Path('models') / f'{v}.pkl'") == "models/*.pkl"
+    assert pattern("Path('models', kind, 'w.bin')") == "models/*/w.bin"
+    assert pattern("DATA / f'{x}.json'", {"DATA": "data"}) == "data/*.json"
+    assert pattern("os.path.join(root, 'x.csv')") is None
+    assert pattern("os.path.join('data', '/etc', name)") is None
+    assert pattern("os.path.join('data', 'x.csv')") is None
+    assert pattern("Path(name)") is None
+    assert pattern("load_path(name)") is None
+
+
+def test_compile_redirects_joined_path_request_reads(tmp_path, monkeypatch):
+    from backend.compiler import _find_import_time_hazards, compile_notebook
+
+    (tmp_path / "rates").mkdir()
+    (tmp_path / "rates" / "eur.txt").write_text("2")
+    (tmp_path / "rates" / "usd.txt").write_text("3")
+    source = (
+        "import os\nfrom pathlib import Path\n\n"
+        "def rate(code: str) -> int:\n"
+        "    return int(open(os.path.join('rates', code + '.txt')).read())\n\n"
+        "def doubled(code: str) -> int:\n"
+        "    return 2 * int(open(Path('rates') / f'{code}.txt').read())\n"
+    )
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(notebook, source)
+    out = tmp_path / "out"
+
+    assert _find_import_time_hazards([source], str(notebook)) == []
+    compile_notebook(str(notebook), str(out))
+
+    runtime = out / "runtime"
+    assert sorted(p.name for p in (runtime / "rates").iterdir()) == ["eur.txt", "usd.txt"]
+    monkeypatch.chdir(tmp_path.parent)
+    namespace = {"__file__": str(runtime / "notebook_module.py")}
+    exec((runtime / "notebook_module.py").read_text(), namespace)
+    assert namespace["rate"]("usd") == 3
+    assert namespace["doubled"]("eur") == 4
