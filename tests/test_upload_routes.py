@@ -35220,3 +35220,29 @@ def test_validate_all_reports_import_time_hazards_and_error_cells_per_notebook()
     # A notebook that can't even be parsed still has the same shape.
     assert results["va_malformed.ipynb"]["status"] == "fail"
     assert results["va_malformed.ipynb"]["import_time_hazards"] == []
+
+
+def test_dockerfile_preview_includes_hub_model_prefetch_matching_a_real_compile():
+
+    filename = "dockerfile_preview_hub_models.ipynb"
+    content = _notebook_bytes(
+        "def embed(text: str) -> int:\n"
+        "    from sentence_transformers import SentenceTransformer\n"
+        "    SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')\n"
+        "    return len(text)\n"
+    )
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(content), "application/json")},
+    )
+
+    preview = client.get("/api/dockerfile-preview", params={"notebook_path": filename}).json()
+
+    assert preview["hub_models"] == ["sentence-transformers/all-MiniLM-L6-v2"]
+    assert "snapshot_download('sentence-transformers/all-MiniLM-L6-v2')" in preview["dockerfile"]
+    assert client.post("/api/compile", json={"notebook_path": filename}).status_code == 200
+    assert preview["dockerfile"] == client.get("/api/generated/Dockerfile").json()["content"]
+
+    bare = client.get("/api/dockerfile-preview").json()
+    assert bare["hub_models"] == []
+    assert "snapshot_download" not in bare["dockerfile"]

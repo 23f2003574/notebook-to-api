@@ -48,6 +48,7 @@ from backend.compiler import (
     _extract_deprecated_functions,
     _extract_excluded_imports,
     _extract_explicit_apt_packages,
+    hub_model_ids,
     _extract_explicit_requirements,
     _filter_functions_by_name,
     _generated_files_sha256,
@@ -15740,6 +15741,7 @@ def dockerfile_preview_endpoint(notebook_path: str = None, version_id: str = Non
     python_version = compiling_python_version()
 
     apt_packages = []
+    hub_models = []
 
     if notebook_path:
 
@@ -15762,6 +15764,9 @@ def dockerfile_preview_endpoint(notebook_path: str = None, version_id: str = Non
         ]
 
         apt_packages = _extract_explicit_apt_packages(code_cells)
+        # The Hub models a compile prefetches into the image (see
+        # hub_model_ids, backend/compiler.py) vary by notebook too.
+        hub_models = hub_model_ids(code_cells)
 
     elif version_id:
 
@@ -15774,8 +15779,11 @@ def dockerfile_preview_endpoint(notebook_path: str = None, version_id: str = Non
         "status": "success",
         "package_name": package_name,
         "compiling_python_version": python_version,
-        "dockerfile": dockerfile_content(package_name, python_version, apt_packages),
+        "dockerfile": dockerfile_content(
+            package_name, python_version, apt_packages, hub_models
+        ),
         "dockerignore": dockerignore_content(),
+        "hub_models": hub_models,
         "notebook": notebook_path,
         "version_id": version_id,
     }

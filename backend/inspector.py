@@ -25,6 +25,7 @@ from backend.compiler import (
     _extract_excluded_imports,
     find_local_modules,
     _extract_explicit_apt_packages,
+    hub_model_ids,
     _extract_private_function_names,
     _filter_functions_by_name,
     distribution_name_for_import,
@@ -777,6 +778,8 @@ def inspect_notebook_data(
         "functions": all_functions,
         "dependencies": _third_party_dependencies(all_imports),
         "apt_packages": apt_packages,
+        # Hugging Face models the generated Dockerfile prefetches at build time.
+        "hub_models": hub_model_ids(code_cells),
         "generated_files": list_generated_files(output_dir),
         "reserved_name_conflicts": _reserved_name_conflicts(all_functions),
         "endpoints": _endpoint_metadata(
@@ -1054,6 +1057,8 @@ def print_compile_summary(notebook_path, output_dir="generated", only=None, excl
 
     if data["apt_packages"]:
         print(f"System packages (apt): {', '.join(data['apt_packages'])}")
+    if data.get("hub_models"):
+        print(f"Hugging Face models (prefetched at build): {', '.join(data['hub_models'])}")
 
     if data["skipped_functions"]:
         print(

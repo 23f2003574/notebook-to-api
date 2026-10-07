@@ -13273,3 +13273,22 @@ def test_dockerfile_without_hub_models_is_unchanged():
 
     assert dockerfile_content("g", "3.12", hub_models=[]) == dockerfile_content("g", "3.12")
     assert "HF_HOME" not in dockerfile_content("g", "3.12")
+
+
+def test_inspect_data_and_compile_summary_report_hub_models_the_dockerfile_prefetches(tmp_path, capsys):
+    from backend.inspector import inspect_notebook_data, print_compile_summary
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "from transformers import pipeline\n\n"
+        "def classify(text: str) -> str:\n"
+        "    return pipeline('sentiment-analysis', model='distilbert/sst2')(text)[0]['label']\n",
+    )
+    plain = tmp_path / "plain.ipynb"
+    _write_notebook_importing(plain, "def add(a: int) -> int:\n    return a\n")
+
+    assert inspect_notebook_data(str(notebook), str(tmp_path / "out"))["hub_models"] == ["distilbert/sst2"]
+    assert inspect_notebook_data(str(plain), str(tmp_path / "out"))["hub_models"] == []
+    print_compile_summary(str(notebook), str(tmp_path / "out"))
+    assert "Hugging Face models (prefetched at build): distilbert/sst2" in capsys.readouterr().out
