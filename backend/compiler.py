@@ -1465,7 +1465,24 @@ _FILE_READ_CALLS = frozenset({
     "read_fwf", "read_orc", "read_xml", "read_html", "read_stata", "read_sas",
     "read_spss", "load_model", "fromfile", "read_text", "read_bytes",
 })
-_FILE_LOAD_BASES = frozenset({"np", "numpy", "torch", "joblib"})
+_FILE_LOAD_BASES = frozenset({"np", "numpy", "torch", "joblib", "librosa"})
+# Path-taking openers/loaders matched on the (alias-resolved) `base.name`
+# label, since their bare names (`connect`, `File`, `read`) are too generic.
+_FILE_READ_LABELS = frozenset({
+    "sqlite3.connect", "h5py.File", "zipfile.ZipFile", "io.loadmat",
+    "sf.read", "soundfile.read", "xr.open_dataset", "xarray.open_dataset",
+    # `from safetensors.torch import load_file` resolves to torch.load_file
+    "torch.load_file", "safetensors.load_file",
+})
+# ...and those whose second argument / `mode=` can make them write instead.
+_MODE_CHECKED_LABELS = frozenset({"h5py.File", "zipfile.ZipFile"})
+# Keyword names a read call's path can be passed as.
+_PATH_KEYWORDS = (
+    "filepath_or_buffer", "io", "path", "file", "fname", "fp",
+    "database", "file_name", "filename_or_obj",
+)
+# Values that look like relative paths but never name a file on disk.
+_NON_FILE_PATHS = frozenset({":memory:", ""})
 
 
 def _find_cells_with_error_outputs(notebook):
@@ -1672,8 +1689,7 @@ def _relative_literal_path(call, constants=None):
             path = path[2:]
         return path if _is_relative_path(path) else None
     arg = call.args[0] if call.args else next(
-        (kw.value for kw in call.keywords
-         if kw.arg in ("filepath_or_buffer", "io", "path", "file", "fname", "fp")),
+        (kw.value for kw in call.keywords if kw.arg in _PATH_KEYWORDS),
         None,
     )
     path = _literal_path_value(arg, constants) if arg is not None else None
@@ -1917,10 +1933,16 @@ def _call_hazard_kind(label, name, base):
 def _file_read_path(name, base, call, constants=None):
     """The relative path a data-file read (`pd.read_csv(...)`, read-mode
     `open(...)`, `np.load(...)`, ...) reads, else None."""
-    is_read = name in _FILE_READ_CALLS or (name == "load" and base in _FILE_LOAD_BASES)
+    label = f"{base}.{name}" if base else name
+    is_read = (
+        name in _FILE_READ_CALLS
+        or (name == "load" and base in _FILE_LOAD_BASES)
+        or label in _FILE_READ_LABELS
+        or (name == "loadmat" and base is None)  # scipy.io.loadmat(...)
+    )
     if not is_read:
         return None
-    if name == "open" and base is None:
+    if (name == "open" and base is None) or label in _MODE_CHECKED_LABELS:
         mode = call.args[1] if len(call.args) > 1 else next(
             (kw.value for kw in call.keywords if kw.arg == "mode"), None
         )
@@ -1929,7 +1951,8 @@ def _file_read_path(name, base, call, constants=None):
             and set(mode.value) & set("wax+")
         ):
             return None
-    return _relative_literal_path(call, constants)
+    path = _relative_literal_path(call, constants)
+    return None if path in _NON_FILE_PATHS or (path or "").startswith("file:") else path
 
 
 def _path_arg_node(call):
@@ -1940,8 +1963,7 @@ def _path_arg_node(call):
         receiver = func.value
         return receiver.args[0] if isinstance(receiver, ast.Call) and len(receiver.args) == 1 else None
     return call.args[0] if call.args else next(
-        (kw.value for kw in call.keywords
-         if kw.arg in ("filepath_or_buffer", "io", "path", "file", "fname", "fp")),
+        (kw.value for kw in call.keywords if kw.arg in _PATH_KEYWORDS),
         None,
     )
 

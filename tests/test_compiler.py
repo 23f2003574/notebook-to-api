@@ -12982,3 +12982,85 @@ def test_hazard_message_covers_every_hazard_kind_without_generic_fallbacks():
         "the app will exit on startup",
     )
     assert "NOTEBOOK_TO_API_MAX_DATA_MB" in messages["file_read"][1]
+
+
+def test_path_taking_openers_and_loaders_are_detected_as_data_file_reads():
+    from backend.compiler import _find_import_time_hazards
+
+    cells = [
+        "import sqlite3, h5py, zipfile, librosa\nimport soundfile as sf\n"
+        "import xarray as xr\nimport scipy.io as sio\nimport scipy.io\n"
+        "from safetensors.torch import load_file\nfrom scipy.io import loadmat\n"
+        "conn = sqlite3.connect('shop.db')\n"
+        "mem = sqlite3.connect(':memory:')\n"
+        "uri = sqlite3.connect('file:x.db?mode=ro')\n"
+        "kw = sqlite3.connect(database='kw.db')\n"
+        "h = h5py.File('weights.h5')\n"
+        "out = h5py.File('export.h5', 'w')\n"
+        "z = zipfile.ZipFile('bundle.zip')\n"
+        "zw = zipfile.ZipFile('new.zip', mode='w')\n"
+        "m1 = sio.loadmat('a.mat')\nm2 = scipy.io.loadmat('b.mat')\nm3 = loadmat('c.mat')\n"
+        "y, sr = librosa.load('clip.wav')\nd, _ = sf.read('tone.flac')\n"
+        "ds = xr.open_dataset('climate.nc')\nw = load_file('model.safetensors')\n"
+        "c = db.connect('not_a_db.db')\nf = File('not_h5.h5')\n",
+    ]
+
+    assert [(h["kind"], h["path"]) for h in _find_import_time_hazards(cells)] == [
+        ("file_read", "shop.db"),
+        ("file_read", "kw.db"),
+        ("file_read", "weights.h5"),
+        ("file_read", "bundle.zip"),
+        ("file_read", "a.mat"),
+        ("file_read", "b.mat"),
+        ("file_read", "c.mat"),
+        ("file_read", "clip.wav"),
+        ("file_read", "tone.flac"),
+        ("file_read", "climate.nc"),
+        ("file_read", "model.safetensors"),
+    ]
+
+
+def test_compile_ships_sqlite_database_read_at_import_and_request_time(tmp_path, monkeypatch):
+    import sqlite3
+
+    from backend.compiler import compile_notebook
+
+    db = sqlite3.connect(tmp_path / "shop.db")
+    db.execute("CREATE TABLE prices (item TEXT, cost INTEGER)")
+    db.execute("INSERT INTO prices VALUES ('apple', 3)")
+    db.commit()
+    db.close()
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "import sqlite3\n"
+        "COUNT = sqlite3.connect('shop.db').execute('SELECT COUNT(*) FROM prices').fetchone()[0]\n\n"
+        "def price(item: str) -> int:\n"
+        "    conn = sqlite3.connect('shop.db')\n"
+        "    return conn.execute('SELECT cost FROM prices WHERE item = ?', (item,)).fetchone()[0] * COUNT\n",
+    )
+    out = tmp_path / "out"
+
+    compile_notebook(str(notebook), str(out))
+
+    assert (out / "runtime" / "shop.db").is_file()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    namespace = {"__file__": str(out / "runtime" / "notebook_module.py")}
+    exec((out / "runtime" / "notebook_module.py").read_text(), namespace)
+
+    assert namespace["price"]("apple") == 3
+    assert not (elsewhere / "shop.db").exists()
+
+
+def test_missing_sqlite_database_is_reported_as_a_startup_hazard(tmp_path):
+    from backend.compiler import _find_import_time_hazards, find_data_files
+
+    notebook = tmp_path / "nb.ipynb"
+    notebook.write_text("{}")
+    cells = ["import sqlite3\nconn = sqlite3.connect('gone.db')\n"]
+    hazards = _find_import_time_hazards(cells)
+
+    assert [(h["kind"], h["path"]) for h in hazards] == [("file_read", "gone.db")]
+    assert find_data_files(str(notebook), cells, hazards) == {}
