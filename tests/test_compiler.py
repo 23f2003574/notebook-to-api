@@ -13142,3 +13142,46 @@ def test_shipped_as_directory_matches_only_whole_path_segments():
     assert _shipped_as_directory("./model/", shipped)
     assert not _shipped_as_directory("mod", shipped)
     assert not _shipped_as_directory(".", shipped)
+
+
+def test_imports_needing_system_libraries_add_their_apt_packages():
+    cells = [
+        "# notebook-to-api: apt-requires curl\n# !apt-get install -y ffmpeg\n"
+        "import cv2\nimport lightgbm as lgb\nfrom pydub import AudioSegment\n"
+        "import librosa.display\nimport numpy as np\n",
+        "def f(x):\n    import pytesseract\n    return x\n",
+        "this is not python (\n",
+    ]
+
+    assert _extract_explicit_apt_packages(cells) == [
+        "curl", "ffmpeg", "libgl1", "libglib2.0-0", "libgomp1",
+        "libsndfile1", "tesseract-ocr",
+    ]
+
+
+def test_excluded_and_local_imports_add_no_apt_packages():
+    cells = [
+        "# notebook-to-api: exclude cv2\nimport cv2\n",
+        "# %%writefile magic.py\n# X = 1\n",
+        "import magic\nfrom . import pydub\nimport pandas\n",
+    ]
+
+    assert _extract_explicit_apt_packages(cells) == []
+
+
+def test_compiled_dockerfile_installs_libgl_for_opencv(tmp_path):
+    from backend.compiler import compile_notebook
+    from backend.inspector import inspect_notebook_data
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook, "import cv2\n\ndef ping(x: int) -> int:\n    return x\n"
+    )
+    out = tmp_path / "out"
+
+    compile_notebook(str(notebook), str(out))
+
+    dockerfile = (out / "Dockerfile").read_text()
+    assert "apt-get install" in dockerfile
+    assert "libgl1 libglib2.0-0" in dockerfile
+    assert inspect_notebook_data(str(notebook), str(out))["apt_packages"] == ["libgl1", "libglib2.0-0"]

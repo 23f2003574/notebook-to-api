@@ -1025,6 +1025,60 @@ def _extract_explicit_apt_packages(code_cells):
             seen.add(package)
             packages.append(package)
 
+    # ...and some imports need a system library the slim base image lacks.
+    for package in _import_implied_apt_packages(code_cells):
+        if package not in seen:
+            seen.add(package)
+            packages.append(package)
+
+    return packages
+
+
+# System libraries python:3.x-slim lacks that an import needs at runtime:
+# the wheel installs fine, then `import cv2` fails on libGL.so.1, lightgbm
+# on libgomp.so.1, soundfile on libsndfile, pydub/whisper shell out to
+# ffmpeg, pytesseract to tesseract. Jupyter's environment already had them.
+IMPORT_APT_PACKAGES = {
+    "cv2": ("libgl1", "libglib2.0-0"),
+    "lightgbm": ("libgomp1",),
+    "soundfile": ("libsndfile1",),
+    "librosa": ("libsndfile1", "ffmpeg"),
+    "pydub": ("ffmpeg",),
+    "whisper": ("ffmpeg",),
+    "moviepy": ("ffmpeg",),
+    "pytesseract": ("tesseract-ocr",),
+    "pdf2image": ("poppler-utils",),
+    "pyzbar": ("libzbar0",),
+    "magic": ("libmagic1",),
+}
+
+
+def _import_implied_apt_packages(code_cells):
+    """apt packages (first-seen order, unique) that the notebook's imports
+    need per IMPORT_APT_PACKAGES, skipping imports an "exclude" directive
+    drops and imports of a local module of the same name."""
+    excluded = set(_extract_excluded_imports(code_cells))
+    local = set(_writefile_modules(code_cells))
+    packages = []
+    for cell in code_cells:
+        try:
+            tree = ast.parse(cell)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+                names = [node.module]
+            else:
+                continue
+            for name in names:
+                top = name.partition(".")[0]
+                if top in excluded or top in local:
+                    continue
+                for package in IMPORT_APT_PACKAGES.get(top, ()):
+                    if package not in packages:
+                        packages.append(package)
     return packages
 
 
