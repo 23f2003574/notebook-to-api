@@ -12873,7 +12873,7 @@ def test_unshipped_data_hazards_say_why_the_file_stayed_behind(tmp_path, monkeyp
     )
     assert "(it doesn't exist beside the notebook)" in text[2]
     assert "(nothing beside the notebook matches it)" in text[4]
-    assert "(its path isn't a string literal or a read-only path constant" in text[5]
+    assert "(its path isn't a string literal, a read-only path constant, or a one-line" in text[5]
 
 
 def test_data_size_limit_can_be_raised_from_the_environment(tmp_path, monkeypatch):
@@ -13522,3 +13522,26 @@ def test_import_time_dynamic_read_matching_nothing_is_a_startup_hazard(tmp_path)
     assert "nothing beside the notebook matches it" in startup_warning_lines(
         {"import_time_hazards": hazards}
     )[0]
+
+
+def test_multi_line_dynamic_request_read_warning_names_the_supported_forms(tmp_path):
+    from backend.compiler import _find_import_time_hazards
+    from backend.inspector import startup_warning_lines
+
+    notebook = tmp_path / "nb.ipynb"
+    (tmp_path / "rates").mkdir()
+    (tmp_path / "rates" / "eur.txt").write_text("2")
+    cells = [
+        "import os\n"
+        "def rate(code):\n"
+        "    return open(os.path.join(\n        'rates', code + '.txt'\n    )).read()\n",
+    ]
+
+    hazards = _find_import_time_hazards(cells, str(notebook))
+
+    assert [(h["kind"], h["path"], h["reason"]) for h in hazards] == [
+        ("request_read", "rates/*", "not_redirectable"),
+    ]
+    line = startup_warning_lines({"import_time_hazards": hazards})[0]
+    assert "inside rate()" in line
+    assert "one-line f-string / os.path.join / Path expression with a literal leading folder" in line

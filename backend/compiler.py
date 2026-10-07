@@ -2701,7 +2701,8 @@ _UNSHIPPED_REASON_TEXT = {
     ),
     "no_matches": "nothing beside the notebook matches it",
     "not_redirectable": (
-        "its path isn't a string literal or a read-only path constant, "
+        "its path isn't a string literal, a read-only path constant, or a one-line "
+        "f-string / os.path.join / Path expression with a literal leading folder, "
         "so it can't be pointed at the shipped copy"
     ),
 }
