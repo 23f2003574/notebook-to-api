@@ -49,6 +49,7 @@ from backend.compiler import (
     _extract_excluded_imports,
     _extract_explicit_apt_packages,
     hub_model_ids,
+    language_data_packages,
     _extract_explicit_requirements,
     _filter_functions_by_name,
     _generated_files_sha256,
@@ -15742,6 +15743,7 @@ def dockerfile_preview_endpoint(notebook_path: str = None, version_id: str = Non
 
     apt_packages = []
     hub_models = []
+    language_data = {"spacy": [], "nltk": []}
 
     if notebook_path:
 
@@ -15767,6 +15769,7 @@ def dockerfile_preview_endpoint(notebook_path: str = None, version_id: str = Non
         # The Hub models a compile prefetches into the image (see
         # hub_model_ids, backend/compiler.py) vary by notebook too.
         hub_models = hub_model_ids(code_cells)
+        language_data = language_data_packages(code_cells)
 
     elif version_id:
 
@@ -15780,10 +15783,11 @@ def dockerfile_preview_endpoint(notebook_path: str = None, version_id: str = Non
         "package_name": package_name,
         "compiling_python_version": python_version,
         "dockerfile": dockerfile_content(
-            package_name, python_version, apt_packages, hub_models
+            package_name, python_version, apt_packages, hub_models, language_data
         ),
         "dockerignore": dockerignore_content(),
         "hub_models": hub_models,
+        "language_data": language_data,
         "notebook": notebook_path,
         "version_id": version_id,
     }

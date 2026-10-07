@@ -13292,3 +13292,61 @@ def test_inspect_data_and_compile_summary_report_hub_models_the_dockerfile_prefe
     assert inspect_notebook_data(str(plain), str(tmp_path / "out"))["hub_models"] == []
     print_compile_summary(str(notebook), str(tmp_path / "out"))
     assert "Hugging Face models (prefetched at build): distilbert/sst2" in capsys.readouterr().out
+
+
+def test_language_data_packages_finds_spacy_pipelines_and_nltk_downloads():
+    from backend.compiler import language_data_packages
+
+    cells = [
+        "import spacy\nimport nltk\nfrom nltk import download as fetch\n"
+        "nlp = spacy.load('en_core_web_sm')\n"
+        "nltk.download('punkt', quiet=True)\n"
+        "nltk.download(['stopwords', 'wordnet', 'punkt'])\n"
+        "fetch(info_or_id='averaged_perceptron_tagger_eng')\n",
+        "def f():\n    return spacy.load(name='de_core_news_md')\n",
+        "local = spacy.load('./my_pipeline')\nother = spacy.load(MODEL)\n"
+        "bad = nltk.download('punkt; rm -rf /')\nnltk.download()\n"
+        "blank = spacy.blank('en')\n",
+        "not python (\n",
+    ]
+
+    assert language_data_packages(cells) == {
+        "spacy": ["en_core_web_sm", "de_core_news_md"],
+        "nltk": ["punkt", "stopwords", "wordnet", "averaged_perceptron_tagger_eng"],
+    }
+
+
+def test_compiled_dockerfile_installs_spacy_pipelines_and_nltk_data(tmp_path, capsys):
+    from backend.compiler import compile_notebook
+    from backend.inspector import inspect_notebook_data, print_compile_summary
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "import nltk\nnltk.download('punkt')\n\n"
+        "def entities(text: str) -> int:\n"
+        "    import spacy\n"
+        "    return len(spacy.load('en_core_web_sm')(text).ents)\n",
+    )
+    out = tmp_path / "out"
+
+    compile_notebook(str(notebook), str(out))
+
+    dockerfile = (out / "Dockerfile").read_text()
+    assert "RUN python -m spacy download en_core_web_sm \\\n    || echo" in dockerfile
+    assert "RUN python -m nltk.downloader -d /usr/local/share/nltk_data punkt \\\n" in dockerfile
+    assert dockerfile.index("RUN pip install") < dockerfile.index("spacy download") < dockerfile.index("USER appuser")
+    assert inspect_notebook_data(str(notebook), str(out))["language_data"] == {
+        "spacy": ["en_core_web_sm"], "nltk": ["punkt"],
+    }
+    print_compile_summary(str(notebook), str(out))
+    printed = capsys.readouterr().out
+    assert "spaCy pipelines (installed at build): en_core_web_sm" in printed
+    assert "NLTK data (downloaded at build): punkt" in printed
+
+
+def test_dockerfile_without_language_data_is_unchanged():
+    from backend.generator.docker_generator import dockerfile_content
+
+    empty = {"spacy": [], "nltk": []}
+    assert dockerfile_content("g", "3.12", language_data=empty) == dockerfile_content("g", "3.12")

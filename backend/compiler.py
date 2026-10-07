@@ -1077,6 +1077,50 @@ def hub_model_ids(code_cells):
     return found
 
 
+# spaCy pipeline packages ("en_core_web_sm", "xx_ent_wiki_sm") and NLTK
+# data ids ("punkt", "averaged_perceptron_tagger_eng").
+_SPACY_PIPELINE_PATTERN = re.compile(r"^[a-z]{2,3}_[a-z0-9]+_[a-z0-9]+_(sm|md|lg|trf)$")
+_NLTK_PACKAGE_PATTERN = re.compile(r"^[a-z][a-z0-9_\-]*$")
+
+
+def language_data_packages(code_cells):
+    """{"spacy": [...], "nltk": [...]} (first-seen order, unique) for the
+    spaCy pipelines a notebook loads by package name (`spacy.load(
+    "en_core_web_sm")`) and the NLTK data it downloads (`nltk.download(
+    "punkt")`, `nltk.download(["stopwords", "wordnet"])`), for the
+    Dockerfile to install at build time (see language_data_content)."""
+    found = {"spacy": [], "nltk": []}
+
+    def add(kind, value, pattern):
+        if isinstance(value, str) and pattern.match(value) and value not in found[kind]:
+            found[kind].append(value)
+
+    for cell in code_cells:
+        try:
+            tree = ast.parse(cell)
+        except SyntaxError:
+            continue
+        aliases = _import_aliases(tree)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            label, name, base = _call_label(node.func)
+            if label is None:
+                continue
+            label, name, base = _resolve_import_alias(label, name, base, aliases)
+            argument = node.args[0] if node.args else next(
+                (kw.value for kw in node.keywords if kw.arg in ("name", "info_or_id")), None
+            )
+            if label == "spacy.load" and isinstance(argument, ast.Constant):
+                add("spacy", argument.value, _SPACY_PIPELINE_PATTERN)
+            elif label == "nltk.download" and argument is not None:
+                values = argument.elts if isinstance(argument, (ast.List, ast.Tuple)) else [argument]
+                for value in values:
+                    if isinstance(value, ast.Constant):
+                        add("nltk", value.value, _NLTK_PACKAGE_PATTERN)
+    return found
+
+
 # System libraries python:3.x-slim lacks that an import needs at runtime:
 # the wheel installs fine, then `import cv2` fails on libGL.so.1, lightgbm
 # on libgomp.so.1, soundfile on libsndfile, pydub/whisper shell out to
@@ -3905,6 +3949,7 @@ def compile_notebook_to_api(
                 dockerfile_path, package_name, compiling_python_version(),
                 apt_packages=apt_packages,
                 hub_models=hub_model_ids(code_cells),
+                language_data=language_data_packages(code_cells),
             )
 
             dockerignore_path = os.path.join(

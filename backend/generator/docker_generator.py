@@ -88,11 +88,39 @@ def hub_model_prefetch_content(hub_models):
     return "\n".join(lines) + "\n"
 
 
+def language_data_content(language_data):
+    """Dockerfile lines installing the spaCy pipelines (`spacy.load(
+    "en_core_web_sm")`) and NLTK data (`nltk.download("punkt")`) the
+    notebook uses: neither is a requirements.txt package, so the image
+    never had them -- spacy.load raised OSError at startup and every
+    container start re-downloaded the NLTK data (or failed offline). A
+    failed download only warns, leaving the old behavior. Names are
+    pre-validated by the compiler (see language_data_packages). Empty for
+    none."""
+    if not language_data:
+        return ""
+    lines = []
+    for pipeline in language_data.get("spacy", []):
+        lines.append(
+            f"RUN python -m spacy download {pipeline} \\\n"
+            f"    || echo \"warning: could not install spaCy pipeline {pipeline}\""
+        )
+    nltk_packages = language_data.get("nltk", [])
+    if nltk_packages:
+        names = " ".join(nltk_packages)
+        lines.append(
+            f"RUN python -m nltk.downloader -d /usr/local/share/nltk_data {names} \\\n"
+            f"    || echo \"warning: could not download NLTK data {names}\""
+        )
+    return "\n".join(lines) + "\n" if lines else ""
+
+
 def dockerfile_content(
     package_name="generated",
     python_version="3.11",
     apt_packages=None,
     hub_models=None,
+    language_data=None,
 ):
     """The exact Dockerfile text generate_dockerfile (below) writes to
     disk, as a pure string -- no filesystem access at all.
@@ -145,7 +173,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 # Copy requirements first for Docker layer caching
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-{hub_model_prefetch_content(hub_models)}
+{hub_model_prefetch_content(hub_models)}{language_data_content(language_data)}
 # Copy generated output into /app/{package_name}/ to preserve module paths
 COPY . {package_name}/
 
@@ -192,6 +220,7 @@ def generate_dockerfile(
     python_version="3.11",
     apt_packages=None,
     hub_models=None,
+    language_data=None,
 ):
     """Write a Dockerfile for the compiled app at `output_path`.
 
@@ -212,7 +241,9 @@ def generate_dockerfile(
     this is and why it exists; passed straight through unchanged.
     """
     with open(output_path, "w", encoding="utf-8") as f:
-        f.write(dockerfile_content(package_name, python_version, apt_packages, hub_models))
+        f.write(dockerfile_content(
+            package_name, python_version, apt_packages, hub_models, language_data
+        ))
 
     print(f"Dockerfile generated at: {output_path}")
 

@@ -35246,3 +35246,23 @@ def test_dockerfile_preview_includes_hub_model_prefetch_matching_a_real_compile(
     bare = client.get("/api/dockerfile-preview").json()
     assert bare["hub_models"] == []
     assert "snapshot_download" not in bare["dockerfile"]
+
+
+def test_dockerfile_preview_includes_language_data_matching_a_real_compile():
+
+    filename = "dockerfile_preview_language_data.ipynb"
+    content = _notebook_bytes(
+        "import nltk\nnltk.download('stopwords')\n\n"
+        "def count(text: str) -> int:\n    return len(text)\n"
+    )
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(content), "application/json")},
+    )
+
+    preview = client.get("/api/dockerfile-preview", params={"notebook_path": filename}).json()
+
+    assert preview["language_data"] == {"spacy": [], "nltk": ["stopwords"]}
+    assert "nltk.downloader -d /usr/local/share/nltk_data stopwords" in preview["dockerfile"]
+    assert client.post("/api/compile", json={"notebook_path": filename}).status_code == 200
+    assert preview["dockerfile"] == client.get("/api/generated/Dockerfile").json()["content"]
