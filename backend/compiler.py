@@ -1845,12 +1845,18 @@ def _shipped_as_directory(path, shipped):
     return prefix != "./" and any(key.startswith(prefix) for key in shipped)
 
 
+# Colab modules the shim below stands in for outside Colab.
+_COLAB_SHIMMED_MODULES = frozenset({"google.colab.userdata", "google.colab.drive"})
+
+# `drive.mount("/content/drive")` needs a Colab runtime; outside one the
+# shim's mount is a no-op, since Drive paths are already read from beside
+# the notebook (see relocate_sandbox_paths, backend/parser).
 # Colab keeps API keys in "Secrets" read with `userdata.get("NAME")`. Outside
 # Colab that module doesn't exist, so the import failed on startup; this shim
 # answers the same call from the environment instead (and raises Colab's
 # SecretNotFoundError-style error when the variable is missing).
 _COLAB_USERDATA_SHIM = """\
-# google.colab.userdata, answered from environment variables (notebook-to-api)
+# google.colab.userdata from environment variables, drive.mount as a no-op (notebook-to-api)
 import os as _nb_os5
 import sys as _nb_sys5
 import types as _nb_types5
@@ -1873,9 +1879,22 @@ if "google.colab" not in _nb_sys5.modules:
         _nb_userdata = _nb_types5.ModuleType("google.colab.userdata")
         _nb_userdata.get = _nb_userdata_get
         _nb_userdata.SecretNotFoundError = SecretNotFoundError
+        def _nb_drive_mount(mountpoint, force_remount=False, timeout_ms=120000, readonly=False):
+            print(
+                f"notebook-to-api: drive.mount({mountpoint!r}) skipped outside Colab; "
+                "Drive files are read from beside the app"
+            )
+
+        def _nb_drive_unmount(timeout_ms=None):
+            pass
+
+        _nb_drive = _nb_types5.ModuleType("google.colab.drive")
+        _nb_drive.mount = _nb_drive_mount
+        _nb_drive.flush_and_unmount = _nb_drive_unmount
         _nb_colab = _nb_types5.ModuleType("google.colab")
         _nb_colab.__path__ = []
         _nb_colab.userdata = _nb_userdata
+        _nb_colab.drive = _nb_drive
         try:
             import google as _nb_google
         except ImportError:
@@ -1885,6 +1904,7 @@ if "google.colab" not in _nb_sys5.modules:
         _nb_google.colab = _nb_colab
         _nb_sys5.modules["google.colab"] = _nb_colab
         _nb_sys5.modules["google.colab.userdata"] = _nb_userdata
+        _nb_sys5.modules["google.colab.drive"] = _nb_drive
 
 """
 
@@ -1929,8 +1949,8 @@ def _uses_kaggle_secrets(code_cells):
 
 
 def _uses_colab_userdata(code_cells):
-    """True when a cell imports Colab's `userdata` (and nothing the shim
-    can't answer is needed for that import to work)."""
+    """True when a cell imports a Colab module the shim stands in for
+    (`userdata` or `drive`, see _COLAB_SHIMMED_MODULES)."""
     for cell in code_cells:
         try:
             tree = ast.parse(cell)
@@ -1938,12 +1958,14 @@ def _uses_colab_userdata(code_cells):
             continue
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and not node.level:
-                if node.module == "google.colab" and any(a.name == "userdata" for a in node.names):
+                if node.module == "google.colab" and any(
+                    f"google.colab.{a.name}" in _COLAB_SHIMMED_MODULES for a in node.names
+                ):
                     return True
-                if node.module == "google.colab.userdata":
+                if node.module in _COLAB_SHIMMED_MODULES:
                     return True
             elif isinstance(node, ast.Import):
-                if any(a.name == "google.colab.userdata" for a in node.names):
+                if any(a.name in _COLAB_SHIMMED_MODULES for a in node.names):
                     return True
     return False
 
@@ -2297,14 +2319,16 @@ def _colab_import(node):
     """"google.colab[.x]" when `node` imports Google Colab's module, else None."""
     if isinstance(node, ast.Import):
         for alias in node.names:
-            if alias.name == "google.colab.userdata":
+            if alias.name in _COLAB_SHIMMED_MODULES:
                 continue
             if alias.name == "google.colab" or alias.name.startswith("google.colab."):
                 return alias.name
     elif isinstance(node, ast.ImportFrom) and not node.level:
-        if node.module == "google.colab" and all(alias.name == "userdata" for alias in node.names):
-            return None  # the userdata shim covers this (see _COLAB_USERDATA_SHIM)
-        if node.module == "google.colab.userdata":
+        if node.module == "google.colab" and all(
+            f"google.colab.{alias.name}" in _COLAB_SHIMMED_MODULES for alias in node.names
+        ):
+            return None  # the shim covers these (see _COLAB_USERDATA_SHIM)
+        if node.module in _COLAB_SHIMMED_MODULES:
             return None
         if node.module == "google.colab" or (node.module or "").startswith("google.colab."):
             return node.module

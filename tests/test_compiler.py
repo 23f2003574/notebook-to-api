@@ -11865,7 +11865,7 @@ def test_import_time_hazards_flag_google_colab_imports():
     from backend.inspector import startup_warning_lines
 
     cells = [
-        "import os\nfrom google.colab import drive, userdata\n",
+        "import os\nfrom google.colab import auth, userdata\n",
         "import google.colab.files\nfrom google import colab\n"
         "from google.cloud import storage\nimport google.generativeai\n",
         "def f():\n    from google.colab import auth\n",
@@ -11941,7 +11941,7 @@ def test_colab_userdata_imports_are_supported_other_colab_imports_still_hazards(
 
     supported = ["from google.colab import userdata\nimport google.colab.userdata\n"
                  "from google.colab.userdata import get\n"]
-    mixed = ["from google.colab import drive, userdata\n"]
+    mixed = ["from google.colab import files, userdata\n"]
     other = ["from google.colab import files\n"]
 
     assert _find_import_time_hazards(supported) == []
@@ -11954,7 +11954,7 @@ def test_colab_userdata_shim_reads_secrets_from_the_environment(monkeypatch):
     from backend.compiler import _COLAB_USERDATA_SHIM, _uses_colab_userdata
 
     assert _uses_colab_userdata(["from google.colab import userdata\n"])
-    assert not _uses_colab_userdata(["from google.colab import drive\n", "x = 1\n"])
+    assert not _uses_colab_userdata(["from google.colab import files\n", "x = 1\n"])
 
     saved = {k: sys.modules.get(k) for k in ("google", "google.colab", "google.colab.userdata")}
     for key in saved:
@@ -13185,3 +13185,33 @@ def test_compiled_dockerfile_installs_libgl_for_opencv(tmp_path):
     assert "apt-get install" in dockerfile
     assert "libgl1 libglib2.0-0" in dockerfile
     assert inspect_notebook_data(str(notebook), str(out))["apt_packages"] == ["libgl1", "libglib2.0-0"]
+
+
+def test_colab_drive_mount_is_a_startup_no_op_outside_colab(tmp_path, monkeypatch, capsys):
+    import sys
+
+    from backend.compiler import _find_import_time_hazards, compile_notebook
+
+    source = (
+        "from google.colab import drive\nimport google.colab.drive\n"
+        "drive.mount('/content/drive', force_remount=True)\n"
+        "BASE = int(open('/content/drive/MyDrive/base.txt').read())\n"
+        "drive.flush_and_unmount()\n\n"
+        "def add(a: int) -> int:\n    return BASE + a\n"
+    )
+    assert not [h for h in _find_import_time_hazards([source]) if h["kind"] == "colab_import"]
+    (tmp_path / "base.txt").write_text("40")
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(notebook, source)
+    out = tmp_path / "out"
+
+    compile_notebook(str(notebook), str(out))
+
+    for name in ("google.colab", "google.colab.drive", "google.colab.userdata"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    monkeypatch.chdir(tmp_path.parent)
+    namespace = {"__file__": str(out / "runtime" / "notebook_module.py")}
+    exec((out / "runtime" / "notebook_module.py").read_text(), namespace)
+
+    assert namespace["add"](2) == 42
+    assert "drive.mount('/content/drive') skipped outside Colab" in capsys.readouterr().out
