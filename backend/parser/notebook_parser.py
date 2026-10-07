@@ -349,12 +349,78 @@ def load_notebook(notebook_path):
     return notebook
 
 
+# Colab and Kaggle notebooks read their uploads through the sandbox's own
+# absolute folders (`pd.read_csv("/content/sales.csv")`,
+# "/kaggle/input/titanic/train.csv"), which never exist in the compiled app
+# -- so the read always failed and the file was never shipped. Each prefix
+# is mapped to the notebook's own directory, where the file is expected to
+# sit after downloading the notebook with its data.
+SANDBOX_PATH_PREFIXES = (
+    "/content/drive/MyDrive/",
+    "/content/drive/My Drive/",
+    "/content/",
+    "/kaggle/input/",
+    "/kaggle/working/",
+)
+
+
+def sandbox_relative_path(path):
+    """`path` with a Colab/Kaggle sandbox prefix (SANDBOX_PATH_PREFIXES)
+    replaced by a notebook-relative path, else None. The Drive mount point
+    itself (`drive.mount("/content/drive")`) is left alone."""
+    for prefix in SANDBOX_PATH_PREFIXES:
+        if path.startswith(prefix):
+            relative = path[len(prefix):].lstrip("/")
+            if not relative or relative == "drive" or relative.startswith("drive/"):
+                return None
+            if ".." in relative.split("/"):
+                return None
+            return relative
+    return None
+
+
+def relocate_sandbox_paths(source):
+    """`source` with each plain string literal naming a sandbox path (see
+    sandbox_relative_path) rewritten to its notebook-relative form, keeping
+    the literal's own prefix and quotes. f-strings, bytes, multi-line
+    literals and untokenizable cells come back unchanged."""
+    if "/content/" not in source and "/kaggle/" not in source:
+        return source
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        return source
+
+    edits = []
+    for token in tokens:
+        if token.type != tokenize.STRING or token.start[0] != token.end[0]:
+            continue
+        match = re.match(r"^([rRuU]?)('|\")(.*)\2$", token.string, re.DOTALL)
+        if not match or match.group(3).startswith(match.group(2) * 2):
+            continue
+        prefix, quote, body = match.groups()
+        if "\\" in body and not prefix.lower() == "r":
+            continue
+        relative = sandbox_relative_path(body)
+        if relative is None or quote in relative:
+            continue
+        edits.append((token.start, token.end, f"{prefix}{quote}{relative}{quote}"))
+
+    if not edits:
+        return source
+    lines = source.splitlines(keepends=True)
+    for (row, start), (_, end), text in reversed(edits):
+        line = lines[row - 1]
+        lines[row - 1] = line[:start] + text + line[end:]
+    return "".join(lines)
+
+
 def extract_code_cells(notebook):
     code_cells = []
 
     for cell in notebook.cells:
         if cell.cell_type == "code":
-            code_cells.append(strip_magic_commands(cell.source))
+            code_cells.append(relocate_sandbox_paths(strip_magic_commands(cell.source)))
 
     return code_cells
 

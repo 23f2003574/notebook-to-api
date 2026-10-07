@@ -568,3 +568,69 @@ def test_cell_magics_that_run_their_body_in_the_notebook_still_compile():
         cleaned = strip_magic_commands(f"%%{magic}\ndef kept():\n    return 1\n")
 
         assert "\ndef kept():" in cleaned, magic
+
+
+def test_relocate_sandbox_paths_maps_colab_and_kaggle_reads_beside_the_notebook():
+    from backend.parser.notebook_parser import relocate_sandbox_paths
+
+    source = (
+        "import pandas as pd\n"
+        "a = pd.read_csv(\"/content/sales.csv\")\n"
+        "b = open('/kaggle/input/titanic/train.csv')\n"
+        "c = pd.read_csv(r'/content/drive/MyDrive/data/x.csv')\n"
+        "d = '/content/drive/My Drive/y.json'\n"
+        "e = '/kaggle/working/out.csv'  # '/content/comment.csv'\n"
+    )
+
+    assert relocate_sandbox_paths(source) == (
+        "import pandas as pd\n"
+        "a = pd.read_csv(\"sales.csv\")\n"
+        "b = open('titanic/train.csv')\n"
+        "c = pd.read_csv(r'data/x.csv')\n"
+        "d = 'y.json'\n"
+        "e = 'out.csv'  # '/content/comment.csv'\n"
+    )
+
+
+def test_relocate_sandbox_paths_leaves_mounts_fstrings_and_other_paths_alone():
+    from backend.parser.notebook_parser import relocate_sandbox_paths
+
+    source = (
+        "drive.mount('/content/drive')\n"
+        "root = '/content/'\n"
+        "up = '/content/../etc/passwd'\n"
+        "f = f'/content/{name}.csv'\n"
+        "raw = b'/content/a.bin'\n"
+        "doc = \"\"\"/content/a.csv\"\"\"\n"
+        "esc = '/content/a\\\\tb.csv'\n"
+        "other = '/data/content/x.csv'\n"
+    )
+
+    assert relocate_sandbox_paths(source) == source
+    assert relocate_sandbox_paths("x = (\n") == "x = (\n"
+
+
+def test_compile_ships_and_reads_a_colab_content_path(tmp_path, monkeypatch):
+    import nbformat
+
+    from backend.compiler import compile_notebook
+
+    (tmp_path / "sales.csv").write_text("40")
+    notebook = tmp_path / "nb.ipynb"
+    nb = nbformat.v4.new_notebook()
+    nb.cells = [nbformat.v4.new_code_cell(
+        "BASE = int(open('/content/sales.csv').read())\n\n"
+        "def total(a: int) -> int:\n"
+        "    return BASE + int(open('/content/sales.csv').read()) + a\n"
+    )]
+    nbformat.write(nb, str(notebook))
+    out = tmp_path / "out"
+
+    compile_notebook(str(notebook), str(out))
+
+    runtime = out / "runtime"
+    assert (runtime / "sales.csv").read_text() == "40"
+    monkeypatch.chdir(tmp_path.parent)
+    namespace = {"__file__": str(runtime / "notebook_module.py")}
+    exec((runtime / "notebook_module.py").read_text(), namespace)
+    assert namespace["total"](2) == 82
