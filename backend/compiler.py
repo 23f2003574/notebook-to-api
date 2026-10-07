@@ -1034,6 +1034,49 @@ def _extract_explicit_apt_packages(code_cells):
     return packages
 
 
+# A Hugging Face Hub model id: "org/name", no path-like parts.
+HUB_MODEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]*/[A-Za-z0-9][A-Za-z0-9_.\-]*$")
+_HUB_LOADER_NAMES = frozenset({"from_pretrained", "SentenceTransformer", "CrossEncoder"})
+_HUB_ID_KEYWORDS = ("pretrained_model_name_or_path", "model_name_or_path", "model_name", "model")
+
+
+def _hub_model_argument(call, name):
+    """The literal model id a Hub loader call names, else None."""
+    if name == "pipeline":
+        nodes = call.args[1:2] + [kw.value for kw in call.keywords if kw.arg == "model"]
+    else:
+        nodes = call.args[:1] + [kw.value for kw in call.keywords if kw.arg in _HUB_ID_KEYWORDS]
+    for node in nodes:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            value = node.value
+            if HUB_MODEL_ID_PATTERN.match(value) and ".." not in value:
+                return value
+    return None
+
+
+def hub_model_ids(code_cells):
+    """Hugging Face Hub model ids (first-seen order, unique) the notebook
+    loads by literal "org/name" id -- `AutoModel.from_pretrained(...)`,
+    `pipeline("task", model=...)`, `SentenceTransformer(...)` -- anywhere,
+    for the Dockerfile to prefetch at build time."""
+    found = []
+    for cell in code_cells:
+        try:
+            tree = ast.parse(cell)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            _, name, _ = _call_label(node.func)
+            if name not in _HUB_LOADER_NAMES and name != "pipeline":
+                continue
+            model = _hub_model_argument(node, name)
+            if model and model not in found:
+                found.append(model)
+    return found
+
+
 # System libraries python:3.x-slim lacks that an import needs at runtime:
 # the wheel installs fine, then `import cv2` fails on libGL.so.1, lightgbm
 # on libgomp.so.1, soundfile on libsndfile, pydub/whisper shell out to
@@ -3861,6 +3904,7 @@ def compile_notebook_to_api(
             generate_dockerfile(
                 dockerfile_path, package_name, compiling_python_version(),
                 apt_packages=apt_packages,
+                hub_models=hub_model_ids(code_cells),
             )
 
             dockerignore_path = os.path.join(

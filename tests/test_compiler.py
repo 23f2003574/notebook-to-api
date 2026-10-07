@@ -13215,3 +13215,61 @@ def test_colab_drive_mount_is_a_startup_no_op_outside_colab(tmp_path, monkeypatc
 
     assert namespace["add"](2) == 42
     assert "drive.mount('/content/drive') skipped outside Colab" in capsys.readouterr().out
+
+
+def test_hub_model_ids_finds_literal_org_name_ids_passed_to_hub_loaders():
+    from backend.compiler import hub_model_ids
+
+    cells = [
+        "from transformers import AutoModel, AutoTokenizer, pipeline\n"
+        "from sentence_transformers import SentenceTransformer\n"
+        "tok = AutoTokenizer.from_pretrained('google-bert/bert-base-uncased')\n"
+        "model = AutoModel.from_pretrained(pretrained_model_name_or_path='google-bert/bert-base-uncased')\n"
+        "clf = pipeline('sentiment-analysis', model='distilbert/sst2')\n"
+        "emb = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')\n",
+        "def load():\n    return pipeline('ner', 'dslim/bert-base-NER')\n",
+        "local = AutoModel.from_pretrained('./checkpoints')\n"
+        "nested = AutoModel.from_pretrained('models/a/b')\n"
+        "up = AutoModel.from_pretrained('../x/y')\n"
+        "bare = AutoModel.from_pretrained('gpt2')\n"
+        "dyn = AutoModel.from_pretrained(NAME)\n"
+        "task_only = pipeline('summarization')\n"
+        "quote = AutoModel.from_pretrained(\"o'r/x\")\n",
+        "not python (\n",
+    ]
+
+    assert hub_model_ids(cells) == [
+        "google-bert/bert-base-uncased", "distilbert/sst2",
+        "sentence-transformers/all-MiniLM-L6-v2", "dslim/bert-base-NER",
+    ]
+
+
+def test_compiled_dockerfile_prefetches_hub_models_without_failing_the_build(tmp_path):
+    from backend.compiler import compile_notebook
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "def embed(text: str) -> int:\n"
+        "    from sentence_transformers import SentenceTransformer\n"
+        "    model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')\n"
+        "    return len(text)\n",
+    )
+    out = tmp_path / "out"
+
+    compile_notebook(str(notebook), str(out))
+
+    dockerfile = (out / "Dockerfile").read_text()
+    assert "ENV HF_HOME=/app/.cache/huggingface" in dockerfile
+    assert (
+        "snapshot_download('sentence-transformers/all-MiniLM-L6-v2')\" \\\n"
+        "    || echo \"warning: could not prefetch" in dockerfile
+    )
+    assert dockerfile.index("RUN pip install") < dockerfile.index("snapshot_download") < dockerfile.index("USER appuser")
+
+
+def test_dockerfile_without_hub_models_is_unchanged():
+    from backend.generator.docker_generator import dockerfile_content
+
+    assert dockerfile_content("g", "3.12", hub_models=[]) == dockerfile_content("g", "3.12")
+    assert "HF_HOME" not in dockerfile_content("g", "3.12")

@@ -68,10 +68,31 @@ RUN apt-get update && apt-get install -y --no-install-recommends \\
 """
 
 
+def hub_model_prefetch_content(hub_models):
+    """Dockerfile lines that download each Hugging Face Hub model the
+    notebook loads by id (`AutoModel.from_pretrained("org/name")`) into the
+    image at build time, so a container start doesn't re-download it (or
+    fail offline / on a rate limit). A model that can't be fetched only
+    prints a warning: the app still downloads it on first use, as before.
+    Ids are pre-validated by the compiler (see HUB_MODEL_ID_PATTERN), so
+    they're safe inside the quoted command. Empty for no models."""
+    if not hub_models:
+        return ""
+    lines = ["ENV HF_HOME=/app/.cache/huggingface"]
+    for model in hub_models:
+        lines.append(
+            f"RUN python -c \"from huggingface_hub import snapshot_download; "
+            f"snapshot_download('{model}')\" \\\n"
+            f"    || echo \"warning: could not prefetch {model}; it downloads on first use\""
+        )
+    return "\n".join(lines) + "\n"
+
+
 def dockerfile_content(
     package_name="generated",
     python_version="3.11",
     apt_packages=None,
+    hub_models=None,
 ):
     """The exact Dockerfile text generate_dockerfile (below) writes to
     disk, as a pure string -- no filesystem access at all.
@@ -124,7 +145,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 # Copy requirements first for Docker layer caching
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
+{hub_model_prefetch_content(hub_models)}
 # Copy generated output into /app/{package_name}/ to preserve module paths
 COPY . {package_name}/
 
@@ -170,6 +191,7 @@ def generate_dockerfile(
     package_name="generated",
     python_version="3.11",
     apt_packages=None,
+    hub_models=None,
 ):
     """Write a Dockerfile for the compiled app at `output_path`.
 
@@ -190,7 +212,7 @@ def generate_dockerfile(
     this is and why it exists; passed straight through unchanged.
     """
     with open(output_path, "w", encoding="utf-8") as f:
-        f.write(dockerfile_content(package_name, python_version, apt_packages))
+        f.write(dockerfile_content(package_name, python_version, apt_packages, hub_models))
 
     print(f"Dockerfile generated at: {output_path}")
 
