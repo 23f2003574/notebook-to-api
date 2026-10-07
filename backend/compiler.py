@@ -2593,6 +2593,10 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
                     })
                     continue
                 path = _file_read_path(name, base, call, path_constants)
+                if path is None and _file_read_path(name, base, call, path_constants, probe=True):
+                    # A loop over f"data/{name}.csv" runs under the import-time
+                    # chdir, so shipping every match is all it needs.
+                    path = _dynamic_path_pattern(_path_arg_node(call), path_constants)
                 if path is not None:
                     hazards.append({
                         "kind": "file_read", "call": label, "path": path,
@@ -2643,11 +2647,12 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
             return bool(files) and all(name in shipped for name in files)
 
         def fully_shipped(item):
+            if item["kind"] in ("file_read", "request_read") and "*" in item["path"]:
+                files = _expand_listing_pattern(directory, item["path"])
+                redirected = item["kind"] == "file_read" or item["rewritable"]
+                return redirected and bool(files) and all(f in shipped for f in files)
             if item["kind"] == "file_read":
                 return path_shipped(item["path"])
-            if item["kind"] == "request_read" and "*" in item["path"]:
-                files = _expand_listing_pattern(directory, item["path"])
-                return item["rewritable"] and bool(files) and all(f in shipped for f in files)
             if item["kind"] == "request_read":
                 return item["rewritable"] and path_shipped(item["path"])
             if item["kind"] == "dir_read":
@@ -2756,7 +2761,7 @@ def find_data_files(notebook_path, code_cells=None, hazards=None):
 
     wanted = []
     for item in hazards:
-        if item["kind"] == "request_read" and "*" in item["path"]:
+        if item["kind"] in ("file_read", "request_read") and "*" in item["path"]:
             wanted += list(_expand_listing_pattern(directory, item["path"]))
         elif item["kind"] in ("file_read", "request_read"):
             wanted += list(_directory_read_files(directory, item["path"])) or [item["path"]]

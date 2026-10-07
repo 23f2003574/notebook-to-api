@@ -2192,3 +2192,16 @@ def test_fstring_request_read_folders_are_watched(tmp_path):
     assert serve_module.extra_watch_directories(str(notebook)) == [
         ((tmp_path / "prices").resolve(), False),
     ]
+
+
+def test_import_time_dynamic_read_folders_are_watched(tmp_path):
+    notebook = tmp_path / "nb.ipynb"
+    _notebook_importing(
+        notebook,
+        "DATA = {m: open(f'months/{m}.csv').read() for m in ['jan']}\n",
+    )
+    (tmp_path / "months").mkdir()
+
+    assert serve_module.extra_watch_directories(str(notebook)) == [
+        ((tmp_path / "months").resolve(), False),
+    ]

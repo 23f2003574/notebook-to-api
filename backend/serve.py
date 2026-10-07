@@ -204,7 +204,7 @@ def _listed_directories(notebook_dir, cells):
                 found.append((directory, True))
             continue
         # f-string reads like f"data/{city}.csv" ship their pattern's matches.
-        if hazard["kind"] not in ("dir_read", "request_read"):
+        if hazard["kind"] not in ("dir_read", "request_read", "file_read"):
             continue
         parts = Path(hazard["path"]).parts
         fixed = []

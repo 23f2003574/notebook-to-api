@@ -13466,3 +13466,59 @@ def test_compile_redirects_joined_path_request_reads(tmp_path, monkeypatch):
     exec((runtime / "notebook_module.py").read_text(), namespace)
     assert namespace["rate"]("usd") == 3
     assert namespace["doubled"]("eur") == 4
+
+
+def test_compile_ships_files_an_import_time_dynamic_read_picks(tmp_path, monkeypatch):
+    from backend.compiler import _find_import_time_hazards, compile_notebook
+
+    (tmp_path / "regions").mkdir()
+    (tmp_path / "regions" / "north.txt").write_text("1")
+    (tmp_path / "regions" / "south.txt").write_text("2")
+    (tmp_path / "regions" / "readme.md").write_text("not shipped")
+    source = (
+        "import os\n"
+        "TOTALS = {}\n"
+        "for region in ['north', 'south']:\n"
+        "    TOTALS[region] = int(open(f'regions/{region}.txt').read())\n"
+        "EXTRA = open(os.path.join('regions', 'south' + '.txt')).read()\n\n"
+        "def total(region: str) -> int:\n"
+        "    return TOTALS[region]\n"
+    )
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(notebook, source)
+    out = tmp_path / "out"
+
+    assert _find_import_time_hazards([source], str(notebook)) == []
+    compile_notebook(str(notebook), str(out))
+
+    runtime = out / "runtime"
+    # The f-string ships regions/*.txt; the joined `'south' + '.txt'` is a
+    # runtime value, so it ships the whole folder (regions/*).
+    assert sorted(p.name for p in (runtime / "regions").iterdir()) == [
+        "north.txt", "readme.md", "south.txt",
+    ]
+    monkeypatch.chdir(tmp_path.parent)
+    namespace = {"__file__": str(runtime / "notebook_module.py")}
+    exec((runtime / "notebook_module.py").read_text(), namespace)
+    assert namespace["total"]("south") == 2
+    assert namespace["EXTRA"] == "2"
+
+
+def test_import_time_dynamic_read_matching_nothing_is_a_startup_hazard(tmp_path):
+    from backend.compiler import _find_import_time_hazards
+    from backend.inspector import startup_warning_lines
+
+    notebook = tmp_path / "nb.ipynb"
+    cells = [
+        "for m in ['a', 'b']:\n    open(f'months/{m}.csv').read()\n"
+        "x = open(f'{prefix}.csv')\n",
+    ]
+
+    hazards = _find_import_time_hazards(cells, str(notebook))
+
+    assert [(h["kind"], h["path"], h.get("reason")) for h in hazards] == [
+        ("file_read", "months/*.csv", "no_matches"),
+    ]
+    assert "nothing beside the notebook matches it" in startup_warning_lines(
+        {"import_time_hazards": hazards}
+    )[0]
