@@ -13064,3 +13064,81 @@ def test_missing_sqlite_database_is_reported_as_a_startup_hazard(tmp_path):
 
     assert [(h["kind"], h["path"]) for h in hazards] == [("file_read", "gone.db")]
     assert find_data_files(str(notebook), cells, hazards) == {}
+
+
+def test_compile_ships_every_file_of_a_directory_a_read_names(tmp_path, monkeypatch):
+    from backend.compiler import _find_import_time_hazards, compile_notebook
+
+    model = tmp_path / "saved_model"
+    (model / "variables").mkdir(parents=True)
+    (model / "config.txt").write_text("7")
+    (model / "variables" / "weights.txt").write_text("6")
+    (model / ".ipynb_checkpoints").mkdir()
+    (model / ".ipynb_checkpoints" / "config-checkpoint.txt").write_text("stale")
+    source = (
+        "import os\n\n"
+        "def load_model(folder):\n"
+        "    def part(name):\n"
+        "        with open(os.path.join(folder, name)) as fh:\n"
+        "            return int(fh.read())\n"
+        "    return part('config.txt') * part(os.path.join('variables', 'weights.txt'))\n\n"
+        "MODEL = load_model('saved_model')\n\n"
+        "def predict(x: int) -> int:\n"
+        "    return load_model('./saved_model') + x\n"
+    )
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(notebook, source)
+    out = tmp_path / "out"
+
+    assert _find_import_time_hazards([source], str(notebook)) == []
+    compile_notebook(str(notebook), str(out))
+
+    runtime = out / "runtime"
+    assert (runtime / "saved_model" / "config.txt").read_text() == "7"
+    assert (runtime / "saved_model" / "variables" / "weights.txt").read_text() == "6"
+    assert not (runtime / "saved_model" / ".ipynb_checkpoints").exists()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    namespace = {"__file__": str(runtime / "notebook_module.py")}
+    exec((runtime / "notebook_module.py").read_text(), namespace)
+
+    assert namespace["MODEL"] == 42
+    assert namespace["predict"](1) == 43
+
+
+def test_directory_reads_past_the_size_cap_or_empty_say_why(tmp_path, monkeypatch):
+    import backend.compiler as compiler_module
+
+    monkeypatch.setattr(compiler_module, "MAX_SHIPPED_DATA_BYTES", 10)
+    monkeypatch.delenv(compiler_module.MAX_SHIPPED_DATA_ENV, raising=False)
+    notebook = tmp_path / "nb.ipynb"
+    (tmp_path / "big_model").mkdir()
+    (tmp_path / "big_model" / "a.bin").write_text("x" * 8)
+    (tmp_path / "big_model" / "b.bin").write_text("x" * 8)
+    (tmp_path / "empty_model").mkdir()
+    cells = [
+        "import pandas as pd\n"
+        "a = pd.read_parquet('big_model')\n"
+        "b = pd.read_parquet('empty_model')\n",
+    ]
+
+    hazards = compiler_module._find_import_time_hazards(cells, str(notebook))
+    shipped = compiler_module.find_data_files(str(notebook), cells, hazards)
+
+    assert [(h["path"], h.get("reason")) for h in hazards] == [
+        ("big_model", "size_limit"),
+        ("empty_model", "directory"),
+    ]
+    assert list(shipped) == ["big_model/a.bin"]
+
+
+def test_shipped_as_directory_matches_only_whole_path_segments():
+    from backend.compiler import _shipped_as_directory
+
+    shipped = {"model/a.bin": None, "models_old/b.bin": None}
+
+    assert _shipped_as_directory("model", shipped)
+    assert _shipped_as_directory("./model/", shipped)
+    assert not _shipped_as_directory("mod", shipped)
+    assert not _shipped_as_directory(".", shipped)

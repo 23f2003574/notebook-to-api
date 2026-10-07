@@ -1771,6 +1771,26 @@ def _expand_listing_pattern(directory, pattern):
     return found
 
 
+def _directory_read_files(directory, path):
+    """{relative posix path: absolute Path} for every file under `path`
+    when a read names a directory beside the notebook (a Keras SavedModel
+    passed to `load_model("saved_model")`, `pd.read_parquet("parts/")`),
+    else {} -- such reads load the whole folder, so all of it ships."""
+    relative = Path(path)
+    if ".." in relative.parts or relative.is_absolute():
+        return {}
+    if not (directory / relative).is_dir():
+        return {}
+    return _expand_listing_pattern(directory, f"{relative.as_posix()}/**/*")
+
+
+def _shipped_as_directory(path, shipped):
+    """Whether `path` names a directory some of whose files are in
+    `shipped` (so a read of it can point at the shipped copy)."""
+    prefix = Path(path).as_posix().rstrip("/") + "/"
+    return prefix != "./" and any(key.startswith(prefix) for key in shipped)
+
+
 # Colab keeps API keys in "Secrets" read with `userdata.get("NAME")`. Outside
 # Colab that module doesn't exist, so the import failed on startup; this shim
 # answers the same call from the environment instead (and raises Colab's
@@ -2080,7 +2100,7 @@ def _rewrite_request_time_reads(code_cells, shipped):
     redirected = set()
     for index, tree in parsed.items():
         for _, call, path in _function_data_reads(tree, aliases, constants):
-            if path not in shipped:
+            if path not in shipped and not _shipped_as_directory(path, shipped):
                 continue
             node = _path_arg_node(call)
             if isinstance(node, ast.Constant) and node.lineno == node.end_lineno:
@@ -2375,11 +2395,17 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
         shipped = find_data_files(notebook_path, hazards=hazards)
         directory = Path(notebook_path).resolve().parent
 
+        def path_shipped(path):
+            if path in shipped:
+                return True
+            files = _directory_read_files(directory, path)
+            return bool(files) and all(name in shipped for name in files)
+
         def fully_shipped(item):
             if item["kind"] == "file_read":
-                return item["path"] in shipped
+                return path_shipped(item["path"])
             if item["kind"] == "request_read":
-                return item["rewritable"] and item["path"] in shipped
+                return item["rewritable"] and path_shipped(item["path"])
             if item["kind"] == "dir_read":
                 files = _expand_listing_pattern(directory, item["path"])
                 return bool(files) and all(path in shipped for path in files)
@@ -2419,7 +2445,7 @@ def max_shipped_data_bytes():
 _UNSHIPPED_REASON_TEXT = {
     "missing": "it doesn't exist beside the notebook",
     "outside": "it's outside the notebook's directory",
-    "directory": "it's a directory, not a file",
+    "directory": "it's an empty directory",
     "size_limit": (
         "shipping it would pass the data size limit "
         f"(raise it with {MAX_SHIPPED_DATA_ENV})"
@@ -2446,14 +2472,16 @@ def _unshipped_reason(item, directory, shipped):
         return "size_limit" if files else "no_matches"
     if item["kind"] not in ("file_read", "request_read"):
         return None
-    if item["kind"] == "request_read" and item["path"] in shipped:
+    if item["kind"] == "request_read" and (
+        item["path"] in shipped or _shipped_as_directory(item["path"], shipped)
+    ):
         return "not_redirectable"
     relative = Path(item["path"])
     candidate = (directory / relative).resolve()
     if ".." in relative.parts or (candidate != directory and directory not in candidate.parents):
         return "outside"
     if candidate.is_dir():
-        return "directory"
+        return "size_limit" if _directory_read_files(directory, item["path"]) else "directory"
     if not candidate.is_file():
         return "missing"
     return "size_limit"
@@ -2463,8 +2491,9 @@ def find_data_files(notebook_path, code_cells=None, hazards=None):
     """{relative path as written: absolute Path} for the relative data files
     the notebook reads at import time (`pd.read_csv("sales.csv")`,
     `open("config.json")`) that exist beside the notebook -- what the
-    compile ships next to the runtime module. Paths that climb out of the
-    notebook's directory, directories, and anything past
+    compile ships next to the runtime module. A read naming a directory
+    (`load_model("saved_model")`) ships every file under it. Paths that
+    climb out of the notebook's directory, empty directories, and anything past
     MAX_SHIPPED_DATA_BYTES in total are left out.
     """
     if not notebook_path:
@@ -2476,7 +2505,10 @@ def find_data_files(notebook_path, code_cells=None, hazards=None):
     found = {}
     total = 0
 
-    wanted = [item["path"] for item in hazards if item["kind"] in ("file_read", "request_read")]
+    wanted = []
+    for item in hazards:
+        if item["kind"] in ("file_read", "request_read"):
+            wanted += list(_directory_read_files(directory, item["path"])) or [item["path"]]
     # `%run script.py` files are shipped too (see _run_magic_scripts).
     wanted += _run_magic_scripts(code_cells or [])
     # So are the files a top-level directory listing finds.
