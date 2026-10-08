@@ -600,6 +600,8 @@ def write_runtime_module(code_cells, output_dir, local_modules=None, data_files=
         extra_prelude += _COLAB_USERDATA_SHIM
     if _uses_kaggle_secrets(code_cells):
         extra_prelude += _KAGGLE_SECRETS_SHIM
+    if _uses_tqdm_notebook(code_cells):
+        extra_prelude += _TQDM_NOTEBOOK_SHIM
     if local_modules:
         extra_prelude += _LOCAL_MODULES_PATH_PRELUDE
     if reads_at_request_time:
@@ -2129,6 +2131,59 @@ if "kaggle_secrets" not in _nb_sys6.modules:
         _nb_sys6.modules["kaggle_secrets"] = _nb_kaggle
 
 """
+
+
+# `from tqdm.notebook import tqdm` draws its bar with ipywidgets, which the
+# compiled app doesn't install: creating a bar raised ImportError ("IProgress
+# not found") / AttributeError, so a top-level progress loop stopped the app
+# starting and one inside an endpoint failed every call. Without ipywidgets
+# the notebook flavour is swapped for tqdm's console bar.
+_TQDM_NOTEBOOK_SHIM = """\
+# tqdm.notebook -> console tqdm when ipywidgets is missing (notebook-to-api)
+import sys as _nb_sys9
+import types as _nb_types9
+
+try:
+    import ipywidgets  # noqa: F401  (a widget-capable environment keeps the real one)
+except ImportError:
+    try:
+        import tqdm as _nb_tqdm9
+        import tqdm.std as _nb_tqdm_std9
+    except ImportError:
+        pass
+    else:
+        _nb_tqdm_nb9 = _nb_types9.ModuleType("tqdm.notebook")
+        _nb_tqdm_nb9.tqdm = _nb_tqdm_nb9.tqdm_notebook = _nb_tqdm_std9.tqdm
+        _nb_tqdm_nb9.trange = _nb_tqdm_nb9.tnrange = _nb_tqdm_std9.trange
+        _nb_sys9.modules["tqdm.notebook"] = _nb_tqdm_nb9
+        _nb_tqdm9.notebook = _nb_tqdm_nb9
+        _nb_tqdm9.tqdm_notebook = _nb_tqdm_std9.tqdm
+        _nb_tqdm9.tnrange = _nb_tqdm_std9.trange
+
+"""
+
+
+def _uses_tqdm_notebook(code_cells):
+    """True when a cell imports tqdm's notebook bar: `tqdm.notebook`, or
+    `tqdm_notebook` / `tnrange` from tqdm."""
+    for cell in code_cells:
+        try:
+            tree = ast.parse(cell)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import) and any(
+                alias.name == "tqdm.notebook" for alias in node.names
+            ):
+                return True
+            if isinstance(node, ast.ImportFrom) and not node.level and (
+                node.module == "tqdm.notebook"
+                or (node.module == "tqdm" and any(
+                    alias.name in ("notebook", "tqdm_notebook", "tnrange") for alias in node.names
+                ))
+            ):
+                return True
+    return False
 
 
 def _uses_kaggle_secrets(code_cells):

@@ -13717,3 +13717,42 @@ def test_dotenv_keys_reach_the_compiled_deployment_files(tmp_path):
     assert "sk-secret-value" not in (out / ".env.example").read_text()
     assert not (out / "runtime" / ".env").exists()
     assert read_notebook_env_vars(str(out)) == [{"name": "OPENAI_API_KEY", "required": True}]
+
+
+def test_uses_tqdm_notebook_detects_the_notebook_bar_imports():
+    from backend.compiler import _uses_tqdm_notebook
+
+    assert _uses_tqdm_notebook(["from tqdm.notebook import tqdm\n"])
+    assert _uses_tqdm_notebook(["import tqdm.notebook as tn\n"])
+    assert _uses_tqdm_notebook(["from tqdm import tqdm_notebook, tnrange\n"])
+    assert _uses_tqdm_notebook(["from tqdm import notebook\n"])
+    assert not _uses_tqdm_notebook(["from tqdm import tqdm\n", "from tqdm.auto import tqdm\n"])
+    assert not _uses_tqdm_notebook(["not python (\n"])
+
+
+def test_compiled_app_with_tqdm_notebook_bars_starts_without_ipywidgets(tmp_path, monkeypatch):
+    import sys
+
+    pytest.importorskip("tqdm")
+    if "ipywidgets" in sys.modules or __import__("importlib").util.find_spec("ipywidgets"):
+        pytest.skip("ipywidgets installed: the real notebook bar is kept")
+    from backend.compiler import compile_notebook
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "from tqdm.notebook import tqdm, trange\nfrom tqdm import tnrange\n"
+        "TOTAL = sum(i for i in tqdm(range(4)))\n\n"
+        "def count(n: int) -> int:\n"
+        "    return TOTAL + sum(1 for _ in trange(n)) + len(list(tnrange(1)))\n",
+    )
+    out = tmp_path / "out"
+
+    compile_notebook(str(notebook), str(out))
+
+    for name in [m for m in sys.modules if m == "tqdm" or m.startswith("tqdm.")]:
+        monkeypatch.delitem(sys.modules, name)
+    namespace = {"__file__": str(out / "runtime" / "notebook_module.py")}
+    exec((out / "runtime" / "notebook_module.py").read_text(), namespace)
+
+    assert namespace["count"](2) == 9
