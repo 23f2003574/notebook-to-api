@@ -115,12 +115,29 @@ def language_data_content(language_data):
     return "\n".join(lines) + "\n" if lines else ""
 
 
+def torch_weights_content(torch_weights):
+    """Dockerfile lines that run each torchvision / torch.hub weights load
+    the notebook makes (see torch_weight_prefetches, backend/compiler.py)
+    once at build time, caching the download under TORCH_HOME in the
+    image. A failed download only warns. Empty for none."""
+    if not torch_weights:
+        return ""
+    lines = ["ENV TORCH_HOME=/app/.cache/torch"]
+    for snippet in torch_weights:
+        lines.append(
+            f"RUN python -c \"{snippet}\" \\\n"
+            f"    || echo \"warning: could not prefetch weights for: {snippet}\""
+        )
+    return "\n".join(lines) + "\n"
+
+
 def dockerfile_content(
     package_name="generated",
     python_version="3.11",
     apt_packages=None,
     hub_models=None,
     language_data=None,
+    torch_weights=None,
 ):
     """The exact Dockerfile text generate_dockerfile (below) writes to
     disk, as a pure string -- no filesystem access at all.
@@ -173,7 +190,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 # Copy requirements first for Docker layer caching
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-{hub_model_prefetch_content(hub_models)}{language_data_content(language_data)}
+{hub_model_prefetch_content(hub_models)}{language_data_content(language_data)}{torch_weights_content(torch_weights)}
 # Copy generated output into /app/{package_name}/ to preserve module paths
 COPY . {package_name}/
 
@@ -221,6 +238,7 @@ def generate_dockerfile(
     apt_packages=None,
     hub_models=None,
     language_data=None,
+    torch_weights=None,
 ):
     """Write a Dockerfile for the compiled app at `output_path`.
 
@@ -242,7 +260,8 @@ def generate_dockerfile(
     """
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(dockerfile_content(
-            package_name, python_version, apt_packages, hub_models, language_data
+            package_name, python_version, apt_packages, hub_models, language_data,
+            torch_weights,
         ))
 
     print(f"Dockerfile generated at: {output_path}")

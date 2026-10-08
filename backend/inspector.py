@@ -27,6 +27,7 @@ from backend.compiler import (
     _extract_explicit_apt_packages,
     hub_model_ids,
     language_data_packages,
+    torch_weight_prefetches,
     _extract_private_function_names,
     _filter_functions_by_name,
     distribution_name_for_import,
@@ -783,6 +784,8 @@ def inspect_notebook_data(
         "hub_models": hub_model_ids(code_cells),
         # spaCy pipelines / NLTK data the Dockerfile installs at build time.
         "language_data": language_data_packages(code_cells),
+        # torchvision / torch.hub weight loads the Dockerfile runs at build time.
+        "torch_weights": torch_weight_prefetches(code_cells),
         "generated_files": list_generated_files(output_dir),
         "reserved_name_conflicts": _reserved_name_conflicts(all_functions),
         "endpoints": _endpoint_metadata(
@@ -1067,6 +1070,8 @@ def print_compile_summary(notebook_path, output_dir="generated", only=None, excl
         print(f"spaCy pipelines (installed at build): {', '.join(language_data['spacy'])}")
     if language_data.get("nltk"):
         print(f"NLTK data (downloaded at build): {', '.join(language_data['nltk'])}")
+    if data.get("torch_weights"):
+        print(f"PyTorch weights (prefetched at build): {len(data['torch_weights'])} load(s)")
 
     if data["skipped_functions"]:
         print(

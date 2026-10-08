@@ -35266,3 +35266,25 @@ def test_dockerfile_preview_includes_language_data_matching_a_real_compile():
     assert "nltk.downloader -d /usr/local/share/nltk_data stopwords" in preview["dockerfile"]
     assert client.post("/api/compile", json={"notebook_path": filename}).status_code == 200
     assert preview["dockerfile"] == client.get("/api/generated/Dockerfile").json()["content"]
+
+
+def test_dockerfile_preview_includes_torch_weight_prefetch_matching_a_real_compile():
+
+    filename = "dockerfile_preview_torch_weights.ipynb"
+    content = _notebook_bytes(
+        "import torch\n\n"
+        "def detect(x: int) -> int:\n"
+        "    torch.hub.load('ultralytics/yolov5', 'yolov5s')\n"
+        "    return x\n"
+    )
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(content), "application/json")},
+    )
+
+    preview = client.get("/api/dockerfile-preview", params={"notebook_path": filename}).json()
+
+    assert preview["torch_weights"] == ["import torch; torch.hub.load('ultralytics/yolov5', 'yolov5s')"]
+    assert "ENV TORCH_HOME=/app/.cache/torch" in preview["dockerfile"]
+    assert client.post("/api/compile", json={"notebook_path": filename}).status_code == 200
+    assert preview["dockerfile"] == client.get("/api/generated/Dockerfile").json()["content"]

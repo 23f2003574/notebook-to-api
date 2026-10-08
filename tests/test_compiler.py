@@ -13545,3 +13545,66 @@ def test_multi_line_dynamic_request_read_warning_names_the_supported_forms(tmp_p
     line = startup_warning_lines({"import_time_hazards": hazards})[0]
     assert "inside rate()" in line
     assert "one-line f-string / os.path.join / Path expression with a literal leading folder" in line
+
+
+def test_torch_weight_prefetches_repeat_literal_weight_loads():
+    from backend.compiler import torch_weight_prefetches
+
+    cells = [
+        "import torch, torchvision\nfrom torchvision import models\n"
+        "from torchvision.models import resnet18, ResNet18_Weights\n"
+        "a = torchvision.models.resnet50(weights='DEFAULT')\n"
+        "b = models.vgg16(pretrained=True)\n"
+        "c = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)\n"
+        "d = models.resnet34()\ne = models.resnet34(weights=None)\n"
+        "f = models.resnet34(pretrained=False)\n"
+        "g = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True)\n"
+        "h = torch.hub.load(REPO, 'x')\ni = models.resnet50(weights=W)\n"
+        "j = torch.hub.load('a/b', 'm', path='$(rm -rf /)')\n"
+        "k = models.ResNet(block, layers)\n",
+        "def f():\n    return torchvision.models.resnet50(weights='DEFAULT')\n",
+        "not python (\n",
+    ]
+
+    assert torch_weight_prefetches(cells) == [
+        "import torchvision.models as m; m.resnet50(weights='DEFAULT')",
+        "import torchvision.models as m; m.vgg16(pretrained=True)",
+        "import torchvision.models as m; m.resnet18(weights='ResNet18_Weights.IMAGENET1K_V1')",
+        "import torch; torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True)",
+    ]
+
+
+def test_compiled_dockerfile_prefetches_torch_weights_and_inspect_reports_them(tmp_path, capsys):
+    from backend.compiler import compile_notebook
+    from backend.inspector import inspect_notebook_data, print_compile_summary
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "def classify(x: int) -> int:\n"
+        "    from torchvision import models\n"
+        "    models.resnet50(weights='DEFAULT')\n"
+        "    return x\n",
+    )
+    out = tmp_path / "out"
+
+    compile_notebook(str(notebook), str(out))
+
+    dockerfile = (out / "Dockerfile").read_text()
+    assert "ENV TORCH_HOME=/app/.cache/torch" in dockerfile
+    assert (
+        "RUN python -c \"import torchvision.models as m; m.resnet50(weights='DEFAULT')\" \\\n"
+        "    || echo \"warning: could not prefetch weights for:" in dockerfile
+    )
+    assert dockerfile.index("RUN pip install") < dockerfile.index("TORCH_HOME") < dockerfile.index("USER appuser")
+    assert inspect_notebook_data(str(notebook), str(out))["torch_weights"] == [
+        "import torchvision.models as m; m.resnet50(weights='DEFAULT')",
+    ]
+    print_compile_summary(str(notebook), str(out))
+    assert "PyTorch weights (prefetched at build): 1 load(s)" in capsys.readouterr().out
+
+
+def test_dockerfile_without_torch_weights_is_unchanged():
+    from backend.generator.docker_generator import dockerfile_content
+
+    assert dockerfile_content("g", "3.12", torch_weights=[]) == dockerfile_content("g", "3.12")

@@ -1122,6 +1122,89 @@ def language_data_packages(code_cells):
     return found
 
 
+# Literal values safe to repeat inside a Dockerfile `RUN python -c "..."`.
+_SAFE_LITERAL_PATTERN = re.compile(r"^[A-Za-z0-9_.:/\-]+$")
+_TORCH_HUB_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+(:[A-Za-z0-9_.\-]+)?$")
+
+
+def _safe_literal_source(node):
+    """Python source for a literal argument that downloads the same
+    weights at build time -- a str/bool/int constant, or a torchvision
+    weights enum like `ResNet50_Weights.DEFAULT` (passed as its string
+    name, which torchvision accepts) -- else None."""
+    if isinstance(node, ast.Constant):
+        value = node.value
+        if isinstance(value, bool) or (isinstance(value, int) and not isinstance(value, bool)):
+            return repr(value)
+        if isinstance(value, str) and _SAFE_LITERAL_PATTERN.match(value):
+            return repr(value)
+        return None
+    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+        text = f"{node.value.id}.{node.attr}"
+        return repr(text) if node.value.id.endswith("_Weights") else None
+    return None
+
+
+def _torch_call_source(call, prefix, kind):
+    """`prefix(<literal args>)` repeating `call`'s arguments, or None when
+    any argument isn't a safe literal or the call downloads nothing."""
+    args = [_safe_literal_source(arg) for arg in call.args]
+    keywords = {kw.arg: _safe_literal_source(kw.value) for kw in call.keywords if kw.arg}
+    if None in args or None in keywords.values() or len(keywords) != len(call.keywords):
+        return None
+    if kind == "torchvision":
+        downloads = keywords.get("weights") not in (None, "None") or keywords.get("pretrained") == "True"
+        if args or not downloads:
+            return None
+    rendered = ", ".join(args + [f"{key}={value}" for key, value in keywords.items()])
+    return f"{prefix}({rendered})"
+
+
+def torch_weight_prefetches(code_cells):
+    """Python one-liners (first-seen order, unique) that download the
+    pretrained weights the notebook loads -- `torchvision.models.resnet50(
+    weights="DEFAULT")` / `(pretrained=True)` and `torch.hub.load(
+    "ultralytics/yolov5", "yolov5s")` -- for the Dockerfile to run at build
+    time, so a container start doesn't fetch them again (or fail offline).
+    Only calls whose arguments are all literals are repeated."""
+    found = []
+    for cell in code_cells:
+        try:
+            tree = ast.parse(cell)
+        except SyntaxError:
+            continue
+        aliases = _import_aliases(tree)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            dotted = ast.unparse(func)
+            label, name, base = _call_label(func)
+            source = None
+            if dotted == "torch.hub.load" or (
+                label is not None
+                and _resolve_import_alias(label, name, base, aliases)[0] == "hub.load"
+                and aliases.get(base or name, "").startswith("torch.hub")
+            ):
+                repo = node.args[0] if node.args else None
+                if isinstance(repo, ast.Constant) and isinstance(repo.value, str) \
+                        and _TORCH_HUB_REPO_PATTERN.match(repo.value):
+                    source = _torch_call_source(node, "torch.hub.load", "hub")
+                    source = source and f"import torch; {source}"
+            else:
+                module, _, model = dotted.rpartition(".")
+                if not module and name in aliases:
+                    module, _, model = aliases[name].rpartition(".")
+                elif module in aliases:
+                    module = aliases[module]
+                if module == "torchvision.models" and model.isidentifier() and model.islower():
+                    source = _torch_call_source(node, f"m.{model}", "torchvision")
+                    source = source and f"import torchvision.models as m; {source}"
+            if source and source not in found:
+                found.append(source)
+    return found
+
+
 # System libraries python:3.x-slim lacks that an import needs at runtime:
 # the wheel installs fine, then `import cv2` fails on libGL.so.1, lightgbm
 # on libgomp.so.1, soundfile on libsndfile, pydub/whisper shell out to
@@ -4042,6 +4125,7 @@ def compile_notebook_to_api(
                 apt_packages=apt_packages,
                 hub_models=hub_model_ids(code_cells),
                 language_data=language_data_packages(code_cells),
+                torch_weights=torch_weight_prefetches(code_cells),
             )
 
             dockerignore_path = os.path.join(
