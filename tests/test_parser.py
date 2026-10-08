@@ -752,3 +752,14 @@ def test_pip_install_in_an_emptied_block_still_reaches_requirements():
     )
 
     assert "requests==2.31.0" in _pip_install_specs([cell])
+
+
+def test_an_indented_assigned_shell_line_alone_in_a_block_gets_a_pass():
+    import ast
+
+    from backend.parser.notebook_parser import strip_magic_commands
+
+    cleaned = strip_magic_commands("if True:\n    stats = !df\nprint(stats)\n")
+
+    assert cleaned == "if True:\n    pass  # stats = !df\nprint(stats)\n"
+    ast.parse(cleaned)

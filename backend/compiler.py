@@ -2598,6 +2598,55 @@ def _local_names(func):
     return set(names)
 
 
+# Names only an IPython magic set: `files = !ls`, `out = %sx cmd`,
+# `t = %timeit -o f()`, `%%capture out`, `%store -r model`. The parser
+# comments those lines out (they aren't Python), so a later use of the name
+# raises NameError in the compiled app.
+_MAGIC_BINDING_PATTERNS = (
+    re.compile(r"^#\s*(?P<names>[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*=\s*[!%]"),
+    re.compile(r"^#\s*%%capture(?:\s+--?\w+)*\s+(?P<names>[A-Za-z_]\w*)\s*$"),
+    re.compile(r"^#\s*%store\s+-r\s+(?P<names>[A-Za-z_]\w*(?:\s+[A-Za-z_]\w*)*)\s*$"),
+)
+
+
+def _magic_variable_hazards(code_cells, trees):
+    """"magic_variable" hazards for each name a commented-out magic line
+    bound (see _MAGIC_BINDING_PATTERNS) that the notebook's Python reads
+    but never assigns itself."""
+    loaded, stored = set(), set()
+    for tree in trees:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name):
+                (loaded if isinstance(node.ctx, ast.Load) else stored).add(node.id)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                stored.add(node.name)
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                stored.update((a.asname or a.name).split(".")[0] for a in node.names)
+            elif isinstance(node, ast.arg):
+                stored.add(node.arg)
+    hazards = []
+    for cell_number, cell in enumerate(code_cells, start=1):
+        unsafe_lines = _lines_inside_multiline_strings(cell)
+        for line_number, line in enumerate(cell.split("\n"), start=1):
+            if line_number in unsafe_lines:
+                continue
+            text = line.strip()
+            if text.startswith("pass  #"):
+                text = text[len("pass  "):]
+            for pattern in _MAGIC_BINDING_PATTERNS:
+                match = pattern.match(text)
+                if not match:
+                    continue
+                for name in re.split(r"[\s,]+", match.group("names").strip()):
+                    if name in loaded and name not in stored:
+                        hazards.append({
+                            "kind": "magic_variable", "call": text.lstrip("# ").strip(),
+                            "path": name, "cell": cell_number, "line": line_number,
+                        })
+                break
+    return hazards
+
+
 def call_hazard_detail(hazard):
     """(what, consequence) wording for a "debugger_call", "exit_call",
     "request_input" or "request_read" hazard."""
@@ -2848,6 +2897,8 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
                     "kind": "shell_command", "call": f"!{match.group('command')}", "path": None,
                     "cell": cell_number, "line": line,
                 })
+
+    hazards.extend(_magic_variable_hazards(code_cells, [tree for _, tree in parsed]))
 
     if notebook_path:
         shipped = find_data_files(notebook_path, hazards=hazards)

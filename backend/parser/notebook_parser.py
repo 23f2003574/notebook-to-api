@@ -286,6 +286,8 @@ def strip_magic_commands(source):
                 cleaned_lines.append(f"{indent}{target} {timed.group(1)}")
             else:
                 cleaned_lines.append(f"{indent}# {line.strip()}")
+                if indent:
+                    commented_indented.append(len(cleaned_lines) - 1)
             continue
 
         match = (

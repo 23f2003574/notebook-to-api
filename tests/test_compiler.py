@@ -13824,3 +13824,31 @@ def test_stdin_prompts_inside_functions_are_request_time_hazards():
     assert label == "Request-time prompt"
     assert "inside ask_name() prompts on stdin" in what
     assert consequence == "every call to ask_name() will fail or hang"
+
+
+def test_names_only_set_by_magics_are_startup_hazards():
+    from backend.compiler import _find_import_time_hazards
+    from backend.inspector import startup_warning_lines
+    from backend.parser.notebook_parser import strip_magic_commands
+
+    cells = [strip_magic_commands(cell) for cell in (
+        "files = !ls data\nprint(len(files))\n",
+        "%%capture out\nprint('quiet')\n",
+        "out.show()\n",
+        "%store -r model scaler\npreds = model.predict([1])\n",
+        "unused = !date\n",
+        "rows = !wc -l x\nrows = ['fixed']\nprint(rows)\n",
+        "if True:\n    stats = !df\nprint(stats)\n",
+    )]
+
+    hazards = [h for h in _find_import_time_hazards(cells) if h["kind"] == "magic_variable"]
+
+    assert [(h["path"], h["call"], h["cell"], h["line"]) for h in hazards] == [
+        ("files", "files = !ls data", 1, 1),
+        ("out", "%%capture out", 2, 1),
+        ("model", "%store -r model scaler", 4, 1),
+        ("stats", "stats = !df", 7, 2),
+    ]
+    assert "`files` is only set by `files = !ls data`" in startup_warning_lines(
+        {"import_time_hazards": hazards[:1]}
+    )[0]

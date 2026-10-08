@@ -902,6 +902,11 @@ def hazard_message(hazard):
         return _HAZARD_LABELS[kind], what, consequence
     if kind == "input":
         what = f"{hazard['call']}() waits on stdin, which the compiled app doesn't have"
+    elif kind == "magic_variable":
+        what = (
+            f"`{hazard['path']}` is only set by `{hazard['call']}`, an IPython magic the "
+            f"compiled app doesn't run, so using `{hazard['path']}` raises NameError"
+        )
     elif kind == "colab_upload":
         what = (
             f"`{hazard['call']}()` opens Colab's browser upload dialog, which the compiled "
