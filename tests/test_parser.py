@@ -763,3 +763,31 @@ def test_an_indented_assigned_shell_line_alone_in_a_block_gets_a_pass():
 
     assert cleaned == "if True:\n    pass  # stats = !df\nprint(stats)\n"
     ast.parse(cleaned)
+
+
+def test_assigned_magics_with_subscript_attribute_and_augmented_targets():
+    import ast
+
+    from backend.parser.notebook_parser import strip_magic_commands
+
+    source = (
+        "d = {}\n"
+        "d['files'] = !ls\n"
+        "cfg.out = %sx echo hi\n"
+        "log += !date\n"
+        "grid[0][1] = %time compute()\n"
+        "a[i], b = !ls\n"
+        "x == !y\n"
+        "def keep():\n    return 1\n"
+    )
+
+    cleaned = strip_magic_commands(source)
+
+    assert cleaned.splitlines()[1:6] == [
+        "# d['files'] = !ls",
+        "# cfg.out = %sx echo hi",
+        "# log += !date",
+        "grid[0][1] = compute()",
+        "# a[i], b = !ls",
+    ]
+    assert "x == !y" in cleaned.splitlines()[6]

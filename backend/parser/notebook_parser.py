@@ -27,8 +27,12 @@ _TIME_MAGIC_RE = re.compile(r"^(\s*)%time[ \t]+(?!-)(\S.*)$")
 # `x = %time expr` assigns expr's value; `x = !ls`, `x = %sx ls`,
 # `x = %timeit -o expr` capture shell/magic output. Left as written, any of
 # these is a SyntaxError that dropped the whole cell (every function in it).
+# Targets may be names, attributes or subscripts (`d["k"] = !ls`,
+# `self.out = %sx ls`), and the assignment augmented (`log += !date`).
+_ASSIGN_TARGET = r"[A-Za-z_][\w.]*(?:\[[^\]=\n]*\])*"
 _ASSIGNED_MAGIC_RE = re.compile(
-    r"^(\s*)([A-Za-z_][\w.]*(?:\s*,\s*[A-Za-z_][\w.]*)*\s*=)[ \t]*(%{1,2}|!)(?!=)(.*)$"
+    r"^(\s*)(" + _ASSIGN_TARGET + r"(?:\s*,\s*" + _ASSIGN_TARGET + r")*\s*(?:[-+*/|&]|//)?=)"
+    r"[ \t]*(%{1,2}|!)(?!=)(.*)$"
 )
 
 # IPython's "dynamic object introspection" syntax -- ``obj?``/``obj??`` for
