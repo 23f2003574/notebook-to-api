@@ -13608,3 +13608,62 @@ def test_dockerfile_without_torch_weights_is_unchanged():
     from backend.generator.docker_generator import dockerfile_content
 
     assert dockerfile_content("g", "3.12", torch_weights=[]) == dockerfile_content("g", "3.12")
+
+
+def test_model_weight_files_loaded_by_constructors_are_data_file_reads():
+    from backend.compiler import _find_import_time_hazards
+
+    cells = [
+        "import cv2\nimport lightgbm as lgb\nimport onnxruntime as ort\n"
+        "import tensorflow as tf\nfrom ultralytics import YOLO\n"
+        "from gensim.models import KeyedVectors\n"
+        "a = ort.InferenceSession('model.onnx')\n"
+        "b = ort.InferenceSession(path_or_bytes='kw.onnx')\n"
+        "c = YOLO('runs/best.pt')\n"
+        "d = YOLO('yolov8n.pt')\n"
+        "e = cv2.CascadeClassifier('haar/face.xml')\n"
+        "f = cv2.dnn.readNetFromONNX('net.onnx')\n"
+        "g = lgb.Booster(model_file='model.txt')\n"
+        "h = lgb.Booster(params={'a': 1})\n"
+        "i = tf.lite.Interpreter(model_path='m.tflite')\n"
+        "j = KeyedVectors.load('vectors.kv')\n"
+        "k = Interpreter()\n",
+    ]
+
+    assert [(h["call"], h["path"]) for h in _find_import_time_hazards(cells)] == [
+        ("ort.InferenceSession", "model.onnx"),
+        ("ort.InferenceSession", "kw.onnx"),
+        ("YOLO", "runs/best.pt"),
+        ("cv2.CascadeClassifier", "haar/face.xml"),
+        ("readNetFromONNX", "net.onnx"),
+        ("lgb.Booster", "model.txt"),
+        ("Interpreter", "m.tflite"),
+        ("KeyedVectors.load", "vectors.kv"),
+    ]
+
+
+def test_compile_ships_and_redirects_a_request_time_model_file(tmp_path, monkeypatch):
+    from backend.compiler import _find_import_time_hazards, compile_notebook
+
+    (tmp_path / "weights").mkdir()
+    (tmp_path / "weights" / "model.onnx").write_text("7")
+    source = (
+        "class InferenceSession:\n"
+        "    def __init__(self, path):\n"
+        "        self.value = int(open(path).read())\n\n"
+        "def score(x: int) -> int:\n"
+        "    return InferenceSession('weights/model.onnx').value * x\n"
+    )
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(notebook, source)
+    out = tmp_path / "out"
+
+    assert _find_import_time_hazards([source], str(notebook)) == []
+    compile_notebook(str(notebook), str(out))
+
+    runtime = out / "runtime"
+    assert (runtime / "weights" / "model.onnx").read_text() == "7"
+    monkeypatch.chdir(tmp_path.parent)
+    namespace = {"__file__": str(runtime / "notebook_module.py")}
+    exec((runtime / "notebook_module.py").read_text(), namespace)
+    assert namespace["score"](6) == 42

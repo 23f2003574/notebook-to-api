@@ -1699,12 +1699,28 @@ _FILE_READ_LABELS = frozenset({
     # `from safetensors.torch import load_file` resolves to torch.load_file
     "torch.load_file", "safetensors.load_file",
 })
+# Model loaders whose first argument (or model_path=/model_file=) is a local
+# weights file: onnxruntime.InferenceSession("model.onnx"), YOLO("best.pt"),
+# cv2.CascadeClassifier("face.xml"), cv2.dnn.readNetFromONNX("net.onnx").
+_MODEL_FILE_CALLS = frozenset({
+    "InferenceSession", "YOLO", "RTDETR", "CascadeClassifier", "readNet",
+    "readNetFromONNX", "readNetFromTensorflow", "readNetFromCaffe",
+    "readNetFromDarknet", "readNetFromTorch", "readNetFromTFLite",
+})
+# ...and ones that only read a file when given one by keyword:
+# lgb.Booster(model_file=...), tf.lite.Interpreter(model_path=...).
+_MODEL_FILE_KEYWORD_CALLS = frozenset({"Booster", "Interpreter"})
+# gensim's KeyedVectors.load("vectors.kv") and friends.
+_GENSIM_LOAD_BASES = frozenset({"KeyedVectors", "Word2Vec", "Doc2Vec", "FastText", "LdaModel"})
+# Official Ultralytics weights YOLO() downloads itself when they're absent.
+_AUTO_DOWNLOADED_YOLO = re.compile(r"^(yolo|rtdetr)[\w.\-]*\.pt$", re.IGNORECASE)
 # ...and those whose second argument / `mode=` can make them write instead.
 _MODE_CHECKED_LABELS = frozenset({"h5py.File", "zipfile.ZipFile"})
 # Keyword names a read call's path can be passed as.
 _PATH_KEYWORDS = (
     "filepath_or_buffer", "io", "path", "file", "fname", "fp",
-    "database", "file_name", "filename_or_obj",
+    "database", "file_name", "filename_or_obj", "model_path", "model_file",
+    "path_or_bytes",
 )
 # Values that look like relative paths but never name a file on disk.
 _NON_FILE_PATHS = frozenset({":memory:", ""})
@@ -2206,6 +2222,12 @@ def _file_read_path(name, base, call, constants=None, probe=False):
         or (name == "load" and base in _FILE_LOAD_BASES)
         or label in _FILE_READ_LABELS
         or (name == "loadmat" and base is None)  # scipy.io.loadmat(...)
+        or name in _MODEL_FILE_CALLS
+        or (name == "load" and base in _GENSIM_LOAD_BASES)
+        or (
+            name in _MODEL_FILE_KEYWORD_CALLS
+            and any(kw.arg in ("model_file", "model_path") for kw in call.keywords)
+        )
     )
     if not is_read:
         return None
@@ -2221,6 +2243,8 @@ def _file_read_path(name, base, call, constants=None, probe=False):
     if probe:  # only "is this a read call?"
         return True
     path = _relative_literal_path(call, constants)
+    if name in ("YOLO", "RTDETR") and path and _AUTO_DOWNLOADED_YOLO.match(path):
+        return None
     return None if path in _NON_FILE_PATHS or (path or "").startswith("file:") else path
 
 
