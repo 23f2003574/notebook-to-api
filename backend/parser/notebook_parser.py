@@ -1,3 +1,4 @@
+import ast
 import io
 import nbformat
 import os
@@ -264,6 +265,7 @@ def strip_magic_commands(source):
     unsafe_lines = _lines_unsafe_for_magic_detection(source)
 
     cleaned_lines = []
+    commented_indented = []
 
     for line_number, line in enumerate(source.split("\n"), start=1):
 
@@ -295,10 +297,41 @@ def strip_magic_commands(source):
         if match:
             indent = match.group(1)
             cleaned_lines.append(f"{indent}# {line.strip()}")
+            if indent:
+                commented_indented.append(len(cleaned_lines) - 1)
         else:
             cleaned_lines.append(line)
 
-    return "\n".join(cleaned_lines)
+    return _fill_emptied_blocks(cleaned_lines, commented_indented)
+
+
+def _fill_emptied_blocks(cleaned_lines, commented_indented):
+    """The cleaned cell, with each indented magic line that was commented
+    out turned into `pass  # <magic>` when commenting left a block with no
+    statement at all -- `except ImportError:` whose only body line was
+    `!pip install x`, or `if GPU:` holding just `%matplotlib inline`. An
+    empty block is a SyntaxError that dropped the whole cell, every
+    function in it included. Lines and line numbers stay the same, and a
+    cell that doesn't parse for some other reason is left as it was."""
+    cleaned = "\n".join(cleaned_lines)
+    if not commented_indented:
+        return cleaned
+    try:
+        ast.parse(cleaned)
+        return cleaned
+    except SyntaxError:
+        pass
+    filled = list(cleaned_lines)
+    for index in commented_indented:
+        line = filled[index]
+        indent = line[: len(line) - len(line.lstrip())]
+        filled[index] = f"{indent}pass  {line.lstrip()}"
+    candidate = "\n".join(filled)
+    try:
+        ast.parse(candidate)
+    except SyntaxError:
+        return cleaned
+    return candidate
 
 
 def notebook_kernel_language(notebook):

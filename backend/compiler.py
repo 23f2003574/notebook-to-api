@@ -877,7 +877,9 @@ def _extract_explicit_requirements(code_cells):
 
 
 _PIP_INSTALL_LINE_PATTERN = re.compile(
-    r"^\s*#\s*[!%]\s*(?:python[\d.]*\s+-m\s+)?pip[\d.]*\s+install\s+(?P<args>.+?)\s*$",
+    # "pass  # !pip install x": an emptied block's filler (see
+    # _fill_emptied_blocks, backend/parser/notebook_parser.py).
+    r"^\s*(?:pass\s+)?#\s*[!%]\s*(?:python[\d.]*\s+-m\s+)?pip[\d.]*\s+install\s+(?P<args>.+?)\s*$",
     re.MULTILINE,
 )
 

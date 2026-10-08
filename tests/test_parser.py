@@ -708,3 +708,47 @@ def test_functions_in_a_cell_with_time_magics_compile_and_run(tmp_path):
     exec((out / "runtime" / "notebook_module.py").read_text(), namespace)
     assert namespace["predict"](7) == 42
     assert "predict" in (out / "app.py").read_text()
+
+
+def test_blocks_left_empty_by_commented_magics_get_a_pass():
+    import ast
+
+    from backend.parser.notebook_parser import strip_magic_commands
+
+    source = (
+        "try:\n    import missing_pkg\nexcept ImportError:\n    !pip install missing_pkg\n"
+        "if True:\n    %matplotlib inline\n"
+        "for _ in range(1):\n    %load_ext autoreload\n    %autoreload 2\n"
+        "def predict(x):\n    return x\n"
+    )
+
+    cleaned = strip_magic_commands(source)
+
+    assert cleaned.splitlines() == [
+        "try:", "    import missing_pkg", "except ImportError:", "    pass  # !pip install missing_pkg",
+        "if True:", "    pass  # %matplotlib inline",
+        "for _ in range(1):", "    pass  # %load_ext autoreload", "    pass  # %autoreload 2",
+        "def predict(x):", "    return x",
+    ]
+    ast.parse(cleaned)
+
+
+def test_magics_in_non_empty_blocks_or_broken_cells_stay_plain_comments():
+    from backend.parser.notebook_parser import strip_magic_commands
+
+    fine = "if True:\n    !echo hi\n    x = 1\n"
+    broken = "if True:\n    !echo hi\nthis is not python (\n"
+
+    assert strip_magic_commands(fine) == "if True:\n    # !echo hi\n    x = 1\n"
+    assert strip_magic_commands(broken) == "if True:\n    # !echo hi\nthis is not python (\n"
+
+
+def test_pip_install_in_an_emptied_block_still_reaches_requirements():
+    from backend.compiler import _pip_install_specs
+    from backend.parser.notebook_parser import strip_magic_commands
+
+    cell = strip_magic_commands(
+        "try:\n    import requests\nexcept ImportError:\n    !pip install requests==2.31.0\n"
+    )
+
+    assert "requests==2.31.0" in _pip_install_specs([cell])
