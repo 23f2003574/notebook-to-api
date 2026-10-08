@@ -895,6 +895,28 @@ _PIP_OPTIONS_WITH_VALUE = frozenset({
 })
 
 
+# `pip install` / `apt-get install` written as lines of a `%%bash` / `%%sh`
+# cell (whose whole body the parser comments out), not as `!` lines.
+_SHELL_CELL_PIP_PATTERN = re.compile(
+    r"^#\s*(?:python[\d.]*\s+-m\s+)?pip[\d.]*\s+install\s+(?P<args>.+?)\s*$",
+    re.MULTILINE,
+)
+_SHELL_CELL_APT_PATTERN = re.compile(
+    r"^#\s*(?:sudo\s+)?apt(?:-get)?\s+(?:-\S+\s+)*install\s+(?P<args>.+?)\s*$",
+    re.MULTILINE,
+)
+
+
+def _shell_install_matches(cell, line_pattern, shell_cell_pattern):
+    """`line_pattern`'s matches in `cell`, plus `shell_cell_pattern`'s when
+    the cell is a shell cell (see _SHELL_CELL_PATTERN), in source order."""
+    matches = list(line_pattern.finditer(cell))
+    if _SHELL_CELL_PATTERN.match(cell.lstrip()):
+        seen = {match.start() for match in matches}
+        matches += [m for m in shell_cell_pattern.finditer(cell) if m.start() not in seen]
+    return sorted(matches, key=lambda match: match.start())
+
+
 def _pip_install_specs(code_cells):
     """The requirement specs named by `!pip install` / `%pip install` /
     `!python -m pip install` lines (the notebook parser turns each into a
@@ -911,7 +933,7 @@ def _pip_install_specs(code_cells):
 
     for cell in code_cells:
         unsafe_lines = _lines_inside_multiline_strings(cell)
-        for match in _PIP_INSTALL_LINE_PATTERN.finditer(cell):
+        for match in _shell_install_matches(cell, _PIP_INSTALL_LINE_PATTERN, _SHELL_CELL_PIP_PATTERN):
             if cell.count("\n", 0, match.start()) + 1 in unsafe_lines:
                 continue
             try:
@@ -1279,7 +1301,7 @@ def _apt_install_packages(code_cells):
     packages = []
     for cell in code_cells:
         unsafe_lines = _lines_inside_multiline_strings(cell)
-        for match in _APT_INSTALL_LINE_PATTERN.finditer(cell):
+        for match in _shell_install_matches(cell, _APT_INSTALL_LINE_PATTERN, _SHELL_CELL_APT_PATTERN):
             if cell.count("\n", 0, match.start()) + 1 in unsafe_lines:
                 continue
             try:

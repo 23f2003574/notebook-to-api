@@ -13875,3 +13875,21 @@ def test_fetch_commands_inside_shell_cells_are_startup_hazards():
     assert "`wget` ran in Jupyter's shell" in startup_warning_lines(
         {"import_time_hazards": hazards[:1]}
     )[0]
+
+
+def test_installs_inside_shell_cells_reach_requirements_and_apt_packages():
+    from backend.compiler import _apt_install_packages, _pip_install_specs
+    from backend.parser.notebook_parser import strip_magic_commands
+
+    cells = [strip_magic_commands(cell) for cell in (
+        "%%bash\npip install -q requests==2.31.0 && echo ok\n"
+        "python -m pip install tqdm\nsudo apt-get install -y ffmpeg\napt install libsndfile1\n",
+        "%%sh\npip3 install pyyaml\n",
+        "%%writefile setup.sh\npip install not-a-real-dependency\napt-get install nope\n",
+        "!pip install numpy\n",
+    )]
+
+    specs = _pip_install_specs(cells)
+    assert "requests==2.31.0" in specs and "tqdm" in specs and "pyyaml" in specs and "numpy" in specs
+    assert "not-a-real-dependency" not in specs
+    assert _apt_install_packages(cells) == ["ffmpeg", "libsndfile1"]
