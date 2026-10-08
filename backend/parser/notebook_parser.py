@@ -19,6 +19,17 @@ except ImportError:
 # commented out.
 _MAGIC_LINE_RE = re.compile(r"^(\s*)(%{1,2}|!)(?!=)")
 
+# `%time <statement>` runs the statement in the notebook's own namespace
+# (only timing it), so its effect -- `%time model = train()` defining
+# `model` -- must survive; it's unwrapped to the bare statement.
+_TIME_MAGIC_RE = re.compile(r"^(\s*)%time[ \t]+(?!-)(\S.*)$")
+# `x = %time expr` assigns expr's value; `x = !ls`, `x = %sx ls`,
+# `x = %timeit -o expr` capture shell/magic output. Left as written, any of
+# these is a SyntaxError that dropped the whole cell (every function in it).
+_ASSIGNED_MAGIC_RE = re.compile(
+    r"^(\s*)([A-Za-z_][\w.]*(?:\s*,\s*[A-Za-z_][\w.]*)*\s*=)[ \t]*(%{1,2}|!)(?!=)(.*)$"
+)
+
 # IPython's "dynamic object introspection" syntax -- ``obj?``/``obj??`` for
 # an object's docstring/source, or the equivalent prefix form ``?obj``/
 # ``??obj`` -- is just as common in real notebooks (typed while exploring,
@@ -258,6 +269,21 @@ def strip_magic_commands(source):
 
         if line_number in unsafe_lines:
             cleaned_lines.append(line)
+            continue
+
+        time_match = _TIME_MAGIC_RE.match(line)
+        if time_match:
+            cleaned_lines.append(f"{time_match.group(1)}{time_match.group(2)}")
+            continue
+
+        assigned = _ASSIGNED_MAGIC_RE.match(line)
+        if assigned:
+            indent, target, prefix, rest = assigned.groups()
+            timed = re.match(r"^time[ \t]+(?!-)(\S.*)$", rest)
+            if prefix == "%" and timed:
+                cleaned_lines.append(f"{indent}{target} {timed.group(1)}")
+            else:
+                cleaned_lines.append(f"{indent}# {line.strip()}")
             continue
 
         match = (

@@ -634,3 +634,77 @@ def test_compile_ships_and_reads_a_colab_content_path(tmp_path, monkeypatch):
     namespace = {"__file__": str(runtime / "notebook_module.py")}
     exec((runtime / "notebook_module.py").read_text(), namespace)
     assert namespace["total"](2) == 82
+
+
+def test_time_magic_keeps_the_statement_it_times():
+    from backend.parser.notebook_parser import strip_magic_commands
+
+    source = (
+        "%time model = {'w': 2}\n"
+        "for i in range(2):\n"
+        "    %time last = i\n"
+        "r = %time len('abc')\n"
+        "%time\n"
+        "%time -q x = 1\n"
+    )
+
+    assert strip_magic_commands(source) == (
+        "model = {'w': 2}\n"
+        "for i in range(2):\n"
+        "    last = i\n"
+        "r = len('abc')\n"
+        "# %time\n"
+        "# %time -q x = 1\n"
+    )
+
+
+def test_assigned_shell_and_magic_output_no_longer_breaks_the_cell():
+    import ast
+
+    from backend.parser.notebook_parser import strip_magic_commands
+
+    source = (
+        "files = !ls data\n"
+        "a, b = %timeit -o f()\n"
+        "out = %sx echo hi\n"
+        "x != 3\n"
+        "y %= 3\n"
+        "s = '= !not magic'\n"
+        "def keep(z):\n    return z\n"
+    )
+
+    cleaned = strip_magic_commands(source)
+
+    assert cleaned.splitlines()[:6] == [
+        "# files = !ls data",
+        "# a, b = %timeit -o f()",
+        "# out = %sx echo hi",
+        "x != 3",
+        "y %= 3",
+        "s = '= !not magic'",
+    ]
+    ast.parse(cleaned)
+
+
+def test_functions_in_a_cell_with_time_magics_compile_and_run(tmp_path):
+    import nbformat
+
+    from backend.compiler import compile_notebook
+
+    notebook = tmp_path / "nb.ipynb"
+    nb = nbformat.v4.new_notebook()
+    nb.cells = [nbformat.v4.new_code_cell(
+        "%time WEIGHT = 6\n"
+        "listing = !ls\n\n"
+        "def predict(x: int) -> int:\n"
+        "    return WEIGHT * x\n"
+    )]
+    nbformat.write(nb, str(notebook))
+    out = tmp_path / "out"
+
+    compile_notebook(str(notebook), str(out))
+
+    namespace = {"__file__": str(out / "runtime" / "notebook_module.py")}
+    exec((out / "runtime" / "notebook_module.py").read_text(), namespace)
+    assert namespace["predict"](7) == 42
+    assert "predict" in (out / "app.py").read_text()
