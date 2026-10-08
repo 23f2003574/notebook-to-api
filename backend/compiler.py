@@ -3182,12 +3182,12 @@ _DOTENV_LOADERS = frozenset({"load_dotenv", "dotenv_values"})
 _DOTENV_KEY_PATTERN = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
 
 
-def _dotenv_keys(code_cells, notebook_path):
-    """The variable names (never the values) in the .env file(s) the
-    notebook loads with `load_dotenv()` / `dotenv_values()` -- the default
-    ".env" beside the notebook, or a literal relative `dotenv_path`. The
-    file itself rightly never ships, so without this the API keys it
-    supplied were missing from .env.example and docker-compose.yml."""
+def dotenv_files(code_cells, notebook_path):
+    """[Path] of the .env file(s) the notebook loads with `load_dotenv()` /
+    `dotenv_values()` -- the default ".env" beside the notebook, or a
+    literal relative `dotenv_path`. The files themselves rightly never
+    ship, but their variable names feed .env.example and
+    docker-compose.yml (see _dotenv_keys)."""
     if not notebook_path:
         return []
     directory = Path(notebook_path).resolve().parent
@@ -3215,10 +3215,16 @@ def _dotenv_keys(code_cells, notebook_path):
             elif isinstance(arg, ast.Constant) and isinstance(arg.value, str) \
                     and _is_relative_path(arg.value) and ".." not in Path(arg.value).parts:
                 paths.append(arg.value)
+    return [directory / relative for relative in dict.fromkeys(paths)]
+
+
+def _dotenv_keys(code_cells, notebook_path):
+    """The variable names (never the values) in the .env files the notebook
+    loads (see dotenv_files)."""
     keys = []
-    for relative in dict.fromkeys(paths):
+    for path in dotenv_files(code_cells, notebook_path):
         try:
-            text = (directory / relative).read_text(encoding="utf-8")
+            text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
         for line in text.splitlines():

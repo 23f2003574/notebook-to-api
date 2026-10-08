@@ -9,7 +9,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 from backend.compiler import (
-    SHIPPED_DATA_MANIFEST, _find_import_time_hazards, compile_notebook, find_data_files, find_local_modules, package_name_for_output_dir,
+    SHIPPED_DATA_MANIFEST, _find_import_time_hazards, compile_notebook, dotenv_files, find_data_files, find_local_modules, package_name_for_output_dir,
     read_notebook_env_vars,
 )
 from backend.parser.ast_parser import extract_imports_from_code
@@ -175,6 +175,10 @@ def extra_watch_directories(notebook_path):
     for source in local.values():
         if isinstance(source, Path) and source.is_dir():
             directories[source.resolve()] = True
+    for env_file in dotenv_files(cells, notebook_path):
+        parent = env_file.resolve().parent
+        if parent != notebook_dir and parent.is_dir():
+            directories.setdefault(parent, False)
     recursive_roots = [d for d, recursive in directories.items() if recursive]
     return sorted(
         (directory, recursive) for directory, recursive in directories.items()
@@ -237,6 +241,27 @@ def _departed_data_file(notebook_path, output_dir, event_path):
         return None
     relative = path.relative_to(notebook_dir).as_posix()
     return relative if isinstance(shipped, list) and relative in shipped else None
+
+
+def _dotenv_change(notebook_path, event_path):
+    """The relative name when `event_path` is a .env file the notebook
+    loads (see dotenv_files), else None. Its variable names go into the
+    compiled .env.example and docker-compose.yml, which only a recompile
+    refreshes."""
+    path = Path(event_path).resolve()
+    notebook_dir = Path(notebook_path).resolve().parent
+    try:
+        cells = extract_code_cells(load_notebook(notebook_path))
+        loaded = dotenv_files(notebook_path=notebook_path, code_cells=cells)
+    except Exception:
+        return None
+    for candidate in loaded:
+        if candidate.resolve() == path:
+            try:
+                return path.relative_to(notebook_dir).as_posix()
+            except ValueError:
+                return path.name
+    return None
 
 
 def _shipped_data_change(notebook_path, event_path):
@@ -413,6 +438,10 @@ class NotebookChangeHandler(FileSystemEventHandler):
                     departed = _departed_data_file(self.notebook_path, self.output_dir, event_path)
                     if departed is not None:
                         reason = f"Data file '{departed}' removed"
+                    else:
+                        env_name = _dotenv_change(self.notebook_path, event_path)
+                        if env_name is not None:
+                            reason = f"Environment file '{env_name}' changed"
 
         if is_notebook or reason != "Notebook changed":
             current_time = time.time()

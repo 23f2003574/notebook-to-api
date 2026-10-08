@@ -2205,3 +2205,29 @@ def test_import_time_dynamic_read_folders_are_watched(tmp_path):
     assert serve_module.extra_watch_directories(str(notebook)) == [
         ((tmp_path / "months").resolve(), False),
     ]
+
+
+def test_editing_a_loaded_dotenv_file_triggers_a_recompile(tmp_path, monkeypatch, capsys):
+    handler, notebook_path, _event, compiled = _handler_with_recording_compile(
+        tmp_path, monkeypatch, debounce_seconds=0
+    )
+    _notebook_importing(
+        notebook_path,
+        "from dotenv import load_dotenv\nload_dotenv()\nload_dotenv('config/prod.env')\n",
+    )
+    (tmp_path / ".env").write_text("OPENAI_API_KEY=x\n")
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "prod.env").write_text("TOKEN=y\n")
+    (tmp_path / "other.env").write_text("IGNORED=1\n")
+
+    handler.on_modified(_module_event(tmp_path / ".env"))
+    handler.on_modified(_module_event(tmp_path / "config" / "prod.env"))
+    handler.on_modified(_module_event(tmp_path / "other.env"))
+
+    assert len(compiled) == 2
+    out = capsys.readouterr().out
+    assert "Environment file '.env' changed" in out
+    assert "Environment file 'config/prod.env' changed" in out
+    assert serve_module.extra_watch_directories(str(notebook_path)) == [
+        ((tmp_path / "config").resolve(), False),
+    ]
