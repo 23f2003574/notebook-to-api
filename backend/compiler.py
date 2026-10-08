@@ -2986,7 +2986,57 @@ def _env_magic_prelude(env_values):
     return "".join(lines) + "\n"
 
 
-def _find_notebook_env_vars(code_cells):
+_DOTENV_LOADERS = frozenset({"load_dotenv", "dotenv_values"})
+_DOTENV_KEY_PATTERN = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
+
+
+def _dotenv_keys(code_cells, notebook_path):
+    """The variable names (never the values) in the .env file(s) the
+    notebook loads with `load_dotenv()` / `dotenv_values()` -- the default
+    ".env" beside the notebook, or a literal relative `dotenv_path`. The
+    file itself rightly never ships, so without this the API keys it
+    supplied were missing from .env.example and docker-compose.yml."""
+    if not notebook_path:
+        return []
+    directory = Path(notebook_path).resolve().parent
+    paths = []
+    for cell in code_cells:
+        try:
+            tree = ast.parse(cell)
+        except SyntaxError:
+            continue
+        aliases = _import_aliases(tree)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            label, name, base = _call_label(node.func)
+            if label is None:
+                continue
+            _, name, _ = _resolve_import_alias(label, name, base, aliases)
+            if name not in _DOTENV_LOADERS:
+                continue
+            arg = node.args[0] if node.args else next(
+                (kw.value for kw in node.keywords if kw.arg == "dotenv_path"), None
+            )
+            if arg is None:
+                paths.append(".env")
+            elif isinstance(arg, ast.Constant) and isinstance(arg.value, str) \
+                    and _is_relative_path(arg.value) and ".." not in Path(arg.value).parts:
+                paths.append(arg.value)
+    keys = []
+    for relative in dict.fromkeys(paths):
+        try:
+            text = (directory / relative).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for line in text.splitlines():
+            match = _DOTENV_KEY_PATTERN.match(line)
+            if match and match.group(1) not in keys:
+                keys.append(match.group(1))
+    return keys
+
+
+def _find_notebook_env_vars(code_cells, notebook_path=None):
     """[{"name", "required"}] (sorted by name) for the environment variables
     the notebook reads by literal name: `os.environ["X"]`,
     `os.environ.get("X"[, default])` and `os.getenv("X"[, default])` (also
@@ -3057,6 +3107,12 @@ def _find_notebook_env_vars(code_cells):
                     )
                     record(first.value, not has_default)
 
+    # Names a loaded .env file supplies (required unless the code already
+    # reads them with a default).
+    for name in _dotenv_keys(code_cells, notebook_path):
+        if not name.startswith("NOTEBOOK_API_"):
+            found.setdefault(name, True)
+
     set_by_magic = _env_magic_values(code_cells)
 
     return [
@@ -3074,7 +3130,14 @@ def read_notebook_env_vars(output_dir):
         source = (Path(output_dir) / "runtime" / "notebook_module.py").read_text(encoding="utf-8")
     except OSError:
         return []
-    return _find_notebook_env_vars([source])
+    try:
+        metadata = json.loads(
+            (Path(output_dir) / COMPILE_METADATA_FILENAME).read_text(encoding="utf-8")
+        )
+        notebook_path = metadata.get("source_notebook") if isinstance(metadata, dict) else None
+    except (OSError, ValueError):
+        notebook_path = None
+    return _find_notebook_env_vars([source], notebook_path)
 
 
 def _statement_calls(node):
@@ -4164,7 +4227,7 @@ def compile_notebook_to_api(
                 "docker-compose.yml"
             )
 
-            notebook_env_vars = _find_notebook_env_vars(code_cells)
+            notebook_env_vars = _find_notebook_env_vars(code_cells, notebook_path)
 
             generate_docker_compose(
                 docker_compose_path, package_name, GENERATED_APP_ENV_VARS,

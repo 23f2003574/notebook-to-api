@@ -13667,3 +13667,53 @@ def test_compile_ships_and_redirects_a_request_time_model_file(tmp_path, monkeyp
     namespace = {"__file__": str(runtime / "notebook_module.py")}
     exec((runtime / "notebook_module.py").read_text(), namespace)
     assert namespace["score"](6) == 42
+
+
+def test_dotenv_keys_from_load_dotenv_become_notebook_env_vars(tmp_path):
+    from backend.compiler import _find_notebook_env_vars
+
+    notebook = tmp_path / "nb.ipynb"
+    (tmp_path / ".env").write_text(
+        "# secrets\nOPENAI_API_KEY=sk-secret-value\nexport DB_URL = postgres://x\n"
+        "TIMEOUT=5\nNOTEBOOK_API_KEY=ignored\nnot a line\n"
+    )
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "prod.env").write_text("PROD_TOKEN=abc\n")
+    cells = [
+        "from dotenv import load_dotenv, dotenv_values\nimport os\n"
+        "load_dotenv()\ncfg = dotenv_values('config/prod.env')\n"
+        "timeout = int(os.getenv('TIMEOUT', '10'))\n",
+    ]
+
+    env_vars = _find_notebook_env_vars(cells, str(notebook))
+
+    assert env_vars == [
+        {"name": "DB_URL", "required": True},
+        {"name": "OPENAI_API_KEY", "required": True},
+        {"name": "PROD_TOKEN", "required": True},
+        {"name": "TIMEOUT", "required": False},
+    ]
+    assert "sk-secret-value" not in repr(env_vars)
+    assert _find_notebook_env_vars(cells) == [{"name": "TIMEOUT", "required": False}]
+    assert _find_notebook_env_vars(["import os\n"], str(notebook)) == []
+
+
+def test_dotenv_keys_reach_the_compiled_deployment_files(tmp_path):
+    from backend.compiler import compile_notebook, read_notebook_env_vars
+
+    notebook = tmp_path / "nb.ipynb"
+    (tmp_path / ".env").write_text("OPENAI_API_KEY=sk-secret-value\n")
+    _write_notebook_importing(
+        notebook,
+        "from dotenv import load_dotenv\nload_dotenv()\n\n"
+        "def ping(x: int) -> int:\n    return x\n",
+    )
+    out = tmp_path / "out"
+
+    compile_notebook(str(notebook), str(out))
+
+    assert "OPENAI_API_KEY" in (out / ".env.example").read_text()
+    assert "OPENAI_API_KEY" in (out / "docker-compose.yml").read_text()
+    assert "sk-secret-value" not in (out / ".env.example").read_text()
+    assert not (out / "runtime" / ".env").exists()
+    assert read_notebook_env_vars(str(out)) == [{"name": "OPENAI_API_KEY", "required": True}]

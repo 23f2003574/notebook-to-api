@@ -578,7 +578,7 @@ def inspect_notebook(notebook_path, output_dir="generated"):
         for line in startup_warnings:
             print(f"- {line}")
 
-    notebook_env_vars = _find_notebook_env_vars(code_cells)
+    notebook_env_vars = _find_notebook_env_vars(code_cells, notebook_path)
 
     if notebook_env_vars:
         print("\nEnvironment Variables the notebook reads (set them where the app runs):")
@@ -862,7 +862,7 @@ def inspect_notebook_data(
         "shipped_data_files": _shipped_data_files(notebook_path, code_cells),
         # Environment variables the notebook reads by name -- see
         # _find_notebook_env_vars.
-        "notebook_env_vars": _find_notebook_env_vars(code_cells),
+        "notebook_env_vars": _find_notebook_env_vars(code_cells, notebook_path),
         # Cells whose saved outputs hold an error: they re-run when the app
         # starts -- see _find_cells_with_error_outputs.
         "cells_with_errors": _find_cells_with_error_outputs(notebook),
