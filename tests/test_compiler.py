@@ -11866,7 +11866,7 @@ def test_import_time_hazards_flag_google_colab_imports():
 
     cells = [
         "import os\nfrom google.colab import auth, userdata\n",
-        "import google.colab.files\nfrom google import colab\n"
+        "import google.colab.output\nfrom google import colab\n"
         "from google.cloud import storage\nimport google.generativeai\n",
         "def f():\n    from google.colab import auth\n",
         "if __name__ == '__main__':\n    from google.colab import files\n",
@@ -11876,7 +11876,7 @@ def test_import_time_hazards_flag_google_colab_imports():
 
     assert [(h["kind"], h["call"], h["cell"], h["line"]) for h in hazards] == [
         ("colab_import", "import google.colab", 1, 2),
-        ("colab_import", "import google.colab.files", 2, 1),
+        ("colab_import", "import google.colab.output", 2, 1),
         ("colab_import", "import google.colab", 2, 2),
     ]
     lines = startup_warning_lines({"import_time_hazards": hazards})
@@ -11941,8 +11941,8 @@ def test_colab_userdata_imports_are_supported_other_colab_imports_still_hazards(
 
     supported = ["from google.colab import userdata\nimport google.colab.userdata\n"
                  "from google.colab.userdata import get\n"]
-    mixed = ["from google.colab import files, userdata\n"]
-    other = ["from google.colab import files\n"]
+    mixed = ["from google.colab import output, userdata\n"]
+    other = ["from google.colab import output\n"]
 
     assert _find_import_time_hazards(supported) == []
     assert [h["call"] for h in _find_import_time_hazards(mixed)] == ["import google.colab"]
@@ -11954,7 +11954,7 @@ def test_colab_userdata_shim_reads_secrets_from_the_environment(monkeypatch):
     from backend.compiler import _COLAB_USERDATA_SHIM, _uses_colab_userdata
 
     assert _uses_colab_userdata(["from google.colab import userdata\n"])
-    assert not _uses_colab_userdata(["from google.colab import files\n", "x = 1\n"])
+    assert not _uses_colab_userdata(["from google.colab import output\n", "x = 1\n"])
 
     saved = {k: sys.modules.get(k) for k in ("google", "google.colab", "google.colab.userdata")}
     for key in saved:
@@ -13756,3 +13756,43 @@ def test_compiled_app_with_tqdm_notebook_bars_starts_without_ipywidgets(tmp_path
     exec((out / "runtime" / "notebook_module.py").read_text(), namespace)
 
     assert namespace["count"](2) == 9
+
+
+def test_colab_files_download_is_a_no_op_and_upload_is_a_startup_hazard(tmp_path, monkeypatch, capsys):
+    import sys
+
+    from backend.compiler import _find_import_time_hazards, compile_notebook
+    from backend.inspector import startup_warning_lines
+
+    uploads = [
+        "from google.colab import files\nuploaded = files.upload()\n"
+        "def f():\n    return files.upload()\n",
+        "files.upload()\n",
+    ]
+    hazards = _find_import_time_hazards(uploads)
+    assert [(h["kind"], h["call"], h["cell"]) for h in hazards] == [("colab_upload", "files.upload", 1)]
+    assert "opens Colab's browser upload dialog" in startup_warning_lines(
+        {"import_time_hazards": hazards}
+    )[0]
+
+    source = (
+        "from google.colab import files\nimport google.colab.files\n"
+        "open('report.csv', 'w').write('a,b')\nfiles.download('report.csv')\n\n"
+        "def ping(x: int) -> int:\n    return x\n"
+    )
+    assert _find_import_time_hazards([source]) == []
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(notebook, source)
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+
+    for name in ("google.colab", "google.colab.files", "google.colab.drive", "google.colab.userdata"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    monkeypatch.chdir(tmp_path)
+    namespace = {"__file__": str(out / "runtime" / "notebook_module.py")}
+    exec((out / "runtime" / "notebook_module.py").read_text(), namespace)
+
+    assert namespace["ping"](3) == 3
+    assert "files.download('report.csv') skipped outside Colab" in capsys.readouterr().out
+    with pytest.raises(RuntimeError, match="browser upload dialog"):
+        sys.modules["google.colab.files"].upload()

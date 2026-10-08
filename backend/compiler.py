@@ -2037,7 +2037,9 @@ def _shipped_as_directory(path, shipped):
 
 
 # Colab modules the shim below stands in for outside Colab.
-_COLAB_SHIMMED_MODULES = frozenset({"google.colab.userdata", "google.colab.drive"})
+_COLAB_SHIMMED_MODULES = frozenset({
+    "google.colab.userdata", "google.colab.drive", "google.colab.files",
+})
 
 # `drive.mount("/content/drive")` needs a Colab runtime; outside one the
 # shim's mount is a no-op, since Drive paths are already read from beside
@@ -2079,6 +2081,21 @@ if "google.colab" not in _nb_sys5.modules:
         def _nb_drive_unmount(timeout_ms=None):
             pass
 
+        def _nb_files_download(filename):
+            print(
+                f"notebook-to-api: files.download({filename!r}) skipped outside Colab; "
+                "the file stays where the app wrote it"
+            )
+
+        def _nb_files_upload(*args, **kwargs):
+            raise RuntimeError(
+                "files.upload() needs Colab's browser upload dialog; put the file beside "
+                "the notebook and read it by name instead"
+            )
+
+        _nb_files = _nb_types5.ModuleType("google.colab.files")
+        _nb_files.download = _nb_files_download
+        _nb_files.upload = _nb_files_upload
         _nb_drive = _nb_types5.ModuleType("google.colab.drive")
         _nb_drive.mount = _nb_drive_mount
         _nb_drive.flush_and_unmount = _nb_drive_unmount
@@ -2086,6 +2103,7 @@ if "google.colab" not in _nb_sys5.modules:
         _nb_colab.__path__ = []
         _nb_colab.userdata = _nb_userdata
         _nb_colab.drive = _nb_drive
+        _nb_colab.files = _nb_files
         try:
             import google as _nb_google
         except ImportError:
@@ -2096,6 +2114,7 @@ if "google.colab" not in _nb_sys5.modules:
         _nb_sys5.modules["google.colab"] = _nb_colab
         _nb_sys5.modules["google.colab.userdata"] = _nb_userdata
         _nb_sys5.modules["google.colab.drive"] = _nb_drive
+        _nb_sys5.modules["google.colab.files"] = _nb_files
 
 """
 
@@ -2730,6 +2749,11 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
                         "cell": cell_number, "line": call.lineno,
                     })
                 kind = _call_hazard_kind(resolved_label, name, base)
+                origin = current_aliases[0].get((label.split(".")[0]), "")
+                if resolved_label == "files.upload" and origin.startswith("google.colab"):
+                    # The shim's files.upload() can only raise: there's no
+                    # browser to upload from.
+                    kind = "colab_upload"
                 if kind:
                     hazards.append({
                         "kind": kind, "call": label, "path": None,

@@ -902,6 +902,11 @@ def hazard_message(hazard):
         return _HAZARD_LABELS[kind], what, consequence
     if kind == "input":
         what = f"{hazard['call']}() waits on stdin, which the compiled app doesn't have"
+    elif kind == "colab_upload":
+        what = (
+            f"`{hazard['call']}()` opens Colab's browser upload dialog, which the compiled "
+            "app doesn't have -- put the file beside the notebook and read it by name"
+        )
     elif kind == "colab_import":
         what = f"`{hazard['call']}` only exists inside Google Colab"
     elif kind == "shell_command":

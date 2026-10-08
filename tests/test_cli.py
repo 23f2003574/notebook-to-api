@@ -31287,7 +31287,7 @@ def test_inspect_fail_on_startup_warnings_gates_ci(tmp_path):
 def test_validate_reports_and_gates_google_colab_imports(tmp_path):
     notebook = tmp_path / "colab.ipynb"
     _write_notebook_with_function(
-        notebook, "from google.colab import drive\n\ndef total(a: int) -> int:\n    return a\n"
+        notebook, "from google.colab import output\n\ndef total(a: int) -> int:\n    return a\n"
     )
 
     plain = _run_cli(["validate", str(notebook)], cwd=tmp_path)
