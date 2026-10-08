@@ -12230,6 +12230,7 @@ def test_import_time_hazards_flag_getpass_and_notebook_login():
         ("input", "getpass", 5),
         ("input", "ask", 6),
         ("blocking_call", "notebook_login", 7),
+        ("request_input", "getpass.getpass", 9),
     ]
     assert "getpass.getpass() waits on stdin" in startup_warning_lines(
         {"import_time_hazards": hazards[:1]}
@@ -12264,6 +12265,7 @@ def test_import_time_hazards_see_through_import_aliases():
         ("blocking_call", "uv.run", None),
         ("file_read", "load", "weights.npy"),
         ("file_read", "rc", "sales.csv"),
+        ("request_input", "ask", None),
     ]
 
 
@@ -13796,3 +13798,29 @@ def test_colab_files_download_is_a_no_op_and_upload_is_a_startup_hazard(tmp_path
     assert "files.download('report.csv') skipped outside Colab" in capsys.readouterr().out
     with pytest.raises(RuntimeError, match="browser upload dialog"):
         sys.modules["google.colab.files"].upload()
+
+
+def test_stdin_prompts_inside_functions_are_request_time_hazards():
+    from backend.compiler import _find_import_time_hazards
+    from backend.inspector import hazard_message
+
+    cells = [
+        "import getpass as gp\nfrom getpass import getpass\n"
+        "def ask_name():\n    return input('name? ')\n"
+        "def login():\n    return getpass('pw: ')\n"
+        "def login2():\n    return gp.getpass()\n"
+        "def shadowed(input):\n    return input('x')\n"
+        "def clean(x):\n    return x\n",
+    ]
+
+    hazards = _find_import_time_hazards(cells)
+
+    assert [(h["kind"], h["call"], h["function"]) for h in hazards] == [
+        ("request_input", "input", "ask_name"),
+        ("request_input", "getpass", "login"),
+        ("request_input", "gp.getpass", "login2"),
+    ]
+    label, what, consequence = hazard_message(hazards[0])
+    assert label == "Request-time prompt"
+    assert "inside ask_name() prompts on stdin" in what
+    assert consequence == "every call to ask_name() will fail or hang"

@@ -2575,12 +2575,32 @@ def _find_function_call_hazards(tree, aliases, cell_number):
                     "kind": "debugger_call", "call": label, "path": None,
                     "cell": cell_number, "line": call.lineno, "function": func.name,
                 })
+            elif _is_stdin_prompt(name, base) and name not in _local_names(func):
+                # No terminal behind a request: input() raises EOFError (or
+                # waits forever on an attached stdin) on every call.
+                hazards.append({
+                    "kind": "request_input", "call": label, "path": None,
+                    "cell": cell_number, "line": call.lineno, "function": func.name,
+                })
     return hazards
 
 
+def _is_stdin_prompt(name, base):
+    """`input(...)` or getpass's `getpass(...)` (alias-resolved)."""
+    return (name == "input" and base is None) or (name == "getpass" and base in (None, "getpass"))
+
+
+def _local_names(func):
+    """Parameter names of `func`, which shadow a builtin like `input`."""
+    args = func.args
+    names = [a.arg for a in args.posonlyargs + args.args + args.kwonlyargs]
+    names += [a.arg for a in (args.vararg, args.kwarg) if a]
+    return set(names)
+
+
 def call_hazard_detail(hazard):
-    """(what, consequence) wording for a "debugger_call", "exit_call" or
-    "request_read" hazard."""
+    """(what, consequence) wording for a "debugger_call", "exit_call",
+    "request_input" or "request_read" hazard."""
     if hazard["kind"] == "request_read":
         return (
             f"{hazard['call']}({hazard['path']!r}) inside {hazard['function']}() reads a file "
@@ -2589,6 +2609,12 @@ def call_hazard_detail(hazard):
             f"every call to {hazard['function']}() will fail",
         )
     call = hazard["call"] if hazard["call"].startswith("raise ") else f"{hazard['call']}()"
+    if hazard["kind"] == "request_input":
+        return (
+            f"`{call}` inside {hazard['function']}() prompts on stdin, which a request "
+            "never has -- take the value as a parameter instead",
+            f"every call to {hazard['function']}() will fail or hang",
+        )
     if hazard["kind"] == "exit_call":
         return f"`{call}` ends the process (Jupyter only warned and carried on)", "the app will exit on startup"
     what = f"`{call}` opens an interactive debugger on stdin, which the compiled app doesn't have"
@@ -2766,8 +2792,7 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
                         "cell": cell_number, "line": call.lineno,
                     })
                     continue
-                is_getpass = name == "getpass" and base in (None, "getpass")
-                if (name == "input" and base is None) or is_getpass:
+                if _is_stdin_prompt(name, base):
                     hazards.append({
                         "kind": "input", "call": label, "path": None,
                         "cell": cell_number, "line": call.lineno,

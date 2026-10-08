@@ -886,7 +886,7 @@ def inspect_notebook_data(
 
 _HAZARD_LABELS = {
     "debugger_call": "Debugger call", "exit_call": "Process exit",
-    "request_read": "Request-time read",
+    "request_read": "Request-time read", "request_input": "Request-time prompt",
 }
 
 
