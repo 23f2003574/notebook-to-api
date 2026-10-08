@@ -2734,6 +2734,13 @@ _SHELL_FETCH_PATTERN = re.compile(
     r"^#[ \t]*!(?:[ \t]*sudo)?[ \t]*(?P<command>" + "|".join(_SHELL_FETCH_COMMANDS) + r")\b.*$",
     re.MULTILINE,
 )
+# The same commands as lines of a shell cell (`%%bash`, `%%sh`, `%%script
+# bash`, `%%system`), whose whole body the parser comments out.
+_SHELL_CELL_PATTERN = re.compile(r"^#[ \t]*%%(?:bash|sh|system|script[ \t]+(?:ba|z)?sh)\b")
+_SHELL_CELL_FETCH_PATTERN = re.compile(
+    r"^#[ \t]*(?:sudo[ \t]+)?(?P<command>" + "|".join(_SHELL_FETCH_COMMANDS) + r")\b.*$",
+    re.MULTILINE,
+)
 
 
 def _colab_import(node):
@@ -2896,6 +2903,12 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
                 hazards.append({
                     "kind": "shell_command", "call": f"!{match.group('command')}", "path": None,
                     "cell": cell_number, "line": line,
+                })
+        if _SHELL_CELL_PATTERN.match(cell.lstrip()):
+            for match in _SHELL_CELL_FETCH_PATTERN.finditer(cell):
+                hazards.append({
+                    "kind": "shell_command", "call": match.group("command"), "path": None,
+                    "cell": cell_number, "line": cell.count("\n", 0, match.start()) + 1,
                 })
 
     hazards.extend(_magic_variable_hazards(code_cells, [tree for _, tree in parsed]))

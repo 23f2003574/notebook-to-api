@@ -13852,3 +13852,26 @@ def test_names_only_set_by_magics_are_startup_hazards():
     assert "`files` is only set by `files = !ls data`" in startup_warning_lines(
         {"import_time_hazards": hazards[:1]}
     )[0]
+
+
+def test_fetch_commands_inside_shell_cells_are_startup_hazards():
+    from backend.compiler import _find_import_time_hazards
+    from backend.inspector import startup_warning_lines
+    from backend.parser.notebook_parser import strip_magic_commands
+
+    cells = [strip_magic_commands(cell) for cell in (
+        "%%bash\nwget https://x/data.csv -O data.csv\nsudo unzip -q x.zip\necho done\n",
+        "%%sh\ncurl -L https://x/m.pt -o m.pt\n",
+        "%%script bash\ngit clone https://github.com/a/b\n",
+        "%%writefile notes.txt\nwget is described here\n",
+        "%%html\n<p>curl</p>\n",
+    )]
+
+    hazards = [h for h in _find_import_time_hazards(cells) if h["kind"] == "shell_command"]
+
+    assert [(h["call"], h["cell"], h["line"]) for h in hazards] == [
+        ("wget", 1, 2), ("unzip", 1, 3), ("curl", 2, 2), ("git", 3, 2),
+    ]
+    assert "`wget` ran in Jupyter's shell" in startup_warning_lines(
+        {"import_time_hazards": hazards[:1]}
+    )[0]
