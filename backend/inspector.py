@@ -890,6 +890,28 @@ _HAZARD_LABELS = {
 }
 
 
+def hub_prefetch_groups(hub_models):
+    """[(label, [names])] for hub_model_ids' entries, grouped by kind and
+    without their internal prefixes: models ("org/name"), datasets
+    ("dataset:glue:mrpc" -> "glue (mrpc)"), timm models ("timm:resnet50")
+    and single files ("org/repo#model.joblib" -> "model.joblib from
+    org/repo"). Empty groups are left out."""
+    groups = {"Hugging Face models": [], "Hugging Face datasets": [],
+              "timm models": [], "Hugging Face files": []}
+    for entry in hub_models:
+        if entry.startswith("dataset:"):
+            dataset, _, config = entry[len("dataset:"):].partition(":")
+            groups["Hugging Face datasets"].append(f"{dataset} ({config})" if config else dataset)
+        elif entry.startswith("timm:"):
+            groups["timm models"].append(entry[len("timm:"):])
+        elif "#" in entry:
+            repo, _, filename = entry.partition("#")
+            groups["Hugging Face files"].append(f"{filename} from {repo}")
+        else:
+            groups["Hugging Face models"].append(entry)
+    return [(label, names) for label, names in groups.items() if names]
+
+
 def hazard_message(hazard):
     """(label, what, consequence) for one _find_import_time_hazards entry --
     the one wording `validate`, `inspect`, `compile` and the multi-notebook
@@ -1073,8 +1095,8 @@ def print_compile_summary(notebook_path, output_dir="generated", only=None, excl
 
     if data["apt_packages"]:
         print(f"System packages (apt): {', '.join(data['apt_packages'])}")
-    if data.get("hub_models"):
-        print(f"Hugging Face models (prefetched at build): {', '.join(data['hub_models'])}")
+    for label, names in hub_prefetch_groups(data.get("hub_models") or []):
+        print(f"{label} (prefetched at build): {', '.join(names)}")
     language_data = data.get("language_data") or {}
     if language_data.get("spacy"):
         print(f"spaCy pipelines (installed at build): {', '.join(language_data['spacy'])}")

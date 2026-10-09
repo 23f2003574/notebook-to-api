@@ -14190,3 +14190,36 @@ def test_hub_loads_add_an_optional_hf_token_env_var(tmp_path):
 
     assert "HF_TOKEN" in (out / ".env.example").read_text()
     assert "HF_TOKEN" in (out / "docker-compose.yml").read_text()
+
+
+def test_hub_prefetch_groups_label_each_kind_without_internal_prefixes(tmp_path, capsys):
+    from backend.compiler import compile_notebook
+    from backend.inspector import hub_prefetch_groups, print_compile_summary
+
+    assert hub_prefetch_groups([
+        "org/model", "dataset:imdb", "dataset:glue:mrpc", "timm:resnet50",
+        "julien-c/wine-quality#sklearn_model.joblib",
+    ]) == [
+        ("Hugging Face models", ["org/model"]),
+        ("Hugging Face datasets", ["imdb", "glue (mrpc)"]),
+        ("timm models", ["resnet50"]),
+        ("Hugging Face files", ["sklearn_model.joblib from julien-c/wine-quality"]),
+    ]
+    assert hub_prefetch_groups([]) == []
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "from datasets import load_dataset\nimport timm\n"
+        "DATA = load_dataset('glue', 'mrpc')\nNET = timm.create_model('resnet50', pretrained=True)\n\n"
+        "def size(x: int) -> int:\n    return x\n",
+    )
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+    capsys.readouterr()
+    print_compile_summary(str(notebook), str(out))
+    printed = capsys.readouterr().out
+
+    assert "Hugging Face datasets (prefetched at build): glue (mrpc)" in printed
+    assert "timm models (prefetched at build): resnet50" in printed
+    assert "dataset:" not in printed and "timm:" not in printed
