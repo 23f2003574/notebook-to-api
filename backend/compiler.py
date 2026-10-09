@@ -3558,6 +3558,11 @@ def _find_notebook_env_vars(code_cells, notebook_path=None):
         if not name.startswith("NOTEBOOK_API_"):
             found.setdefault(name, True)
 
+    # Hub downloads (see hub_model_ids) read HF_TOKEN implicitly: a gated or
+    # private model/dataset needs it in the container, optional otherwise.
+    if "HF_TOKEN" not in found and hub_model_ids(code_cells):
+        found["HF_TOKEN"] = False
+
     set_by_magic = _env_magic_values(code_cells)
 
     return [

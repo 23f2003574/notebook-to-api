@@ -14163,3 +14163,30 @@ def test_timm_pretrained_models_are_prefetched(tmp_path):
     dockerfile = (out / "Dockerfile").read_text()
     assert "ENV HF_HOME=/app/.cache/huggingface" in dockerfile
     assert "RUN python -c \"import timm; timm.create_model('resnet50', pretrained=True)\" \\\n" in dockerfile
+
+
+def test_hub_loads_add_an_optional_hf_token_env_var(tmp_path):
+    from backend.compiler import _find_notebook_env_vars, compile_notebook
+
+    hub = ["from transformers import pipeline\nclf = pipeline('sentiment-analysis', model='distilbert/sst2')\n"]
+    assert _find_notebook_env_vars(hub) == [{"name": "HF_TOKEN", "required": False}]
+    assert _find_notebook_env_vars(hub + ["import os\nt = os.environ['HF_TOKEN']\n"]) == [
+        {"name": "HF_TOKEN", "required": True},
+    ]
+    assert _find_notebook_env_vars(["import os\nx = os.getenv('A', '1')\n"]) == [
+        {"name": "A", "required": False},
+    ]
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "def embed(text: str) -> int:\n"
+        "    from sentence_transformers import SentenceTransformer\n"
+        "    SentenceTransformer('all-MiniLM-L6-v2')\n"
+        "    return len(text)\n",
+    )
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+
+    assert "HF_TOKEN" in (out / ".env.example").read_text()
+    assert "HF_TOKEN" in (out / "docker-compose.yml").read_text()
