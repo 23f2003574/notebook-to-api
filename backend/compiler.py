@@ -1108,6 +1108,8 @@ def hub_model_ids(code_cells):
 # data ids ("punkt", "averaged_perceptron_tagger_eng").
 _SPACY_PIPELINE_PATTERN = re.compile(r"^[a-z]{2,3}_[a-z0-9]+_[a-z0-9]+_(sm|md|lg|trf)$")
 # tiktoken encodings ("cl100k_base") and the model names it maps ("gpt-4o").
+# gensim-data model names ("glove-wiki-gigaword-50", "word2vec-google-news-300").
+_GENSIM_MODEL_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_.\-]*$")
 # EasyOCR language codes ("en", "ch_sim").
 _EASYOCR_LANG_PATTERN = re.compile(r"^[a-z]{2,3}(_[a-z]+)?$")
 _TIKTOKEN_ENCODING_PATTERN = re.compile(r"^[a-z0-9_]+$")
@@ -1123,9 +1125,14 @@ def language_data_packages(code_cells):
     tiktoken encodings it loads by name (`tiktoken.get_encoding(
     "cl100k_base")`, "tiktoken") or by model (`tiktoken.encoding_for_model(
     "gpt-4o")`, "tiktoken_models") and each literal language list an
-    `easyocr.Reader(["en"])` loads models for ("easyocr"), for the
+    `easyocr.Reader(["en"])` loads models for ("easyocr") and the gensim-data
+    models `gensim.downloader.load("glove-wiki-gigaword-50")` fetches
+    ("gensim"), for the
     Dockerfile to install at build time (see language_data_content)."""
-    found = {"spacy": [], "nltk": [], "tiktoken": [], "tiktoken_models": [], "easyocr": []}
+    found = {
+        "spacy": [], "nltk": [], "tiktoken": [], "tiktoken_models": [], "easyocr": [],
+        "gensim": [],
+    }
 
     def add(kind, value, pattern):
         if isinstance(value, str) and pattern.match(value) and value not in found[kind]:
@@ -1149,6 +1156,11 @@ def language_data_packages(code_cells):
             )
             if label == "spacy.load" and isinstance(argument, ast.Constant):
                 add("spacy", argument.value, _SPACY_PIPELINE_PATTERN)
+            elif label == "downloader.load" and isinstance(argument, ast.Constant) and (
+                "gensim.downloader" in aliases.values()
+                or ast.unparse(node.func) == "gensim.downloader.load"
+            ):
+                add("gensim", argument.value, _GENSIM_MODEL_PATTERN)
             elif label == "easyocr.Reader":
                 langs = node.args[0] if node.args else next(
                     (kw.value for kw in node.keywords if kw.arg == "lang_list"), None

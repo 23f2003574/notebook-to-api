@@ -15744,7 +15744,7 @@ def dockerfile_preview_endpoint(notebook_path: str = None, version_id: str = Non
 
     apt_packages = []
     hub_models = []
-    language_data = {"spacy": [], "nltk": [], "tiktoken": [], "tiktoken_models": [], "easyocr": []}
+    language_data = {"spacy": [], "nltk": [], "tiktoken": [], "tiktoken_models": [], "easyocr": [], "gensim": []}
     torch_weights = []
 
     if notebook_path:

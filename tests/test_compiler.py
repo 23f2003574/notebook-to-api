@@ -13315,7 +13315,7 @@ def test_language_data_packages_finds_spacy_pipelines_and_nltk_downloads():
     assert language_data_packages(cells) == {
         "spacy": ["en_core_web_sm", "de_core_news_md"],
         "nltk": ["punkt", "stopwords", "wordnet", "averaged_perceptron_tagger_eng"],
-        "tiktoken": [], "tiktoken_models": [], "easyocr": [],
+        "tiktoken": [], "tiktoken_models": [], "easyocr": [], "gensim": [],
     }
 
 
@@ -13340,7 +13340,7 @@ def test_compiled_dockerfile_installs_spacy_pipelines_and_nltk_data(tmp_path, ca
     assert "RUN python -m nltk.downloader -d /usr/local/share/nltk_data punkt \\\n" in dockerfile
     assert dockerfile.index("RUN pip install") < dockerfile.index("spacy download") < dockerfile.index("USER appuser")
     assert inspect_notebook_data(str(notebook), str(out))["language_data"] == {
-        "spacy": ["en_core_web_sm"], "nltk": ["punkt"], "tiktoken": [], "tiktoken_models": [], "easyocr": [],
+        "spacy": ["en_core_web_sm"], "nltk": ["punkt"], "tiktoken": [], "tiktoken_models": [], "easyocr": [], "gensim": [],
     }
     print_compile_summary(str(notebook), str(out))
     printed = capsys.readouterr().out
@@ -13980,3 +13980,31 @@ def test_nltk_data_used_without_a_download_is_prefetched():
         "averaged_perceptron_tagger_eng", "brown", "vader_lexicon",
     ]
     assert language_data_packages(["from mylib.corpus import stopwords\n"])["nltk"] == []
+
+
+def test_gensim_downloader_models_are_prefetched_at_build(tmp_path):
+    from backend.compiler import compile_notebook, language_data_packages
+
+    cells = [
+        "import gensim.downloader as api\nfrom gensim import downloader\n"
+        "a = api.load('glove-wiki-gigaword-50')\nb = downloader.load('fasttext-wiki-news-subwords-300')\n"
+        "c = api.load(NAME)\nd = api.load(\"x'; rm -rf /\")\n",
+        "import pickle\ne = pickle.load(open('m.pkl', 'rb'))\n",
+    ]
+    assert language_data_packages(cells)["gensim"] == [
+        "glove-wiki-gigaword-50", "fasttext-wiki-news-subwords-300",
+    ]
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "import gensim.downloader as api\nVECS = api.load('glove-wiki-gigaword-50')\n\n"
+        "def size(x: int) -> int:\n    return x\n",
+    )
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+
+    dockerfile = (out / "Dockerfile").read_text()
+    assert "ENV GENSIM_DATA_DIR=/app/.cache/gensim-data" in dockerfile
+    assert "d.load('glove-wiki-gigaword-50', return_path=True)" in dockerfile
+    assert dockerfile.index("GENSIM_DATA_DIR") < dockerfile.index("USER appuser")

@@ -112,6 +112,15 @@ def language_data_content(language_data):
             f"RUN python -m nltk.downloader -d /usr/local/share/nltk_data {names} \\\n"
             f"    || echo \"warning: could not download NLTK data {names}\""
         )
+    gensim_models = language_data.get("gensim", [])
+    if gensim_models:
+        # gensim.downloader keeps models in ~/gensim-data otherwise.
+        lines.append("ENV GENSIM_DATA_DIR=/app/.cache/gensim-data")
+        for model in gensim_models:
+            lines.append(
+                f"RUN python -c \"import gensim.downloader as d; d.load('{model}', return_path=True)\" \\\n"
+                f"    || echo \"warning: could not prefetch gensim model {model}\""
+            )
     reader_langs = language_data.get("easyocr", [])
     if reader_langs:
         # EasyOCR downloads its models into ~/.EasyOCR on first use -- the
