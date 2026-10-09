@@ -14031,3 +14031,39 @@ def test_hub_model_ids_resolve_bare_sentence_transformers_and_legacy_ids():
         "bert-base-uncased",
         "sentence-transformers/all-mpnet-base-v2",
     ]
+
+
+def test_hub_downloads_by_repo_and_file_are_prefetched(tmp_path):
+    from backend.compiler import compile_notebook, hub_model_ids
+
+    cells = [
+        "from huggingface_hub import hf_hub_download, snapshot_download\n"
+        "p = hf_hub_download(repo_id='julien-c/wine-quality', filename='sklearn_model.joblib')\n"
+        "q = hf_hub_download('org/repo', 'weights/model.pt')\n"
+        "r = snapshot_download('org/full-repo')\n"
+        "s = snapshot_download('org/data', repo_type='dataset')\n"
+        "t = hf_hub_download('org/repo', FILE)\n"
+        "u = hf_hub_download('org/repo', '../escape')\n",
+    ]
+    assert hub_model_ids(cells) == [
+        "julien-c/wine-quality#sklearn_model.joblib",
+        "org/repo#weights/model.pt",
+        "org/full-repo",
+    ]
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "from huggingface_hub import hf_hub_download\n"
+        "PATH = hf_hub_download(repo_id='julien-c/wine-quality', filename='sklearn_model.joblib')\n\n"
+        "def ping(x: int) -> int:\n    return x\n",
+    )
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+
+    dockerfile = (out / "Dockerfile").read_text()
+    assert (
+        "RUN python -c \"from huggingface_hub import hf_hub_download; "
+        "hf_hub_download('julien-c/wine-quality', 'sklearn_model.joblib')\"" in dockerfile
+    )
+    assert "ENV HF_HOME=/app/.cache/huggingface" in dockerfile

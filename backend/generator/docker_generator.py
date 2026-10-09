@@ -80,6 +80,14 @@ def hub_model_prefetch_content(hub_models):
         return ""
     lines = ["ENV HF_HOME=/app/.cache/huggingface"]
     for model in hub_models:
+        if "#" in model:
+            repo, filename = model.split("#", 1)
+            lines.append(
+                f"RUN python -c \"from huggingface_hub import hf_hub_download; "
+                f"hf_hub_download('{repo}', '{filename}')\" \\\n"
+                f"    || echo \"warning: could not prefetch {filename} from {repo}; it downloads on first use\""
+            )
+            continue
         lines.append(
             f"RUN python -c \"from huggingface_hub import snapshot_download; "
             f"snapshot_download('{model}')\" \\\n"

@@ -1098,11 +1098,40 @@ def _hub_model_argument(call, name):
 _BARE_HUB_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]*(?:\.[0-9]+)?(?:-[A-Za-z0-9_]+)*$")
 
 
+_HUB_FILENAME_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-/]*$")
+
+
+def _hub_download_target(call, name):
+    """"org/name" for a literal `snapshot_download("org/name")`, or
+    "org/name#file" for `hf_hub_download(repo_id="org/name",
+    filename="model.joblib")` -- a single-file download the Dockerfile
+    repeats as such -- else None. Only model repos (no repo_type=)."""
+    if any(kw.arg == "repo_type" for kw in call.keywords):
+        return None
+    keywords = {kw.arg: kw.value for kw in call.keywords if kw.arg}
+    repo = call.args[0] if call.args else keywords.get("repo_id")
+    if not (isinstance(repo, ast.Constant) and isinstance(repo.value, str)):
+        return None
+    if not HUB_MODEL_ID_PATTERN.match(repo.value) or ".." in repo.value:
+        return None
+    if name == "snapshot_download":
+        return repo.value
+    filename = call.args[1] if len(call.args) > 1 else keywords.get("filename")
+    if (
+        isinstance(filename, ast.Constant) and isinstance(filename.value, str)
+        and _HUB_FILENAME_PATTERN.match(filename.value) and ".." not in filename.value
+    ):
+        return f"{repo.value}#{filename.value}"
+    return None
+
+
 def hub_model_ids(code_cells):
     """Hugging Face Hub model ids (first-seen order, unique) the notebook
     loads by literal "org/name" id -- `AutoModel.from_pretrained(...)`,
-    `pipeline("task", model=...)`, `SentenceTransformer(...)` -- anywhere,
-    for the Dockerfile to prefetch at build time."""
+    `pipeline("task", model=...)`, `SentenceTransformer(...)`,
+    `snapshot_download(...)` -- plus "org/name#file" single-file
+    `hf_hub_download` targets, anywhere, for the Dockerfile to prefetch at
+    build time."""
     found = []
     for cell in code_cells:
         try:
@@ -1113,6 +1142,11 @@ def hub_model_ids(code_cells):
             if not isinstance(node, ast.Call):
                 continue
             _, name, _ = _call_label(node.func)
+            if name in ("snapshot_download", "hf_hub_download"):
+                model = _hub_download_target(node, name)
+                if model and model not in found:
+                    found.append(model)
+                continue
             if name not in _HUB_LOADER_NAMES and name != "pipeline":
                 continue
             model = _hub_model_argument(node, name)
