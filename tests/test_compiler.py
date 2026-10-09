@@ -14067,3 +14067,32 @@ def test_hub_downloads_by_repo_and_file_are_prefetched(tmp_path):
         "hf_hub_download('julien-c/wine-quality', 'sklearn_model.joblib')\"" in dockerfile
     )
     assert "ENV HF_HOME=/app/.cache/huggingface" in dockerfile
+
+
+def test_hub_datasets_loaded_by_name_are_prefetched(tmp_path):
+    from backend.compiler import compile_notebook, hub_model_ids
+
+    cells = [
+        "from datasets import load_dataset\nimport datasets\n"
+        "a = load_dataset('imdb')\n"
+        "b = load_dataset('glue', 'mrpc', split='train')\n"
+        "c = datasets.load_dataset(path='stanfordnlp/sst2')\n"
+        "d = load_dataset('csv', data_files='train.csv')\n"
+        "e = load_dataset('json')\n"
+        "f = load_dataset('org/name', data_dir='local')\n"
+        "g = load_dataset(NAME)\n",
+    ]
+    assert hub_model_ids(cells) == ["dataset:imdb", "dataset:glue:mrpc", "dataset:stanfordnlp/sst2"]
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "from datasets import load_dataset\nDATA = load_dataset('glue', 'mrpc')\n\n"
+        "def size(x: int) -> int:\n    return x\n",
+    )
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+
+    dockerfile = (out / "Dockerfile").read_text()
+    assert "ENV HF_HOME=/app/.cache/huggingface" in dockerfile
+    assert "RUN python -c \"from datasets import load_dataset; load_dataset('glue', 'mrpc')\" \\\n" in dockerfile

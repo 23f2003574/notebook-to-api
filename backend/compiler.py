@@ -1125,6 +1125,38 @@ def _hub_download_target(call, name):
     return None
 
 
+# load_dataset builders that read local files instead of a Hub dataset.
+_LOCAL_DATASET_BUILDERS = frozenset({
+    "csv", "json", "parquet", "text", "arrow", "imagefolder", "audiofolder",
+    "pandas", "sql", "webdataset", "xml",
+})
+
+
+def _hub_dataset_target(call):
+    """"dataset:<id>[:<config>]" for a literal Hub `load_dataset("imdb")` /
+    `load_dataset("glue", "mrpc")` / `load_dataset(path="org/name")`, else
+    None -- local-file builders and `data_files=`/`data_dir=` loads read
+    files the compile ships instead."""
+    keywords = {kw.arg: kw.value for kw in call.keywords if kw.arg}
+    if "data_files" in keywords or "data_dir" in keywords:
+        return None
+    path = call.args[0] if call.args else keywords.get("path")
+    if not (isinstance(path, ast.Constant) and isinstance(path.value, str)):
+        return None
+    value = path.value
+    if value in _LOCAL_DATASET_BUILDERS or ".." in value:
+        return None
+    if not (HUB_MODEL_ID_PATTERN.match(value) or re.match(r"^[A-Za-z0-9][\w.\-]*$", value)):
+        return None
+    config = call.args[1] if len(call.args) > 1 else keywords.get("name")
+    if config is None:
+        return f"dataset:{value}"
+    if isinstance(config, ast.Constant) and isinstance(config.value, str) \
+            and re.match(r"^[A-Za-z0-9][\w.\-]*$", config.value):
+        return f"dataset:{value}:{config.value}"
+    return None
+
+
 def hub_model_ids(code_cells):
     """Hugging Face Hub model ids (first-seen order, unique) the notebook
     loads by literal "org/name" id -- `AutoModel.from_pretrained(...)`,
@@ -1142,6 +1174,11 @@ def hub_model_ids(code_cells):
             if not isinstance(node, ast.Call):
                 continue
             _, name, _ = _call_label(node.func)
+            if name == "load_dataset":
+                dataset = _hub_dataset_target(node)
+                if dataset and dataset not in found:
+                    found.append(dataset)
+                continue
             if name in ("snapshot_download", "hf_hub_download"):
                 model = _hub_download_target(node, name)
                 if model and model not in found:
