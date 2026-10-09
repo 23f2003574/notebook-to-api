@@ -14008,3 +14008,26 @@ def test_gensim_downloader_models_are_prefetched_at_build(tmp_path):
     assert "ENV GENSIM_DATA_DIR=/app/.cache/gensim-data" in dockerfile
     assert "d.load('glove-wiki-gigaword-50', return_path=True)" in dockerfile
     assert dockerfile.index("GENSIM_DATA_DIR") < dockerfile.index("USER appuser")
+
+
+def test_hub_model_ids_resolve_bare_sentence_transformers_and_legacy_ids():
+    from backend.compiler import hub_model_ids
+
+    cells = [
+        "from sentence_transformers import SentenceTransformer, CrossEncoder\n"
+        "from transformers import AutoModel, AutoTokenizer\n"
+        "a = SentenceTransformer('all-MiniLM-L6-v2')\n"
+        "b = CrossEncoder('ms-marco-MiniLM-L-6-v2')\n"
+        "c = AutoTokenizer.from_pretrained('bert-base-uncased')\n"
+        "d = AutoModel.from_pretrained('gpt2')\n"
+        "e = AutoModel.from_pretrained('weights.bin')\n"
+        "f = SentenceTransformer('./my-model')\n"
+        "g = SentenceTransformer('sentence-transformers/all-mpnet-base-v2')\n",
+    ]
+
+    assert hub_model_ids(cells) == [
+        "sentence-transformers/all-MiniLM-L6-v2",
+        "cross-encoder/ms-marco-MiniLM-L-6-v2",
+        "bert-base-uncased",
+        "sentence-transformers/all-mpnet-base-v2",
+    ]

@@ -1078,7 +1078,24 @@ def _hub_model_argument(call, name):
             value = node.value
             if HUB_MODEL_ID_PATTERN.match(value) and ".." not in value:
                 return value
+            if _BARE_HUB_ID_PATTERN.match(value):
+                # sentence-transformers resolves a bare name under its own
+                # org; transformers resolves legacy bare ids
+                # ("bert-base-uncased") itself.
+                if name in ("SentenceTransformer", "CrossEncoder"):
+                    return (
+                        f"sentence-transformers/{value}" if name == "SentenceTransformer"
+                        else f"cross-encoder/{value}"
+                    )
+                if "-" in value:
+                    return value
     return None
+
+
+# A bare Hub id: "all-MiniLM-L6-v2", "bert-base-uncased" -- lowercase-led,
+# no path separators or file extension. A local folder with such a name only
+# costs a build warning (prefetch failures never fail the build).
+_BARE_HUB_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]*(?:\.[0-9]+)?(?:-[A-Za-z0-9_]+)*$")
 
 
 def hub_model_ids(code_cells):
