@@ -578,6 +578,18 @@ def inspect_notebook(notebook_path, output_dir="generated"):
         for line in startup_warnings:
             print(f"- {line}")
 
+    build_lines = build_addition_lines({
+        "apt_packages": _extract_explicit_apt_packages(code_cells),
+        "hub_models": hub_model_ids(code_cells),
+        "language_data": language_data_packages(code_cells),
+        "torch_weights": torch_weight_prefetches(code_cells),
+    })
+    if build_lines:
+        print("\nBuild-time Additions (installed or downloaded into the Docker image):")
+        print("-" * 20)
+        for line in build_lines:
+            print(f"- {line}")
+
     notebook_env_vars = _find_notebook_env_vars(code_cells, notebook_path)
 
     if notebook_env_vars:
@@ -890,6 +902,37 @@ _HAZARD_LABELS = {
 }
 
 
+def build_addition_lines(data):
+    """The "<what> (... at build): <names>" lines for what a compile adds to
+    the Docker image beyond requirements.txt -- apt packages and every
+    build-time model/data download -- from inspect_notebook_data-shaped
+    `data` (missing keys count as empty). Shared by the compile summary and
+    the inspect report."""
+    lines = []
+    if data.get("apt_packages"):
+        lines.append(f"System packages (apt): {', '.join(data['apt_packages'])}")
+    for label, names in hub_prefetch_groups(data.get("hub_models") or []):
+        lines.append(f"{label} (prefetched at build): {', '.join(names)}")
+    language_data = data.get("language_data") or {}
+    if language_data.get("spacy"):
+        lines.append(f"spaCy pipelines (installed at build): {', '.join(language_data['spacy'])}")
+    if language_data.get("keras"):
+        lines.append(f"Keras weights (prefetched at build): {len(language_data['keras'])} load(s)")
+    if language_data.get("gensim"):
+        lines.append(f"gensim models (prefetched at build): {', '.join(language_data['gensim'])}")
+    if language_data.get("easyocr"):
+        langs = ", ".join("+".join(codes) for codes in language_data["easyocr"])
+        lines.append(f"EasyOCR models (prefetched at build): {langs}")
+    tiktoken_names = language_data.get("tiktoken", []) + language_data.get("tiktoken_models", [])
+    if tiktoken_names:
+        lines.append(f"tiktoken encodings (prefetched at build): {', '.join(tiktoken_names)}")
+    if language_data.get("nltk"):
+        lines.append(f"NLTK data (downloaded at build): {', '.join(language_data['nltk'])}")
+    if data.get("torch_weights"):
+        lines.append(f"PyTorch weights (prefetched at build): {len(data['torch_weights'])} load(s)")
+    return lines
+
+
 def hub_prefetch_groups(hub_models):
     """[(label, [names])] for hub_model_ids' entries, grouped by kind and
     without their internal prefixes: models ("org/name"), datasets
@@ -1093,27 +1136,8 @@ def print_compile_summary(notebook_path, output_dir="generated", only=None, excl
     if data["dependencies"]:
         print(f"\nDependencies: {', '.join(data['dependencies'])}")
 
-    if data["apt_packages"]:
-        print(f"System packages (apt): {', '.join(data['apt_packages'])}")
-    for label, names in hub_prefetch_groups(data.get("hub_models") or []):
-        print(f"{label} (prefetched at build): {', '.join(names)}")
-    language_data = data.get("language_data") or {}
-    if language_data.get("spacy"):
-        print(f"spaCy pipelines (installed at build): {', '.join(language_data['spacy'])}")
-    if language_data.get("keras"):
-        print(f"Keras weights (prefetched at build): {len(language_data['keras'])} load(s)")
-    if language_data.get("gensim"):
-        print(f"gensim models (prefetched at build): {', '.join(language_data['gensim'])}")
-    if language_data.get("easyocr"):
-        langs = ", ".join("+".join(codes) for codes in language_data["easyocr"])
-        print(f"EasyOCR models (prefetched at build): {langs}")
-    tiktoken_names = language_data.get("tiktoken", []) + language_data.get("tiktoken_models", [])
-    if tiktoken_names:
-        print(f"tiktoken encodings (prefetched at build): {', '.join(tiktoken_names)}")
-    if language_data.get("nltk"):
-        print(f"NLTK data (downloaded at build): {', '.join(language_data['nltk'])}")
-    if data.get("torch_weights"):
-        print(f"PyTorch weights (prefetched at build): {len(data['torch_weights'])} load(s)")
+    for line in build_addition_lines(data):
+        print(line)
 
     if data["skipped_functions"]:
         print(

@@ -14223,3 +14223,29 @@ def test_hub_prefetch_groups_label_each_kind_without_internal_prefixes(tmp_path,
     assert "Hugging Face datasets (prefetched at build): glue (mrpc)" in printed
     assert "timm models (prefetched at build): resnet50" in printed
     assert "dataset:" not in printed and "timm:" not in printed
+
+
+def test_inspect_report_lists_build_time_additions(tmp_path, capsys):
+    from backend.inspector import build_addition_lines, inspect_notebook
+
+    assert build_addition_lines({}) == []
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "import cv2\nimport nltk\nfrom nltk.corpus import stopwords\n"
+        "from datasets import load_dataset\nDATA = load_dataset('imdb')\n\n"
+        "def size(x: int) -> int:\n    return x\n",
+    )
+    plain = tmp_path / "plain.ipynb"
+    _write_notebook_importing(plain, "def add(a: int) -> int:\n    return a\n")
+
+    inspect_notebook(str(notebook), str(tmp_path / "out"))
+    report = capsys.readouterr().out
+    inspect_notebook(str(plain), str(tmp_path / "out2"))
+    plain_report = capsys.readouterr().out
+
+    assert "Build-time Additions (installed or downloaded into the Docker image):" in report
+    assert "- System packages (apt): libgl1, libglib2.0-0" in report
+    assert "- Hugging Face datasets (prefetched at build): imdb" in report
+    assert "- NLTK data (downloaded at build): stopwords" in report
+    assert "Build-time Additions" not in plain_report
