@@ -1125,6 +1125,26 @@ def _hub_download_target(call, name):
     return None
 
 
+_TIMM_MODEL_PATTERN = re.compile(
+    r"^(?:hf[-_]hub:[A-Za-z0-9][\w.\-]*/[A-Za-z0-9][\w.\-]*|[a-z0-9][a-z0-9_.\-]*)$"
+)
+
+
+def _timm_pretrained_target(call):
+    """"timm:<name>" for `timm.create_model("resnet50", pretrained=True)`
+    with a literal name (timm fetches the weights from the Hub), else
+    None."""
+    keywords = {kw.arg: kw.value for kw in call.keywords if kw.arg}
+    pretrained = keywords.get("pretrained")
+    if not (isinstance(pretrained, ast.Constant) and pretrained.value is True):
+        return None
+    model = call.args[0] if call.args else keywords.get("model_name")
+    if isinstance(model, ast.Constant) and isinstance(model.value, str) \
+            and _TIMM_MODEL_PATTERN.match(model.value) and ".." not in model.value:
+        return f"timm:{model.value}"
+    return None
+
+
 # load_dataset builders that read local files instead of a Hub dataset.
 _LOCAL_DATASET_BUILDERS = frozenset({
     "csv", "json", "parquet", "text", "arrow", "imagefolder", "audiofolder",
@@ -1174,6 +1194,11 @@ def hub_model_ids(code_cells):
             if not isinstance(node, ast.Call):
                 continue
             _, name, _ = _call_label(node.func)
+            if name == "create_model" and _call_label(node.func)[0] in ("timm.create_model", "create_model"):
+                timm_model = _timm_pretrained_target(node)
+                if timm_model and timm_model not in found:
+                    found.append(timm_model)
+                continue
             if name == "load_dataset":
                 dataset = _hub_dataset_target(node)
                 if dataset and dataset not in found:

@@ -80,6 +80,13 @@ def hub_model_prefetch_content(hub_models):
         return ""
     lines = ["ENV HF_HOME=/app/.cache/huggingface"]
     for model in hub_models:
+        if model.startswith("timm:"):
+            name = model[len("timm:"):]
+            lines.append(
+                f"RUN python -c \"import timm; timm.create_model('{name}', pretrained=True)\" \\\n"
+                f"    || echo \"warning: could not prefetch {model}; it downloads on first use\""
+            )
+            continue
         if model.startswith("dataset:"):
             dataset_args = ", ".join(repr(part) for part in model[len("dataset:"):].split(":"))
             lines.append(

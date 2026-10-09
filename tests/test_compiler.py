@@ -14132,3 +14132,34 @@ def test_keras_application_weights_are_prefetched_at_build(tmp_path, capsys):
     assert dockerfile.index("KERAS_HOME") < dockerfile.index("USER appuser")
     print_compile_summary(str(notebook), str(out))
     assert "Keras weights (prefetched at build): 1 load(s)" in capsys.readouterr().out
+
+
+def test_timm_pretrained_models_are_prefetched(tmp_path):
+    from backend.compiler import compile_notebook, hub_model_ids
+
+    cells = [
+        "import timm\nfrom timm import create_model\n"
+        "a = timm.create_model('resnet50', pretrained=True)\n"
+        "b = create_model('vit_base_patch16_224.augreg_in21k', pretrained=True, num_classes=2)\n"
+        "c = timm.create_model('hf-hub:timm/convnext_tiny.fb_in1k', pretrained=True)\n"
+        "d = timm.create_model('resnet18')\n"
+        "e = timm.create_model('resnet18', pretrained=FLAG)\n"
+        "f = timm.create_model(NAME, pretrained=True)\n"
+        "g = other.create_model('x', pretrained=True)\n",
+    ]
+    assert hub_model_ids(cells) == [
+        "timm:resnet50", "timm:vit_base_patch16_224.augreg_in21k", "timm:hf-hub:timm/convnext_tiny.fb_in1k",
+    ]
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "import timm\nMODEL = timm.create_model('resnet50', pretrained=True)\n\n"
+        "def size(x: int) -> int:\n    return x\n",
+    )
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+
+    dockerfile = (out / "Dockerfile").read_text()
+    assert "ENV HF_HOME=/app/.cache/huggingface" in dockerfile
+    assert "RUN python -c \"import timm; timm.create_model('resnet50', pretrained=True)\" \\\n" in dockerfile
