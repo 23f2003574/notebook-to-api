@@ -127,6 +127,15 @@ def language_data_content(language_data):
             f"RUN python -m nltk.downloader -d /usr/local/share/nltk_data {names} \\\n"
             f"    || echo \"warning: could not download NLTK data {names}\""
         )
+    keras_loads = language_data.get("keras", [])
+    if keras_loads:
+        # Keras keeps downloaded weights in ~/.keras otherwise.
+        lines.append("ENV KERAS_HOME=/app/.cache/keras")
+        for snippet in keras_loads:
+            lines.append(
+                f"RUN python -c \"{snippet}\" \\\n"
+                f"    || echo \"warning: could not prefetch Keras weights for: {snippet}\""
+            )
     gensim_models = language_data.get("gensim", [])
     if gensim_models:
         # gensim.downloader keeps models in ~/gensim-data otherwise.

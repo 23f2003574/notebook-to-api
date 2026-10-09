@@ -1078,6 +1078,8 @@ def print_compile_summary(notebook_path, output_dir="generated", only=None, excl
     language_data = data.get("language_data") or {}
     if language_data.get("spacy"):
         print(f"spaCy pipelines (installed at build): {', '.join(language_data['spacy'])}")
+    if language_data.get("keras"):
+        print(f"Keras weights (prefetched at build): {len(language_data['keras'])} load(s)")
     if language_data.get("gensim"):
         print(f"gensim models (prefetched at build): {', '.join(language_data['gensim'])}")
     if language_data.get("easyocr"):

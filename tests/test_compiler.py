@@ -13315,7 +13315,7 @@ def test_language_data_packages_finds_spacy_pipelines_and_nltk_downloads():
     assert language_data_packages(cells) == {
         "spacy": ["en_core_web_sm", "de_core_news_md"],
         "nltk": ["punkt", "stopwords", "wordnet", "averaged_perceptron_tagger_eng"],
-        "tiktoken": [], "tiktoken_models": [], "easyocr": [], "gensim": [],
+        "tiktoken": [], "tiktoken_models": [], "easyocr": [], "gensim": [], "keras": [],
     }
 
 
@@ -13340,7 +13340,7 @@ def test_compiled_dockerfile_installs_spacy_pipelines_and_nltk_data(tmp_path, ca
     assert "RUN python -m nltk.downloader -d /usr/local/share/nltk_data punkt \\\n" in dockerfile
     assert dockerfile.index("RUN pip install") < dockerfile.index("spacy download") < dockerfile.index("USER appuser")
     assert inspect_notebook_data(str(notebook), str(out))["language_data"] == {
-        "spacy": ["en_core_web_sm"], "nltk": ["punkt"], "tiktoken": [], "tiktoken_models": [], "easyocr": [], "gensim": [],
+        "spacy": ["en_core_web_sm"], "nltk": ["punkt"], "tiktoken": [], "tiktoken_models": [], "easyocr": [], "gensim": [], "keras": [],
     }
     print_compile_summary(str(notebook), str(out))
     printed = capsys.readouterr().out
@@ -14096,3 +14096,39 @@ def test_hub_datasets_loaded_by_name_are_prefetched(tmp_path):
     dockerfile = (out / "Dockerfile").read_text()
     assert "ENV HF_HOME=/app/.cache/huggingface" in dockerfile
     assert "RUN python -c \"from datasets import load_dataset; load_dataset('glue', 'mrpc')\" \\\n" in dockerfile
+
+
+def test_keras_application_weights_are_prefetched_at_build(tmp_path, capsys):
+    from backend.compiler import compile_notebook, language_data_packages
+    from backend.inspector import print_compile_summary
+
+    cells = [
+        "import tensorflow as tf\nfrom tensorflow.keras.applications import MobileNetV2\nimport keras\n"
+        "a = tf.keras.applications.ResNet50()\n"
+        "b = MobileNetV2(include_top=False, weights='imagenet')\n"
+        "c = keras.applications.VGG16(weights=None)\n"
+        "d = tf.keras.applications.resnet50.preprocess_input(x)\n"
+        "e = keras.applications.EfficientNetB0(weights='my.h5')\n"
+        "f = tf.keras.layers.Dense(3)\n"
+        "g = keras.applications.Xception(include_top=FLAG)\n",
+    ]
+    assert language_data_packages(cells)["keras"] == [
+        "import tensorflow as tf; tf.keras.applications.ResNet50(weights='imagenet')",
+        "import tensorflow as tf; tf.keras.applications.MobileNetV2(weights='imagenet', include_top=False)",
+    ]
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "import keras\nMODEL = keras.applications.VGG16()\n\n"
+        "def size(x: int) -> int:\n    return x\n",
+    )
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+
+    dockerfile = (out / "Dockerfile").read_text()
+    assert "ENV KERAS_HOME=/app/.cache/keras" in dockerfile
+    assert "RUN python -c \"import keras; keras.applications.VGG16(weights='imagenet')\" \\\n" in dockerfile
+    assert dockerfile.index("KERAS_HOME") < dockerfile.index("USER appuser")
+    print_compile_summary(str(notebook), str(out))
+    assert "Keras weights (prefetched at build): 1 load(s)" in capsys.readouterr().out

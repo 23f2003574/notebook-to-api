@@ -1198,6 +1198,33 @@ _SPACY_PIPELINE_PATTERN = re.compile(r"^[a-z]{2,3}_[a-z0-9]+_[a-z0-9]+_(sm|md|lg
 # tiktoken encodings ("cl100k_base") and the model names it maps ("gpt-4o").
 # gensim-data model names ("glove-wiki-gigaword-50", "word2vec-google-news-300").
 _GENSIM_MODEL_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_.\-]*$")
+def _keras_application_call(call, name, aliases):
+    """A one-liner repeating a Keras application load that downloads
+    ImageNet weights -- `tf.keras.applications.ResNet50()` (weights default
+    to "imagenet"), `keras.applications.MobileNetV2(include_top=False)` --
+    with only its weights/include_top arguments, else None."""
+    dotted = ast.unparse(call.func)
+    origin = aliases.get(dotted.split(".")[0], "")
+    full = f"{origin}.{dotted.split('.', 1)[1]}" if origin and "." in dotted else (origin or dotted)
+    if ".applications" not in f".{full}" or not name or not name[0].isupper():
+        return None
+    keywords = {kw.arg: kw.value for kw in call.keywords if kw.arg}
+    weights = keywords.get("weights")
+    if weights is not None and not (isinstance(weights, ast.Constant) and weights.value == "imagenet"):
+        return None
+    include_top = keywords.get("include_top")
+    if include_top is not None and not (
+        isinstance(include_top, ast.Constant) and isinstance(include_top.value, bool)
+    ):
+        return None
+    root = "tensorflow" if full.startswith(("tf.", "tensorflow.")) else "keras"
+    args = "weights='imagenet'" + (
+        f", include_top={include_top.value}" if include_top is not None else ""
+    )
+    module = "tensorflow as tf; tf.keras" if root == "tensorflow" else "keras; keras"
+    return f"import {module}.applications.{name}({args})"
+
+
 # EasyOCR language codes ("en", "ch_sim").
 _EASYOCR_LANG_PATTERN = re.compile(r"^[a-z]{2,3}(_[a-z]+)?$")
 _TIKTOKEN_ENCODING_PATTERN = re.compile(r"^[a-z0-9_]+$")
@@ -1215,11 +1242,11 @@ def language_data_packages(code_cells):
     "gpt-4o")`, "tiktoken_models") and each literal language list an
     `easyocr.Reader(["en"])` loads models for ("easyocr") and the gensim-data
     models `gensim.downloader.load("glove-wiki-gigaword-50")` fetches
-    ("gensim"), for the
+    ("gensim"), and Keras application ImageNet weights ("keras"), for the
     Dockerfile to install at build time (see language_data_content)."""
     found = {
         "spacy": [], "nltk": [], "tiktoken": [], "tiktoken_models": [], "easyocr": [],
-        "gensim": [],
+        "gensim": [], "keras": [],
     }
 
     def add(kind, value, pattern):
@@ -1249,6 +1276,10 @@ def language_data_packages(code_cells):
                 or ast.unparse(node.func) == "gensim.downloader.load"
             ):
                 add("gensim", argument.value, _GENSIM_MODEL_PATTERN)
+            elif _keras_application_call(node, name, aliases):
+                snippet = _keras_application_call(node, name, aliases)
+                if snippet not in found["keras"]:
+                    found["keras"].append(snippet)
             elif label == "easyocr.Reader":
                 langs = node.args[0] if node.args else next(
                     (kw.value for kw in node.keywords if kw.arg == "lang_list"), None
