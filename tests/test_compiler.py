@@ -13315,7 +13315,7 @@ def test_language_data_packages_finds_spacy_pipelines_and_nltk_downloads():
     assert language_data_packages(cells) == {
         "spacy": ["en_core_web_sm", "de_core_news_md"],
         "nltk": ["punkt", "stopwords", "wordnet", "averaged_perceptron_tagger_eng"],
-        "tiktoken": [], "tiktoken_models": [],
+        "tiktoken": [], "tiktoken_models": [], "easyocr": [],
     }
 
 
@@ -13340,7 +13340,7 @@ def test_compiled_dockerfile_installs_spacy_pipelines_and_nltk_data(tmp_path, ca
     assert "RUN python -m nltk.downloader -d /usr/local/share/nltk_data punkt \\\n" in dockerfile
     assert dockerfile.index("RUN pip install") < dockerfile.index("spacy download") < dockerfile.index("USER appuser")
     assert inspect_notebook_data(str(notebook), str(out))["language_data"] == {
-        "spacy": ["en_core_web_sm"], "nltk": ["punkt"], "tiktoken": [], "tiktoken_models": [],
+        "spacy": ["en_core_web_sm"], "nltk": ["punkt"], "tiktoken": [], "tiktoken_models": [], "easyocr": [],
     }
     print_compile_summary(str(notebook), str(out))
     printed = capsys.readouterr().out
@@ -13930,3 +13930,33 @@ def test_tiktoken_encodings_are_prefetched_at_build(tmp_path, capsys):
     assert dockerfile.index("TIKTOKEN_CACHE_DIR") < dockerfile.index("USER appuser")
     print_compile_summary(str(notebook), str(out))
     assert "tiktoken encodings (prefetched at build): o200k_base" in capsys.readouterr().out
+
+
+def test_easyocr_models_are_prefetched_at_build(tmp_path, capsys):
+    from backend.compiler import compile_notebook, language_data_packages
+    from backend.inspector import print_compile_summary
+
+    cells = [
+        "import easyocr\n"
+        "a = easyocr.Reader(['en'])\nb = easyocr.Reader(lang_list=['ch_sim', 'en'], gpu=False)\n"
+        "c = easyocr.Reader(['en'])\nd = easyocr.Reader(LANGS)\ne = easyocr.Reader(['en', code])\n"
+        "f = easyocr.Reader([\"x'); import os; ('\"])\n",
+    ]
+    assert language_data_packages(cells)["easyocr"] == [["en"], ["ch_sim", "en"]]
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "def read(path: str) -> int:\n"
+        "    import easyocr\n"
+        "    return len(easyocr.Reader(['en']).readtext(path))\n",
+    )
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+
+    dockerfile = (out / "Dockerfile").read_text()
+    assert "ENV EASYOCR_MODULE_PATH=/app/.cache/easyocr" in dockerfile
+    assert "RUN python -c \"import easyocr; easyocr.Reader(['en'], gpu=False)\" \\\n" in dockerfile
+    assert dockerfile.index("EASYOCR_MODULE_PATH") < dockerfile.index("USER appuser")
+    print_compile_summary(str(notebook), str(out))
+    assert "EasyOCR models (prefetched at build): en" in capsys.readouterr().out

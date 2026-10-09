@@ -1108,6 +1108,8 @@ def hub_model_ids(code_cells):
 # data ids ("punkt", "averaged_perceptron_tagger_eng").
 _SPACY_PIPELINE_PATTERN = re.compile(r"^[a-z]{2,3}_[a-z0-9]+_[a-z0-9]+_(sm|md|lg|trf)$")
 # tiktoken encodings ("cl100k_base") and the model names it maps ("gpt-4o").
+# EasyOCR language codes ("en", "ch_sim").
+_EASYOCR_LANG_PATTERN = re.compile(r"^[a-z]{2,3}(_[a-z]+)?$")
 _TIKTOKEN_ENCODING_PATTERN = re.compile(r"^[a-z0-9_]+$")
 _TIKTOKEN_MODEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]*$")
 _NLTK_PACKAGE_PATTERN = re.compile(r"^[a-z][a-z0-9_\-]*$")
@@ -1120,9 +1122,10 @@ def language_data_packages(code_cells):
     "punkt")`, `nltk.download(["stopwords", "wordnet"])`), plus the
     tiktoken encodings it loads by name (`tiktoken.get_encoding(
     "cl100k_base")`, "tiktoken") or by model (`tiktoken.encoding_for_model(
-    "gpt-4o")`, "tiktoken_models"), for the Dockerfile to install at build
-    time (see language_data_content)."""
-    found = {"spacy": [], "nltk": [], "tiktoken": [], "tiktoken_models": []}
+    "gpt-4o")`, "tiktoken_models") and each literal language list an
+    `easyocr.Reader(["en"])` loads models for ("easyocr"), for the
+    Dockerfile to install at build time (see language_data_content)."""
+    found = {"spacy": [], "nltk": [], "tiktoken": [], "tiktoken_models": [], "easyocr": []}
 
     def add(kind, value, pattern):
         if isinstance(value, str) and pattern.match(value) and value not in found[kind]:
@@ -1146,6 +1149,21 @@ def language_data_packages(code_cells):
             )
             if label == "spacy.load" and isinstance(argument, ast.Constant):
                 add("spacy", argument.value, _SPACY_PIPELINE_PATTERN)
+            elif label == "easyocr.Reader":
+                langs = node.args[0] if node.args else next(
+                    (kw.value for kw in node.keywords if kw.arg == "lang_list"), None
+                )
+                codes = [
+                    item.value for item in getattr(langs, "elts", [])
+                    if isinstance(item, ast.Constant) and isinstance(item.value, str)
+                ]
+                if (
+                    isinstance(langs, (ast.List, ast.Tuple)) and codes
+                    and len(codes) == len(langs.elts)
+                    and all(_EASYOCR_LANG_PATTERN.match(code) for code in codes)
+                    and codes not in found["easyocr"]
+                ):
+                    found["easyocr"].append(codes)
             elif label == "tiktoken.get_encoding" and isinstance(argument, ast.Constant):
                 add("tiktoken", argument.value, _TIKTOKEN_ENCODING_PATTERN)
             elif label == "tiktoken.encoding_for_model":

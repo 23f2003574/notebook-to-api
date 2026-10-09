@@ -112,6 +112,16 @@ def language_data_content(language_data):
             f"RUN python -m nltk.downloader -d /usr/local/share/nltk_data {names} \\\n"
             f"    || echo \"warning: could not download NLTK data {names}\""
         )
+    reader_langs = language_data.get("easyocr", [])
+    if reader_langs:
+        # EasyOCR downloads its models into ~/.EasyOCR on first use -- the
+        # build user's home is not the runtime user's, so pin one path.
+        lines.append("ENV EASYOCR_MODULE_PATH=/app/.cache/easyocr")
+        for langs in reader_langs:
+            lines.append(
+                f"RUN python -c \"import easyocr; easyocr.Reader({langs!r}, gpu=False)\" \\\n"
+                f"    || echo \"warning: could not prefetch EasyOCR models for {' '.join(langs)}\""
+            )
     encodings = language_data.get("tiktoken", [])
     models = language_data.get("tiktoken_models", [])
     if encodings or models:
