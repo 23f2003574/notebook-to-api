@@ -14249,3 +14249,16 @@ def test_inspect_report_lists_build_time_additions(tmp_path, capsys):
     assert "- Hugging Face datasets (prefetched at build): imdb" in report
     assert "- NLTK data (downloaded at build): stopwords" in report
     assert "Build-time Additions" not in plain_report
+
+
+def test_timm_prefetch_sees_through_import_aliases_but_not_other_create_models():
+    from backend.compiler import hub_model_ids
+
+    cells = [
+        "from timm import create_model as cm\nimport timm as t\nfrom pydantic import create_model\n"
+        "a = cm('efficientnet_b0', pretrained=True)\n"
+        "b = t.create_model('resnet34', pretrained=True)\n"
+        "M = create_model('Model', pretrained=True)\n",
+    ]
+
+    assert hub_model_ids(cells) == ["timm:efficientnet_b0", "timm:resnet34"]

@@ -1190,11 +1190,15 @@ def hub_model_ids(code_cells):
             tree = ast.parse(cell)
         except SyntaxError:
             continue
+        aliases = _import_aliases(tree)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             _, name, _ = _call_label(node.func)
-            if name == "create_model" and _call_label(node.func)[0] in ("timm.create_model", "create_model"):
+            raw_label, raw_name, raw_base = _call_label(node.func)
+            if raw_label and _resolve_import_alias(
+                raw_label, raw_name, raw_base, aliases
+            )[0] in ("timm.create_model", "create_model"):
                 timm_model = _timm_pretrained_target(node)
                 if timm_model and timm_model not in found:
                     found.append(timm_model)

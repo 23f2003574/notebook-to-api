@@ -35290,3 +35290,47 @@ def test_dockerfile_preview_includes_torch_weight_prefetch_matching_a_real_compi
     assert "ENV TORCH_HOME=/app/.cache/torch" in preview["dockerfile"]
     assert client.post("/api/compile", json={"notebook_path": filename}).status_code == 200
     assert preview["dockerfile"] == client.get("/api/generated/Dockerfile").json()["content"]
+
+
+def test_dockerfile_preview_matches_a_real_compile_for_every_build_time_prefetch_kind():
+
+    filename = "dockerfile_preview_all_prefetches.ipynb"
+    content = _notebook_bytes(
+        "import tiktoken, easyocr, timm, keras\n"
+        "import gensim.downloader as api\n"
+        "from datasets import load_dataset\n"
+        "from huggingface_hub import hf_hub_download\n"
+        "from nltk.corpus import stopwords\n"
+        "from sentence_transformers import SentenceTransformer\n\n"
+        "def build(x: int) -> int:\n"
+        "    tiktoken.get_encoding('cl100k_base')\n"
+        "    easyocr.Reader(['en'])\n"
+        "    api.load('glove-wiki-gigaword-50')\n"
+        "    keras.applications.ResNet50()\n"
+        "    timm.create_model('resnet50', pretrained=True)\n"
+        "    load_dataset('glue', 'mrpc')\n"
+        "    hf_hub_download('julien-c/wine-quality', 'sklearn_model.joblib')\n"
+        "    SentenceTransformer('all-MiniLM-L6-v2')\n"
+        "    return x\n"
+    )
+    client.post(
+        "/api/upload",
+        files={"file": (filename, io.BytesIO(content), "application/json")},
+    )
+
+    preview = client.get("/api/dockerfile-preview", params={"notebook_path": filename}).json()
+
+    assert preview["hub_models"] == [
+        "timm:resnet50", "dataset:glue:mrpc",
+        "julien-c/wine-quality#sklearn_model.joblib", "sentence-transformers/all-MiniLM-L6-v2",
+    ]
+    data = preview["language_data"]
+    assert data["tiktoken"] == ["cl100k_base"]
+    assert data["easyocr"] == [["en"]]
+    assert data["gensim"] == ["glove-wiki-gigaword-50"]
+    assert data["keras"] == ["import keras; keras.applications.ResNet50(weights='imagenet')"]
+    assert data["nltk"] == ["stopwords"]
+    for env in ("HF_HOME", "TIKTOKEN_CACHE_DIR", "EASYOCR_MODULE_PATH", "GENSIM_DATA_DIR", "KERAS_HOME"):
+        assert f"ENV {env}=/app/.cache/" in preview["dockerfile"]
+    assert client.post("/api/compile", json={"notebook_path": filename}).status_code == 200
+    assert preview["dockerfile"] == client.get("/api/generated/Dockerfile").json()["content"]
