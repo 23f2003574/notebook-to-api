@@ -112,6 +112,18 @@ def language_data_content(language_data):
             f"RUN python -m nltk.downloader -d /usr/local/share/nltk_data {names} \\\n"
             f"    || echo \"warning: could not download NLTK data {names}\""
         )
+    encodings = language_data.get("tiktoken", [])
+    models = language_data.get("tiktoken_models", [])
+    if encodings or models:
+        # tiktoken otherwise downloads each BPE file into a temp dir on
+        # every container start (or fails offline).
+        lines.append("ENV TIKTOKEN_CACHE_DIR=/app/.cache/tiktoken")
+        calls = [f"tiktoken.get_encoding('{name}')" for name in encodings]
+        calls += [f"tiktoken.encoding_for_model('{name}')" for name in models]
+        lines.append(
+            f"RUN python -c \"import tiktoken; {'; '.join(calls)}\" \\\n"
+            f"    || echo \"warning: could not prefetch tiktoken encodings\""
+        )
     return "\n".join(lines) + "\n" if lines else ""
 
 

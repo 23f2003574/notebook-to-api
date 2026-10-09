@@ -1078,6 +1078,9 @@ def print_compile_summary(notebook_path, output_dir="generated", only=None, excl
     language_data = data.get("language_data") or {}
     if language_data.get("spacy"):
         print(f"spaCy pipelines (installed at build): {', '.join(language_data['spacy'])}")
+    tiktoken_names = language_data.get("tiktoken", []) + language_data.get("tiktoken_models", [])
+    if tiktoken_names:
+        print(f"tiktoken encodings (prefetched at build): {', '.join(tiktoken_names)}")
     if language_data.get("nltk"):
         print(f"NLTK data (downloaded at build): {', '.join(language_data['nltk'])}")
     if data.get("torch_weights"):

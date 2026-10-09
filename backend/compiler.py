@@ -1107,6 +1107,9 @@ def hub_model_ids(code_cells):
 # spaCy pipeline packages ("en_core_web_sm", "xx_ent_wiki_sm") and NLTK
 # data ids ("punkt", "averaged_perceptron_tagger_eng").
 _SPACY_PIPELINE_PATTERN = re.compile(r"^[a-z]{2,3}_[a-z0-9]+_[a-z0-9]+_(sm|md|lg|trf)$")
+# tiktoken encodings ("cl100k_base") and the model names it maps ("gpt-4o").
+_TIKTOKEN_ENCODING_PATTERN = re.compile(r"^[a-z0-9_]+$")
+_TIKTOKEN_MODEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]*$")
 _NLTK_PACKAGE_PATTERN = re.compile(r"^[a-z][a-z0-9_\-]*$")
 
 
@@ -1114,9 +1117,12 @@ def language_data_packages(code_cells):
     """{"spacy": [...], "nltk": [...]} (first-seen order, unique) for the
     spaCy pipelines a notebook loads by package name (`spacy.load(
     "en_core_web_sm")`) and the NLTK data it downloads (`nltk.download(
-    "punkt")`, `nltk.download(["stopwords", "wordnet"])`), for the
-    Dockerfile to install at build time (see language_data_content)."""
-    found = {"spacy": [], "nltk": []}
+    "punkt")`, `nltk.download(["stopwords", "wordnet"])`), plus the
+    tiktoken encodings it loads by name (`tiktoken.get_encoding(
+    "cl100k_base")`, "tiktoken") or by model (`tiktoken.encoding_for_model(
+    "gpt-4o")`, "tiktoken_models"), for the Dockerfile to install at build
+    time (see language_data_content)."""
+    found = {"spacy": [], "nltk": [], "tiktoken": [], "tiktoken_models": []}
 
     def add(kind, value, pattern):
         if isinstance(value, str) and pattern.match(value) and value not in found[kind]:
@@ -1140,6 +1146,14 @@ def language_data_packages(code_cells):
             )
             if label == "spacy.load" and isinstance(argument, ast.Constant):
                 add("spacy", argument.value, _SPACY_PIPELINE_PATTERN)
+            elif label == "tiktoken.get_encoding" and isinstance(argument, ast.Constant):
+                add("tiktoken", argument.value, _TIKTOKEN_ENCODING_PATTERN)
+            elif label == "tiktoken.encoding_for_model":
+                model = node.args[0] if node.args else next(
+                    (kw.value for kw in node.keywords if kw.arg == "model_name"), None
+                )
+                if isinstance(model, ast.Constant):
+                    add("tiktoken_models", model.value, _TIKTOKEN_MODEL_PATTERN)
             elif label == "nltk.download" and argument is not None:
                 values = argument.elts if isinstance(argument, (ast.List, ast.Tuple)) else [argument]
                 for value in values:

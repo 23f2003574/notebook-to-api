@@ -35262,7 +35262,9 @@ def test_dockerfile_preview_includes_language_data_matching_a_real_compile():
 
     preview = client.get("/api/dockerfile-preview", params={"notebook_path": filename}).json()
 
-    assert preview["language_data"] == {"spacy": [], "nltk": ["stopwords"]}
+    assert preview["language_data"] == {
+        "spacy": [], "nltk": ["stopwords"], "tiktoken": [], "tiktoken_models": [],
+    }
     assert "nltk.downloader -d /usr/local/share/nltk_data stopwords" in preview["dockerfile"]
     assert client.post("/api/compile", json={"notebook_path": filename}).status_code == 200
     assert preview["dockerfile"] == client.get("/api/generated/Dockerfile").json()["content"]

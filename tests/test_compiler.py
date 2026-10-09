@@ -13315,6 +13315,7 @@ def test_language_data_packages_finds_spacy_pipelines_and_nltk_downloads():
     assert language_data_packages(cells) == {
         "spacy": ["en_core_web_sm", "de_core_news_md"],
         "nltk": ["punkt", "stopwords", "wordnet", "averaged_perceptron_tagger_eng"],
+        "tiktoken": [], "tiktoken_models": [],
     }
 
 
@@ -13339,7 +13340,7 @@ def test_compiled_dockerfile_installs_spacy_pipelines_and_nltk_data(tmp_path, ca
     assert "RUN python -m nltk.downloader -d /usr/local/share/nltk_data punkt \\\n" in dockerfile
     assert dockerfile.index("RUN pip install") < dockerfile.index("spacy download") < dockerfile.index("USER appuser")
     assert inspect_notebook_data(str(notebook), str(out))["language_data"] == {
-        "spacy": ["en_core_web_sm"], "nltk": ["punkt"],
+        "spacy": ["en_core_web_sm"], "nltk": ["punkt"], "tiktoken": [], "tiktoken_models": [],
     }
     print_compile_summary(str(notebook), str(out))
     printed = capsys.readouterr().out
@@ -13893,3 +13894,39 @@ def test_installs_inside_shell_cells_reach_requirements_and_apt_packages():
     assert "requests==2.31.0" in specs and "tqdm" in specs and "pyyaml" in specs and "numpy" in specs
     assert "not-a-real-dependency" not in specs
     assert _apt_install_packages(cells) == ["ffmpeg", "libsndfile1"]
+
+
+def test_tiktoken_encodings_are_prefetched_at_build(tmp_path, capsys):
+    from backend.compiler import compile_notebook, language_data_packages
+    from backend.inspector import print_compile_summary
+
+    cells = [
+        "import tiktoken\nfrom tiktoken import encoding_for_model as efm\n"
+        "enc = tiktoken.get_encoding('cl100k_base')\n"
+        "m = tiktoken.encoding_for_model('gpt-4o')\n"
+        "k = efm(model_name='gpt-3.5-turbo')\n"
+        "bad = tiktoken.get_encoding(\"x'; rm -rf /\")\n"
+        "dyn = tiktoken.get_encoding(NAME)\n",
+    ]
+    data = language_data_packages(cells)
+    assert data["tiktoken"] == ["cl100k_base"]
+    assert data["tiktoken_models"] == ["gpt-4o", "gpt-3.5-turbo"]
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "import tiktoken\nENC = tiktoken.get_encoding('o200k_base')\n\n"
+        "def count(text: str) -> int:\n    return len(text)\n",
+    )
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+
+    dockerfile = (out / "Dockerfile").read_text()
+    assert "ENV TIKTOKEN_CACHE_DIR=/app/.cache/tiktoken" in dockerfile
+    assert (
+        "RUN python -c \"import tiktoken; tiktoken.get_encoding('o200k_base')\" \\\n"
+        "    || echo \"warning: could not prefetch tiktoken encodings\"" in dockerfile
+    )
+    assert dockerfile.index("TIKTOKEN_CACHE_DIR") < dockerfile.index("USER appuser")
+    print_compile_summary(str(notebook), str(out))
+    assert "tiktoken encodings (prefetched at build): o200k_base" in capsys.readouterr().out
