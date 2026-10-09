@@ -13960,3 +13960,23 @@ def test_easyocr_models_are_prefetched_at_build(tmp_path, capsys):
     assert dockerfile.index("EASYOCR_MODULE_PATH") < dockerfile.index("USER appuser")
     print_compile_summary(str(notebook), str(out))
     assert "EasyOCR models (prefetched at build): en" in capsys.readouterr().out
+
+
+def test_nltk_data_used_without_a_download_is_prefetched():
+    from backend.compiler import language_data_packages
+
+    cells = [
+        "import nltk\nfrom nltk.corpus import stopwords, wordnet\n"
+        "from nltk.tokenize import word_tokenize\nfrom nltk.stem import WordNetLemmatizer\n"
+        "nltk.download('stopwords')\n"
+        "tags = nltk.pos_tag(word_tokenize('hi there'))\n"
+        "brown = nltk.corpus.brown.words()\n",
+        "from nltk.sentiment.vader import SentimentIntensityAnalyzer\n",
+        "word_tokenize = str.split\n",
+    ]
+
+    assert language_data_packages(cells)["nltk"] == [
+        "stopwords", "wordnet", "omw-1.4", "punkt", "punkt_tab",
+        "averaged_perceptron_tagger_eng", "brown", "vader_lexicon",
+    ]
+    assert language_data_packages(["from mylib.corpus import stopwords\n"])["nltk"] == []

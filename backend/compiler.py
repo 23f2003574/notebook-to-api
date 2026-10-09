@@ -1112,7 +1112,7 @@ _SPACY_PIPELINE_PATTERN = re.compile(r"^[a-z]{2,3}_[a-z0-9]+_[a-z0-9]+_(sm|md|lg
 _EASYOCR_LANG_PATTERN = re.compile(r"^[a-z]{2,3}(_[a-z]+)?$")
 _TIKTOKEN_ENCODING_PATTERN = re.compile(r"^[a-z0-9_]+$")
 _TIKTOKEN_MODEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]*$")
-_NLTK_PACKAGE_PATTERN = re.compile(r"^[a-z][a-z0-9_\-]*$")
+_NLTK_PACKAGE_PATTERN = re.compile(r"^[a-z][a-z0-9_.\-]*$")
 
 
 def language_data_packages(code_cells):
@@ -1177,7 +1177,66 @@ def language_data_packages(code_cells):
                 for value in values:
                     if isinstance(value, ast.Constant):
                         add("nltk", value.value, _NLTK_PACKAGE_PATTERN)
+    for package in _implied_nltk_packages(code_cells):
+        add("nltk", package, _NLTK_PACKAGE_PATTERN)
     return found
+
+
+# NLTK data a notebook uses without downloading it there (it was fetched
+# once on the author's machine): `stopwords.words("english")`,
+# `word_tokenize(...)`, `WordNetLemmatizer()`. The container has none of
+# it, so each raised LookupError.
+_NLTK_IMPLIED_DATA = {
+    "word_tokenize": ("punkt", "punkt_tab"),
+    "sent_tokenize": ("punkt", "punkt_tab"),
+    "pos_tag": ("averaged_perceptron_tagger_eng",),
+    "WordNetLemmatizer": ("wordnet", "omw-1.4"),
+    "ne_chunk": ("maxent_ne_chunker_tab", "words"),
+    "SentimentIntensityAnalyzer": ("vader_lexicon",),
+}
+_NLTK_CORPUS_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def _implied_nltk_packages(code_cells):
+    """NLTK data ids (first-seen order) that cells importing nltk need
+    implicitly: `nltk.corpus` readers (`from nltk.corpus import stopwords`,
+    `nltk.corpus.wordnet`) and the helpers in _NLTK_IMPLIED_DATA."""
+    packages = []
+    for cell in code_cells:
+        if "nltk" not in cell:
+            continue
+        try:
+            tree = ast.parse(cell)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            names = []
+            if isinstance(node, ast.ImportFrom) and node.module == "nltk.corpus":
+                names = [("corpus", alias.name) for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and (node.module or "").startswith("nltk"):
+                names = [("helper", alias.name) for alias in node.names]
+            elif (
+                isinstance(node, ast.Attribute) and isinstance(node.value, ast.Attribute)
+                and node.value.attr == "corpus" and isinstance(node.value.value, ast.Name)
+                and node.value.value.id == "nltk"
+            ):
+                names = [("corpus", node.attr)]
+            elif (
+                isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+                and node.value.id == "nltk"
+            ):
+                names = [("helper", node.attr)]
+            for kind, name in names:
+                if kind == "corpus":
+                    implied = (name,) if _NLTK_CORPUS_PATTERN.match(name) else ()
+                    if name == "wordnet":
+                        implied = ("wordnet", "omw-1.4")
+                else:
+                    implied = _NLTK_IMPLIED_DATA.get(name, ())
+                for package in implied:
+                    if package not in packages:
+                        packages.append(package)
+    return packages
 
 
 # Literal values safe to repeat inside a Dockerfile `RUN python -c "..."`.
