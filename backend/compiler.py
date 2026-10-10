@@ -1352,6 +1352,8 @@ _SPACY_SHELL_DOWNLOAD_PATTERN = re.compile(
 )
 
 
+# rembg model names ("u2net", "isnet-general-use", "birefnet-general").
+_REMBG_MODEL_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_\-]*$")
 # Stanza language codes ("en", "zh-hans").
 _STANZA_LANG_PATTERN = re.compile(r"^[a-z]{2,3}(-[a-z]+)?$")
 
@@ -1380,11 +1382,13 @@ def language_data_packages(code_cells):
     downloads ("sklearn", as one-liners) and the Stanza language models
     `stanza.download("en")` / `stanza.Pipeline("en")` fetch ("stanza") and the
     official weights file `YOLO("yolov8n.pt")` downloads on first use
-    ("ultralytics"), for the
+    ("ultralytics") and the rembg segmentation models `rembg.remove(image)`
+    (default "u2net") and `rembg.new_session("isnet-general-use")` fetch
+    ("rembg"), for the
     Dockerfile to install at build time (see language_data_content)."""
     found = {
         "spacy": [], "nltk": [], "tiktoken": [], "tiktoken_models": [], "easyocr": [],
-        "gensim": [], "keras": [], "whisper": [], "sklearn": [], "stanza": [], "ultralytics": [],
+        "gensim": [], "keras": [], "whisper": [], "sklearn": [], "stanza": [], "ultralytics": [], "rembg": [],
     }
 
     def add(kind, value, pattern):
@@ -1440,6 +1444,17 @@ def language_data_packages(code_cells):
                     for kw in node.keywords
                 ):
                     add("stanza", lang.value, _STANZA_LANG_PATTERN)
+            elif label in ("rembg.new_session", "rembg.remove"):
+                if label == "rembg.new_session":
+                    model = node.args[0] if node.args else next(
+                        (kw.value for kw in node.keywords if kw.arg == "model_name"), None
+                    )
+                    if model is None:
+                        add("rembg", "u2net", _REMBG_MODEL_PATTERN)
+                    elif isinstance(model, ast.Constant):
+                        add("rembg", model.value, _REMBG_MODEL_PATTERN)
+                elif not any(kw.arg == "session" for kw in node.keywords) and len(node.args) < 2:
+                    add("rembg", "u2net", _REMBG_MODEL_PATTERN)  # remove() builds the default session
             elif name in ("YOLO", "RTDETR") and "ultralytics" in cell:
                 weights = node.args[0] if node.args else next(
                     (kw.value for kw in node.keywords if kw.arg == "model"), None

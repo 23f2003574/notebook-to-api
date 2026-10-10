@@ -152,6 +152,15 @@ def language_data_content(language_data):
                 f"RUN python -c \"import gensim.downloader as d; d.load('{model}', return_path=True)\" \\\n"
                 f"    || echo \"warning: could not prefetch gensim model {model}\""
             )
+    rembg_models = language_data.get("rembg", [])
+    if rembg_models:
+        # rembg keeps its ONNX models in ~/.u2net otherwise.
+        lines.append("ENV U2NET_HOME=/app/.cache/u2net")
+        for model in rembg_models:
+            lines.append(
+                f"RUN python -c \"from rembg import new_session; new_session('{model}')\" \\\n"
+                f"    || echo \"warning: could not prefetch rembg model {model}\""
+            )
     for weights in language_data.get("ultralytics", []):
         # YOLO("yolov8n.pt") downloads the file next to the working
         # directory on first use; fetch it into /app (the WORKDIR) now.
