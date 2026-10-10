@@ -13329,7 +13329,7 @@ def test_language_data_packages_finds_spacy_pipelines_and_nltk_downloads():
     assert language_data_packages(cells) == {
         "spacy": ["en_core_web_sm", "de_core_news_md"],
         "nltk": ["punkt", "stopwords", "wordnet", "averaged_perceptron_tagger_eng"],
-        "tiktoken": [], "tiktoken_models": [], "easyocr": [], "gensim": [], "keras": [], "whisper": [], "sklearn": [], "stanza": [], "ultralytics": [],
+        "tiktoken": [], "tiktoken_models": [], "easyocr": [], "gensim": [], "keras": [], "whisper": [], "sklearn": [], "stanza": [], "ultralytics": [], "rembg": [],
     }
 
 
@@ -13354,7 +13354,7 @@ def test_compiled_dockerfile_installs_spacy_pipelines_and_nltk_data(tmp_path, ca
     assert "RUN python -m nltk.downloader -d /usr/local/share/nltk_data punkt \\\n" in dockerfile
     assert dockerfile.index("RUN pip install") < dockerfile.index("spacy download") < dockerfile.index("USER appuser")
     assert inspect_notebook_data(str(notebook), str(out))["language_data"] == {
-        "spacy": ["en_core_web_sm"], "nltk": ["punkt"], "tiktoken": [], "tiktoken_models": [], "easyocr": [], "gensim": [], "keras": [], "whisper": [], "sklearn": [], "stanza": [], "ultralytics": [],
+        "spacy": ["en_core_web_sm"], "nltk": ["punkt"], "tiktoken": [], "tiktoken_models": [], "easyocr": [], "gensim": [], "keras": [], "whisper": [], "sklearn": [], "stanza": [], "ultralytics": [], "rembg": [],
     }
     print_compile_summary(str(notebook), str(out))
     printed = capsys.readouterr().out
@@ -14197,6 +14197,38 @@ def test_official_ultralytics_weights_are_prefetched_at_build(tmp_path, capsys):
     assert dockerfile.index("YOLO('yolov8n.pt')") < dockerfile.index("USER appuser")
     print_compile_summary(str(notebook), str(out))
     assert "Ultralytics weights (prefetched at build): yolov8n.pt" in capsys.readouterr().out
+
+
+def test_rembg_models_are_prefetched_at_build(tmp_path, capsys):
+    from backend.compiler import compile_notebook, language_data_packages
+    from backend.inspector import print_compile_summary
+
+    cells = [
+        "import rembg\nfrom rembg import remove, new_session\n"
+        "a = new_session('isnet-general-use')\nb = rembg.new_session(model_name='birefnet-general')\n"
+        "c = remove(img)\nd = new_session(NAME)\ne = new_session(\"x'); import os; ('\")\n"
+        "f = remove(img, session=a)\n",
+        "def remove(x):\n    return x\nremove(1)\n",
+    ]
+    assert language_data_packages(cells)["rembg"] == ["isnet-general-use", "birefnet-general", "u2net"]
+    assert language_data_packages(["from rembg import remove\nremove(i, session=s)\n"])["rembg"] == []
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "def cutout(path: str) -> int:\n"
+        "    from rembg import remove\n"
+        "    return len(remove(open(path, 'rb').read()))\n",
+    )
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+
+    dockerfile = (out / "Dockerfile").read_text()
+    assert "ENV U2NET_HOME=/app/.cache/u2net" in dockerfile
+    assert "RUN python -c \"from rembg import new_session; new_session('u2net')\" \\\n" in dockerfile
+    assert dockerfile.index("U2NET_HOME") < dockerfile.index("USER appuser")
+    print_compile_summary(str(notebook), str(out))
+    assert "rembg models (prefetched at build): u2net" in capsys.readouterr().out
 
 
 def test_nltk_data_used_without_a_download_is_prefetched():

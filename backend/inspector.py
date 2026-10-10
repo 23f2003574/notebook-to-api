@@ -920,6 +920,8 @@ def build_addition_lines(data):
         lines.append(f"Keras weights (prefetched at build): {len(language_data['keras'])} load(s)")
     if language_data.get("gensim"):
         lines.append(f"gensim models (prefetched at build): {', '.join(language_data['gensim'])}")
+    if language_data.get("rembg"):
+        lines.append(f"rembg models (prefetched at build): {', '.join(language_data['rembg'])}")
     if language_data.get("ultralytics"):
         lines.append(f"Ultralytics weights (prefetched at build): {', '.join(language_data['ultralytics'])}")
     if language_data.get("stanza"):
