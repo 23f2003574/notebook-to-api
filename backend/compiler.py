@@ -1343,6 +1343,23 @@ _NLTK_PACKAGE_PATTERN = re.compile(r"^[a-z][a-z0-9_.\-]*$")
 _WHISPER_MODEL_PATTERN = re.compile(r"^[a-z0-9][a-z0-9.\-]*$")
 
 
+# `!python -m spacy download en_core_web_sm` / `!spacy download ...` lines
+# (commented out by the parser) install a pipeline the compiled app lacks.
+_SPACY_SHELL_DOWNLOAD_PATTERN = re.compile(
+    r"^#[ \t]*!(?:[ \t]*python[0-9.]*[ \t]+-m)?[ \t]*spacy[ \t]+download[ \t]+"
+    r"(?P<name>[A-Za-z0-9_]+)[ \t]*(?:--.*)?$",
+    re.MULTILINE,
+)
+
+
+def _is_spacy_cli_download(func, aliases):
+    """True for `spacy.cli.download(...)`, or `download(...)` after
+    `from spacy.cli import download` (also renamed)."""
+    dotted = ast.unparse(func)
+    head, _, rest = dotted.partition(".")
+    return f"{aliases.get(head, head)}{'.' + rest if rest else ''}" == "spacy.cli.download"
+
+
 def language_data_packages(code_cells):
     """{"spacy": [...], "nltk": [...]} (first-seen order, unique) for the
     spaCy pipelines a notebook loads by package name (`spacy.load(
@@ -1368,6 +1385,8 @@ def language_data_packages(code_cells):
             found[kind].append(value)
 
     for cell in code_cells:
+        for match in _SPACY_SHELL_DOWNLOAD_PATTERN.finditer(cell):
+            add("spacy", match.group("name"), _SPACY_PIPELINE_PATTERN)
         try:
             tree = ast.parse(cell)
         except SyntaxError:
@@ -1375,6 +1394,13 @@ def language_data_packages(code_cells):
         aliases = _import_aliases(tree)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
+                continue
+            if _is_spacy_cli_download(node.func, aliases):
+                target = node.args[0] if node.args else next(
+                    (kw.value for kw in node.keywords if kw.arg == "model"), None
+                )
+                if isinstance(target, ast.Constant):
+                    add("spacy", target.value, _SPACY_PIPELINE_PATTERN)
                 continue
             label, name, base = _call_label(node.func)
             if label is None:
