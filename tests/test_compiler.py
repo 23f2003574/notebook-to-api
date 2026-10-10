@@ -13161,6 +13161,20 @@ def test_imports_needing_system_libraries_add_their_apt_packages():
     ]
 
 
+def test_imports_of_binding_packages_add_the_system_package_they_load():
+    cells = [
+        "import graphviz\nfrom cairosvg import svg2png\nimport sounddevice as sd\n",
+        "from weasyprint import HTML\nimport tabula\nimport camelot.io\nimport ffmpeg\n",
+        "import graphviz_helpers\nimport numpy\n",
+    ]
+
+    assert _extract_explicit_apt_packages(cells) == [
+        "graphviz", "libcairo2", "libportaudio2", "libpango-1.0-0", "libpangoft2-1.0-0",
+        "default-jre-headless", "ghostscript", "ffmpeg",
+    ]
+    assert _extract_explicit_apt_packages(["# notebook-to-api: exclude graphviz\nimport graphviz\n"]) == []
+
+
 def test_excluded_and_local_imports_add_no_apt_packages():
     cells = [
         "# notebook-to-api: exclude cv2\nimport cv2\n",
