@@ -13329,7 +13329,7 @@ def test_language_data_packages_finds_spacy_pipelines_and_nltk_downloads():
     assert language_data_packages(cells) == {
         "spacy": ["en_core_web_sm", "de_core_news_md"],
         "nltk": ["punkt", "stopwords", "wordnet", "averaged_perceptron_tagger_eng"],
-        "tiktoken": [], "tiktoken_models": [], "easyocr": [], "gensim": [], "keras": [], "whisper": [], "sklearn": [], "stanza": [], "ultralytics": [], "rembg": [],
+        "tiktoken": [], "tiktoken_models": [], "easyocr": [], "gensim": [], "keras": [], "whisper": [], "sklearn": [], "stanza": [], "ultralytics": [], "rembg": [], "open_clip": [],
     }
 
 
@@ -13354,7 +13354,7 @@ def test_compiled_dockerfile_installs_spacy_pipelines_and_nltk_data(tmp_path, ca
     assert "RUN python -m nltk.downloader -d /usr/local/share/nltk_data punkt \\\n" in dockerfile
     assert dockerfile.index("RUN pip install") < dockerfile.index("spacy download") < dockerfile.index("USER appuser")
     assert inspect_notebook_data(str(notebook), str(out))["language_data"] == {
-        "spacy": ["en_core_web_sm"], "nltk": ["punkt"], "tiktoken": [], "tiktoken_models": [], "easyocr": [], "gensim": [], "keras": [], "whisper": [], "sklearn": [], "stanza": [], "ultralytics": [], "rembg": [],
+        "spacy": ["en_core_web_sm"], "nltk": ["punkt"], "tiktoken": [], "tiktoken_models": [], "easyocr": [], "gensim": [], "keras": [], "whisper": [], "sklearn": [], "stanza": [], "ultralytics": [], "rembg": [], "open_clip": [],
     }
     print_compile_summary(str(notebook), str(out))
     printed = capsys.readouterr().out
@@ -14229,6 +14229,45 @@ def test_rembg_models_are_prefetched_at_build(tmp_path, capsys):
     assert dockerfile.index("U2NET_HOME") < dockerfile.index("USER appuser")
     print_compile_summary(str(notebook), str(out))
     assert "rembg models (prefetched at build): u2net" in capsys.readouterr().out
+
+
+def test_open_clip_checkpoints_are_prefetched_at_build(tmp_path, capsys):
+    from backend.compiler import compile_notebook, language_data_packages
+    from backend.inspector import print_compile_summary
+
+    cells = [
+        "import open_clip\n"
+        "a, _, pre = open_clip.create_model_and_transforms('ViT-B-32', pretrained='laion2b_s34b_b79k')\n"
+        "b = open_clip.create_model('ViT-L-14', 'openai')\n"
+        "c = open_clip.create_model_from_pretrained('hf-hub:timm/ViT-B-16-SigLIP')\n"
+        "d = open_clip.create_model_and_transforms('ViT-B-32', pretrained='laion2b_s34b_b79k')\n"
+        "e = open_clip.create_model('RN50')\nf = open_clip.create_model('RN50', pretrained='')\n"
+        "g = open_clip.create_model('ViT-B-32', pretrained='/models/clip.pt')\n"
+        "h = open_clip.create_model(NAME, pretrained='openai')\n"
+        "i = open_clip.get_tokenizer('ViT-B-32')\n",
+    ]
+    assert language_data_packages(cells)["open_clip"] == [
+        "import open_clip; open_clip.create_model('ViT-B-32', pretrained='laion2b_s34b_b79k')",
+        "import open_clip; open_clip.create_model('ViT-L-14', pretrained='openai')",
+        "import open_clip; open_clip.create_model('hf-hub:timm/ViT-B-16-SigLIP')",
+    ]
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "def embed_size() -> int:\n"
+        "    import open_clip\n"
+        "    model = open_clip.create_model('ViT-B-32', pretrained='openai')\n"
+        "    return model.visual.output_dim\n",
+    )
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+
+    dockerfile = (out / "Dockerfile").read_text()
+    assert "RUN python -c \"import open_clip; open_clip.create_model('ViT-B-32', pretrained='openai')\" \\\n" in dockerfile
+    assert dockerfile.index("ENV HF_HOME") < dockerfile.index("open_clip.create_model") < dockerfile.index("USER appuser")
+    print_compile_summary(str(notebook), str(out))
+    assert "OpenCLIP weights (prefetched at build): 1 load(s)" in capsys.readouterr().out
 
 
 def test_nltk_data_used_without_a_download_is_prefetched():

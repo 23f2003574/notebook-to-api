@@ -152,6 +152,15 @@ def language_data_content(language_data):
                 f"RUN python -c \"import gensim.downloader as d; d.load('{model}', return_path=True)\" \\\n"
                 f"    || echo \"warning: could not prefetch gensim model {model}\""
             )
+    open_clip_loads = language_data.get("open_clip", [])
+    if open_clip_loads:
+        # Checkpoints come from the Hugging Face Hub, cached under HF_HOME.
+        lines.append("ENV HF_HOME=/app/.cache/huggingface")
+    for snippet in open_clip_loads:
+        lines.append(
+            f"RUN python -c \"{snippet}\" \\\n"
+            f"    || echo \"warning: could not prefetch OpenCLIP weights for: {snippet}\""
+        )
     rembg_models = language_data.get("rembg", [])
     if rembg_models:
         # rembg keeps its ONNX models in ~/.u2net otherwise.

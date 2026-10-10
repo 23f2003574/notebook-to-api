@@ -1352,6 +1352,35 @@ _SPACY_SHELL_DOWNLOAD_PATTERN = re.compile(
 )
 
 
+_OPEN_CLIP_LOADERS = frozenset({
+    "open_clip.create_model", "open_clip.create_model_and_transforms",
+    "open_clip.create_model_from_pretrained",
+})
+
+
+def _open_clip_call(call):
+    """A one-liner loading the checkpoint a literal `open_clip.create_model*
+    ("ViT-B-32", pretrained="laion2b_s34b_b79k")` call downloads, else None
+    -- for a missing/empty `pretrained` (random weights), a local file path
+    or any non-literal argument nothing is downloaded or knowable."""
+    keywords = {kw.arg: kw.value for kw in call.keywords if kw.arg}
+    model = call.args[0] if call.args else keywords.get("model_name")
+    pretrained = call.args[1] if len(call.args) > 1 else keywords.get("pretrained")
+    if not (isinstance(model, ast.Constant) and isinstance(model.value, str)):
+        return None
+    model_source = _safe_literal_source(model)
+    if model_source is None:
+        return None
+    if model.value.startswith("hf-hub:"):
+        return f"import open_clip; open_clip.create_model({model_source})"
+    source = _safe_literal_source(pretrained) if pretrained is not None else None
+    if source is None or not isinstance(pretrained, ast.Constant) or not pretrained.value:
+        return None
+    if "/" in pretrained.value and not pretrained.value.startswith("hf-hub:"):
+        return None
+    return f"import open_clip; open_clip.create_model({model_source}, pretrained={source})"
+
+
 # rembg model names ("u2net", "isnet-general-use", "birefnet-general").
 _REMBG_MODEL_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_\-]*$")
 # Stanza language codes ("en", "zh-hans").
@@ -1384,11 +1413,13 @@ def language_data_packages(code_cells):
     official weights file `YOLO("yolov8n.pt")` downloads on first use
     ("ultralytics") and the rembg segmentation models `rembg.remove(image)`
     (default "u2net") and `rembg.new_session("isnet-general-use")` fetch
-    ("rembg"), for the
+    ("rembg") and the pretrained OpenCLIP checkpoints
+    `open_clip.create_model_and_transforms("ViT-B-32", pretrained="openai")`
+    downloads ("open_clip", as one-liners), for the
     Dockerfile to install at build time (see language_data_content)."""
     found = {
         "spacy": [], "nltk": [], "tiktoken": [], "tiktoken_models": [], "easyocr": [],
-        "gensim": [], "keras": [], "whisper": [], "sklearn": [], "stanza": [], "ultralytics": [], "rembg": [],
+        "gensim": [], "keras": [], "whisper": [], "sklearn": [], "stanza": [], "ultralytics": [], "rembg": [], "open_clip": [],
     }
 
     def add(kind, value, pattern):
@@ -1444,6 +1475,10 @@ def language_data_packages(code_cells):
                     for kw in node.keywords
                 ):
                     add("stanza", lang.value, _STANZA_LANG_PATTERN)
+            elif label in _OPEN_CLIP_LOADERS:
+                snippet = _open_clip_call(node)
+                if snippet and snippet not in found["open_clip"]:
+                    found["open_clip"].append(snippet)
             elif label in ("rembg.new_session", "rembg.remove"):
                 if label == "rembg.new_session":
                     model = node.args[0] if node.args else next(
