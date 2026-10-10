@@ -152,6 +152,16 @@ def language_data_content(language_data):
                 f"RUN python -c \"import gensim.downloader as d; d.load('{model}', return_path=True)\" \\\n"
                 f"    || echo \"warning: could not prefetch gensim model {model}\""
             )
+    whisper_models = language_data.get("whisper", [])
+    if whisper_models:
+        # whisper.load_model caches checkpoints under $XDG_CACHE_HOME/whisper
+        # (~/.cache/whisper otherwise -- the build user's home).
+        lines.append("ENV XDG_CACHE_HOME=/app/.cache")
+        for model in whisper_models:
+            lines.append(
+                f"RUN python -c \"import whisper; whisper.load_model('{model}', device='cpu')\" \\\n"
+                f"    || echo \"warning: could not prefetch whisper model {model}\""
+            )
     reader_langs = language_data.get("easyocr", [])
     if reader_langs:
         # EasyOCR downloads its models into ~/.EasyOCR on first use -- the

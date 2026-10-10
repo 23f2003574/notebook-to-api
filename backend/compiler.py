@@ -1259,6 +1259,9 @@ _EASYOCR_LANG_PATTERN = re.compile(r"^[a-z]{2,3}(_[a-z]+)?$")
 _TIKTOKEN_ENCODING_PATTERN = re.compile(r"^[a-z0-9_]+$")
 _TIKTOKEN_MODEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]*$")
 _NLTK_PACKAGE_PATTERN = re.compile(r"^[a-z][a-z0-9_.\-]*$")
+# openai-whisper checkpoint names ("base", "large-v3", "small.en"); a path
+# to a local .pt file has a slash and is shipped as data instead.
+_WHISPER_MODEL_PATTERN = re.compile(r"^[a-z0-9][a-z0-9.\-]*$")
 
 
 def language_data_packages(code_cells):
@@ -1271,11 +1274,13 @@ def language_data_packages(code_cells):
     "gpt-4o")`, "tiktoken_models") and each literal language list an
     `easyocr.Reader(["en"])` loads models for ("easyocr") and the gensim-data
     models `gensim.downloader.load("glove-wiki-gigaword-50")` fetches
-    ("gensim"), and Keras application ImageNet weights ("keras"), for the
+    ("gensim"), Keras application ImageNet weights ("keras") and the
+    openai-whisper checkpoints `whisper.load_model("base")` fetches
+    ("whisper"), for the
     Dockerfile to install at build time (see language_data_content)."""
     found = {
         "spacy": [], "nltk": [], "tiktoken": [], "tiktoken_models": [], "easyocr": [],
-        "gensim": [], "keras": [],
+        "gensim": [], "keras": [], "whisper": [],
     }
 
     def add(kind, value, pattern):
@@ -1309,6 +1314,12 @@ def language_data_packages(code_cells):
                 snippet = _keras_application_call(node, name, aliases)
                 if snippet not in found["keras"]:
                     found["keras"].append(snippet)
+            elif label == "whisper.load_model":
+                model = argument if node.args else next(
+                    (kw.value for kw in node.keywords if kw.arg == "name"), None
+                )
+                if isinstance(model, ast.Constant):
+                    add("whisper", model.value, _WHISPER_MODEL_PATTERN)
             elif label == "easyocr.Reader":
                 langs = node.args[0] if node.args else next(
                     (kw.value for kw in node.keywords if kw.arg == "lang_list"), None

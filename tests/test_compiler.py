@@ -13315,7 +13315,7 @@ def test_language_data_packages_finds_spacy_pipelines_and_nltk_downloads():
     assert language_data_packages(cells) == {
         "spacy": ["en_core_web_sm", "de_core_news_md"],
         "nltk": ["punkt", "stopwords", "wordnet", "averaged_perceptron_tagger_eng"],
-        "tiktoken": [], "tiktoken_models": [], "easyocr": [], "gensim": [], "keras": [],
+        "tiktoken": [], "tiktoken_models": [], "easyocr": [], "gensim": [], "keras": [], "whisper": [],
     }
 
 
@@ -13340,7 +13340,7 @@ def test_compiled_dockerfile_installs_spacy_pipelines_and_nltk_data(tmp_path, ca
     assert "RUN python -m nltk.downloader -d /usr/local/share/nltk_data punkt \\\n" in dockerfile
     assert dockerfile.index("RUN pip install") < dockerfile.index("spacy download") < dockerfile.index("USER appuser")
     assert inspect_notebook_data(str(notebook), str(out))["language_data"] == {
-        "spacy": ["en_core_web_sm"], "nltk": ["punkt"], "tiktoken": [], "tiktoken_models": [], "easyocr": [], "gensim": [], "keras": [],
+        "spacy": ["en_core_web_sm"], "nltk": ["punkt"], "tiktoken": [], "tiktoken_models": [], "easyocr": [], "gensim": [], "keras": [], "whisper": [],
     }
     print_compile_summary(str(notebook), str(out))
     printed = capsys.readouterr().out
@@ -13960,6 +13960,38 @@ def test_easyocr_models_are_prefetched_at_build(tmp_path, capsys):
     assert dockerfile.index("EASYOCR_MODULE_PATH") < dockerfile.index("USER appuser")
     print_compile_summary(str(notebook), str(out))
     assert "EasyOCR models (prefetched at build): en" in capsys.readouterr().out
+
+
+def test_whisper_models_are_prefetched_at_build(tmp_path, capsys):
+    from backend.compiler import compile_notebook, language_data_packages
+    from backend.inspector import print_compile_summary
+
+    cells = [
+        "import whisper\nfrom whisper import load_model\n"
+        "a = whisper.load_model('base')\nb = whisper.load_model(name='large-v3', device='cpu')\n"
+        "c = whisper.load_model('base')\nd = whisper.load_model(SIZE)\n"
+        "e = whisper.load_model('/models/custom.pt')\nf = load_model('small.en')\n"
+        "g = whisper.load_model(\"x'); import os; ('\")\n",
+        "from keras.models import load_model\nm = load_model('model.h5')\n",
+    ]
+    assert language_data_packages(cells)["whisper"] == ["base", "large-v3", "small.en"]
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "def transcribe(path: str) -> str:\n"
+        "    import whisper\n"
+        "    return whisper.load_model('base').transcribe(path)['text']\n",
+    )
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+
+    dockerfile = (out / "Dockerfile").read_text()
+    assert "ENV XDG_CACHE_HOME=/app/.cache" in dockerfile
+    assert "RUN python -c \"import whisper; whisper.load_model('base', device='cpu')\" \\\n" in dockerfile
+    assert dockerfile.index("XDG_CACHE_HOME") < dockerfile.index("USER appuser")
+    print_compile_summary(str(notebook), str(out))
+    assert "Whisper models (prefetched at build): base" in capsys.readouterr().out
 
 
 def test_nltk_data_used_without_a_download_is_prefetched():
