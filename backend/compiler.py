@@ -1637,6 +1637,14 @@ IMPORT_APT_PACKAGES = {
     "pdf2image": ("poppler-utils",),
     "pyzbar": ("libzbar0",),
     "magic": ("libmagic1",),
+    # Python bindings that shell out to, or load, a system binary/library.
+    "graphviz": ("graphviz",),
+    "cairosvg": ("libcairo2",),
+    "weasyprint": ("libpango-1.0-0", "libpangoft2-1.0-0"),
+    "sounddevice": ("libportaudio2",),
+    "ffmpeg": ("ffmpeg",),
+    "tabula": ("default-jre-headless",),
+    "camelot": ("ghostscript",),
 }
 
 
