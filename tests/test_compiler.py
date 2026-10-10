@@ -14072,6 +14072,33 @@ def test_faster_whisper_models_are_prefetched_from_the_hub(tmp_path, capsys):
     assert "Systran/faster-whisper-base" in capsys.readouterr().out
 
 
+def test_spacy_pipelines_downloaded_by_shell_or_cli_are_installed_at_build(tmp_path):
+    from backend.compiler import compile_notebook, language_data_packages
+
+    cells = [
+        "# !python -m spacy download en_core_web_sm\n# !spacy download de_core_news_md --direct\n"
+        "# !python3 -m spacy download en_core_web_sm\n# !spacy download not-a-pipeline\n"
+        "# !pip install spacy\n",
+        "import spacy\nspacy.cli.download('fr_core_news_sm')\nspacy.cli.download(NAME)\n"
+        "from spacy.cli import download as dl\ndl(model='en_core_web_lg')\n"
+        "def download(x):\n    pass\n",
+        "from other import download\ndownload('es_core_news_sm')\n",
+    ]
+    assert language_data_packages(cells)["spacy"] == [
+        "en_core_web_sm", "de_core_news_md", "fr_core_news_sm", "en_core_web_lg",
+    ]
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "!python -m spacy download en_core_web_sm\n"
+        "def count(text: str) -> int:\n    return len(text.split())\n",
+    )
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+    assert "RUN python -m spacy download en_core_web_sm \\\n" in (out / "Dockerfile").read_text()
+
+
 def test_nltk_data_used_without_a_download_is_prefetched():
     from backend.compiler import language_data_packages
 
