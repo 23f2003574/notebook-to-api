@@ -1352,6 +1352,10 @@ _SPACY_SHELL_DOWNLOAD_PATTERN = re.compile(
 )
 
 
+# Stanza language codes ("en", "zh-hans").
+_STANZA_LANG_PATTERN = re.compile(r"^[a-z]{2,3}(-[a-z]+)?$")
+
+
 def _is_spacy_cli_download(func, aliases):
     """True for `spacy.cli.download(...)`, or `download(...)` after
     `from spacy.cli import download` (also renamed)."""
@@ -1373,11 +1377,12 @@ def language_data_packages(code_cells):
     ("gensim"), Keras application ImageNet weights ("keras") and the
     openai-whisper checkpoints `whisper.load_model("base")` fetches
     ("whisper") and the scikit-learn datasets `fetch_california_housing()`
-    downloads ("sklearn", as one-liners), for the
+    downloads ("sklearn", as one-liners) and the Stanza language models
+    `stanza.download("en")` / `stanza.Pipeline("en")` fetch ("stanza"), for the
     Dockerfile to install at build time (see language_data_content)."""
     found = {
         "spacy": [], "nltk": [], "tiktoken": [], "tiktoken_models": [], "easyocr": [],
-        "gensim": [], "keras": [], "whisper": [], "sklearn": [],
+        "gensim": [], "keras": [], "whisper": [], "sklearn": [], "stanza": [],
     }
 
     def add(kind, value, pattern):
@@ -1420,6 +1425,19 @@ def language_data_packages(code_cells):
                 snippet = _keras_application_call(node, name, aliases)
                 if snippet not in found["keras"]:
                     found["keras"].append(snippet)
+            elif label in ("stanza.download", "stanza.Pipeline") and (
+                "stanza" in aliases.values() or "stanza" in cell
+            ):
+                lang = node.args[0] if node.args else next(
+                    (kw.value for kw in node.keywords if kw.arg == "lang"), None
+                )
+                if isinstance(lang, ast.Constant) and not any(
+                    kw.arg == "download_method" and not (
+                        isinstance(kw.value, ast.Attribute) and "DOWNLOAD" in kw.value.attr.upper()
+                    )
+                    for kw in node.keywords
+                ):
+                    add("stanza", lang.value, _STANZA_LANG_PATTERN)
             elif _sklearn_fetch_call(node, name, aliases, cell):
                 snippet = _sklearn_fetch_call(node, name, aliases, cell)
                 if snippet not in found["sklearn"]:

@@ -13315,7 +13315,7 @@ def test_language_data_packages_finds_spacy_pipelines_and_nltk_downloads():
     assert language_data_packages(cells) == {
         "spacy": ["en_core_web_sm", "de_core_news_md"],
         "nltk": ["punkt", "stopwords", "wordnet", "averaged_perceptron_tagger_eng"],
-        "tiktoken": [], "tiktoken_models": [], "easyocr": [], "gensim": [], "keras": [], "whisper": [], "sklearn": [],
+        "tiktoken": [], "tiktoken_models": [], "easyocr": [], "gensim": [], "keras": [], "whisper": [], "sklearn": [], "stanza": [],
     }
 
 
@@ -13340,7 +13340,7 @@ def test_compiled_dockerfile_installs_spacy_pipelines_and_nltk_data(tmp_path, ca
     assert "RUN python -m nltk.downloader -d /usr/local/share/nltk_data punkt \\\n" in dockerfile
     assert dockerfile.index("RUN pip install") < dockerfile.index("spacy download") < dockerfile.index("USER appuser")
     assert inspect_notebook_data(str(notebook), str(out))["language_data"] == {
-        "spacy": ["en_core_web_sm"], "nltk": ["punkt"], "tiktoken": [], "tiktoken_models": [], "easyocr": [], "gensim": [], "keras": [], "whisper": [], "sklearn": [],
+        "spacy": ["en_core_web_sm"], "nltk": ["punkt"], "tiktoken": [], "tiktoken_models": [], "easyocr": [], "gensim": [], "keras": [], "whisper": [], "sklearn": [], "stanza": [],
     }
     print_compile_summary(str(notebook), str(out))
     printed = capsys.readouterr().out
@@ -14097,6 +14097,37 @@ def test_spacy_pipelines_downloaded_by_shell_or_cli_are_installed_at_build(tmp_p
     out = tmp_path / "out"
     compile_notebook(str(notebook), str(out))
     assert "RUN python -m spacy download en_core_web_sm \\\n" in (out / "Dockerfile").read_text()
+
+
+def test_stanza_language_models_are_prefetched_at_build(tmp_path, capsys):
+    from backend.compiler import compile_notebook, language_data_packages
+    from backend.inspector import print_compile_summary
+
+    cells = [
+        "import stanza\nstanza.download('en')\n"
+        "nlp = stanza.Pipeline('de', processors='tokenize')\nb = stanza.Pipeline(lang='zh-hans')\n"
+        "c = stanza.Pipeline('en')\nd = stanza.Pipeline(LANG)\ne = stanza.Pipeline('fr', download_method=None)\n"
+        "f = stanza.Pipeline(\"x'); import os; ('\")\n",
+        "class Pipeline:\n    pass\nPipeline('es')\n",
+    ]
+    assert language_data_packages(cells)["stanza"] == ["en", "de", "zh-hans"]
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "def tokens(text: str) -> int:\n"
+        "    import stanza\n"
+        "    return len(stanza.Pipeline('en', processors='tokenize')(text).sentences)\n",
+    )
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+
+    dockerfile = (out / "Dockerfile").read_text()
+    assert "ENV STANZA_RESOURCES_DIR=/app/.cache/stanza_resources" in dockerfile
+    assert "RUN python -c \"import stanza; stanza.download('en')\" \\\n" in dockerfile
+    assert dockerfile.index("STANZA_RESOURCES_DIR") < dockerfile.index("USER appuser")
+    print_compile_summary(str(notebook), str(out))
+    assert "Stanza models (prefetched at build): en" in capsys.readouterr().out
 
 
 def test_nltk_data_used_without_a_download_is_prefetched():
