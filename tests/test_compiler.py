@@ -14270,6 +14270,41 @@ def test_open_clip_checkpoints_are_prefetched_at_build(tmp_path, capsys):
     assert "OpenCLIP weights (prefetched at build): 1 load(s)" in capsys.readouterr().out
 
 
+def test_torchvision_task_submodule_weights_are_prefetched_at_build(tmp_path):
+    from backend.compiler import compile_notebook, torch_weight_prefetches
+
+    cells = [
+        "import torchvision\nfrom torchvision.models import detection\n"
+        "import torchvision.models.segmentation as seg\nfrom torchvision.models.video import r3d_18\n"
+        "a = torchvision.models.detection.fasterrcnn_resnet50_fpn(weights='DEFAULT')\n"
+        "b = detection.maskrcnn_resnet50_fpn(pretrained=True)\n"
+        "c = seg.deeplabv3_resnet50(weights='DEFAULT')\n"
+        "d = r3d_18(weights='DEFAULT')\n"
+        "e = detection.fasterrcnn_resnet50_fpn()\nf = seg.fcn_resnet50(weights=None)\n"
+        "g = detection.fasterrcnn_resnet50_fpn(weights=W)\n",
+    ]
+    assert torch_weight_prefetches(cells) == [
+        "import torchvision.models.detection as m; m.fasterrcnn_resnet50_fpn(weights='DEFAULT')",
+        "import torchvision.models.detection as m; m.maskrcnn_resnet50_fpn(pretrained=True)",
+        "import torchvision.models.segmentation as m; m.deeplabv3_resnet50(weights='DEFAULT')",
+        "import torchvision.models.video as m; m.r3d_18(weights='DEFAULT')",
+    ]
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "def detector() -> str:\n"
+        "    import torchvision\n"
+        "    m = torchvision.models.detection.fasterrcnn_resnet50_fpn(weights='DEFAULT')\n"
+        "    return type(m).__name__\n",
+    )
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+    dockerfile = (out / "Dockerfile").read_text()
+    assert "import torchvision.models.detection as m; m.fasterrcnn_resnet50_fpn(weights='DEFAULT')" in dockerfile
+    assert dockerfile.index("TORCH_HOME") < dockerfile.index("USER appuser")
+
+
 def test_nltk_data_used_without_a_download_is_prefetched():
     from backend.compiler import language_data_packages
 
