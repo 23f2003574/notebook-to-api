@@ -1650,11 +1650,20 @@ def _torch_call_source(call, prefix, kind):
     return f"{prefix}({rendered})"
 
 
+# Where torchvision's pretrained builders live: classification at the top,
+# the rest in task submodules (`models.detection.fasterrcnn_resnet50_fpn`).
+_TORCHVISION_MODEL_MODULES = frozenset({
+    "torchvision.models", "torchvision.models.detection", "torchvision.models.segmentation",
+    "torchvision.models.video", "torchvision.models.optical_flow",
+})
+
+
 def torch_weight_prefetches(code_cells):
     """Python one-liners (first-seen order, unique) that download the
     pretrained weights the notebook loads -- `torchvision.models.resnet50(
     weights="DEFAULT")` / `(pretrained=True)` and `torch.hub.load(
-    "ultralytics/yolov5", "yolov5s")` -- for the Dockerfile to run at build
+    "ultralytics/yolov5", "yolov5s")`, including the detection, segmentation,
+    video and optical_flow builders -- for the Dockerfile to run at build
     time, so a container start doesn't fetch them again (or fail offline).
     Only calls whose arguments are all literals are repeated."""
     found = []
@@ -1687,9 +1696,9 @@ def torch_weight_prefetches(code_cells):
                     module, _, model = aliases[name].rpartition(".")
                 elif module in aliases:
                     module = aliases[module]
-                if module == "torchvision.models" and model.isidentifier() and model.islower():
+                if module in _TORCHVISION_MODEL_MODULES and model.isidentifier() and model.islower():
                     source = _torch_call_source(node, f"m.{model}", "torchvision")
-                    source = source and f"import torchvision.models as m; {source}"
+                    source = source and f"import {module} as m; {source}"
             if source and source not in found:
                 found.append(source)
     return found
