@@ -1254,6 +1254,48 @@ def _keras_application_call(call, name, aliases):
     return f"import {module}.applications.{name}({args})"
 
 
+# scikit-learn dataset loaders that download on first call (the bundled
+# load_* ones don't), cached under SCIKIT_LEARN_DATA.
+_SKLEARN_FETCHERS = frozenset({
+    "fetch_20newsgroups", "fetch_20newsgroups_vectorized", "fetch_california_housing",
+    "fetch_covtype", "fetch_kddcup99", "fetch_lfw_pairs", "fetch_lfw_people",
+    "fetch_olivetti_faces", "fetch_openml", "fetch_rcv1", "fetch_species_distributions",
+})
+
+
+def _sklearn_fetch_call(call, name, aliases, cell):
+    """A one-liner repeating a `sklearn.datasets.fetch_*` call with only its
+    literal arguments, else None -- when an argument isn't a safe literal,
+    the dataset can't be known at build time, or the call sets `data_home`
+    (the notebook picked its own cache) or `download_if_missing=False`."""
+    if name not in _SKLEARN_FETCHERS or "sklearn" not in cell:
+        return None
+    if isinstance(call.func, ast.Attribute):
+        owner = ast.unparse(call.func.value)
+        if "datasets" not in aliases.get(owner, owner):
+            return None
+    if any(kw.arg is None or kw.arg in ("data_home", "download_if_missing") for kw in call.keywords):
+        return None
+    if any(isinstance(arg, ast.Starred) for arg in call.args):
+        return None
+    parts = []
+    for node in call.args:
+        source = "None" if isinstance(node, ast.Constant) and node.value is None else _safe_literal_source(node)
+        if source is None:
+            return None
+        parts.append(source)
+    keywords = {}
+    for kw in call.keywords:
+        source = "None" if isinstance(kw.value, ast.Constant) and kw.value.value is None else _safe_literal_source(kw.value)
+        if source is None:
+            return None
+        keywords[kw.arg] = source
+    if name == "fetch_openml" and not (call.args or {"name", "data_id"} & keywords.keys()):
+        return None
+    parts += [f"{key}={value}" for key, value in keywords.items()]
+    return f"from sklearn.datasets import {name}; {name}({', '.join(parts)})"
+
+
 # EasyOCR language codes ("en", "ch_sim").
 _EASYOCR_LANG_PATTERN = re.compile(r"^[a-z]{2,3}(_[a-z]+)?$")
 _TIKTOKEN_ENCODING_PATTERN = re.compile(r"^[a-z0-9_]+$")
@@ -1276,11 +1318,12 @@ def language_data_packages(code_cells):
     models `gensim.downloader.load("glove-wiki-gigaword-50")` fetches
     ("gensim"), Keras application ImageNet weights ("keras") and the
     openai-whisper checkpoints `whisper.load_model("base")` fetches
-    ("whisper"), for the
+    ("whisper") and the scikit-learn datasets `fetch_california_housing()`
+    downloads ("sklearn", as one-liners), for the
     Dockerfile to install at build time (see language_data_content)."""
     found = {
         "spacy": [], "nltk": [], "tiktoken": [], "tiktoken_models": [], "easyocr": [],
-        "gensim": [], "keras": [], "whisper": [],
+        "gensim": [], "keras": [], "whisper": [], "sklearn": [],
     }
 
     def add(kind, value, pattern):
@@ -1314,6 +1357,10 @@ def language_data_packages(code_cells):
                 snippet = _keras_application_call(node, name, aliases)
                 if snippet not in found["keras"]:
                     found["keras"].append(snippet)
+            elif _sklearn_fetch_call(node, name, aliases, cell):
+                snippet = _sklearn_fetch_call(node, name, aliases, cell)
+                if snippet not in found["sklearn"]:
+                    found["sklearn"].append(snippet)
             elif label == "whisper.load_model":
                 model = argument if node.args else next(
                     (kw.value for kw in node.keywords if kw.arg == "name"), None

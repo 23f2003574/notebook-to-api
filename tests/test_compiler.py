@@ -13315,7 +13315,7 @@ def test_language_data_packages_finds_spacy_pipelines_and_nltk_downloads():
     assert language_data_packages(cells) == {
         "spacy": ["en_core_web_sm", "de_core_news_md"],
         "nltk": ["punkt", "stopwords", "wordnet", "averaged_perceptron_tagger_eng"],
-        "tiktoken": [], "tiktoken_models": [], "easyocr": [], "gensim": [], "keras": [], "whisper": [],
+        "tiktoken": [], "tiktoken_models": [], "easyocr": [], "gensim": [], "keras": [], "whisper": [], "sklearn": [],
     }
 
 
@@ -13340,7 +13340,7 @@ def test_compiled_dockerfile_installs_spacy_pipelines_and_nltk_data(tmp_path, ca
     assert "RUN python -m nltk.downloader -d /usr/local/share/nltk_data punkt \\\n" in dockerfile
     assert dockerfile.index("RUN pip install") < dockerfile.index("spacy download") < dockerfile.index("USER appuser")
     assert inspect_notebook_data(str(notebook), str(out))["language_data"] == {
-        "spacy": ["en_core_web_sm"], "nltk": ["punkt"], "tiktoken": [], "tiktoken_models": [], "easyocr": [], "gensim": [], "keras": [], "whisper": [],
+        "spacy": ["en_core_web_sm"], "nltk": ["punkt"], "tiktoken": [], "tiktoken_models": [], "easyocr": [], "gensim": [], "keras": [], "whisper": [], "sklearn": [],
     }
     print_compile_summary(str(notebook), str(out))
     printed = capsys.readouterr().out
@@ -13992,6 +13992,49 @@ def test_whisper_models_are_prefetched_at_build(tmp_path, capsys):
     assert dockerfile.index("XDG_CACHE_HOME") < dockerfile.index("USER appuser")
     print_compile_summary(str(notebook), str(out))
     assert "Whisper models (prefetched at build): base" in capsys.readouterr().out
+
+
+def test_sklearn_dataset_fetches_are_prefetched_at_build(tmp_path, capsys):
+    from backend.compiler import compile_notebook, language_data_packages
+    from backend.inspector import print_compile_summary
+
+    cells = [
+        "from sklearn.datasets import fetch_california_housing, fetch_20newsgroups, fetch_openml\n"
+        "from sklearn import datasets as ds\n"
+        "a = fetch_california_housing()\nb = fetch_california_housing()\n"
+        "c = fetch_20newsgroups(subset='train', remove=('headers',))\n"
+        "d = fetch_20newsgroups(subset=SPLIT)\ne = fetch_openml('mnist_784', as_frame=False)\n"
+        "f = fetch_openml()\ng = fetch_california_housing(data_home='/tmp/x')\n"
+        "h = ds.fetch_olivetti_faces()\ni = fetch_california_housing(download_if_missing=False)\n"
+        "j = fetch_20newsgroups(subset=\"x'); import os; ('\")\n",
+        "def fetch_covtype():\n    return 1\nfetch_covtype()\n",
+    ]
+    found = language_data_packages(cells)["sklearn"]
+    assert found == [
+        "from sklearn.datasets import fetch_california_housing; fetch_california_housing()",
+        "from sklearn.datasets import fetch_openml; fetch_openml('mnist_784', as_frame=False)",
+        "from sklearn.datasets import fetch_olivetti_faces; fetch_olivetti_faces()",
+    ]
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "def housing_rows() -> int:\n"
+        "    from sklearn.datasets import fetch_california_housing\n"
+        "    return len(fetch_california_housing().data)\n",
+    )
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+
+    dockerfile = (out / "Dockerfile").read_text()
+    assert "ENV SCIKIT_LEARN_DATA=/app/.cache/scikit_learn_data" in dockerfile
+    assert (
+        "RUN python -c \"from sklearn.datasets import fetch_california_housing; "
+        "fetch_california_housing()\" \\\n"
+    ) in dockerfile
+    assert dockerfile.index("SCIKIT_LEARN_DATA") < dockerfile.index("USER appuser")
+    print_compile_summary(str(notebook), str(out))
+    assert "scikit-learn datasets (prefetched at build): 1 fetch(es)" in capsys.readouterr().out
 
 
 def test_nltk_data_used_without_a_download_is_prefetched():
