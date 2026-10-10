@@ -1658,12 +1658,18 @@ _TORCHVISION_MODEL_MODULES = frozenset({
 })
 
 
+# torchaudio pipeline bundles (WAV2VEC2_ASR_BASE_960H, HUBERT_BASE, ...)
+# download their checkpoint into TORCH_HOME on `.get_model()`.
+_TORCHAUDIO_BUNDLE_PATTERN = re.compile(r"^torchaudio\.pipelines\.[A-Z][A-Z0-9_]*$")
+
+
 def torch_weight_prefetches(code_cells):
     """Python one-liners (first-seen order, unique) that download the
     pretrained weights the notebook loads -- `torchvision.models.resnet50(
     weights="DEFAULT")` / `(pretrained=True)` and `torch.hub.load(
     "ultralytics/yolov5", "yolov5s")`, including the detection, segmentation,
-    video and optical_flow builders -- for the Dockerfile to run at build
+    video and optical_flow builders and torchaudio's
+    `pipelines.WAV2VEC2_ASR_BASE_960H.get_model()` bundles -- for the Dockerfile to run at build
     time, so a container start doesn't fetch them again (or fail offline).
     Only calls whose arguments are all literals are repeated."""
     found = []
@@ -1690,6 +1696,11 @@ def torch_weight_prefetches(code_cells):
                         and _TORCH_HUB_REPO_PATTERN.match(repo.value):
                     source = _torch_call_source(node, "torch.hub.load", "hub")
                     source = source and f"import torch; {source}"
+            elif name == "get_model" and isinstance(func, ast.Attribute) and not node.args and not node.keywords:
+                head, _, rest = ast.unparse(func.value).partition(".")
+                bundle = f"{aliases.get(head, head)}{'.' + rest if rest else ''}"
+                if _TORCHAUDIO_BUNDLE_PATTERN.match(bundle):
+                    source = f"import torchaudio; torchaudio.pipelines.{bundle.rpartition('.')[2]}.get_model()"
             else:
                 module, _, model = dotted.rpartition(".")
                 if not module and name in aliases:

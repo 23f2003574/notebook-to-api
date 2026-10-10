@@ -14305,6 +14305,42 @@ def test_torchvision_task_submodule_weights_are_prefetched_at_build(tmp_path):
     assert dockerfile.index("TORCH_HOME") < dockerfile.index("USER appuser")
 
 
+def test_torchaudio_pipeline_bundles_are_prefetched_at_build(tmp_path):
+    from backend.compiler import compile_notebook, torch_weight_prefetches
+
+    cells = [
+        "import torchaudio\nfrom torchaudio.pipelines import HUBERT_BASE as bundle\n"
+        "from torchaudio import pipelines\n"
+        "a = torchaudio.pipelines.WAV2VEC2_ASR_BASE_960H.get_model()\n"
+        "b = bundle.get_model()\nc = pipelines.WAV2VEC2_BASE.get_model()\n"
+        "d = torchaudio.pipelines.WAV2VEC2_ASR_BASE_960H.get_model()\n"
+        "e = torchaudio.pipelines.HUBERT_LARGE.get_model(dl_kwargs={'progress': False})\n"
+        "f = other.WAV2VEC2_BASE.get_model()\ng = model.get_model()\n",
+    ]
+    assert torch_weight_prefetches(cells) == [
+        "import torchaudio; torchaudio.pipelines.WAV2VEC2_ASR_BASE_960H.get_model()",
+        "import torchaudio; torchaudio.pipelines.HUBERT_BASE.get_model()",
+        "import torchaudio; torchaudio.pipelines.WAV2VEC2_BASE.get_model()",
+    ]
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "def labels() -> int:\n"
+        "    import torchaudio\n"
+        "    bundle = torchaudio.pipelines.WAV2VEC2_ASR_BASE_960H\n"
+        "    return len(bundle.get_labels())\n"
+        "def model_params() -> int:\n"
+        "    import torchaudio\n"
+        "    return sum(1 for _ in torchaudio.pipelines.WAV2VEC2_ASR_BASE_960H.get_model().parameters())\n",
+    )
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+    dockerfile = (out / "Dockerfile").read_text()
+    assert "import torchaudio; torchaudio.pipelines.WAV2VEC2_ASR_BASE_960H.get_model()" in dockerfile
+    assert dockerfile.index("TORCH_HOME") < dockerfile.index("USER appuser")
+
+
 def test_nltk_data_used_without_a_download_is_prefetched():
     from backend.compiler import language_data_packages
 
