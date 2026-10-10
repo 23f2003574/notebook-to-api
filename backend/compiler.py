@@ -1494,20 +1494,36 @@ _NLTK_IMPLIED_DATA = {
     "SentimentIntensityAnalyzer": ("vader_lexicon",),
 }
 _NLTK_CORPUS_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+# TextBlob's sentiment, tagging, noun phrases and spelling all read NLTK
+# corpora that `python -m textblob.download_corpora` fetches once on the
+# author's machine (the "lite" set); the container has none of them.
+_TEXTBLOB_NLTK_DATA = (
+    "brown", "punkt", "punkt_tab", "wordnet", "omw-1.4",
+    "averaged_perceptron_tagger", "averaged_perceptron_tagger_eng",
+)
 
 
 def _implied_nltk_packages(code_cells):
-    """NLTK data ids (first-seen order) that cells importing nltk need
-    implicitly: `nltk.corpus` readers (`from nltk.corpus import stopwords`,
+    """NLTK data ids (first-seen order) that cells importing nltk (or
+    textblob, see _TEXTBLOB_NLTK_DATA) need implicitly: `nltk.corpus` readers (`from nltk.corpus import stopwords`,
     `nltk.corpus.wordnet`) and the helpers in _NLTK_IMPLIED_DATA."""
     packages = []
     for cell in code_cells:
-        if "nltk" not in cell:
+        if "nltk" not in cell and "textblob" not in cell:
             continue
         try:
             tree = ast.parse(cell)
         except SyntaxError:
             continue
+        if any(
+            isinstance(node, ast.Import) and any(a.name.partition(".")[0] == "textblob" for a in node.names)
+            or isinstance(node, ast.ImportFrom) and not node.level
+            and (node.module or "").partition(".")[0] == "textblob"
+            for node in ast.walk(tree)
+        ):
+            for package in _TEXTBLOB_NLTK_DATA:
+                if package not in packages:
+                    packages.append(package)
         for node in ast.walk(tree):
             names = []
             if isinstance(node, ast.ImportFrom) and node.module == "nltk.corpus":

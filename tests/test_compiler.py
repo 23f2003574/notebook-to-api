@@ -14144,6 +14144,31 @@ def test_stanza_language_models_are_prefetched_at_build(tmp_path, capsys):
     assert "Stanza models (prefetched at build): en" in capsys.readouterr().out
 
 
+def test_textblob_imports_prefetch_the_nltk_corpora_it_reads(tmp_path):
+    from backend.compiler import compile_notebook, language_data_packages
+
+    cells = ["from textblob import TextBlob\nimport nltk\nnltk.download('stopwords')\n"]
+    assert language_data_packages(cells)["nltk"] == [
+        "stopwords", "brown", "punkt", "punkt_tab", "wordnet", "omw-1.4",
+        "averaged_perceptron_tagger", "averaged_perceptron_tagger_eng",
+    ]
+    assert language_data_packages(["import textblob.blob\n"])["nltk"][0] == "brown"
+    # A mention without an import, or a local helper named like it, adds nothing.
+    assert language_data_packages(["x = 'textblob'\nimport textblob_helpers\n"])["nltk"] == []
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "def polarity(text: str) -> float:\n"
+        "    from textblob import TextBlob\n"
+        "    return TextBlob(text).sentiment.polarity\n",
+    )
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+    dockerfile = (out / "Dockerfile").read_text()
+    assert "nltk.downloader -d /usr/local/share/nltk_data brown punkt punkt_tab wordnet" in dockerfile
+
+
 def test_nltk_data_used_without_a_download_is_prefetched():
     from backend.compiler import language_data_packages
 
