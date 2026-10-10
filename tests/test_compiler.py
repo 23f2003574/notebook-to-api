@@ -14341,6 +14341,38 @@ def test_torchaudio_pipeline_bundles_are_prefetched_at_build(tmp_path):
     assert dockerfile.index("TORCH_HOME") < dockerfile.index("USER appuser")
 
 
+def test_model_less_transformers_pipelines_prefetch_the_task_default(tmp_path, capsys):
+    from backend.compiler import compile_notebook, hub_model_ids
+    from backend.inspector import print_compile_summary
+
+    cells = [
+        "from transformers import pipeline\n"
+        "a = pipeline('sentiment-analysis')\nb = pipeline(task='summarization', device=-1)\n"
+        "c = pipeline('sentiment-analysis')\nd = pipeline('text-generation', model='gpt2-xl')\n"
+        "e = pipeline('sentiment-analysis', model=MODEL)\nf = pipeline('translation_en_to_fr')\n"
+        "g = pipeline(TASK)\nh = pipeline('ner', tokenizer=tok)\n",
+        "def pipeline(task):\n    return task\npipeline('fill-mask')\n",
+    ]
+    assert hub_model_ids(cells) == [
+        "distilbert/distilbert-base-uncased-finetuned-sst-2-english",
+        "sshleifer/distilbart-cnn-12-6",
+        "gpt2-xl",
+    ]
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "def mood(text: str) -> str:\n"
+        "    from transformers import pipeline\n"
+        "    return pipeline('sentiment-analysis')(text)[0]['label']\n",
+    )
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+    assert "distilbert/distilbert-base-uncased-finetuned-sst-2-english" in (out / "Dockerfile").read_text()
+    print_compile_summary(str(notebook), str(out))
+    assert "distilbert-base-uncased-finetuned-sst-2-english" in capsys.readouterr().out
+
+
 def test_nltk_data_used_without_a_download_is_prefetched():
     from backend.compiler import language_data_packages
 
