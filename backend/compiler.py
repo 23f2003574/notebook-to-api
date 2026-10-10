@@ -1378,11 +1378,13 @@ def language_data_packages(code_cells):
     openai-whisper checkpoints `whisper.load_model("base")` fetches
     ("whisper") and the scikit-learn datasets `fetch_california_housing()`
     downloads ("sklearn", as one-liners) and the Stanza language models
-    `stanza.download("en")` / `stanza.Pipeline("en")` fetch ("stanza"), for the
+    `stanza.download("en")` / `stanza.Pipeline("en")` fetch ("stanza") and the
+    official weights file `YOLO("yolov8n.pt")` downloads on first use
+    ("ultralytics"), for the
     Dockerfile to install at build time (see language_data_content)."""
     found = {
         "spacy": [], "nltk": [], "tiktoken": [], "tiktoken_models": [], "easyocr": [],
-        "gensim": [], "keras": [], "whisper": [], "sklearn": [], "stanza": [],
+        "gensim": [], "keras": [], "whisper": [], "sklearn": [], "stanza": [], "ultralytics": [],
     }
 
     def add(kind, value, pattern):
@@ -1438,6 +1440,12 @@ def language_data_packages(code_cells):
                     for kw in node.keywords
                 ):
                     add("stanza", lang.value, _STANZA_LANG_PATTERN)
+            elif name in ("YOLO", "RTDETR") and "ultralytics" in cell:
+                weights = node.args[0] if node.args else next(
+                    (kw.value for kw in node.keywords if kw.arg == "model"), None
+                )
+                if isinstance(weights, ast.Constant):
+                    add("ultralytics", weights.value, _AUTO_DOWNLOADED_YOLO)
             elif _sklearn_fetch_call(node, name, aliases, cell):
                 snippet = _sklearn_fetch_call(node, name, aliases, cell)
                 if snippet not in found["sklearn"]:
