@@ -14037,6 +14037,41 @@ def test_sklearn_dataset_fetches_are_prefetched_at_build(tmp_path, capsys):
     assert "scikit-learn datasets (prefetched at build): 1 fetch(es)" in capsys.readouterr().out
 
 
+def test_faster_whisper_models_are_prefetched_from_the_hub(tmp_path, capsys):
+    from backend.compiler import compile_notebook, hub_model_ids
+    from backend.inspector import print_compile_summary
+
+    cells = [
+        "from faster_whisper import WhisperModel\n"
+        "a = WhisperModel('base', device='cpu')\nb = WhisperModel(model_size_or_path='large')\n"
+        "c = WhisperModel('distil-large-v3')\nd = WhisperModel('Systran/faster-whisper-tiny')\n"
+        "e = WhisperModel('base')\nf = WhisperModel(SIZE)\ng = WhisperModel('/models/ct2')\n"
+        "h = WhisperModel('../escape')\n",
+        "class WhisperModel:\n    pass\nWhisperModel('small')\n",
+    ]
+    assert hub_model_ids(cells) == [
+        "Systran/faster-whisper-base",
+        "Systran/faster-whisper-large-v3",
+        "Systran/faster-distil-whisper-large-v3",
+        "Systran/faster-whisper-tiny",
+    ]
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "def transcribe(path: str) -> str:\n"
+        "    from faster_whisper import WhisperModel\n"
+        "    segments, _ = WhisperModel('base').transcribe(path)\n"
+        "    return ' '.join(s.text for s in segments)\n",
+    )
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+
+    assert "Systran/faster-whisper-base" in (out / "Dockerfile").read_text()
+    print_compile_summary(str(notebook), str(out))
+    assert "Systran/faster-whisper-base" in capsys.readouterr().out
+
+
 def test_nltk_data_used_without_a_download_is_prefetched():
     from backend.compiler import language_data_packages
 

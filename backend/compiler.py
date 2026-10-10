@@ -1177,13 +1177,45 @@ def _hub_dataset_target(call):
     return None
 
 
+# faster-whisper model sizes -> the CTranslate2 repo it downloads from the
+# Hub (WhisperModel("base") reads Systran/faster-whisper-base).
+_FASTER_WHISPER_SIZES = frozenset({
+    "tiny", "tiny.en", "base", "base.en", "small", "small.en", "medium", "medium.en",
+    "large-v1", "large-v2", "large-v3", "large", "distil-large-v2", "distil-large-v3",
+    "distil-medium.en", "distil-small.en",
+})
+
+
+def _faster_whisper_target(call, cell):
+    """The Hub repo for a literal `faster_whisper.WhisperModel("base")` (a
+    size name, or an explicit "org/name" id), else None. A local model
+    directory or a non-literal argument names nothing to prefetch."""
+    if "faster_whisper" not in cell:
+        return None
+    node = call.args[0] if call.args else next(
+        (kw.value for kw in call.keywords if kw.arg == "model_size_or_path"), None
+    )
+    if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+        return None
+    value = node.value
+    if value in _FASTER_WHISPER_SIZES:
+        if value == "large":
+            value = "large-v3"
+        prefix = "faster-distil-whisper-" if value.startswith("distil-") else "faster-whisper-"
+        return f"Systran/{prefix}{value.removeprefix('distil-')}"
+    if HUB_MODEL_ID_PATTERN.match(value) and ".." not in value:
+        return value
+    return None
+
+
 def hub_model_ids(code_cells):
     """Hugging Face Hub model ids (first-seen order, unique) the notebook
     loads by literal "org/name" id -- `AutoModel.from_pretrained(...)`,
     `pipeline("task", model=...)`, `SentenceTransformer(...)`,
     `snapshot_download(...)` -- plus "org/name#file" single-file
-    `hf_hub_download` targets, anywhere, for the Dockerfile to prefetch at
-    build time."""
+    `hf_hub_download` targets, and the Systran repo behind each literal
+    `faster_whisper.WhisperModel("base")`, anywhere, for the Dockerfile to
+    prefetch at build time."""
     found = []
     for cell in code_cells:
         try:
@@ -1202,6 +1234,11 @@ def hub_model_ids(code_cells):
                 timm_model = _timm_pretrained_target(node)
                 if timm_model and timm_model not in found:
                     found.append(timm_model)
+                continue
+            if name == "WhisperModel":
+                model = _faster_whisper_target(node, cell)
+                if model and model not in found:
+                    found.append(model)
                 continue
             if name == "load_dataset":
                 dataset = _hub_dataset_target(node)
