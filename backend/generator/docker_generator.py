@@ -152,6 +152,15 @@ def language_data_content(language_data):
                 f"RUN python -c \"import gensim.downloader as d; d.load('{model}', return_path=True)\" \\\n"
                 f"    || echo \"warning: could not prefetch gensim model {model}\""
             )
+    sklearn_loads = language_data.get("sklearn", [])
+    if sklearn_loads:
+        # fetch_* keeps datasets in ~/scikit_learn_data otherwise.
+        lines.append("ENV SCIKIT_LEARN_DATA=/app/.cache/scikit_learn_data")
+        for snippet in sklearn_loads:
+            lines.append(
+                f"RUN python -c \"{snippet}\" \\\n"
+                f"    || echo \"warning: could not prefetch scikit-learn dataset: {snippet}\""
+            )
     whisper_models = language_data.get("whisper", [])
     if whisper_models:
         # whisper.load_model caches checkpoints under $XDG_CACHE_HOME/whisper

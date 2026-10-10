@@ -920,6 +920,8 @@ def build_addition_lines(data):
         lines.append(f"Keras weights (prefetched at build): {len(language_data['keras'])} load(s)")
     if language_data.get("gensim"):
         lines.append(f"gensim models (prefetched at build): {', '.join(language_data['gensim'])}")
+    if language_data.get("sklearn"):
+        lines.append(f"scikit-learn datasets (prefetched at build): {len(language_data['sklearn'])} fetch(es)")
     if language_data.get("whisper"):
         lines.append(f"Whisper models (prefetched at build): {', '.join(language_data['whisper'])}")
     if language_data.get("easyocr"):
