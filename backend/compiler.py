@@ -1186,6 +1186,36 @@ _FASTER_WHISPER_SIZES = frozenset({
 })
 
 
+# What `transformers.pipeline("<task>")` downloads when no model is named
+# (the task's default checkpoint, per transformers' SUPPORTED_TASKS).
+_DEFAULT_PIPELINE_MODELS = {
+    "sentiment-analysis": "distilbert/distilbert-base-uncased-finetuned-sst-2-english",
+    "text-classification": "distilbert/distilbert-base-uncased-finetuned-sst-2-english",
+    "ner": "dbmdz/bert-large-cased-finetuned-conll03-english",
+    "token-classification": "dbmdz/bert-large-cased-finetuned-conll03-english",
+    "question-answering": "distilbert/distilbert-base-cased-distilled-squad",
+    "fill-mask": "distilbert/distilroberta-base",
+    "summarization": "sshleifer/distilbart-cnn-12-6",
+    "text-generation": "openai-community/gpt2",
+    "zero-shot-classification": "facebook/bart-large-mnli",
+    "image-classification": "google/vit-base-patch16-224",
+    "automatic-speech-recognition": "facebook/wav2vec2-base-960h",
+}
+
+
+def _default_pipeline_model(call):
+    """The default Hub checkpoint of a literal `pipeline("sentiment-analysis")`
+    that names no model (positionally or by keyword), else None -- a call
+    that passes `model=` as anything non-literal downloads something we
+    can't know, so it is left alone."""
+    if len(call.args) > 1 or any(kw.arg in ("model", "config", "tokenizer") or kw.arg is None for kw in call.keywords):
+        return None
+    task = call.args[0] if call.args else next((kw.value for kw in call.keywords if kw.arg == "task"), None)
+    if isinstance(task, ast.Constant) and isinstance(task.value, str):
+        return _DEFAULT_PIPELINE_MODELS.get(task.value)
+    return None
+
+
 def _faster_whisper_target(call, cell):
     """The Hub repo for a literal `faster_whisper.WhisperModel("base")` (a
     size name, or an explicit "org/name" id), else None. A local model
@@ -1213,7 +1243,8 @@ def hub_model_ids(code_cells):
     loads by literal "org/name" id -- `AutoModel.from_pretrained(...)`,
     `pipeline("task", model=...)`, `SentenceTransformer(...)`,
     `snapshot_download(...)` -- plus "org/name#file" single-file
-    `hf_hub_download` targets, and the Systran repo behind each literal
+    `hf_hub_download` targets, the default checkpoint of a model-less
+    `pipeline("sentiment-analysis")`, and the Systran repo behind each literal
     `faster_whisper.WhisperModel("base")`, anywhere, for the Dockerfile to
     prefetch at build time."""
     found = []
@@ -1253,6 +1284,8 @@ def hub_model_ids(code_cells):
             if name not in _HUB_LOADER_NAMES and name != "pipeline":
                 continue
             model = _hub_model_argument(node, name)
+            if model is None and name == "pipeline" and "transformers" in cell:
+                model = _default_pipeline_model(node)
             if model and model not in found:
                 found.append(model)
     return found
