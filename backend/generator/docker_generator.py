@@ -152,6 +152,15 @@ def language_data_content(language_data):
                 f"RUN python -c \"import gensim.downloader as d; d.load('{model}', return_path=True)\" \\\n"
                 f"    || echo \"warning: could not prefetch gensim model {model}\""
             )
+    stanza_langs = language_data.get("stanza", [])
+    if stanza_langs:
+        # Stanza keeps models in ~/stanza_resources otherwise.
+        lines.append("ENV STANZA_RESOURCES_DIR=/app/.cache/stanza_resources")
+        for lang in stanza_langs:
+            lines.append(
+                f"RUN python -c \"import stanza; stanza.download('{lang}')\" \\\n"
+                f"    || echo \"warning: could not prefetch Stanza models for {lang}\""
+            )
     sklearn_loads = language_data.get("sklearn", [])
     if sklearn_loads:
         # fetch_* keeps datasets in ~/scikit_learn_data otherwise.
