@@ -152,6 +152,13 @@ def language_data_content(language_data):
                 f"RUN python -c \"import gensim.downloader as d; d.load('{model}', return_path=True)\" \\\n"
                 f"    || echo \"warning: could not prefetch gensim model {model}\""
             )
+    for weights in language_data.get("ultralytics", []):
+        # YOLO("yolov8n.pt") downloads the file next to the working
+        # directory on first use; fetch it into /app (the WORKDIR) now.
+        lines.append(
+            f"RUN python -c \"from ultralytics import YOLO; YOLO('{weights}')\" \\\n"
+            f"    || echo \"warning: could not prefetch Ultralytics weights {weights}\""
+        )
     stanza_langs = language_data.get("stanza", [])
     if stanza_langs:
         # Stanza keeps models in ~/stanza_resources otherwise.
