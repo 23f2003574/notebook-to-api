@@ -1709,6 +1709,20 @@ def generate_fastapi_code(
     lines.append("        await self.app(scope, receive, send)")
     lines.append("")
     lines.append("app.add_middleware(MaxRequestBodySizeMiddleware)")
+    # FastAPI's default 422 handler echoes each error's `input` through
+    # jsonable_encoder, which recurses once per nesting level: a deeply nested
+    # JSON body that failed validation raised RecursionError inside the
+    # handler itself and reached the client as a plain-text 500.
+    lines.append("from fastapi.exceptions import RequestValidationError")
+    lines.append("")
+    lines.append("@app.exception_handler(RequestValidationError)")
+    lines.append("async def _request_validation_error_handler(request, exc):")
+    lines.append("    try:")
+    lines.append("        detail = jsonable_encoder(exc.errors())")
+    lines.append("    except RecursionError:")
+    lines.append("        detail = [{'type': 'value_error', 'loc': ['body'], 'msg': 'Request body is nested too deeply'}]")
+    lines.append("    return JSONResponse(status_code=422, content={'detail': detail})")
+    lines.append("")
     lines.append("")
     # Registered last (see MaxRequestBodySizeMiddleware/CORSMiddleware
     # above -- the same "middleware added last ends up outermost, since

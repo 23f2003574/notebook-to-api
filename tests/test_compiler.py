@@ -11443,6 +11443,60 @@ print("ENV_NUMBER_E2E_OK")
     assert "ENV_NUMBER_E2E_OK" in proc.stdout
 
 
+def test_deeply_nested_invalid_request_body_gets_a_json_422_not_a_plain_text_500(tmp_path):
+    """Confirmed before this: FastAPI's 422 handler recursed through the
+    echoed `input` of a 5000-level nested body, raised RecursionError, and the
+    client got a plain-text "Internal Server Error" instead of the app's JSON."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_importing(
+        notebook_path, "def pick(label: str = 'a', count: int = 1) -> int:\n    return count\n"
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key", "Content-Type": "application/json"}}
+
+deep = b'{{"label": ' + b"[" * 5000 + b"]" * 5000 + b"}}"
+response = client.post("/pick", content=deep, headers=headers)
+assert response.status_code == 422, (response.status_code, response.text[:200])
+assert response.headers["content-type"].startswith("application/json")
+assert response.json()["detail"][0]["loc"] == ["body"], response.text
+
+# Ordinary validation errors keep FastAPI's usual shape.
+response = client.post("/pick", json={{"count": "many"}}, headers=headers)
+assert response.status_code == 422
+error = response.json()["detail"][0]
+assert error["type"] == "int_parsing" and error["loc"] == ["body", "count"], error
+print("DEEP_BODY_422_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "DEEP_BODY_422_E2E_OK" in proc.stdout
+
+
 def test_compiler_pipeline_stdlib_mappings_sequences_exceptions_and_matches_are_plain_json(tmp_path):
     """Confirmed before this: ChainMap/UserDict came back as {"maps": ...} /
     {"data": ...}, a UserList as {"data": [...]}, a returned exception as a
