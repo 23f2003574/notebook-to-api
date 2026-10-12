@@ -1067,13 +1067,51 @@ _HUB_LOADER_NAMES = frozenset({"from_pretrained", "SentenceTransformer", "CrossE
 _HUB_ID_KEYWORDS = ("pretrained_model_name_or_path", "model_name_or_path", "model_name", "model")
 
 
-def _hub_model_argument(call, name):
-    """The literal model id a Hub loader call names, else None."""
+def _module_string_constants(code_cells):
+    """Names the notebook assigns a plain string exactly once at top level
+    (`MODEL_NAME = "bert-base-uncased"`, `MODEL: str = "org/name"`), mapped
+    to that string. A name assigned anywhere else at top level, or twice,
+    is dropped -- its value at a call site isn't knowable."""
+    values, rebound = {}, set()
+    for cell in code_cells:
+        try:
+            body = ast.parse(cell).body
+        except SyntaxError:
+            continue
+        for stmt in body:
+            targets = (
+                stmt.targets if isinstance(stmt, ast.Assign)
+                else [stmt.target] if isinstance(stmt, (ast.AnnAssign, ast.AugAssign))
+                else []
+            )
+            value = getattr(stmt, "value", None)
+            for target in targets:
+                names = [n.id for n in ast.walk(target) if isinstance(n, ast.Name)]
+                literal = (
+                    isinstance(target, ast.Name)
+                    and isinstance(value, ast.Constant)
+                    and isinstance(value.value, str)
+                    and not isinstance(stmt, ast.AugAssign)
+                )
+                for ident in names:
+                    if ident in values or ident in rebound or not literal:
+                        rebound.add(ident)
+                        values.pop(ident, None)
+                    else:
+                        values[ident] = value.value
+    return values
+
+
+def _hub_model_argument(call, name, constants=None):
+    """The literal model id a Hub loader call names (directly or through a
+    module-level string constant), else None."""
     if name == "pipeline":
         nodes = call.args[1:2] + [kw.value for kw in call.keywords if kw.arg == "model"]
     else:
         nodes = call.args[:1] + [kw.value for kw in call.keywords if kw.arg in _HUB_ID_KEYWORDS]
     for node in nodes:
+        if isinstance(node, ast.Name) and constants and node.id in constants:
+            node = ast.Constant(value=constants[node.id])
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             value = node.value
             if HUB_MODEL_ID_PATTERN.match(value) and ".." not in value:
@@ -1253,10 +1291,12 @@ def hub_model_ids(code_cells):
     `pipeline("task", model=...)`, `SentenceTransformer(...)`,
     `snapshot_download(...)` -- plus "org/name#file" single-file
     `hf_hub_download` targets, the default checkpoint of a model-less
-    `pipeline("sentiment-analysis")`, and the Systran repo behind each literal
+    `pipeline("sentiment-analysis")`, a model id held in a module-level string
+    constant, and the Systran repo behind each literal
     `faster_whisper.WhisperModel("base")`, anywhere, for the Dockerfile to
     prefetch at build time."""
     found = []
+    constants = _module_string_constants(code_cells)
     for cell in code_cells:
         try:
             tree = ast.parse(cell)
@@ -1292,7 +1332,7 @@ def hub_model_ids(code_cells):
                 continue
             if name not in _HUB_LOADER_NAMES and name != "pipeline":
                 continue
-            model = _hub_model_argument(node, name)
+            model = _hub_model_argument(node, name, constants)
             if model is None and name == "pipeline" and "transformers" in cell:
                 model = _default_pipeline_model(node)
             if model and model not in found:

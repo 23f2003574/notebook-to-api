@@ -14399,6 +14399,33 @@ def test_model_less_pipelines_for_vision_audio_and_embedding_tasks_prefetch_thei
     ]
 
 
+def test_hub_model_ids_held_in_module_level_constants_are_prefetched():
+    from backend.compiler import hub_model_ids
+
+    cells = [
+        "from transformers import AutoModel, AutoTokenizer, pipeline\n"
+        "from sentence_transformers import SentenceTransformer\n"
+        "MODEL_NAME = 'bert-base-uncased'\nENCODER: str = 'all-MiniLM-L6-v2'\n"
+        "PIPE_MODEL = 'distilbert/distilbert-base-uncased'\n",
+        "tok = AutoTokenizer.from_pretrained(MODEL_NAME)\nmodel = AutoModel.from_pretrained(MODEL_NAME)\n"
+        "enc = SentenceTransformer(ENCODER)\nfill = pipeline('fill-mask', model=PIPE_MODEL)\n",
+    ]
+    assert hub_model_ids(cells) == [
+        "bert-base-uncased",
+        "sentence-transformers/all-MiniLM-L6-v2",
+        "distilbert/distilbert-base-uncased",
+    ]
+
+    # Rebound, augmented, non-string or unknown names name no known model.
+    cells = [
+        "from transformers import AutoModel\n"
+        "A = 'bert-base-uncased'\nA = 'roberta-base'\nB = 'gpt2-xl'\nB += '-x'\nC = 5\n",
+        "AutoModel.from_pretrained(A)\nAutoModel.from_pretrained(B)\n"
+        "AutoModel.from_pretrained(C)\nAutoModel.from_pretrained(UNKNOWN)\n",
+    ]
+    assert hub_model_ids(cells) == []
+
+
 def test_nltk_data_used_without_a_download_is_prefetched():
     from backend.compiler import language_data_packages
 
