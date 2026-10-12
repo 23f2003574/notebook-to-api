@@ -11390,6 +11390,59 @@ print("OPENAPI_ENVELOPE_E2E_OK")
     assert "OPENAPI_ENVELOPE_E2E_OK" in proc.stdout
 
 
+def test_generated_app_names_the_environment_variable_with_a_malformed_number(tmp_path):
+    """Confirmed before this: NOTEBOOK_API_MAX_REQUEST_BYTES=10MB (or a blank
+    value from a compose file) crashed the import with a bare "invalid literal
+    for int()" that never named the variable; blank now means the default."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_importing(notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    script = f"""
+import os, sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+import importlib
+
+for name, value, ok in (
+    ("NOTEBOOK_API_MAX_REQUEST_BYTES", "10MB", False),
+    ("NOTEBOOK_API_RATE_LIMIT_PER_MINUTE", "1.5", False),
+    ("NOTEBOOK_API_WEBHOOK_RETRY_BACKOFF_SECONDS", "soon", False),
+    ("NOTEBOOK_API_TASK_TTL_SECONDS", "  ", True),
+    ("NOTEBOOK_API_WEBHOOK_RETRY_BACKOFF_SECONDS", "0.25", True),
+):
+    os.environ[name] = value
+    for module in [m for m in sys.modules if m == "generated" or m.startswith("generated.")]:
+        del sys.modules[module]
+    try:
+        app_module = importlib.import_module("generated.app")
+        assert ok, (name, value, "should have been rejected")
+    except RuntimeError as exc:
+        assert not ok and name in str(exc) and repr(value) in str(exc), (name, str(exc))
+    del os.environ[name]
+print("ENV_NUMBER_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ENV_NUMBER_E2E_OK" in proc.stdout
+
+
 def test_compiler_pipeline_stdlib_mappings_sequences_exceptions_and_matches_are_plain_json(tmp_path):
     """Confirmed before this: ChainMap/UserDict came back as {"maps": ...} /
     {"data": ...}, a UserList as {"data": [...]}, a returned exception as a

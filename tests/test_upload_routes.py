@@ -27867,17 +27867,17 @@ def test_env_vars_preview_matches_what_an_actual_compiled_app_reads():
         in generated_app
     )
     assert (
-        'os.getenv("NOTEBOOK_API_MAX_REQUEST_BYTES", '
+        '_env_number("NOTEBOOK_API_MAX_REQUEST_BYTES", '
         f'"{env_vars["NOTEBOOK_API_MAX_REQUEST_BYTES"]["default"]}")'
         in generated_app
     )
     assert (
-        'os.getenv("NOTEBOOK_API_TASK_TTL_SECONDS", '
+        '_env_number("NOTEBOOK_API_TASK_TTL_SECONDS", '
         f'"{env_vars["NOTEBOOK_API_TASK_TTL_SECONDS"]["default"]}")'
         in generated_app
     )
     assert (
-        'os.getenv("NOTEBOOK_API_MAX_TASKS", '
+        '_env_number("NOTEBOOK_API_MAX_TASKS", '
         f'"{env_vars["NOTEBOOK_API_MAX_TASKS"]["default"]}")'
         in generated_app
     )

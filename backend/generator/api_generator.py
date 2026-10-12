@@ -1547,6 +1547,19 @@ def generate_fastapi_code(
     # why leaving it at the default outside local development silently
     # breaks Swagger UI's own "Try it out" for anyone not on the same
     # machine as the deployment.
+    # A number from the environment ("NOTEBOOK_API_MAX_REQUEST_BYTES=10MB",
+    # or a blank value from a compose file's "${VAR:-}") crashed the import
+    # with a bare "invalid literal for int()" that never named the variable.
+    lines.append("def _env_number(name, default, cast=int):")
+    lines.append("    raw = os.getenv(name)")
+    lines.append("    if raw is None or not raw.strip():")
+    lines.append("        raw = default")
+    lines.append("    try:")
+    lines.append("        return cast(raw)")
+    lines.append("    except ValueError:")
+    lines.append("        kind = 'a whole number' if cast is int else 'a number'")
+    lines.append("        raise RuntimeError(f'{name} must be {kind}, got {raw!r}') from None")
+    lines.append("")
     lines.append(
         'PUBLIC_URL = os.getenv('
         '"NOTEBOOK_API_PUBLIC_URL", '
@@ -1661,10 +1674,10 @@ def generate_fastapi_code(
     # already follow, defaulting to the same 10MB MAX_UPLOAD_BYTES already
     # defaults to.
     lines.append(
-        'MAX_REQUEST_BODY_BYTES = int(os.getenv('
+        'MAX_REQUEST_BODY_BYTES = _env_number('
         '"NOTEBOOK_API_MAX_REQUEST_BYTES", '
         f'"{_generated_app_env_var_default("NOTEBOOK_API_MAX_REQUEST_BYTES")}"'
-        '))'
+        ')'
     )
     lines.append("")
     lines.append("class MaxRequestBodySizeMiddleware:")
@@ -2175,10 +2188,10 @@ def generate_fastapi_code(
     # control sequence (and so this identical lock) for the same reason.
     lines.append("_TASKS_ADMISSION_LOCK = threading.Lock()")
     lines.append(
-        'TASK_TTL_SECONDS = int(os.getenv('
+        'TASK_TTL_SECONDS = _env_number('
         '"NOTEBOOK_API_TASK_TTL_SECONDS", '
         f'"{_generated_app_env_var_default("NOTEBOOK_API_TASK_TTL_SECONDS")}"'
-        '))'
+        ')'
     )
     # _evict_expired_tasks bounds TASKS' *long-term* growth (nothing
     # older than TASK_TTL_SECONDS survives), but a burst of background
@@ -2191,10 +2204,10 @@ def generate_fastapi_code(
     # other limits (API_KEYS, TASK_TTL_SECONDS, MAX_REQUEST_BODY_BYTES)
     # already follow.
     lines.append(
-        'MAX_PENDING_TASKS = int(os.getenv('
+        'MAX_PENDING_TASKS = _env_number('
         '"NOTEBOOK_API_MAX_TASKS", '
         f'"{_generated_app_env_var_default("NOTEBOOK_API_MAX_TASKS")}"'
-        '))'
+        ')'
     )
     # Bounds _run_background_task's own single execution below (see its
     # own docstring) -- 0 (the default) disables this entirely, the
@@ -2202,10 +2215,10 @@ def generate_fastapi_code(
     # convention RATE_LIMIT_PER_MINUTE/MAX_PENDING_TASKS's own defaults
     # already follow.
     lines.append(
-        'TASK_EXECUTION_TIMEOUT_SECONDS = int(os.getenv('
+        'TASK_EXECUTION_TIMEOUT_SECONDS = _env_number('
         '"NOTEBOOK_API_TASK_EXECUTION_TIMEOUT_SECONDS", '
         f'"{_generated_app_env_var_default("NOTEBOOK_API_TASK_EXECUTION_TIMEOUT_SECONDS")}"'
-        '))'
+        ')'
     )
     # The synchronous-endpoint counterpart of TASK_EXECUTION_TIMEOUT_SECONDS
     # (see GENERATED_APP_ENV_VARS): a hung notebook function behind a
@@ -2214,10 +2227,10 @@ def generate_fastapi_code(
     # abandon_on_cancel caveat: the caller gets a prompt 504, while the
     # orphaned thread itself still runs to completion in the background.
     lines.append(
-        'REQUEST_TIMEOUT_SECONDS = int(os.getenv('
+        'REQUEST_TIMEOUT_SECONDS = _env_number('
         '"NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS", '
         f'"{_generated_app_env_var_default("NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS")}"'
-        '))'
+        ')'
     )
     # Per-endpoint count of requests answered 504 by the timeout above,
     # reported by GET /metrics and /metrics/prometheus -- the generic
@@ -2263,10 +2276,10 @@ def generate_fastapi_code(
     # thread/coroutine, so it becomes the usual 500 / failed-task with a
     # message naming what happened.
     lines.append(
-        'MAX_CONCURRENT_CALLS = int(os.getenv('
+        'MAX_CONCURRENT_CALLS = _env_number('
         '"NOTEBOOK_API_MAX_CONCURRENT_CALLS", '
         f'"{_generated_app_env_var_default("NOTEBOOK_API_MAX_CONCURRENT_CALLS")}"'
-        '))'
+        ')'
     )
     lines.append("_CALL_LIMITER = None")
     lines.append("")
@@ -2342,10 +2355,10 @@ def generate_fastapi_code(
     # endpoint must never be allowed to tie up a worker thread (and, by
     # extension, this process' limited thread pool) indefinitely.
     lines.append(
-        'WEBHOOK_TIMEOUT_SECONDS = int(os.getenv('
+        'WEBHOOK_TIMEOUT_SECONDS = _env_number('
         '"NOTEBOOK_API_WEBHOOK_TIMEOUT_SECONDS", '
         f'"{_generated_app_env_var_default("NOTEBOOK_API_WEBHOOK_TIMEOUT_SECONDS")}"'
-        '))'
+        ')'
     )
     # Read by _deliver_task_webhook below to sign the webhook body with
     # HMAC-SHA256 (the same X-Hub-Signature-256 contract GitHub/Stripe
@@ -2371,19 +2384,19 @@ def generate_fastapi_code(
     # "0 means off" convention TASK_EXECUTION_TIMEOUT_SECONDS/
     # RATE_LIMIT_PER_MINUTE's own defaults already follow.
     lines.append(
-        'WEBHOOK_MAX_RETRIES = int(os.getenv('
+        'WEBHOOK_MAX_RETRIES = _env_number('
         '"NOTEBOOK_API_WEBHOOK_MAX_RETRIES", '
         f'"{_generated_app_env_var_default("NOTEBOOK_API_WEBHOOK_MAX_RETRIES")}"'
-        '))'
+        ')'
     )
     # Read by _deliver_task_webhook below as the base delay between
     # retries -- float, not int, so a sub-second base delay (the default,
     # 0.5s) stays exact instead of truncating to 0.
     lines.append(
-        'WEBHOOK_RETRY_BACKOFF_SECONDS = float(os.getenv('
+        'WEBHOOK_RETRY_BACKOFF_SECONDS = _env_number('
         '"NOTEBOOK_API_WEBHOOK_RETRY_BACKOFF_SECONDS", '
         f'"{_generated_app_env_var_default("NOTEBOOK_API_WEBHOOK_RETRY_BACKOFF_SECONDS")}"'
-        '))'
+        ', float)'
     )
     lines.append(
         '# A comma-separated list, not a single value, so a key can be'
@@ -2437,10 +2450,10 @@ def generate_fastapi_code(
     # unlike TASKS (which needs its own TTL-based eviction above), a
     # matching eviction scheme isn't needed here.
     lines.append(
-        'RATE_LIMIT_PER_MINUTE = int(os.getenv('
+        'RATE_LIMIT_PER_MINUTE = _env_number('
         '"NOTEBOOK_API_RATE_LIMIT_PER_MINUTE", '
         f'"{_generated_app_env_var_default("NOTEBOOK_API_RATE_LIMIT_PER_MINUTE")}"'
-        '))'
+        ')'
     )
     lines.append("RATE_LIMIT_WINDOW_SECONDS = 60")
     lines.append("_RATE_LIMIT_WINDOWS = {}")

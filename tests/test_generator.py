@@ -85,7 +85,11 @@ def test_generated_app_env_vars_default_matches_the_actual_generated_code():
     }
 
     for entry in GENERATED_APP_ENV_VARS:
-        assert f'os.getenv("{entry["name"]}", "{entry["default"]}")' in code
+        # Numeric settings are read through _env_number, text ones through os.getenv.
+        assert (
+            f'os.getenv("{entry["name"]}", "{entry["default"]}")' in code
+            or f'_env_number("{entry["name"]}", "{entry["default"]}"' in code
+        )
         assert entry["description"]
 
 
@@ -715,7 +719,7 @@ def test_generated_app_configures_a_max_request_body_size_middleware():
     code = generate_fastapi_code(functions)
 
     assert "class MaxRequestBodySizeMiddleware:" in code
-    assert 'os.getenv("NOTEBOOK_API_MAX_REQUEST_BYTES", "10485760")' in code
+    assert '_env_number("NOTEBOOK_API_MAX_REQUEST_BYTES", "10485760")' in code
     assert "app.add_middleware(MaxRequestBodySizeMiddleware)" in code
 
 
@@ -1498,7 +1502,7 @@ def test_background_endpoint_rejects_new_tasks_past_max_pending_tasks():
 
     code = generate_fastapi_code(functions)
 
-    assert 'os.getenv("NOTEBOOK_API_MAX_TASKS", "10000")' in code
+    assert '_env_number("NOTEBOOK_API_MAX_TASKS", "10000")' in code
     assert "if len(TASKS) >= MAX_PENDING_TASKS:" in code
     assert "status_code=503" in code
 
@@ -1730,7 +1734,7 @@ def test_non_background_endpoint_has_no_max_pending_tasks_check():
 
     assert "if len(TASKS) >= MAX_PENDING_TASKS:" not in add_endpoint_body
     # The constant itself is still always defined at module level.
-    assert "MAX_PENDING_TASKS = int(os.getenv(" in code
+    assert "MAX_PENDING_TASKS = _env_number(" in code
 
 
 def test_notebook_function_named_max_pending_tasks_is_rejected():
@@ -4103,7 +4107,7 @@ def test_background_task_creation_evicts_expired_tasks_and_stamps_created_at():
 
     code = generate_fastapi_code(functions)
 
-    assert "TASK_TTL_SECONDS = int(os.getenv(" in code
+    assert "TASK_TTL_SECONDS = _env_number(" in code
     assert '"created_at": time.time()' in code
     assert "_evict_expired_tasks()" in code
     # Eviction must run before the new task is recorded, not after --
