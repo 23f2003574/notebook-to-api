@@ -1200,6 +1200,15 @@ _DEFAULT_PIPELINE_MODELS = {
     "zero-shot-classification": "facebook/bart-large-mnli",
     "image-classification": "google/vit-base-patch16-224",
     "automatic-speech-recognition": "facebook/wav2vec2-base-960h",
+    "feature-extraction": "distilbert/distilbert-base-cased",
+    "object-detection": "facebook/detr-resnet-50",
+    "image-segmentation": "facebook/detr-resnet-50-panoptic",
+    "depth-estimation": "Intel/dpt-large",
+    "audio-classification": "superb/wav2vec2-base-superb-ks",
+    "zero-shot-image-classification": "openai/clip-vit-base-patch32",
+    "zero-shot-object-detection": "google/owlvit-base-patch32",
+    "table-question-answering": "google/tapas-base-finetuned-wtq",
+    "document-question-answering": "impira/layoutlm-document-qa",
 }
 
 

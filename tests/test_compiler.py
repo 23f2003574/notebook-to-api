@@ -14373,6 +14373,32 @@ def test_model_less_transformers_pipelines_prefetch_the_task_default(tmp_path, c
     assert "distilbert-base-uncased-finetuned-sst-2-english" in capsys.readouterr().out
 
 
+def test_model_less_pipelines_for_vision_audio_and_embedding_tasks_prefetch_their_default():
+    from backend.compiler import hub_model_ids
+
+    cells = [
+        "from transformers import pipeline\n"
+        "a = pipeline('feature-extraction')\nb = pipeline('object-detection')\n"
+        "c = pipeline('image-segmentation')\nd = pipeline('depth-estimation')\n"
+        "e = pipeline('audio-classification')\nf = pipeline('zero-shot-image-classification')\n"
+        "g = pipeline('zero-shot-object-detection')\nh = pipeline('table-question-answering')\n"
+        "i = pipeline('document-question-answering')\n"
+        "j = pipeline('object-detection', model='hustvl/yolos-tiny')\nk = pipeline('image-to-3d')\n"
+    ]
+    assert hub_model_ids(cells) == [
+        "distilbert/distilbert-base-cased",
+        "facebook/detr-resnet-50",
+        "facebook/detr-resnet-50-panoptic",
+        "Intel/dpt-large",
+        "superb/wav2vec2-base-superb-ks",
+        "openai/clip-vit-base-patch32",
+        "google/owlvit-base-patch32",
+        "google/tapas-base-finetuned-wtq",
+        "impira/layoutlm-document-qa",
+        "hustvl/yolos-tiny",
+    ]
+
+
 def test_nltk_data_used_without_a_download_is_prefetched():
     from backend.compiler import language_data_packages
 
