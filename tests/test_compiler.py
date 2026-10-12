@@ -9058,6 +9058,38 @@ def test_distribution_name_for_import_maps_well_known_aliases_when_not_installed
     assert compiler_module.distribution_name_for_import("totally_unknown_xyz") == "totally_unknown_xyz"
 
 
+def test_distribution_name_for_import_maps_more_mismatched_import_names_when_not_installed(monkeypatch):
+    """`import jose`, `import slugify`, `import grpc` or `import faiss` were
+    written to requirements.txt as-is when the compiling host lacked them --
+    names that are missing from PyPI or, for slugify, a different project."""
+    from backend import compiler as compiler_module
+
+    monkeypatch.setattr(compiler_module, "_installed_packages_distributions", lambda: {})
+
+    expected = {
+        "jose": "python-jose",
+        "slugify": "python-slugify",
+        "github": "PyGithub",
+        "googleapiclient": "google-api-python-client",
+        "grpc": "grpcio",
+        "pywt": "PyWavelets",
+        "faiss": "faiss-cpu",
+        "socks": "PySocks",
+        "ruamel": "ruamel.yaml",
+        "imblearn": "imbalanced-learn",
+        "sksurv": "scikit-survival",
+        "skvideo": "scikit-video",
+        "cairo": "pycairo",
+        "pkg_resources": "setuptools",
+        "telegram": "python-telegram-bot",
+        "dns": "dnspython",
+        "speech_recognition": "SpeechRecognition",
+        "ldap": "python-ldap",
+    }
+    for import_name, distribution in expected.items():
+        assert compiler_module.distribution_name_for_import(import_name) == distribution
+
+
 def test_distribution_name_for_import_prefers_what_is_actually_installed(monkeypatch):
     from backend import compiler as compiler_module
 
