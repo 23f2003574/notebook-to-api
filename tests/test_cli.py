@@ -80,6 +80,35 @@ def _run_cli(args, cwd):
     )
 
 
+def test_export_openapi_imports_an_app_dir_outside_the_working_directory(tmp_path):
+
+    """`export-openapi --app-dir` only worked when the app's parent folder
+    happened to be the working directory: from anywhere else, importing
+    "<package>.app" died with "No module named '<package>'"."""
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    compile_proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "built_outside"], cwd=workdir
+    )
+    assert compile_proc.returncode == 0, compile_proc.stdout + compile_proc.stderr
+
+    for extra in ([], ["--json"]):
+        proc = _run_cli(
+            ["export-openapi", "--app-dir", str(workdir / "built_outside"), *extra],
+            cwd=elsewhere,
+        )
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        schema = json.loads((workdir / "built_outside" / "openapi.json").read_text(encoding="utf-8"))
+        assert "/add" in schema["paths"]
+        (workdir / "built_outside" / "openapi.json").unlink()
+
+
 def test_version_flag_prints_the_tools_own_version_and_exits_zero(tmp_path):
 
     workdir = tmp_path / "workdir"

@@ -1,6 +1,7 @@
 import importlib
 import json
 import re
+import sys
 from pathlib import Path
 
 _YAML_RESERVED_WORDS = {"true", "false", "null", "~", "yes", "no", "on", "off"}
@@ -165,7 +166,7 @@ def _to_yaml(value, indent=0):
     return f"{pad}{_yaml_scalar(value)}\n"
 
 
-def export_openapi_schema(output_path="generated/openapi.json", package_name="generated", format="json"):
+def export_openapi_schema(output_path="generated/openapi.json", package_name="generated", format="json", app_dir=None):
     """Export the FastAPI OpenAPI schema to a JSON or YAML file.
 
     Parameters
@@ -191,11 +192,24 @@ def export_openapi_schema(output_path="generated/openapi.json", package_name="ge
         Either "json" (default) or "yaml". YAML is the format most
         OpenAPI tooling (Swagger UI configs, API gateways, codegen)
         actually expects; JSON-only export was the only option before.
+    app_dir: str, optional
+        The directory the app was compiled into. Its parent is put on
+        sys.path for the import (and removed again), so an --app-dir
+        outside the current working directory -- ../build, /srv/apps/nb --
+        imports instead of failing with "No module named '<package>'".
     """
-    module = importlib.import_module(f"{package_name}.app")
-    app = module.app
+    parent_dir = str(Path(app_dir).resolve().parent) if app_dir else None
+    path_added = parent_dir is not None and parent_dir not in sys.path
 
-    schema = app.openapi()
+    if path_added:
+        sys.path.insert(0, parent_dir)
+
+    try:
+        module = importlib.import_module(f"{package_name}.app")
+        schema = module.app.openapi()
+    finally:
+        if path_added:
+            sys.path.remove(parent_dir)
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 

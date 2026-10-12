@@ -2406,7 +2406,7 @@ def _dispatch_core_command(args):
             # apply to their own writer functions' prints, for the same
             # reason.
             with contextlib.redirect_stdout(io.StringIO()):
-                export_openapi_schema(output, package_name, format=args.format)
+                export_openapi_schema(output, package_name, format=args.format, app_dir=args.app_dir)
 
             with open(output, "r", encoding="utf-8") as f:
                 content = f.read()
@@ -2424,7 +2424,7 @@ def _dispatch_core_command(args):
 
             print(json.dumps(response, indent=2))
         else:
-            export_openapi_schema(output, package_name, format=args.format)
+            export_openapi_schema(output, package_name, format=args.format, app_dir=args.app_dir)
     elif args.command == "export-sdk":
         # --app-dir mirrors export-openapi's own --app-dir-derived default
         # (see its own comment above): before this, --openapi's default
