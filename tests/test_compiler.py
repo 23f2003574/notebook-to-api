@@ -11343,6 +11343,53 @@ print("SURROGATE_JSON_E2E_OK")
     assert "SURROGATE_JSON_E2E_OK" in proc.stdout
 
 
+def test_openapi_declares_the_result_envelope_as_the_success_response_schema(tmp_path):
+    """Confirmed before this: every notebook endpoint's 200 response had the
+    schema `{}` (any value) although every success body is {"result": ...},
+    so generic OpenAPI tooling saw an untyped response."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_importing(notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n")
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+content = app.openapi()["paths"]["/add"]["post"]["responses"]["200"]["content"]["application/json"]
+assert content["schema"] == {{
+    "type": "object", "properties": {{"result": {{}}}}, "required": ["result"],
+}}, content
+assert content["example"] == {{"result": 0}}, content
+
+client = TestClient(app, raise_server_exceptions=False)
+response = client.post("/add", json={{"a": 1, "b": 2}}, headers={{"X-API-Key": "notebook-to-api-dev-key"}})
+assert response.status_code == 200 and response.json() == {{"result": 3}}, response.text
+print("OPENAPI_ENVELOPE_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "OPENAPI_ENVELOPE_E2E_OK" in proc.stdout
+
+
 def test_compiler_pipeline_stdlib_mappings_sequences_exceptions_and_matches_are_plain_json(tmp_path):
     """Confirmed before this: ChainMap/UserDict came back as {"maps": ...} /
     {"data": ...}, a UserList as {"data": [...]}, a returned exception as a

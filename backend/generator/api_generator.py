@@ -5637,7 +5637,19 @@ def generate_fastapi_code(
                 200: {
                     "description": response_description,
                     "content": {
-                        "application/json": {"example": example_response}
+                        "application/json": {
+                            # Every success body is {"result": ...}; the
+                            # value's own schema stays open because it is
+                            # coerced on the way out (NaN -> null, bytes ->
+                            # a data URI), so the declared return type
+                            # would sometimes be wrong.
+                            "schema": {
+                                "type": "object",
+                                "properties": {"result": {}},
+                                "required": ["result"],
+                            },
+                            "example": example_response,
+                        }
                     },
                 },
                 500: {
