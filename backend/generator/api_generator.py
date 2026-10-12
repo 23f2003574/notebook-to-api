@@ -2752,9 +2752,23 @@ def generate_fastapi_code(
     lines.append("            pass")
     lines.append("    return frame.to_dict(orient='records')")
     lines.append("")
+    # A str holding a lone surrogate (os.listdir of a non-UTF-8 filename,
+    # bytes decoded with errors='surrogateescape') passes json.dumps(), but
+    # the response body's UTF-8 encoding then fails *after* the endpoint's own
+    # error handling -- a bare plain-text "Internal Server Error". Each lone
+    # surrogate becomes U+FFFD instead.
+    lines.append("def _utf8_safe(text):")
+    lines.append("    try:")
+    lines.append("        text.encode('utf-8')")
+    lines.append("        return text")
+    lines.append("    except UnicodeEncodeError:")
+    lines.append("        return ''.join('\\ufffd' if '\\ud800' <= c <= '\\udfff' else c for c in text)")
+    lines.append("")
     lines.append("def _json_safe(value, _depth=0):")
     lines.append("    if _depth > 50:")
     lines.append("        return value")
+    lines.append("    if isinstance(value, str):")
+    lines.append("        return _utf8_safe(value)")
     # pandas' missing-value singletons (pd.NA, pd.NaT): jsonable_encoder
     # turned pd.NA into a junk {"__module__": "pandas"} object and pd.NaT
     # into the string "NaT". Matched by type name, so no pandas import.
@@ -2831,7 +2845,7 @@ def generate_fastapi_code(
     # in ISO format, matching how the same value is encoded as a *value*,
     # instead of str()'s '2024-01-01 00:00:00'; a Period key as its string.
     lines.append(
-        "        return {(k if k is None or isinstance(k, (str, int, float, bool)) "
+        "        return {(_utf8_safe(k) if isinstance(k, str) else k if k is None or isinstance(k, (int, float, bool)) "
         "else k.isoformat() if hasattr(k, 'isoformat') and not hasattr(k, 'freqstr') "
         "else str(k)): _json_safe(v, _depth + 1) for k, v in value.items()}"
     )

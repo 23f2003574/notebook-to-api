@@ -11278,6 +11278,71 @@ print("NAMEDTUPLE_JSON_E2E_OK")
     assert "NAMEDTUPLE_JSON_E2E_OK" in proc.stdout
 
 
+def test_compiler_pipeline_strings_with_lone_surrogates_are_returned_as_json_not_a_bare_500(tmp_path):
+    """Confirmed before this: a returned str holding a lone surrogate (a
+    non-UTF-8 filename from os.listdir, bytes decoded with surrogateescape)
+    crashed the response encoder after the endpoint's error handling -- a
+    plain-text "Internal Server Error" instead of the app's JSON."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "def name(n: int) -> str:\n    return b'caf\\xe9.txt'.decode('utf-8', 'surrogateescape')\n\n"
+                    "def names(n: int):\n    return {'a\\ud800': ['ok', 'x\\udfffy']}\n\n"
+                    "def clean(n: int) -> str:\n    return 'caf\\u00e9'\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def call(name):
+    response = client.post("/" + name, json={{"n": 1}}, headers=headers)
+    assert response.status_code == 200, (name, response.status_code, response.text)
+    return response.json()["result"]
+
+assert call("name") == "caf\\ufffd.txt"
+assert call("names") == {{"a\\ufffd": ["ok", "x\\ufffdy"]}}
+assert call("clean") == "caf\\u00e9"
+print("SURROGATE_JSON_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "SURROGATE_JSON_E2E_OK" in proc.stdout
+
+
 def test_compiler_pipeline_stdlib_mappings_sequences_exceptions_and_matches_are_plain_json(tmp_path):
     """Confirmed before this: ChainMap/UserDict came back as {"maps": ...} /
     {"data": ...}, a UserList as {"data": [...]}, a returned exception as a
