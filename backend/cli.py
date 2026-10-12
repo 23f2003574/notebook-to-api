@@ -1397,7 +1397,7 @@ def _startup_problem_count(data):
     and cells that errored when last run (see startup_warning_lines)."""
     return sum(
         len(data.get(key) or [])
-        for key in ("unrecognized_directives", "import_time_hazards", "cells_with_errors")
+        for key in ("unrecognized_directives", "import_time_hazards", "cells_with_errors", "unparseable_cells")
     )
 
 
@@ -5596,7 +5596,7 @@ def _dispatch_core_command(args):
 
             startup_warnings = startup_warning_lines({
                 key: data.get(key) or []
-                for key in ("unrecognized_directives", "cells_with_errors", "import_time_hazards")
+                for key in ("unrecognized_directives", "cells_with_errors", "import_time_hazards", "unparseable_cells")
             })
 
             if startup_warnings:
@@ -5733,7 +5733,7 @@ def _dispatch_core_command(args):
 
             startup_warnings = startup_warning_lines({
                 key: data.get(key) or []
-                for key in ("unrecognized_directives", "cells_with_errors", "import_time_hazards")
+                for key in ("unrecognized_directives", "cells_with_errors", "import_time_hazards", "unparseable_cells")
             })
 
             if startup_warnings:

@@ -8,6 +8,7 @@ from urllib.parse import quote, urlsplit
 
 from backend.compiler import (
     _find_cells_with_error_outputs,
+    _find_unparseable_cells,
     _find_import_time_hazards,
     call_hazard_detail,
     unshipped_reason_text,
@@ -878,6 +879,9 @@ def inspect_notebook_data(
         # Cells whose saved outputs hold an error: they re-run when the app
         # starts -- see _find_cells_with_error_outputs.
         "cells_with_errors": _find_cells_with_error_outputs(notebook),
+        # Cells that are not valid Python: compile drops them entirely --
+        # see _find_unparseable_cells.
+        "unparseable_cells": _find_unparseable_cells(code_cells),
         # Names defined more than once in the notebook's own raw
         # extraction (before deduplicate_functions_by_name, backend/
         # parser/ast_parser.py, silently collapses each down to its last
@@ -1031,6 +1035,11 @@ def startup_warning_lines(data):
         lines.append(
             f"Cell {failed['cell']} raised {failed['error']} when last run "
             f"({failed['message']}) -- it runs again when the app starts"
+        )
+    for broken in data.get("unparseable_cells", []):
+        lines.append(
+            f"Cell {broken['cell']}, line {broken['line']}: {broken['message']} -- "
+            "the cell is not valid Python, so compile leaves it out entirely"
         )
     for hazard in data.get("import_time_hazards", []):
         _, what, consequence = hazard_message(hazard)

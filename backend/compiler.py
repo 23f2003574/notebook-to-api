@@ -2344,6 +2344,21 @@ _PATH_KEYWORDS = (
 _NON_FILE_PATHS = frozenset({":memory:", ""})
 
 
+def _find_unparseable_cells(code_cells):
+    """[{"cell", "line", "message"}] for every code cell (as
+    extract_code_cells returns them, magics already stripped) that is not
+    valid Python. compile_notebook drops such a cell without a word -- every
+    function, import and constant in it is missing from the compiled app.
+    `cell` is the 1-based position among the code cells, as elsewhere."""
+    found = []
+    for number, source in enumerate(code_cells, start=1):
+        try:
+            ast.parse(source)
+        except SyntaxError as exc:
+            found.append({"cell": number, "line": exc.lineno, "message": exc.msg})
+    return found
+
+
 def _find_cells_with_error_outputs(notebook):
     """[{"cell", "line", "error", "message"}] for every code cell whose saved
     outputs include an error -- a cell that raised when the author last ran it

@@ -31322,6 +31322,53 @@ def test_compile_warns_when_no_endpoints_were_generated_and_the_gate_fails_it(tm
     assert fine.returncode == 0 and "No endpoints were generated" not in fine.stdout
 
 
+def _write_notebook_with_cells(path, sources):
+    path.write_text(
+        json.dumps({
+            "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+            "cells": [
+                {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [], "source": source}
+                for source in sources
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+
+def test_compile_reports_cells_that_are_not_valid_python_instead_of_dropping_them_silently(tmp_path):
+    """Confirmed before this: a cell with a syntax error was left out of the
+    compiled app (with its functions and imports) and nothing said so."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    broken = workdir / "broken.ipynb"
+    _write_notebook_with_cells(broken, [
+        "def total(a: int) -> int:\n    return a\n",
+        "def helper(:\n    pass\n",
+    ])
+    clean = workdir / "clean.ipynb"
+    _write_notebook_with_cells(clean, [
+        "%matplotlib inline\n!pip install requests\nimport os\n",
+        "def total(a: int) -> int:\n    return a\n",
+    ])
+
+    plain = _run_cli(["compile", str(broken), "--output", "plain"], cwd=workdir)
+    gated = _run_cli(["compile", str(broken), "--output", "gated", "--fail-on-startup-warnings"], cwd=workdir)
+    fine = _run_cli(["compile", str(clean), "--output", "fine", "--fail-on-startup-warnings"], cwd=workdir)
+    inspected = _run_cli(["inspect", str(broken), "--json"], cwd=workdir)
+    inspected_clean = _run_cli(["inspect", str(clean), "--json"], cwd=workdir)
+
+    assert plain.returncode == 0, plain.stdout + plain.stderr
+    assert "Cell 2, line 1: invalid syntax" in plain.stdout
+    assert "No endpoints were generated" not in plain.stdout
+    assert gated.returncode == 1 and "startup problem(s) found" in gated.stdout
+    assert (workdir / "gated" / "app.py").exists()
+    assert fine.returncode == 0, fine.stdout + fine.stderr
+    assert json.loads(inspected.stdout)["unparseable_cells"] == [
+        {"cell": 2, "line": 1, "message": "invalid syntax"}
+    ]
+    assert json.loads(inspected_clean.stdout)["unparseable_cells"] == []
+
+
 def test_inspect_fail_on_startup_warnings_gates_ci(tmp_path):
     workdir = tmp_path / "workdir"
     workdir.mkdir()
