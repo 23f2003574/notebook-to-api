@@ -1137,6 +1137,27 @@ def extract_imports_from_code(code):
                     continue
                 imports.add(pypi_mapping.get(base_module, base_module))
 
+        elif isinstance(node, ast.Call):
+            # `importlib.import_module("seaborn")` / `__import__("plotly")`
+            # with a literal absolute name import exactly like a statement
+            # would, but never reached requirements.txt.
+            func = node.func
+            called = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+            if called not in ("import_module", "__import__") or not node.args:
+                continue
+            target = node.args[0]
+            if not (isinstance(target, ast.Constant) and isinstance(target.value, str)):
+                continue
+            if not target.value or target.value.startswith("."):
+                continue
+            base_module = target.value.split(".")[0]
+            if base_module == "google":
+                distribution = google_distribution_for_module(target.value)
+                if distribution:
+                    imports.add(distribution)
+                continue
+            imports.add(pypi_mapping.get(base_module, base_module))
+
     return imports
 
 

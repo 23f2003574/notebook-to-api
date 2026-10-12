@@ -11505,6 +11505,34 @@ def _write_notebook_importing(path, source):
         nbformat.write(notebook, f)
 
 
+def test_literal_dynamic_imports_reach_requirements_txt(tmp_path):
+    """`importlib.import_module("plotly.express")` and `__import__("seaborn")`
+    import a third-party package as surely as an import statement does, but
+    only statements reached requirements.txt -- the generated app then died
+    with ModuleNotFoundError. Relative, non-literal and stdlib names add none."""
+    from backend.compiler import compile_notebook, extract_third_party_imports
+
+    source = (
+        "import importlib\n"
+        "def draw(kind: str) -> str:\n"
+        "    px = importlib.import_module('plotly_dyn_pkg.express')\n"
+        "    sns = __import__('seaborn_dyn_pkg')\n"
+        "    importlib.import_module('.sibling', package='x')\n"
+        "    importlib.import_module(kind)\n"
+        "    importlib.import_module('json.decoder')\n"
+        "    return 'ok'\n"
+    )
+    assert sorted(extract_third_party_imports([source])) == ["plotly_dyn_pkg", "seaborn_dyn_pkg"]
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(notebook, source)
+    out = tmp_path / "out"
+    compile_notebook(str(notebook), str(out))
+    requirements = (out / "requirements.txt").read_text()
+    assert "plotly_dyn_pkg" in requirements and "seaborn_dyn_pkg" in requirements
+    assert "sibling" not in requirements and "json" not in requirements
+
+
 def test_find_local_modules_matches_sibling_modules_and_packages_only(tmp_path):
     from backend.compiler import find_local_modules
 
