@@ -2084,6 +2084,8 @@ def _dispatch_core_command(args):
                     if endpoint["path"].lstrip("/") in kept_names
                 ]
 
+            data["no_endpoints"] = not data["endpoints"]
+
             smoke_test = None
 
             if args.smoke_test:
@@ -2100,6 +2102,24 @@ def _dispatch_core_command(args):
             )
             print("\nCompilation finished. FastAPI app is ready in", output_dir)
             print_compile_summary(args.notebook, output_dir, only=only, exclude=exclude)
+
+            # print_compile_summary reports the same warnings but returns
+            # nothing to count, so inspect once here for both the
+            # no-endpoints warning and the --fail-on-startup-warnings gate.
+            data = inspect_notebook_data(notebook_path=args.notebook)
+            if only or exclude:
+                data["functions"] = _filter_functions_by_name(data["functions"], only, exclude)
+                kept_names = {func["name"] for func in data["functions"]}
+                data["endpoints"] = [
+                    endpoint for endpoint in data["endpoints"]
+                    if endpoint["path"].lstrip("/") in kept_names
+                ]
+            data["no_endpoints"] = not data["endpoints"]
+            if data["no_endpoints"]:
+                print(
+                    "\n⚠ No endpoints were generated: nothing in this notebook "
+                    "would be exposed, so the compiled app has no routes."
+                )
 
             smoke_test = None
 
@@ -2118,12 +2138,8 @@ def _dispatch_core_command(args):
             sys.exit(1)
 
         if args.fail_on_startup_warnings:
-            # --json already inspected the notebook above; the text path
-            # only does it now, since print_compile_summary reports the
-            # same warnings but returns nothing to count.
-            if not args.json_output:
-                data = inspect_notebook_data(notebook_path=args.notebook)
-            startup_problems = _startup_problem_count(data)
+            # A compile that produced no routes is a startup problem too.
+            startup_problems = _startup_problem_count(data) + (1 if data["no_endpoints"] else 0)
             if startup_problems:
                 if not args.json_output:
                     print(

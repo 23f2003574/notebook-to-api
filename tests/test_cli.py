@@ -31290,6 +31290,38 @@ def test_compile_fail_on_startup_warnings_passes_for_a_clean_notebook(tmp_path):
     assert "startup problem" not in proc.stdout
 
 
+def test_compile_warns_when_no_endpoints_were_generated_and_the_gate_fails_it(tmp_path):
+    """Confirmed before this: `compile` of a notebook defining no functions
+    (or only an unparseable one) printed "Generated 0 endpoint(s)" and exited
+    0, even under --fail-on-startup-warnings, leaving a routeless app."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    empty = workdir / "empty.ipynb"
+    _write_notebook_with_function(empty, "x = 1\nprint(x)\n")
+    clean = workdir / "clean.ipynb"
+    _write_notebook_with_function(clean, "def total(a: int) -> int:\n    return a\n")
+
+    plain = _run_cli(["compile", str(empty), "--output", "plain"], cwd=workdir)
+    gated = _run_cli(["compile", str(empty), "--output", "gated", "--fail-on-startup-warnings"], cwd=workdir)
+    gated_json = _run_cli(
+        ["compile", str(empty), "--output", "gj", "--fail-on-startup-warnings", "--json"], cwd=workdir
+    )
+    excluded = _run_cli(
+        ["compile", str(clean), "--output", "ex", "--exclude", "total", "--fail-on-startup-warnings"],
+        cwd=workdir,
+    )
+    fine = _run_cli(["compile", str(clean), "--output", "fine", "--fail-on-startup-warnings"], cwd=workdir)
+
+    assert plain.returncode == 0, plain.stdout + plain.stderr
+    assert "No endpoints were generated" in plain.stdout
+    assert gated.returncode == 1 and "--fail-on-startup-warnings is set" in gated.stdout
+    assert (workdir / "gated" / "app.py").exists()
+    assert gated_json.returncode == 1
+    assert json.loads(gated_json.stdout)["no_endpoints"] is True
+    assert excluded.returncode == 1 and "No endpoints were generated" in excluded.stdout
+    assert fine.returncode == 0 and "No endpoints were generated" not in fine.stdout
+
+
 def test_inspect_fail_on_startup_warnings_gates_ci(tmp_path):
     workdir = tmp_path / "workdir"
     workdir.mkdir()
