@@ -791,3 +791,38 @@ def test_assigned_magics_with_subscript_attribute_and_augmented_targets():
         "# a[i], b = !ls",
     ]
     assert "x == !y" in cleaned.splitlines()[6]
+
+
+def test_load_notebook_explains_valid_json_that_is_not_a_notebook(tmp_path):
+    """Confirmed before this: a top-level JSON list crashed nbformat with a bare
+    AttributeError, and a numeric cell source crashed later in the pipeline
+    with another one -- tracebacks instead of a message naming the problem."""
+    import json
+
+    import pytest
+
+    from backend.parser.notebook_parser import load_notebook
+
+    listing = tmp_path / "list.ipynb"
+    listing.write_text("[1, 2]", encoding="utf-8")
+    with pytest.raises(ValueError, match="valid JSON but not a Jupyter notebook"):
+        load_notebook(str(listing))
+
+    bad_source = tmp_path / "bad_source.ipynb"
+    bad_source.write_text(json.dumps({
+        "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+        "cells": [
+            {"cell_type": "markdown", "metadata": {}, "source": "# title"},
+            {"cell_type": "code", "metadata": {}, "outputs": [], "execution_count": None, "source": 5},
+        ],
+    }), encoding="utf-8")
+    with pytest.raises(ValueError, match=r"Notebook cell 2 has an invalid 'source' \(int\)"):
+        load_notebook(str(bad_source))
+
+    fine = tmp_path / "fine.ipynb"
+    fine.write_text(json.dumps({
+        "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+        "cells": [{"cell_type": "code", "metadata": {}, "outputs": [], "execution_count": None,
+                   "source": ["x = 1\n", "y = 2"]}],
+    }), encoding="utf-8")
+    assert load_notebook(str(fine)).cells[0].source == "x = 1\ny = 2"

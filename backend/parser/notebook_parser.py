@@ -373,7 +373,24 @@ def notebook_kernel_language(notebook):
 
 def load_notebook(notebook_path):
     with open(notebook_path, "r", encoding="utf-8") as f:
-        notebook = nbformat.read(f, as_version=4)
+        try:
+            notebook = nbformat.read(f, as_version=4)
+        except (AttributeError, TypeError) as exc:
+            # Valid JSON that is not a notebook (a top-level list, a cell
+            # source of the wrong type) crashed nbformat's own reader with
+            # a bare AttributeError/TypeError and a full traceback.
+            raise ValueError(
+                f"This file is valid JSON but not a Jupyter notebook "
+                f"(a notebook is a JSON object with a 'cells' list): {exc}"
+            ) from exc
+
+    for position, cell in enumerate(notebook.get("cells", []), start=1):
+        if not isinstance(cell.get("source", ""), str):
+            raise ValueError(
+                f"Notebook cell {position} has an invalid 'source' "
+                f"({type(cell['source']).__name__}): expected text or a list "
+                "of text lines."
+            )
 
     # A real Jupyter notebook can carry any kernel at all -- R, Julia,
     # Scala, ... -- but this tool only ever extracts *Python* functions

@@ -31369,6 +31369,24 @@ def test_compile_reports_cells_that_are_not_valid_python_instead_of_dropping_the
     assert json.loads(inspected_clean.stdout)["unparseable_cells"] == []
 
 
+def test_compile_reports_non_notebook_json_as_a_clean_error_not_a_traceback(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    listing = workdir / "list.ipynb"
+    listing.write_text("[1, 2]", encoding="utf-8")
+    bad_source = workdir / "bad_source.ipynb"
+    bad_source.write_text(json.dumps({
+        "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+        "cells": [{"cell_type": "code", "metadata": {}, "outputs": [], "execution_count": None, "source": 5}],
+    }), encoding="utf-8")
+
+    for path, message in ((listing, "valid JSON but not a Jupyter notebook"), (bad_source, "Notebook cell 1 has an invalid 'source'")):
+        proc = _run_cli(["compile", str(path), "--output", "out"], cwd=workdir)
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert message in proc.stderr
+        assert "Traceback" not in proc.stderr
+
+
 def test_inspect_fail_on_startup_warnings_gates_ci(tmp_path):
     workdir = tmp_path / "workdir"
     workdir.mkdir()
