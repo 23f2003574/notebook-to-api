@@ -5276,6 +5276,28 @@ def test_python_type_to_safe_python_annotation_maps_common_scalars():
     assert _python_type_to_safe_python_annotation("dict") == "Dict[str, Any]"
 
 
+def test_sdk_response_types_follow_how_bytes_and_complex_results_are_serialized():
+    """Confirmed before this: the Python client annotated a bytes result as
+    `bytes` and a complex one as `complex`, but the server's JSON carries a
+    str (text or base64 data URI) and {"real", "imag"}; the TypeScript client
+    typed complex as a number."""
+    from backend.exporters.sdk_generator import (
+        _python_type_to_safe_python_annotation,
+        _python_type_to_typescript,
+    )
+
+    assert _python_type_to_safe_python_annotation("bytes") == "str"
+    assert _python_type_to_safe_python_annotation("complex") == "Dict[str, float]"
+    assert _python_type_to_safe_python_annotation("Optional[bytes]") == "Optional[str]"
+    assert _python_type_to_safe_python_annotation("List[complex]") == "List[Dict[str, float]]"
+    assert _python_type_to_safe_python_annotation("int") == "int"
+
+    assert _python_type_to_typescript("bytes") == "string"
+    assert _python_type_to_typescript("complex") == "{ real: number; imag: number }"
+    assert _python_type_to_typescript("List[complex]") == "{ real: number; imag: number }[]"
+    assert _python_type_to_typescript("Optional[complex]") == "{ real: number; imag: number } | null"
+
+
 def test_python_type_to_safe_python_annotation_falls_back_to_any():
     """Confirmed exploitable before this feature: a notebook-defined
     class/Enum return type (e.g. "Priority") is syntactically valid

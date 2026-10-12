@@ -114,7 +114,8 @@ def _pascal_case(name):
 # other way to learn the real shape of -- see
 # _python_type_to_typescript below for what these back.
 _PYTHON_SCALAR_TO_TS = {
-    "int": "number", "float": "number", "complex": "number",
+    "int": "number", "float": "number",
+    "complex": "{ real: number; imag: number }",
     "str": "string", "bool": "boolean", "bytes": "string",
     "None": "null", "NoneType": "null",
     "Any": "unknown", "object": "unknown", "dict": "Record<string, unknown>",
@@ -644,6 +645,14 @@ def _python_type_to_safe_python_annotation(type_str):
     # import for the notebook's own Enum class to reference.
     if type_str.startswith("Literal["):
         return type_str if _literal_annotation_values(type_str) is not None else "Any"
+
+    # Neither survives the JSON response: a returned `bytes` arrives as a
+    # str (its text, or a base64 data URI), a `complex` as {"real", "imag"}.
+    if type_str == "bytes":
+        return "str"
+
+    if type_str == "complex":
+        return "Dict[str, float]"
 
     if type_str in _PYTHON_SAFE_SCALARS:
         return type_str
