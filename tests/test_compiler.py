@@ -15142,3 +15142,50 @@ def test_top_level_await_cells_run_at_import_instead_of_breaking_the_app(tmp_pat
         sys.path.remove(str(tmp_path))
         for name in [m for m in sys.modules if m.startswith("awaitpkg")]:
             del sys.modules[name]
+
+
+def test_idempotency_key_reuse_for_a_different_request_is_refused(tmp_path):
+    """A repeat of the *same* call still returns the first task, but reusing
+    the key for another body or endpoint used to silently answer with the
+    first call's task_id (the new call never ran); it is now a 422."""
+    import importlib
+
+    from fastapi.testclient import TestClient
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "def train_a(n: int) -> int:\n    return n\n"
+        "def train_b(n: int) -> int:\n    return n * 2\n",
+    )
+    compile_notebook(str(notebook), str(tmp_path / "idempkg"))
+
+    sys.path.insert(0, str(tmp_path))
+    try:
+        app = importlib.import_module("idempkg.app").app
+        client = TestClient(app)
+        base = {"X-API-Key": "notebook-to-api-dev-key"}
+        keyed = {**base, "Idempotency-Key": "k1"}
+
+        first = client.post("/train_a", json={"n": 1}, headers=keyed)
+        assert first.status_code == 200
+        task_id = first.json()["task_id"]
+
+        retry = client.post("/train_a", json={"n": 1}, headers=keyed)
+        assert retry.status_code == 200 and retry.json()["task_id"] == task_id
+
+        other_body = client.post("/train_a", json={"n": 99}, headers=keyed)
+        assert other_body.status_code == 422
+        assert "Idempotency-Key" in other_body.json()["detail"]
+
+        other_endpoint = client.post("/train_b", json={"n": 1}, headers=keyed)
+        assert other_endpoint.status_code == 422
+
+        fresh = client.post(
+            "/train_b", json={"n": 1}, headers={**base, "Idempotency-Key": "k2"}
+        )
+        assert fresh.status_code == 200 and fresh.json()["task_id"] != task_id
+    finally:
+        sys.path.remove(str(tmp_path))
+        for name in [m for m in sys.modules if m.startswith("idempkg")]:
+            del sys.modules[name]

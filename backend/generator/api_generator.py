@@ -2194,6 +2194,11 @@ def generate_fastapi_code(
     # never outlives (or leaks memory past) the TASKS entries it points
     # to.
     lines.append("IDEMPOTENCY_KEYS = {}")
+    # Idempotency-Key -> "<endpoint>:<request body>" of the call that
+    # created its task, so a key reused for a *different* call is refused
+    # (422) instead of silently answering with the first call's task_id and
+    # never running the new one.
+    lines.append("IDEMPOTENCY_FINGERPRINTS = {}")
     # A background-task submission endpoint (below) is a plain
     # synchronous `def`, not `async def` -- FastAPI runs a synchronous
     # endpoint in Starlette's own threadpool, not the single asyncio
@@ -2624,6 +2629,7 @@ def generate_fastapi_code(
     lines.append("    ]")
     lines.append("    for key in stale_idempotency_keys:")
     lines.append("        IDEMPOTENCY_KEYS.pop(key, None)")
+    lines.append("        IDEMPOTENCY_FINGERPRINTS.pop(key, None)")
     lines.append("")
     # Per-endpoint quota from a "# notebook-to-api: rate-limit N"
     # directive: N calls per 60s per API key, on top of (never instead
@@ -5547,6 +5553,10 @@ def generate_fastapi_code(
             # bypassing the MAX_PENDING_TASKS admission check below for
             # every request after the first.
             lines.append(
+                "        _idempotency_fingerprint = json.dumps(["
+                f"'/{func_name}', jsonable_encoder(req)], sort_keys=True, default=str)"
+            )
+            lines.append(
                 "        if isinstance(idempotency_key, str) and "
                 "idempotency_key in IDEMPOTENCY_KEYS:"
             )
@@ -5557,6 +5567,22 @@ def generate_fastapi_code(
                 "            existing_task = TASKS.get(existing_task_id)"
             )
             lines.append("            if existing_task is not None:")
+            lines.append(
+                "                if IDEMPOTENCY_FINGERPRINTS.get(idempotency_key) "
+                "!= _idempotency_fingerprint:"
+            )
+            lines.append("                    raise HTTPException(")
+            lines.append("                        status_code=422,")
+            lines.append("                        detail=(")
+            lines.append(
+                "                            'Idempotency-Key was already used for a "
+                "different request (another endpoint or body); '"
+            )
+            lines.append(
+                "                            'send a new key for a new request.'"
+            )
+            lines.append("                        ),")
+            lines.append("                    )")
             lines.append(
                 "                return {\"task_id\": existing_task_id, "
                 "\"status\": existing_task[\"status\"]}"
@@ -5600,6 +5626,10 @@ def generate_fastapi_code(
             # task_id that isn't in TASKS yet.
             lines.append("        if isinstance(idempotency_key, str):")
             lines.append("            IDEMPOTENCY_KEYS[idempotency_key] = task_id")
+            lines.append(
+                "            IDEMPOTENCY_FINGERPRINTS[idempotency_key] = "
+                "_idempotency_fingerprint"
+            )
             # '_replay' records exactly what would be needed to run this
             # exact call a second time: the notebook function's own name
             # (looked up on notebook_module again at retry time, rather
