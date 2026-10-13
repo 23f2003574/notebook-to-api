@@ -8,14 +8,18 @@ A tool that compiles a Jupyter notebook into a FastAPI microservice, automatical
 
 ## Usage
 ```bash
-# Compile a notebook
-.venv/bin/python backend/compiler.py --notebook notebooks/sample.ipynb --output generated/app.py
+# Compile a notebook (--output is a directory, not a file)
+.venv/bin/python -m backend.cli compile notebooks/sample.ipynb --output generated
 ```
 This will generate:
 - `generated/app.py` – FastAPI app
 - `generated/runtime/notebook_module.py` – Runtime module containing notebook code
 - `generated/requirements.txt` – Dependencies (including detected imports)
 - `generated/Dockerfile` – Dockerfile for container build
+- `generated/docker-compose.yml`, `generated/kubernetes.yaml`, `generated/.env.example` and `generated/.dockerignore` – deployment helpers
+- `generated/README.md` – docs for the generated service (endpoints, environment variables)
+
+Every generated endpoint needs an `X-API-Key` header. It defaults to `notebook-to-api-dev-key` for local development; set `NOTEBOOK_API_KEY` before exposing the service.
 
 ## Building the Docker Image
 Make sure Docker is installed on your system.
@@ -47,5 +51,5 @@ Exit codes:
 - `2` diagnostics could not be completed
 
 ## Next Steps
-- Implement one‑command deployment (`notebook-to-api deploy <notebook.ipynb>`)
-- Add support for async functions, auth, and more advanced type handling.
+- One-command deployment already exists: `.venv/bin/python -m backend.cli deploy <notebook.ipynb>` compiles and builds the Docker image (see `deploy --help`).
+- Add more advanced type handling.
