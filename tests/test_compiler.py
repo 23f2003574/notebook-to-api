@@ -15045,3 +15045,46 @@ def test_parameters_named_like_builtin_types_compile_and_keep_their_json_keys(tm
         sys.path.remove(str(tmp_path))
         for name in [m for m in sys.modules if m.startswith("shadowpkg")]:
             del sys.modules[name]
+
+
+def test_none_default_parameters_accept_an_explicit_null_but_still_reject_bad_types(tmp_path):
+    """`def f(a: int = None)` accepted omission but answered {"a": null} with
+    a 422 although f(a=None) is valid Python; a literal None default now makes
+    the field nullable in the request model and the OpenAPI schema."""
+    import importlib
+
+    from fastapi.testclient import TestClient
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "def pick(a: int = None, b: str = None, c: int = 5) -> list:\n"
+        "    return [a, b, c]\n",
+    )
+    compile_notebook(str(notebook), str(tmp_path / "nonepkg"))
+
+    sys.path.insert(0, str(tmp_path))
+    try:
+        app = importlib.import_module("nonepkg.app").app
+        client = TestClient(app, raise_server_exceptions=False)
+        headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+        omitted = client.post("/pick", json={}, headers=headers)
+        assert omitted.json()["result"] == [None, None, 5]
+
+        explicit = client.post("/pick", json={"a": None, "b": None}, headers=headers)
+        assert explicit.status_code == 200, explicit.text
+        assert explicit.json()["result"] == [None, None, 5]
+
+        assert client.post("/pick", json={"a": 3, "b": "x"}, headers=headers).json()["result"] == [3, "x", 5]
+        assert client.post("/pick", json={"a": "nope"}, headers=headers).status_code == 422
+        # c has a non-None default, so null is still not a valid value
+        assert client.post("/pick", json={"c": None}, headers=headers).status_code == 422
+
+        props = app.openapi()["components"]["schemas"]["PickRequest"]["properties"]
+        assert {"type": "null"} in props["a"]["anyOf"]
+        assert {"type": "null"} not in props["c"].get("anyOf", [])
+    finally:
+        sys.path.remove(str(tmp_path))
+        for name in [m for m in sys.modules if m.startswith("nonepkg")]:
+            del sys.modules[name]

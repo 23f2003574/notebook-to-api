@@ -5070,6 +5070,18 @@ def generate_fastapi_code(
             alias_part = f", alias={arg_name!r}" if field_name != arg_name else ""
             raw_arg_type = arg.get("type")
             arg_type, _ = _arg_annotation_source(arg)
+            # `def f(a: int = None)` is valid Python that accepts f(a=None),
+            # but a bare `a: int` field answered an explicit {"a": null}
+            # (what SDKs and many clients send for "unset") with a 422.
+            # A literal None default makes the parameter nullable.
+            if (
+                arg.get("has_default")
+                and arg.get("default_is_literal", True)
+                and arg.get("default") is None
+                and arg.get("kind") not in ("var_positional", "var_keyword")
+                and not re.search(r"\bNone\b|\bOptional\b|^Any$", arg_type)
+            ):
+                arg_type = f"Optional[{arg_type}]"
             # A type from the notebook's own namespace (a numpy/pandas
             # scalar, a notebook-defined class, ...) may be one Pydantic has
             # no schema for, which would otherwise crash the *whole* app at

@@ -4868,7 +4868,7 @@ def test_field_with_explicit_none_default_is_not_required():
 
     code = generate_fastapi_code(functions)
 
-    assert "title: str = Field(default=None," in code
+    assert "title: Optional[str] = Field(default=None," in code
     assert "name: str = Field(description=" in code
     assert "name: str = Field(default=" not in code
 
@@ -5108,7 +5108,7 @@ def test_typing_generic_argument_types_get_a_matching_typing_import(monkeypatch)
     assert "from typing import Any, Dict, List, Optional" in code
     assert "items: List[float] = Field(" in code
     assert "name: Optional[str] = Field(" in code
-    assert "meta: Dict[str, Any] = Field(" in code
+    assert "meta: Optional[Dict[str, Any]] = Field(" in code
 
     _register_fake_notebook_module(monkeypatch)
     namespace = {}
