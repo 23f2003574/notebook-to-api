@@ -15189,3 +15189,54 @@ def test_idempotency_key_reuse_for_a_different_request_is_refused(tmp_path):
         sys.path.remove(str(tmp_path))
         for name in [m for m in sys.modules if m.startswith("idempkg")]:
             del sys.modules[name]
+
+
+def test_distribution_name_for_import_maps_twenty_three_more_mismatched_import_names(monkeypatch, tmp_path):
+    """`import skopt`, `import rest_framework`, `import kafka` and friends were
+    written to requirements.txt under the import name -- not a PyPI project,
+    or a different one -- failing `pip install` and every `docker build`."""
+    from backend import compiler as compiler_module
+
+    monkeypatch.setattr(compiler_module, "_installed_packages_distributions", lambda: {})
+
+    expected = {
+        "skopt": "scikit-optimize",
+        "bayes_opt": "bayesian-optimization",
+        "skfuzzy": "scikit-fuzzy",
+        "talib": "TA-Lib",
+        "community": "python-louvain",
+        "rest_framework": "djangorestframework",
+        "kafka": "kafka-python",
+        "snowflake": "snowflake-connector-python",
+        "OpenGL": "PyOpenGL",
+        "whisper": "openai-whisper",
+        "Xlib": "python-xlib",
+        "jenkins": "python-jenkins",
+        "consul": "python-consul",
+        "decouple": "python-decouple",
+        "gi": "PyGObject",
+        "enchant": "pyenchant",
+        "pythonjsonlogger": "python-json-logger",
+        "snappy": "python-snappy",
+        "bson": "pymongo",
+        "gridfs": "pymongo",
+        "markdown_it": "markdown-it-py",
+        "haiku": "dm-haiku",
+        "vertexai": "google-cloud-aiplatform",
+    }
+    for import_name, distribution in expected.items():
+        assert compiler_module.distribution_name_for_import(import_name) == distribution
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "from skopt import gp_minimize\nimport rest_framework\nfrom kafka import KafkaProducer\n\n"
+        "def run(a: int) -> int:\n    return a\n",
+    )
+    compile_notebook(str(notebook), str(tmp_path / "out"))
+    names = {
+        line.split("==")[0].strip()
+        for line in (tmp_path / "out" / "requirements.txt").read_text().splitlines()
+    }
+    assert {"scikit-optimize", "djangorestframework", "kafka-python"} <= names
+    assert not {"skopt", "rest_framework", "kafka"} & names
