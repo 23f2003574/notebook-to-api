@@ -467,6 +467,71 @@ def _neutralize_ipython_shell_calls(combined_code):
     return b"\n".join(lines).decode("utf-8")
 
 
+_TOP_LEVEL_AWAIT_RUNNER = (
+    "def _n2a_run_top_level_await(source, namespace):\n"
+    "    import ast, asyncio, inspect\n"
+    "    code = compile(source, '<notebook cell>', 'exec', "
+    "flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)\n"
+    "    coroutine = eval(code, namespace)\n"
+    "    if not inspect.iscoroutine(coroutine):\n"
+    "        return\n"
+    "    try:\n"
+    "        asyncio.get_running_loop()\n"
+    "    except RuntimeError:\n"
+    "        asyncio.run(coroutine)\n"
+    "    else:\n"
+    "        # Imported while uvicorn's loop is already running.\n"
+    "        import concurrent.futures\n"
+    "        with concurrent.futures.ThreadPoolExecutor(1) as pool:\n"
+    "            pool.submit(asyncio.run, coroutine).result()\n\n"
+)
+
+
+def _has_top_level_await(statement):
+    """Whether `statement` awaits (or uses `async for` / `async with` / an
+    async comprehension) outside any function, lambda or class body."""
+    stack = [statement]
+    while stack:
+        node = stack.pop()
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+                continue
+            if isinstance(child, (ast.Await, ast.AsyncFor, ast.AsyncWith)):
+                return True
+            if isinstance(child, ast.comprehension) and child.is_async:
+                return True
+            stack.append(child)
+    return False
+
+
+def _run_top_level_awaits(combined_code):
+    """`(code, prelude)` where each top-level statement that awaits outside a
+    function -- legal in Jupyter, a SyntaxError in a module -- is replaced by
+    a call that runs it the way IPython does (compile with
+    PyCF_ALLOW_TOP_LEVEL_AWAIT, then drive the coroutine to completion) in
+    the module's own namespace, keeping the line count. Before this, one
+    `data = await fetch()` cell made the whole generated app fail to import.
+    Code without such statements is returned untouched with an empty prelude.
+    """
+    try:
+        tree = ast.parse(combined_code)
+    except SyntaxError:
+        return combined_code, ""
+    lines = combined_code.split("\n")
+    spans = [
+        (node.lineno, node.end_lineno) for node in tree.body
+        if node.col_offset == 0 and _has_top_level_await(node)
+    ]
+    if not spans:
+        return combined_code, ""
+    for start, end in reversed(spans):
+        source = "\n".join(lines[start - 1:end])
+        lines[start - 1:end] = [
+            f"_n2a_run_top_level_await({source!r}, globals())"
+        ] + [""] * (end - start)
+    return "\n".join(lines), _TOP_LEVEL_AWAIT_RUNNER
+
+
 def _with_jupyter_prelude(combined_code, extra_prelude=""):
     """`combined_code` with _jupyter_builtin_prelude's stubs inserted -- at the
     very top, or, for a notebook that opens with `from __future__` imports
@@ -474,6 +539,8 @@ def _with_jupyter_prelude(combined_code, extra_prelude=""):
     Python requires those to be the module's first statements, so a stub
     placed above them is a SyntaxError. Such a notebook used to get no stubs
     at all, and a top-level display(...) still crashed the app on import."""
+    combined_code, await_prelude = _run_top_level_awaits(combined_code)
+    extra_prelude += await_prelude
     prelude = _jupyter_builtin_prelude(combined_code)
     if "def get_ipython" in prelude:
         combined_code = _neutralize_ipython_shell_calls(combined_code)

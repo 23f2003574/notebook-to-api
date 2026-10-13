@@ -15088,3 +15088,57 @@ def test_none_default_parameters_accept_an_explicit_null_but_still_reject_bad_ty
         sys.path.remove(str(tmp_path))
         for name in [m for m in sys.modules if m.startswith("nonepkg")]:
             del sys.modules[name]
+
+
+def test_top_level_await_cells_run_at_import_instead_of_breaking_the_app(tmp_path):
+    """Jupyter lets a cell `await` at the top level; pasted into a module that
+    is a SyntaxError, which used to stop the whole generated app importing.
+    Such statements now run to completion in the module namespace, including
+    when the import happens inside an already-running event loop (uvicorn)."""
+    import asyncio
+    import importlib
+
+    from fastapi.testclient import TestClient
+
+    notebook = tmp_path / "nb.ipynb"
+    notebook_obj = nbformat.v4.new_notebook()
+    notebook_obj.cells = [
+        nbformat.v4.new_code_cell(
+            "import asyncio\n"
+            "async def fetch():\n"
+            "    await asyncio.sleep(0)\n"
+            "    return 5"
+        ),
+        nbformat.v4.new_code_cell("base = await fetch()"),
+        nbformat.v4.new_code_cell("async def agen():\n    yield 2\n    yield 3"),
+        nbformat.v4.new_code_cell("squares = [x * x async for x in agen()]"),
+        nbformat.v4.new_code_cell(
+            "def add(a: int) -> list:\n    return [a + base, squares]\n"
+        ),
+    ]
+    nbformat.write(notebook_obj, str(notebook))
+    compile_notebook(str(notebook), str(tmp_path / "awaitpkg"))
+
+    module_source = (tmp_path / "awaitpkg" / "runtime" / "notebook_module.py").read_text()
+    compile(module_source, "notebook_module.py", "exec")  # no SyntaxError
+
+    sys.path.insert(0, str(tmp_path))
+    try:
+        app = importlib.import_module("awaitpkg.app").app
+        response = TestClient(app).post(
+            "/add", json={"a": 1}, headers={"X-API-Key": "notebook-to-api-dev-key"}
+        )
+        assert response.json() == {"result": [6, [4, 9]]}
+
+        for name in [m for m in sys.modules if m.startswith("awaitpkg")]:
+            del sys.modules[name]
+
+        async def import_inside_running_loop():
+            return importlib.import_module("awaitpkg.app").app
+
+        looped = asyncio.run(import_inside_running_loop())
+        assert any(route.path == "/add" for route in looped.routes)
+    finally:
+        sys.path.remove(str(tmp_path))
+        for name in [m for m in sys.modules if m.startswith("awaitpkg")]:
+            del sys.modules[name]
