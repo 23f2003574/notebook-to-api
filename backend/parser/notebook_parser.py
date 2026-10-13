@@ -372,9 +372,18 @@ def notebook_kernel_language(notebook):
 
 
 def load_notebook(notebook_path):
-    with open(notebook_path, "r", encoding="utf-8") as f:
+    # utf-8-sig: Windows editors save a notebook with a UTF-8 byte-order mark,
+    # which plain utf-8 leaves in the text and nbformat then rejects as "not
+    # JSON" although the file is a valid notebook. Without a BOM it is
+    # identical to utf-8.
+    with open(notebook_path, "r", encoding="utf-8-sig") as f:
         try:
             notebook = nbformat.read(f, as_version=4)
+        except UnicodeDecodeError as exc:
+            raise ValueError(
+                f"{notebook_path} is not a UTF-8 text file, so it cannot be a "
+                f"Jupyter notebook (.ipynb files are UTF-8 JSON): {exc}"
+            ) from exc
         except (AttributeError, TypeError) as exc:
             # Valid JSON that is not a notebook (a top-level list, a cell
             # source of the wrong type) crashed nbformat's own reader with
@@ -385,6 +394,11 @@ def load_notebook(notebook_path):
             ) from exc
 
     for position, cell in enumerate(notebook.get("cells", []), start=1):
+        if cell.get("cell_type") == "code" and "source" not in cell:
+            raise ValueError(
+                f"Notebook cell {position} is a code cell with no 'source' "
+                "field: expected text or a list of text lines."
+            )
         if not isinstance(cell.get("source", ""), str):
             raise ValueError(
                 f"Notebook cell {position} has an invalid 'source' "

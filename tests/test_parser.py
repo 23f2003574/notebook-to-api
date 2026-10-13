@@ -826,3 +826,38 @@ def test_load_notebook_explains_valid_json_that_is_not_a_notebook(tmp_path):
                    "source": ["x = 1\n", "y = 2"]}],
     }), encoding="utf-8")
     assert load_notebook(str(fine)).cells[0].source == "x = 1\ny = 2"
+
+
+def test_load_notebook_accepts_a_utf8_bom_and_explains_a_missing_source_or_binary_file(tmp_path):
+    """A notebook saved with a UTF-8 byte-order mark (common from Windows
+    editors) was rejected as "not JSON"; a code cell with no 'source' key
+    crashed later with a bare AttributeError: source; and a binary file
+    raised a raw UnicodeDecodeError with no mention of notebooks."""
+    import json
+
+    from backend.parser.notebook_parser import load_notebook
+
+    def notebook(cells):
+        return json.dumps(
+            {"nbformat": 4, "nbformat_minor": 5, "metadata": {}, "cells": cells}
+        )
+
+    code = {"cell_type": "code", "metadata": {}, "outputs": [],
+            "execution_count": None, "source": "x = 1"}
+
+    with_bom = tmp_path / "bom.ipynb"
+    with_bom.write_bytes(b"\xef\xbb\xbf" + notebook([code]).encode("utf-8"))
+    assert load_notebook(str(with_bom)).cells[0].source == "x = 1"
+
+    no_source = tmp_path / "no_source.ipynb"
+    no_source.write_text(
+        notebook([code, {k: v for k, v in code.items() if k != "source"}]),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="cell 2 is a code cell with no 'source'"):
+        load_notebook(str(no_source))
+
+    binary = tmp_path / "binary.ipynb"
+    binary.write_bytes(b"\xff\xfe\x00\x01\x80")
+    with pytest.raises(ValueError, match="not a UTF-8 text file"):
+        load_notebook(str(binary))
