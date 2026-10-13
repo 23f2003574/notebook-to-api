@@ -31516,3 +31516,38 @@ def test_inspect_command_describes_new_hazard_kinds_precisely(tmp_path):
     assert "lists 'inbox/*', which matches no files the compiled app ships (nothing beside" in proc.stdout
     assert "Cell 1, line 6: open('weights.txt') inside predict()" in proc.stdout
     assert "-- every call to predict() will fail" in proc.stdout
+
+
+def test_export_sdk_after_compile_exports_the_schema_itself_when_none_exists_yet(tmp_path):
+    """`compile` never writes openapi.json, so `export-sdk --app-dir built`
+    straight after it died with a bare "[Errno 2] No such file or directory:
+    'built/openapi.json'". It now exports the app's schema first; an
+    explicit --openapi that is missing is still reported as missing."""
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    compile_proc = _run_cli(
+        ["compile", str(notebook_path), "--output", "built"], cwd=workdir
+    )
+    assert compile_proc.returncode == 0, compile_proc.stdout + compile_proc.stderr
+    assert not (workdir / "built" / "openapi.json").exists()
+
+    proc = _run_cli(
+        ["export-sdk", "--app-dir", "built", "--output", "built/client.py"],
+        cwd=workdir,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "from the compiled app first" in proc.stderr
+    assert (workdir / "built" / "openapi.json").exists()
+    assert "def add(" in (workdir / "built" / "client.py").read_text(encoding="utf-8")
+
+    missing = _run_cli(
+        ["export-sdk", "--openapi", "nowhere/openapi.json", "--output", "x.py"],
+        cwd=workdir,
+    )
+    assert missing.returncode == 1
+    assert "nowhere/openapi.json" in missing.stdout + missing.stderr

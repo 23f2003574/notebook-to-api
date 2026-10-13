@@ -2472,6 +2472,28 @@ def _dispatch_core_command(args):
             if fallback_path:
                 openapi_path = fallback_path
 
+        # `compile --output built` followed by `export-sdk --app-dir built`
+        # died with a bare "[Errno 2] No such file or directory:
+        # 'built/openapi.json'": compile never writes the schema, and the
+        # SDK step only ever read one an earlier `export-openapi` left
+        # there. When the app itself is right there and no --openapi was
+        # given, export its schema now (exactly what export-openapi would
+        # have written), so the two commands chain.
+        if (
+            not os.path.isfile(openapi_path)
+            and not args.openapi
+            and os.path.isfile(os.path.join(args.app_dir, "app.py"))
+        ):
+            from backend.exporters.openapi_exporter import export_openapi_schema
+            from backend.compiler import package_name_for_output_dir
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                export_openapi_schema(
+                    openapi_path, package_name_for_output_dir(args.app_dir),
+                    format="json", app_dir=args.app_dir,
+                )
+            print(f"Exported {openapi_path} from the compiled app first.", file=sys.stderr)
+
         if args.language == "typescript":
             from backend.exporters.sdk_generator import generate_typescript_sdk as generate_sdk
             output = args.output or os.path.join(openapi_dir, "sdk", "typescript_client.ts")
