@@ -504,9 +504,17 @@ def extract_functions_from_code(code):
             # didn't already declare by name). Defaults to {} so a caller
             # who has nothing extra to pass can omit the field entirely.
             if node.args.kwarg:
+                # `**kwargs: str` constrains every value to str, exactly as
+                # `*args: int` constrains each item (above); it used to be
+                # a fixed Dict[str, Any], so the annotation was neither
+                # enforced nor shown in the OpenAPI schema.
+                kwarg_type = (
+                    ast.unparse(node.args.kwarg.annotation)
+                    if node.args.kwarg.annotation else "Any"
+                )
                 args.append({
                     "name": node.args.kwarg.arg,
-                    "type": "Dict[str, Any]",
+                    "type": f"Dict[str, {kwarg_type}]",
                     "default": {},
                     "default_is_literal": True,
                     "has_default": True,

@@ -15275,3 +15275,44 @@ def test_recompile_removes_local_modules_the_notebook_no_longer_ships(tmp_path):
     assert not (runtime / "mylib").exists()
     assert not (runtime / ".shipped_modules.json").exists()
     assert (runtime / "mine.py").exists() and (runtime / "notebook_module.py").exists()
+
+
+def test_var_keyword_annotation_is_enforced_and_documented_like_var_positional(tmp_path):
+    """`**kw: str` was always a Dict[str, Any]: {"kw": {"z": 1}} reached the
+    notebook function as an int and the OpenAPI schema said any value, while
+    `*args: int` already rejected "x" with a 422. Both now follow the
+    annotation; an unannotated `**opts` still takes any value."""
+    import importlib
+
+    from fastapi.testclient import TestClient
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "def typed(a: int, *args: int, **kw: str) -> dict:\n"
+        "    return {'a': a, 'args': list(args), 'kw': kw}\n"
+        "def untyped(a: int, **opts) -> dict:\n"
+        "    return opts\n",
+    )
+    compile_notebook(str(notebook), str(tmp_path / "kwpkg"))
+
+    sys.path.insert(0, str(tmp_path))
+    try:
+        app = importlib.import_module("kwpkg.app").app
+        client = TestClient(app, raise_server_exceptions=False)
+        headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+        ok = client.post("/typed", json={"a": 1, "args": [2], "kw": {"z": "q"}}, headers=headers)
+        assert ok.json()["result"] == {"a": 1, "args": [2], "kw": {"z": "q"}}
+        assert client.post("/typed", json={"a": 1, "kw": {"z": 1}}, headers=headers).status_code == 422
+        assert client.post("/typed", json={"a": 1, "args": ["x"]}, headers=headers).status_code == 422
+
+        props = app.openapi()["components"]["schemas"]["TypedRequest"]["properties"]
+        assert props["kw"]["additionalProperties"] == {"type": "string"}
+
+        mixed = client.post("/untyped", json={"a": 1, "opts": {"n": 1, "s": "x"}}, headers=headers)
+        assert mixed.json()["result"] == {"n": 1, "s": "x"}
+    finally:
+        sys.path.remove(str(tmp_path))
+        for name in [m for m in sys.modules if m.startswith("kwpkg")]:
+            del sys.modules[name]
