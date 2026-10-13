@@ -11471,11 +11471,34 @@ from fastapi.testclient import TestClient
 client = TestClient(app, raise_server_exceptions=False)
 headers = {{"X-API-Key": "notebook-to-api-dev-key", "Content-Type": "application/json"}}
 
+# The handler itself, fed an error whose echoed input is 5000 levels deep
+# (what made jsonable_encoder raise RecursionError), on any Python version.
+import asyncio
+import json
+from fastapi.exceptions import RequestValidationError
+
+nested = []
+for _ in range(5000):
+    nested = [nested]
+exc = RequestValidationError(
+    [{{"type": "string_type", "loc": ("body", "label"), "msg": "Input should be a valid string", "input": nested}}]
+)
+handler = app.exception_handlers[RequestValidationError]
+direct = asyncio.run(handler(None, exc))
+assert direct.status_code == 422, direct.status_code
+assert direct.headers["content-type"].startswith("application/json")
+assert json.loads(direct.body)["detail"][0]["loc"] == ["body"], direct.body
+
+# Over HTTP: where the body still parses (Python 3.12+) the handler answers
+# 422; older versions' JSON parser refuses a body this deep first and
+# FastAPI answers 400. Either is a JSON error, never a plain-text 500.
 deep = b'{{"label": ' + b"[" * 5000 + b"]" * 5000 + b"}}"
 response = client.post("/pick", content=deep, headers=headers)
-assert response.status_code == 422, (response.status_code, response.text[:200])
+assert response.status_code in (400, 422), (response.status_code, response.text[:200])
 assert response.headers["content-type"].startswith("application/json")
-assert response.json()["detail"][0]["loc"] == ["body"], response.text
+assert "detail" in response.json(), response.text
+if response.status_code == 422:
+    assert response.json()["detail"][0]["loc"] == ["body"], response.text
 
 # Ordinary validation errors keep FastAPI's usual shape.
 response = client.post("/pick", json={{"count": "many"}}, headers=headers)
