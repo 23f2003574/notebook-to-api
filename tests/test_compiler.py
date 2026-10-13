@@ -54,26 +54,26 @@ from backend.generator.kubernetes_generator import (
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_compiler_pipeline():
+def test_compiler_pipeline(tmp_path):
+    """Compiles the sample notebook into a temporary directory. It used to
+    write into the tracked test_generated/ folder (relative to the working
+    directory) and only check the files exist -- they already did in git, so
+    the test passed even when compile_notebook wrote nothing, and every run
+    left tracked files modified."""
 
-    output_dir = "test_generated"
+    output_dir = tmp_path / "sample_app"
 
     compile_notebook(
-        "notebooks/sample.ipynb",
-        output_dir
+        str(PROJECT_ROOT / "notebooks" / "sample.ipynb"),
+        str(output_dir),
     )
 
-    assert Path(
-        f"{output_dir}/app.py"
-    ).exists()
-
-    assert Path(
-        f"{output_dir}/requirements.txt"
-    ).exists()
-
-    assert Path(
-        f"{output_dir}/Dockerfile"
-    ).exists()
+    app_source = (output_dir / "app.py").read_text(encoding="utf-8")
+    assert "FastAPI(" in app_source
+    assert "@app.post('/add'" in app_source or '@app.post("/add"' in app_source
+    assert (output_dir / "runtime" / "notebook_module.py").is_file()
+    assert "fastapi" in (output_dir / "requirements.txt").read_text(encoding="utf-8").lower()
+    assert "uvicorn" in (output_dir / "Dockerfile").read_text(encoding="utf-8")
 
 
 def test_compiler_pipeline_dockerfile_runs_as_non_root_with_a_healthcheck(tmp_path):
