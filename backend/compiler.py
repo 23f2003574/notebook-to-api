@@ -597,10 +597,50 @@ def _with_jupyter_prelude(combined_code, extra_prelude=""):
     return "\n".join(lines[:insert_after_line]) + "\n" + prelude + "\n".join(lines[insert_after_line:])
 
 
+# Which local modules/packages the last compile shipped, so the next one can
+# remove those the notebook no longer uses. Without it a dropped `import
+# helper` (or a removed `%%writefile helper.py`) left runtime/helper.py in the
+# output directory and in every later Docker image.
+SHIPPED_MODULES_MANIFEST = ".shipped_modules.json"
+
+
+def _remove_stale_local_modules(local_modules, runtime_dir):
+    """Delete the modules/packages a previous compile recorded in the
+    manifest that `local_modules` no longer includes, then record the current
+    set. Only manifest-listed top-level names directly inside `runtime_dir`
+    are ever removed; the manifest is dropped when nothing is shipped."""
+    runtime_dir = Path(runtime_dir).resolve()
+    manifest_path = runtime_dir / SHIPPED_MODULES_MANIFEST
+    try:
+        previous = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(previous, list):
+            previous = []
+    except (OSError, ValueError):
+        previous = []
+
+    for name in previous:
+        if (
+            not isinstance(name, str) or name in local_modules
+            or not name.isidentifier() or name == "notebook_module"
+        ):
+            continue
+        (runtime_dir / f"{name}.py").unlink(missing_ok=True)
+        stale_package = runtime_dir / name
+        if stale_package.is_dir() and not stale_package.is_symlink():
+            shutil.rmtree(stale_package)
+
+    if local_modules:
+        manifest_path.write_text(json.dumps(sorted(local_modules), indent=2) + "\n", encoding="utf-8")
+    else:
+        manifest_path.unlink(missing_ok=True)
+
+
 def _ship_local_modules(local_modules, runtime_dir):
     """Copy each local module/package into the runtime directory (replacing
     a stale copy from an earlier compile), so the compiled app -- and the
-    Docker image, which copies the whole output directory -- carries them."""
+    Docker image, which copies the whole output directory -- carries them.
+    Modules a previous compile shipped that this one doesn't are removed."""
+    _remove_stale_local_modules(local_modules, runtime_dir)
     for name, source in local_modules.items():
         if isinstance(source, str):
             (runtime_dir / f"{name}.py").write_text(source, encoding="utf-8")
@@ -719,8 +759,7 @@ def write_runtime_module(code_cells, output_dir, local_modules=None, data_files=
     combined_code = _with_jupyter_prelude(combined_code, extra_prelude=extra_prelude)
     if data_files:
         combined_code = combined_code.rstrip("\n") + "\n\n" + _DATA_FILES_CHDIR_EPILOGUE
-    if local_modules:
-        _ship_local_modules(local_modules, runtime_path.parent)
+    _ship_local_modules(local_modules or {}, runtime_path.parent)
     _sync_shipped_data_files(data_files, runtime_path.parent)
 
     with open(runtime_path, "w", encoding="utf-8") as f:

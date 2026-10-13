@@ -15240,3 +15240,38 @@ def test_distribution_name_for_import_maps_twenty_three_more_mismatched_import_n
     }
     assert {"scikit-optimize", "djangorestframework", "kafka-python"} <= names
     assert not {"skopt", "rest_framework", "kafka"} & names
+
+
+def test_recompile_removes_local_modules_the_notebook_no_longer_ships(tmp_path):
+    """Dropping `import helper` (or a `%%writefile helper.py` cell) left
+    runtime/helper.py -- and any sibling package -- in the output directory
+    and in every later Docker image. Only what an earlier compile recorded as
+    shipped is removed; files the user put there themselves are kept."""
+    import nbformat
+
+    (tmp_path / "mylib").mkdir()
+    (tmp_path / "mylib" / "__init__.py").write_text("Y = 2\n")
+    notebook_path = tmp_path / "nb.ipynb"
+    out = tmp_path / "out"
+
+    def write(*cells):
+        notebook = nbformat.v4.new_notebook()
+        notebook.cells = [nbformat.v4.new_code_cell(c) for c in cells]
+        nbformat.write(notebook, str(notebook_path))
+
+    write(
+        "%%writefile helper.py\nX = 1\n",
+        "import helper\nimport mylib\n\ndef f(a: int) -> int:\n    return a + helper.X + mylib.Y\n",
+    )
+    compile_notebook(str(notebook_path), str(out))
+    runtime = out / "runtime"
+    assert (runtime / "helper.py").exists() and (runtime / "mylib" / "__init__.py").exists()
+    (runtime / "mine.py").write_text("USER = 1\n")
+
+    write("def f(a: int) -> int:\n    return a\n")
+    compile_notebook(str(notebook_path), str(out))
+
+    assert not (runtime / "helper.py").exists()
+    assert not (runtime / "mylib").exists()
+    assert not (runtime / ".shipped_modules.json").exists()
+    assert (runtime / "mine.py").exists() and (runtime / "notebook_module.py").exists()
