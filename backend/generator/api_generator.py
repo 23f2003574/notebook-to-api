@@ -332,6 +332,20 @@ RESERVED_PYDANTIC_FIELD_NAMES = frozenset({
 })
 
 
+# Names a request model's class body looks up while evaluating annotations
+# (`list: list = None`, `float: float = 1.5`, `Optional: Optional[int]`). A
+# field of the same name binds in the class namespace first, so Pydantic
+# fails at import with "Error when building FieldInfo from annotated
+# attribute" -- crashing the whole generated app for a notebook function
+# whose parameter is merely called `list` or `str`. Such fields are stored
+# under a `p_` attribute with the real name kept as the alias.
+_ANNOTATION_SHADOWING_NAMES = frozenset(
+    {name for name, value in vars(builtins).items() if isinstance(value, type)}
+    | {"Annotated", "Any", "Dict", "Field", "List", "Literal", "Optional",
+       "Set", "Tuple", "Union"}
+)
+
+
 class ReservedParameterNameError(ValueError):
     """A notebook function parameter's name collides with an attribute
     or method `pydantic.BaseModel` itself defines -- see
@@ -835,7 +849,7 @@ def _field_name(arg):
     parameter's actual name.
     """
     name = arg["name"]
-    if name in RESERVED_PYDANTIC_FIELD_NAMES:
+    if name in RESERVED_PYDANTIC_FIELD_NAMES or name in _ANNOTATION_SHADOWING_NAMES:
         return f"p_{name}"
     return f"p{name}" if name.startswith("_") else name
 

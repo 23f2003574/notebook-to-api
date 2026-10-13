@@ -15005,3 +15005,43 @@ def test_timm_prefetch_sees_through_import_aliases_but_not_other_create_models()
     ]
 
     assert hub_model_ids(cells) == ["timm:efficientnet_b0", "timm:resnet34"]
+
+
+def test_parameters_named_like_builtin_types_compile_and_keep_their_json_keys(tmp_path):
+    """`def f(list: list, str: str = 'x')` crashed the generated app at import
+    (the field name shadowed its own annotation inside the request model's
+    class body); such fields now live under a `p_` attribute and keep the
+    real parameter name as the JSON key."""
+    import importlib
+
+    from fastapi.testclient import TestClient
+
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook,
+        "def shadow(list: list, str: str = 'x', float: float = 1.5, type: str = 't') -> dict:\n"
+        "    return {'list': list, 'str': str, 'float': float, 'type': type}\n",
+    )
+    compile_notebook(str(notebook), str(tmp_path / "shadowpkg"))
+
+    sys.path.insert(0, str(tmp_path))
+    try:
+        app = importlib.import_module("shadowpkg.app").app
+        client = TestClient(app, raise_server_exceptions=False)
+        headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+        ok = client.post("/shadow", json={"list": [1, 2], "float": 2.5}, headers=headers)
+        assert ok.status_code == 200, ok.text
+        assert ok.json()["result"] == {
+            "list": [1, 2], "str": "x", "float": 2.5, "type": "t",
+        }
+
+        props = app.openapi()["components"]["schemas"]["ShadowRequest"]["properties"]
+        assert {"list", "str", "float", "type"} <= set(props)
+
+        missing = client.post("/shadow", json={}, headers=headers)
+        assert missing.status_code == 422
+    finally:
+        sys.path.remove(str(tmp_path))
+        for name in [m for m in sys.modules if m.startswith("shadowpkg")]:
+            del sys.modules[name]
