@@ -15508,3 +15508,40 @@ def test_compile_refuses_to_overwrite_a_users_own_files_but_recompiles_its_own_o
     compile_notebook(str(notebook_path), str(clean))
     compile_notebook(str(notebook_path), str(clean))  # recompile in place
     assert (clean / "app.py").is_file()
+
+
+def test_compile_maps_removed_stdlib_modules_to_their_pypi_backports(tmp_path):
+    """On Python 3.12/3.13 `import cgi`, `imghdr`, `telnetlib`, `imp` or
+    `distutils` are no longer stdlib, and requirements.txt listed those bare
+    names -- unrelated or nonexistent PyPI projects -- so the image failed
+    at pip install or at import. They map to their backports; on an older
+    interpreter they are still stdlib and add nothing."""
+    import sys
+    from backend.compiler import compile_notebook
+
+    modules = {
+        "cgi": "legacy-cgi", "imghdr": "standard-imghdr",
+        "telnetlib": "standard-telnetlib", "imp": "zombie-imp",
+        "distutils": "setuptools",
+    }
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook_path,
+        "import cgi, imghdr, telnetlib, imp, distutils\n"
+        "def f(n: int) -> int:\n    return n\n",
+    )
+    output_dir = tmp_path / "out"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    names = {
+        line.split("==")[0].split(" ")[0]
+        for line in (output_dir / "requirements.txt").read_text().splitlines()
+    }
+    for module, distribution in modules.items():
+        if module in sys.stdlib_module_names:
+            assert distribution not in names or module == "distutils"
+            assert module not in names
+        else:
+            assert distribution in names, module
+            assert module not in names or module == distribution

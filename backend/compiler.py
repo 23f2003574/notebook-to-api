@@ -212,6 +212,31 @@ KNOWN_IMPORT_TO_DISTRIBUTION = {
     "markdown_it": "markdown-it-py",
     "haiku": "dm-haiku",
     "vertexai": "google-cloud-aiplatform",
+    # Modules removed from the standard library in Python 3.12 / 3.13. They
+    # only reach this table when the compiling interpreter (and so the
+    # Docker base image) no longer ships them; on older Pythons they are
+    # stdlib and filtered out before here. Bare, they named unrelated or
+    # nonexistent PyPI projects.
+    "distutils": "setuptools",
+    "imp": "zombie-imp",
+    "asyncore": "standard-asyncore",
+    "asynchat": "standard-asynchat",
+    "smtpd": "standard-smtpd",
+    "cgi": "legacy-cgi",
+    "cgitb": "legacy-cgi",
+    "aifc": "standard-aifc",
+    "audioop": "standard-audioop",
+    "chunk": "standard-chunk",
+    "crypt": "standard-crypt",
+    "imghdr": "standard-imghdr",
+    "mailcap": "standard-mailcap",
+    "nntplib": "standard-nntplib",
+    "pipes": "standard-pipes",
+    "sndhdr": "standard-sndhdr",
+    "sunau": "standard-sunau",
+    "telnetlib": "standard-telnetlib",
+    "uu": "standard-uu",
+    "xdrlib": "standard-xdrlib",
 }
 
 
