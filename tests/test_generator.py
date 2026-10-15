@@ -8706,7 +8706,7 @@ def test_timed_out_task_webhook_payload_says_so(monkeypatch):
 
     client = TestClient(namespace["app"], headers={"X-API-Key": "test-key"})
     response = client.post(
-        "/train_model", json={}, params={"callback_url": "https://example.com/hook"}
+        "/train_model", json={}, params={"callback_url": "https://example.test/hook"}
     )
 
     assert response.status_code == 200, response.text
