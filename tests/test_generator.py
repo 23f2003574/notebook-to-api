@@ -4374,6 +4374,47 @@ def test_evict_expired_tasks_never_evicts_a_processing_task(monkeypatch):
     assert "long-done" not in namespace["TASKS"]
 
 
+def test_failed_notebook_function_is_logged_with_its_traceback_for_the_operator(monkeypatch, caplog):
+    """The client got "'f' raised KeyError: ..." but the server logged only
+    the access-line 500, so `docker logs` had nothing to debug the notebook
+    function from. The traceback is now logged (sync and background)."""
+    import logging
+
+    code = generate_fastapi_code([
+        {"name": "lookup", "args": [], "return_type": "int"},
+        {"name": "process_data", "args": [], "return_type": "dict"},
+    ])
+    notebook_module = _register_fake_notebook_module(monkeypatch)
+
+    def lookup():
+        raise KeyError("missing-key")
+
+    def process_data():
+        raise ValueError("background-boom")
+
+    notebook_module.lookup = lookup
+    notebook_module.process_data = process_data
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+    with caplog.at_level(logging.ERROR, logger="uvicorn.error"):
+        sync = client.post("/lookup", json={}, headers=headers)
+        client.post("/process_data", json={}, headers=headers)
+
+    assert sync.status_code == 500
+    assert sync.json()["detail"] == "'lookup' raised KeyError: 'missing-key'"
+    records = {r.getMessage(): r for r in caplog.records if r.name == "uvicorn.error"}
+    sync_record = next(r for m, r in records.items() if m.startswith("'lookup' raised KeyError"))
+    assert sync_record.exc_info and sync_record.exc_info[0] is KeyError
+    background = next(r for m, r in records.items() if m.startswith("'process_data' raised ValueError"))
+    assert background.exc_info[0] is ValueError
+    assert "Traceback" not in sync.text  # the traceback stays in the log
+
+
 def test_background_task_result_survives_a_run_longer_than_the_ttl(monkeypatch):
     """TASK_TTL_SECONDS is documented as how long a result stays after the
     task completes, but it was measured from submission: a task that ran

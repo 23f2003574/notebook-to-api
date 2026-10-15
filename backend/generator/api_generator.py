@@ -23,7 +23,8 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "MAX_PENDING_TASKS", "WEBHOOK_TIMEOUT_SECONDS", "WEBHOOK_SECRET",
     "WEBHOOK_MAX_RETRIES", "WEBHOOK_RETRY_BACKOFF_SECONDS",
     "TASK_EXECUTION_TIMEOUT_SECONDS",
-    "REQUEST_TIMEOUT_SECONDS", "_call_notebook_function", "_REQUEST_TIMEOUTS",
+    "REQUEST_TIMEOUT_SECONDS", "_call_notebook_function", "_log_notebook_error",
+    "_NotebookTimeoutError", "_REQUEST_TIMEOUTS",
     "_ENDPOINT_TIMEOUTS", "_TASK_TIMEOUTS", "_TASK_TIMEOUT_FAILURES",
     "_ENDPOINT_RATE_LIMIT_WINDOWS", "_enforce_endpoint_rate_limit",
     "_ENDPOINT_RATE_LIMITED", "_RESPONSE_CACHE", "_RESPONSE_CACHE_LOCK",
@@ -2375,6 +2376,17 @@ def generate_fastapi_code(
     lines.append("    def __init__(self, original):")
     lines.append("        super().__init__(str(original))")
     lines.append("        self.original = original")
+    lines.append("")
+    lines.append("")
+    # The client only gets "'f' raised X: msg"; without this the operator's
+    # own logs (`docker logs`) showed nothing but the access-log's 500, with
+    # no traceback to debug the notebook function from.
+    lines.append("def _log_notebook_error(func_name, exc):")
+    lines.append("    import logging as _logging")
+    lines.append("    _logging.getLogger('uvicorn.error').error(")
+    lines.append("        \"'%s' raised %s: %s\", func_name, type(exc).__name__, exc,")
+    lines.append("        exc_info=exc,")
+    lines.append("    )")
     lines.append("")
     lines.append("")
     lines.append("async def _call_notebook_function(call, is_async=False, timeout=None):")
@@ -4984,6 +4996,7 @@ def generate_fastapi_code(
     lines.append("            if task_id in TASKS:")
     lines.append("                TASKS[task_id][\"webhook\"] = webhook_result")
     lines.append("    except Exception as e:")
+    lines.append("        _log_notebook_error(getattr(func, '__name__', 'unknown'), e)")
     lines.append("        if task_id in TASKS:")
     lines.append("            TASKS[task_id][\"status\"] = \"failed\"")
     lines.append("            TASKS[task_id][\"finished_at\"] = time.time()")
@@ -5929,6 +5942,7 @@ def generate_fastapi_code(
             lines.append("            headers={'X-Notebook-API-Timeout': 'true'},")
             lines.append("        )")
             lines.append("    except _NotebookTimeoutError as e:")
+            lines.append(f"        _log_notebook_error('{func_name}', e.original)")
             lines.append("        raise HTTPException(")
             lines.append("            status_code=500,")
             lines.append(
@@ -5936,6 +5950,7 @@ def generate_fastapi_code(
             )
             lines.append("        )")
             lines.append("    except Exception as e:")
+            lines.append(f"        _log_notebook_error('{func_name}', e)")
             lines.append("        raise HTTPException(")
             lines.append("            status_code=500,")
             lines.append(
