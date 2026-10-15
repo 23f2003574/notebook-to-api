@@ -1134,9 +1134,11 @@ def extract_imports_from_code(code):
             if node.module:
                 base_module = node.module.split(".")[0]
                 if base_module == "google" and not node.level:
+                    # `from google import genai` / `from google.cloud import
+                    # storage` name the product only in the imported alias.
                     modules = (
-                        [f"{node.module}.{alias.name}" for alias in node.names]
-                        if node.module == "google" else [node.module]
+                        [f"{node.module}.{alias.name}" for alias in node.names if alias.name != "*"]
+                        if node.module in ("google", "google.cloud") else [node.module]
                     )
                     for module in modules:
                         distribution = google_distribution_for_module(module)

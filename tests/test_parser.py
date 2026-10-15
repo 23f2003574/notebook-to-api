@@ -861,3 +861,22 @@ def test_load_notebook_accepts_a_utf8_bom_and_explains_a_missing_source_or_binar
     binary.write_bytes(b"\xff\xfe\x00\x01\x80")
     with pytest.raises(ValueError, match="not a UTF-8 text file"):
         load_notebook(str(binary))
+
+
+def test_from_google_cloud_import_maps_to_the_product_distribution():
+    from backend.parser.ast_parser import extract_imports_from_code
+
+    code = (
+        "from google.cloud import storage, bigquery\n"
+        "from google.cloud import *\n"
+        "from google.cloud.storage import Client\n"
+        "import google.cloud.firestore\n"
+        "from google import genai\n"
+    )
+
+    assert extract_imports_from_code(code) == {
+        "google-cloud-storage",
+        "google-cloud-bigquery",
+        "google-cloud-firestore",
+        "google-genai",
+    }
