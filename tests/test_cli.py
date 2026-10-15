@@ -31387,6 +31387,28 @@ def test_compile_reports_non_notebook_json_as_a_clean_error_not_a_traceback(tmp_
         assert "Traceback" not in proc.stderr
 
 
+def test_compile_names_the_malformed_cells_field_or_cell_instead_of_a_missing_key(tmp_path):
+    """'cells' as a string/object or a cell that is a bare number were reported
+    as "missing an expected key: 'str' object has no attribute 'get'"."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    base = {"nbformat": 4, "nbformat_minor": 5, "metadata": {}}
+    cases = {
+        "cells_str.ipynb": ({**base, "cells": "oops"}, "'cells' must be a list of cells, not str"),
+        "cells_dict.ipynb": ({**base, "cells": {"a": 1}}, "'cells' must be a list of cells, not dict"),
+        "cell_int.ipynb": ({**base, "cells": [1]}, "cell 1 must be an object"),
+    }
+
+    for name, (content, message) in cases.items():
+        path = workdir / name
+        path.write_text(json.dumps(content), encoding="utf-8")
+        proc = _run_cli(["compile", str(path), "--output", "out"], cwd=workdir)
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert message in proc.stderr
+        assert "missing an expected key" not in proc.stderr
+        assert "Traceback" not in proc.stderr
+
+
 def test_inspect_fail_on_startup_warnings_gates_ci(tmp_path):
     workdir = tmp_path / "workdir"
     workdir.mkdir()

@@ -371,6 +371,35 @@ def notebook_kernel_language(notebook):
     return language.strip().lower() if language else None
 
 
+def _notebook_structure_problem(notebook_path):
+    """Names the first structural fault in a notebook's raw JSON -- 'cells'
+    not a list, or a cell that is not an object -- or None. nbformat reports
+    these as "missing an expected key: 'str' object has no attribute 'get'",
+    which names neither the field nor the cell at fault."""
+    import json
+
+    try:
+        with open(notebook_path, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or "cells" not in data:
+        return None
+    cells = data["cells"]
+    if not isinstance(cells, list):
+        return (
+            f"Invalid notebook: 'cells' must be a list of cells, not "
+            f"{type(cells).__name__}."
+        )
+    for position, cell in enumerate(cells, start=1):
+        if not isinstance(cell, dict):
+            return (
+                f"Invalid notebook: cell {position} must be an object with "
+                f"'cell_type' and 'source', not {type(cell).__name__}."
+            )
+    return None
+
+
 def load_notebook(notebook_path):
     # utf-8-sig: Windows editors save a notebook with a UTF-8 byte-order mark,
     # which plain utf-8 leaves in the text and nbformat then rejects as "not
@@ -384,7 +413,12 @@ def load_notebook(notebook_path):
                 f"{notebook_path} is not a UTF-8 text file, so it cannot be a "
                 f"Jupyter notebook (.ipynb files are UTF-8 JSON): {exc}"
             ) from exc
-        except (AttributeError, TypeError) as exc:
+        except (AttributeError, TypeError, nbformat.ValidationError) as exc:
+            problem = _notebook_structure_problem(notebook_path)
+            if problem:
+                raise ValueError(problem) from exc
+            if isinstance(exc, nbformat.ValidationError):
+                raise
             # Valid JSON that is not a notebook (a top-level list, a cell
             # source of the wrong type) crashed nbformat's own reader with
             # a bare AttributeError/TypeError and a full traceback.
