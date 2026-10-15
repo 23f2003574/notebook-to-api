@@ -4415,6 +4415,48 @@ def test_failed_notebook_function_is_logged_with_its_traceback_for_the_operator(
     assert "Traceback" not in sync.text  # the traceback stays in the log
 
 
+def test_openapi_documents_the_auth_and_404_every_route_actually_returns(monkeypatch):
+    """The built-in management routes (/tasks, /cache, /auth/validate, ...)
+    answer 401 without a key and 404 for an unknown task_id, but the spec
+    declared neither -- and no `security`, so Swagger's Authorize and
+    generated clients treated them as open. Compare the served schema with
+    what every operation really does."""
+    code = generate_fastapi_code([
+        {"name": "lookup", "args": [], "return_type": "int"},
+        {"name": "process_data", "args": [], "return_type": "dict"},
+    ])
+    notebook_module = _register_fake_notebook_module(monkeypatch)
+    notebook_module.lookup = lambda: 1
+    notebook_module.process_data = lambda: {"ok": True}
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"], raise_server_exceptions=False)
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+    spec = client.get("/openapi.json").json()
+    checked = 0
+    for path, item in spec["paths"].items():
+        for method, operation in item.items():
+            url = path.replace("{task_id}", "unknown-task")
+            body = {"json": {}} if method == "post" else {}
+            unauthenticated = client.request(method.upper(), url, **body)
+            authenticated = client.request(method.upper(), url, headers=headers, **body)
+            documented = operation["responses"]
+            where = f"{method.upper()} {path}"
+            if unauthenticated.status_code == 401:
+                assert "401" in documented, where
+                assert operation.get("security") == [{"ApiKeyAuth": []}], where
+            else:
+                assert "401" not in documented, where  # open routes stay open
+            if authenticated.status_code != 200:
+                assert str(authenticated.status_code) in documented, where
+            checked += 1
+    assert checked > 20
+    assert "404" in spec["paths"]["/tasks/{task_id}"]["get"]["responses"]
+
+
 def test_background_task_result_survives_a_run_longer_than_the_ttl(monkeypatch):
     """TASK_TTL_SECONDS is documented as how long a result stays after the
     task completes, but it was measured from submission: a task that ran

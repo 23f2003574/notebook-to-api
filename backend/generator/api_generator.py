@@ -3114,6 +3114,37 @@ def generate_fastapi_code(
     lines.append("        'name': API_KEY_HEADER_NAME")
     lines.append("    }")
     lines.append("")
+    # The endpoint decorators declare security/401 themselves, but the
+    # built-in management routes (/tasks, /cache, /auth/validate, ...) also
+    # run verify_api_key and answer 401 -- and 404 for an unknown task_id --
+    # while the schema showed neither, so Swagger's Authorize button and
+    # generated clients treated them as open and error-free.
+    lines.append("    def _requires_api_key(dependant):")
+    lines.append("        return any(")
+    lines.append("            sub.call is verify_api_key or _requires_api_key(sub)")
+    lines.append("            for sub in dependant.dependencies")
+    lines.append("        )")
+    lines.append("")
+    lines.append("    for route in app.routes:")
+    lines.append("        dependant = getattr(route, 'dependant', None)")
+    lines.append("        if dependant is None or not _requires_api_key(dependant):")
+    lines.append("            continue")
+    lines.append("        for method in route.methods or ():")
+    lines.append("            operation = openapi_schema['paths'].get(route.path, {}).get(method.lower())")
+    lines.append("            if operation is None:")
+    lines.append("                continue")
+    lines.append("            operation.setdefault('security', [{'ApiKeyAuth': []}])")
+    lines.append("            responses = operation.setdefault('responses', {})")
+    lines.append("            responses.setdefault('401', {")
+    lines.append("                'description': 'Missing or invalid X-API-Key header.',")
+    lines.append("                'content': {'application/json': {'example': {'detail': 'Invalid API key'}}},")
+    lines.append("            })")
+    lines.append("            if '{task_id}' in route.path:")
+    lines.append("                responses.setdefault('404', {")
+    lines.append("                    'description': 'No task with this task_id (unknown, evicted or deleted).',")
+    lines.append("                    'content': {'application/json': {'example': {'detail': 'Task not found'}}},")
+    lines.append("                })")
+    lines.append("")
     # get_openapi() above silently drops any None-valued key from a
     # model's own "example" (set via model_config['json_schema_extra']
     # below, on every generated {Pascal}Request class) while rebuilding
