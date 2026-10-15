@@ -342,8 +342,11 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \\
 # so the port would stay hardcoded to 8000 no matter what $PORT a deploy
 # target set. Routing through `sh -c` lets `${{PORT:-8000}}` actually
 # expand at container start, falling back to 8000 when $PORT isn't set
-# (e.g. a local `docker run` with no other configuration).
-CMD ["sh", "-c", "uvicorn {package_name}.app:app --host 0.0.0.0 --port ${{PORT:-8000}}"]
+# (e.g. a local `docker run` with no other configuration). `exec` makes
+# uvicorn replace the shell as PID 1: a PID 1 shell ignores SIGTERM, so
+# `docker stop` / a k8s rollout waited out the grace period and SIGKILLed
+# the server mid-request instead of letting it drain.
+CMD ["sh", "-c", "exec uvicorn {package_name}.app:app --host 0.0.0.0 --port ${{PORT:-8000}}"]
 """
 
 

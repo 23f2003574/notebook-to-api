@@ -7170,7 +7170,7 @@ def test_dockerfile_content_is_a_pure_string_with_no_disk_access(tmp_path, monke
 
     assert content.startswith("FROM python:3.12-slim")
     assert "COPY . my_app/" in content
-    assert 'CMD ["sh", "-c", "uvicorn my_app.app:app' in content
+    assert 'CMD ["sh", "-c", "exec uvicorn my_app.app:app' in content
     assert list(tmp_path.iterdir()) == []
 
 

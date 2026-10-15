@@ -15566,3 +15566,51 @@ def test_compiled_docker_compose_file_is_valid_for_a_non_ascii_package_name(tmp_
     services = yaml.safe_load((output_dir / "docker-compose.yml").read_text(encoding="utf-8"))["services"]
     assert list(services) == ["caf"]
     assert "café.app:app" in (output_dir / "Dockerfile").read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads /proc")
+def test_dockerfile_cmd_hands_pid_1_to_uvicorn_so_it_receives_sigterm(tmp_path):
+    """`CMD ["sh", "-c", "uvicorn ..."]` left the shell as PID 1 with uvicorn
+    as its child; a PID 1 shell ignores SIGTERM, so `docker stop` and k8s
+    rollouts waited out the grace period and SIGKILLed the server."""
+    import json
+    import subprocess
+    import time
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell("def add(a: int, b: int) -> int:\n    return a + b\n")
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    nbformat.write(notebook, str(notebook_path))
+    output_dir = tmp_path / "svc"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    cmd_line = next(
+        line for line in (output_dir / "Dockerfile").read_text(encoding="utf-8").splitlines()
+        if line.startswith("CMD ")
+    )
+    argv = json.loads(cmd_line[len("CMD "):])
+    # Stand-in for the real server: it only has to be what the shell launches.
+    stub_dir = tmp_path / "bin"
+    stub_dir.mkdir()
+    stub = stub_dir / "uvicorn"
+    stub.write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
+    stub.chmod(0o755)
+    env = dict(os.environ, PATH=f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+
+    process = subprocess.Popen(argv, env=env)
+    try:
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            args = Path(f"/proc/{process.pid}/cmdline").read_bytes().split(b"\0")
+            if any(a.endswith(b"uvicorn") for a in args[:2]):
+                break
+            time.sleep(0.05)
+        # The process we started must *be* uvicorn, not `sh -c ...`.
+        assert any(a.endswith(b"uvicorn") for a in args[:2]), args
+        process.terminate()
+        assert process.wait(timeout=5) != 0
+    finally:
+        process.kill()
+        process.wait()
