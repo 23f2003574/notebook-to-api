@@ -2631,7 +2631,13 @@ def generate_fastapi_code(
     lines.append("        task_id")
     lines.append("        for task_id, task in list(TASKS.items())")
     lines.append("        if task.get('status') != 'processing'")
-    lines.append("        and now - task.get('created_at', now) > TASK_TTL_SECONDS")
+    # The TTL runs from when the task finished, not from when it was
+    # submitted: a task that ran longer than the TTL was otherwise evictable
+    # the instant it completed, before its caller could poll the result.
+    lines.append(
+        "        and now - task.get('finished_at', task.get('created_at', now))"
+        " > TASK_TTL_SECONDS"
+    )
     lines.append("    ]")
     lines.append("    for task_id in expired_ids:")
     lines.append("        TASKS.pop(task_id, None)")
@@ -4910,6 +4916,7 @@ def generate_fastapi_code(
     # is just to let that happen quietly instead of crashing on it.
     lines.append("        if task_id in TASKS:")
     lines.append("            TASKS[task_id][\"status\"] = \"completed\"")
+    lines.append("            TASKS[task_id][\"finished_at\"] = time.time()")
     lines.append("            TASKS[task_id][\"result\"] = result")
     # Built from the local outcome directly, not read back from TASKS --
     # this must still deliver the real result even when the entry is
@@ -4953,6 +4960,7 @@ def generate_fastapi_code(
     )
     lines.append("        if task_id in TASKS:")
     lines.append("            TASKS[task_id][\"status\"] = \"failed\"")
+    lines.append("            TASKS[task_id][\"finished_at\"] = time.time()")
     lines.append("            TASKS[task_id][\"error\"] = timeout_error")
     # "timed_out": the machine-readable twin of a synchronous endpoint's
     # X-Notebook-API-Timeout header -- a task failed by its own execution
@@ -4978,6 +4986,7 @@ def generate_fastapi_code(
     lines.append("    except Exception as e:")
     lines.append("        if task_id in TASKS:")
     lines.append("            TASKS[task_id][\"status\"] = \"failed\"")
+    lines.append("            TASKS[task_id][\"finished_at\"] = time.time()")
     lines.append("            TASKS[task_id][\"error\"] = str(e)")
     lines.append("        if callback_url:")
     lines.append("            webhook_result = await anyio.to_thread.run_sync(")

@@ -4374,6 +4374,47 @@ def test_evict_expired_tasks_never_evicts_a_processing_task(monkeypatch):
     assert "long-done" not in namespace["TASKS"]
 
 
+def test_background_task_result_survives_a_run_longer_than_the_ttl(monkeypatch):
+    """TASK_TTL_SECONDS is documented as how long a result stays after the
+    task completes, but it was measured from submission: a task that ran
+    longer than the TTL was evicted by the next submission's sweep the
+    moment it finished, before its caller could fetch the result."""
+    import time as time_module
+
+    code = generate_fastapi_code(
+        [{"name": "process_data", "args": [], "return_type": "dict"}]
+    )
+    notebook_module = _register_fake_notebook_module(monkeypatch)
+    clock = [1000.0]
+    monkeypatch.setattr(time_module, "time", lambda: clock[0])
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    ttl = namespace["TASK_TTL_SECONDS"]
+
+    def slow_job():
+        clock[0] += ttl + 10  # runs longer than the whole TTL
+        return {"done": True}
+
+    notebook_module.process_data = slow_job
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+    first = client.post("/process_data", json={}, headers=headers).json()["task_id"]
+    clock[0] += 1
+    client.post("/process_data", json={}, headers=headers)  # sweeps expired tasks
+
+    fetched = client.get(f"/tasks/{first}", headers=headers)
+    assert fetched.status_code == 200, fetched.text
+    assert fetched.json()["result"] == {"done": True}
+    assert fetched.json()["finished_at"] > fetched.json()["created_at"]
+
+    clock[0] += ttl + 5  # now genuinely older than the TTL since finishing
+    client.post("/process_data", json={}, headers=headers)
+    assert client.get(f"/tasks/{first}", headers=headers).status_code == 404
+
+
 def test_evict_expired_tasks_prunes_idempotency_keys_pointing_at_gone_tasks(
     monkeypatch,
 ):
