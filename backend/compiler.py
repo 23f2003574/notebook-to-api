@@ -668,6 +668,27 @@ def _remove_stale_local_modules(local_modules, runtime_dir):
         manifest_path.unlink(missing_ok=True)
 
 
+def _local_package_ignore(package_dir):
+    """copytree `ignore=` for a notebook-local package: bytecode caches, plus
+    any symlink that resolves outside the package. copytree follows links, so
+    `pkg/leak.txt -> ../../private/secret.txt` copied the target's contents
+    into runtime/ and from there into the Docker image."""
+    root = Path(package_dir).resolve()
+    skip_caches = shutil.ignore_patterns("__pycache__", "*.pyc")
+
+    def ignore(directory, names):
+        ignored = set(skip_caches(directory, names))
+        for name in names:
+            path = Path(directory) / name
+            if path.is_symlink():
+                resolved = path.resolve()
+                if resolved != root and root not in resolved.parents:
+                    ignored.add(name)
+        return ignored
+
+    return ignore
+
+
 def _ship_local_modules(local_modules, runtime_dir):
     """Copy each local module/package into the runtime directory (replacing
     a stale copy from an earlier compile), so the compiled app -- and the
@@ -681,7 +702,7 @@ def _ship_local_modules(local_modules, runtime_dir):
             target = runtime_dir / name
             if target.exists():
                 shutil.rmtree(target)
-            shutil.copytree(source, target, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+            shutil.copytree(source, target, ignore=_local_package_ignore(source))
         else:
             shutil.copyfile(source, runtime_dir / f"{name}.py")
 

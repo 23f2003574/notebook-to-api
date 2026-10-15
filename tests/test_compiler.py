@@ -15647,3 +15647,42 @@ def test_requirements_name_the_pypi_projects_behind_socketio_mysql_paho_and_ffmp
         "mysql-connector-python", "ffmpeg-python",
     } <= names
     assert not names & {"socketio", "engineio", "paho", "mysql", "ffmpeg"}
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="needs symlinks")
+def test_local_package_symlink_pointing_outside_is_not_shipped_into_the_output(tmp_path):
+    """`pkg/leak.txt -> ../../private/secret.txt` was followed by copytree,
+    so the secret ended up in runtime/ and in the Docker image. A symlink
+    that stays inside the package is still shipped."""
+    notebook_dir = tmp_path / "nbdir"
+    package = notebook_dir / "pkg"
+    package.mkdir(parents=True)
+    private = tmp_path / "private"
+    private.mkdir()
+    (private / "secret.txt").write_text("TOPSECRET", encoding="utf-8")
+    (package / "__init__.py").write_text("X = 1\n", encoding="utf-8")
+    (package / "real.txt").write_text("ok", encoding="utf-8")
+    (package / "leak.txt").symlink_to(private / "secret.txt")
+    (package / "leakdir").symlink_to(private, target_is_directory=True)
+    (package / "inside.txt").symlink_to("real.txt")
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell("import pkg\ndef f(a: int) -> int:\n    return pkg.X + a\n")
+    )
+    notebook_path = notebook_dir / "nb.ipynb"
+    nbformat.write(notebook, str(notebook_path))
+    output_dir = tmp_path / "out" / "svc"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    shipped = output_dir / "runtime" / "pkg"
+    assert (shipped / "__init__.py").is_file()
+    assert (shipped / "real.txt").read_text(encoding="utf-8") == "ok"
+    assert (shipped / "inside.txt").read_text(encoding="utf-8") == "ok"
+    assert not (shipped / "leak.txt").exists()
+    assert not (shipped / "leakdir").exists()
+    assert "TOPSECRET" not in "".join(
+        p.read_text(encoding="utf-8", errors="ignore")
+        for p in output_dir.rglob("*") if p.is_file()
+    )
