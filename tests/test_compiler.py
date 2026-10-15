@@ -15614,3 +15614,36 @@ def test_dockerfile_cmd_hands_pid_1_to_uvicorn_so_it_receives_sigterm(tmp_path):
     finally:
         process.kill()
         process.wait()
+
+
+def test_requirements_name_the_pypi_projects_behind_socketio_mysql_paho_and_ffmpeg_imports(tmp_path):
+    """`import socketio` / `engineio` / `paho.mqtt` / `mysql.connector` /
+    `ffmpeg` went into requirements.txt verbatim: the first three are not
+    PyPI projects at all and the last two are unrelated packages."""
+    import re
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "import socketio\n"
+            "import engineio\n"
+            "import paho.mqtt.client as mqtt\n"
+            "import mysql.connector\n"
+            "import ffmpeg\n"
+            "def add(a: int, b: int) -> int:\n"
+            "    return a + b\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    nbformat.write(notebook, str(notebook_path))
+    output_dir = tmp_path / "svc"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    lines = (output_dir / "requirements.txt").read_text(encoding="utf-8").splitlines()
+    names = {re.split(r"[=<>~! ]", line, maxsplit=1)[0].lower() for line in lines if line}
+    assert {
+        "python-socketio", "python-engineio", "paho-mqtt",
+        "mysql-connector-python", "ffmpeg-python",
+    } <= names
+    assert not names & {"socketio", "engineio", "paho", "mysql", "ffmpeg"}

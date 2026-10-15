@@ -160,6 +160,14 @@ KNOWN_IMPORT_TO_DISTRIBUTION = {
     "serial": "pyserial",
     "usb": "pyusb",
     "zmq": "pyzmq",
+    # The bare import names below are not the PyPI projects people mean: there
+    # is no "socketio"/"engineio"/"paho" at all, and "mysql" and "ffmpeg" are
+    # unrelated packages, so a plain `pip install` failed or got the wrong code.
+    "socketio": "python-socketio",
+    "engineio": "python-engineio",
+    "paho": "paho-mqtt",
+    "mysql": "mysql-connector-python",
+    "ffmpeg": "ffmpeg-python",
     "Crypto": "pycryptodome",
     "nacl": "PyNaCl",
     "OpenSSL": "pyOpenSSL",
