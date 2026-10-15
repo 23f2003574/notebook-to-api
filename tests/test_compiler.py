@@ -15404,3 +15404,73 @@ def test_readme_running_locally_commands_work_from_where_they_say(tmp_path):
         [sys.executable, "-c", check], cwd=output_dir, capture_output=True, text=True
     )
     assert from_inside.returncode != 0
+
+
+def test_docker_image_file_tree_still_starts_and_serves_a_shipped_helper_module(tmp_path):
+    """The existing .dockerignore tests only check the file's text. Build the
+    image's /app tree for real -- the compiled folder minus what .dockerignore
+    excludes, copied to /app/<pkg> as `COPY . <pkg>/` does -- and run the app
+    from /app the way the Dockerfile's CMD does, so an ignore pattern that
+    swallows a runtime file (a shipped %%writefile helper, the runtime
+    package) fails here instead of at `docker run`."""
+    import fnmatch
+    import shutil
+    import subprocess
+    import sys
+    import textwrap
+    import nbformat
+    from backend.compiler import compile_notebook
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells = [
+        nbformat.v4.new_code_cell("%%writefile helper.py\ndef dbl(x):\n    return x * 2\n"),
+        nbformat.v4.new_code_cell("import helper\ndef double(n: int) -> int:\n    return helper.dbl(n)\n"),
+    ]
+    notebook_path = tmp_path / "nb.ipynb"
+    nbformat.write(notebook, str(notebook_path))
+    output_dir = tmp_path / "build" / "myapp"
+    compile_notebook(str(notebook_path), str(output_dir))
+    (output_dir / "__pycache__").mkdir()
+    (output_dir / "__pycache__" / "stale.pyc").write_bytes(b"x")
+
+    patterns = [
+        line.strip() for line in (output_dir / ".dockerignore").read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+
+    def ignored(relative):
+        parts = relative.split("/")
+        return any(
+            fnmatch.fnmatch(relative, p.rstrip("/")) or any(
+                fnmatch.fnmatch(part, p.rstrip("/")) for part in parts[: len(parts) if not p.endswith("/") else -1]
+            )
+            for p in patterns
+        )
+
+    image_app = tmp_path / "image" / "app"
+    for source in output_dir.rglob("*"):
+        relative = source.relative_to(output_dir).as_posix()
+        if source.is_file() and not ignored(relative):
+            target = image_app / "myapp" / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+
+    assert not (image_app / "myapp" / "Dockerfile").exists()
+    assert not (image_app / "myapp" / "__pycache__").exists()
+    assert (image_app / "myapp" / "runtime" / "helper.py").is_file()
+
+    script = textwrap.dedent(
+        """
+        from fastapi.testclient import TestClient
+        from myapp.app import app
+        client = TestClient(app)
+        headers = {"X-API-Key": "notebook-to-api-dev-key"}
+        assert client.get("/health").status_code == 200
+        response = client.post("/double", json={"n": 21}, headers=headers)
+        assert response.status_code == 200 and response.json() == {"result": 42}, response.text
+        """
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script], cwd=image_app, capture_output=True, text=True, timeout=60
+    )
+    assert proc.returncode == 0, proc.stderr
