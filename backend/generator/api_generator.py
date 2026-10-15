@@ -1570,10 +1570,16 @@ def generate_fastapi_code(
     lines.append("    if raw is None or not raw.strip():")
     lines.append("        raw = default")
     lines.append("    try:")
-    lines.append("        return cast(raw)")
+    lines.append("        value = cast(raw)")
     lines.append("    except ValueError:")
     lines.append("        kind = 'a whole number' if cast is int else 'a number'")
     lines.append("        raise RuntimeError(f'{name} must be {kind}, got {raw!r}') from None")
+    # Every setting read here is a size, count or duration, so -1 (or nan/inf)
+    # is never meaningful -- yet "-1" was accepted and then made every POST
+    # fail with 413 (MAX_REQUEST_BYTES) or 504 (REQUEST_TIMEOUT_SECONDS).
+    lines.append("    if not 0 <= value < float('inf'):")
+    lines.append("        raise RuntimeError(f'{name} must not be negative, got {raw!r}')")
+    lines.append("    return value")
     lines.append("")
     lines.append(
         'PUBLIC_URL = os.getenv('

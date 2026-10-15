@@ -9330,3 +9330,39 @@ def test_endpoint_accepts_its_own_schema_example_when_a_default_is_not_a_literal
     assert example == {"a": 0.0, "n": 3}
     assert response.status_code == 200, response.text
     assert response.json() == {"result": 3.0}
+
+
+@pytest.mark.parametrize(
+    "name, value",
+    [
+        ("NOTEBOOK_API_MAX_REQUEST_BYTES", "-1"),
+        ("NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS", "-1"),
+        ("NOTEBOOK_API_TASK_TTL_SECONDS", "-5"),
+        ("NOTEBOOK_API_WEBHOOK_RETRY_BACKOFF_SECONDS", "nan"),
+        ("NOTEBOOK_API_WEBHOOK_RETRY_BACKOFF_SECONDS", "inf"),
+    ],
+)
+def test_generated_app_refuses_to_start_on_a_negative_numeric_setting(monkeypatch, name, value):
+    """NOTEBOOK_API_MAX_REQUEST_BYTES=-1 was accepted and then answered
+    every POST with 413 (and REQUEST_TIMEOUT_SECONDS=-1 with 504); a bad
+    number now fails at startup naming the variable, like a non-number."""
+    code = generate_fastapi_code([{"name": "add", "args": [], "return_type": "int"}])
+    _register_fake_notebook_module(monkeypatch)
+    monkeypatch.setenv("NOTEBOOK_API_KEY", "test-key")
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(RuntimeError, match=f"{name} must not be negative"):
+        exec(compile(code, "<generated>", "exec"), {})
+
+
+def test_generated_app_accepts_zero_for_numeric_settings(monkeypatch):
+    code = generate_fastapi_code([{"name": "add", "args": [], "return_type": "int"}])
+    _register_fake_notebook_module(monkeypatch)
+    monkeypatch.setenv("NOTEBOOK_API_KEY", "test-key")
+    monkeypatch.setenv("NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS", "0")
+    monkeypatch.setenv("NOTEBOOK_API_RATE_LIMIT_PER_MINUTE", "0")
+
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    assert namespace["REQUEST_TIMEOUT_SECONDS"] == 0
