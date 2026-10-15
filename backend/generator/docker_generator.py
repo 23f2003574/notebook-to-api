@@ -1,3 +1,4 @@
+import re
 import shlex
 import textwrap
 
@@ -462,9 +463,15 @@ def docker_compose_content(package_name="generated", env_vars=None, notebook_env
             + "".join(f"      - {entry['name']}\n" for entry in notebook_env_vars)
         )
 
+    # Compose only accepts [a-zA-Z0-9._-] in a service name, while a Python
+    # package name may be any identifier (`café` is one): the file was
+    # rejected by `docker compose` outright. The service name is only a
+    # label -- the image still imports the real package_name.
+    service_name = re.sub(r"[^a-zA-Z0-9._-]", "-", package_name).strip("-") or "app"
+
     return (
         "services:\n"
-        f"  {package_name}:\n"
+        f"  {service_name}:\n"
         "    build: .\n"
         "    restart: unless-stopped\n"
         "    ports:\n"

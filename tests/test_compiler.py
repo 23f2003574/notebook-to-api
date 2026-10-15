@@ -15545,3 +15545,24 @@ def test_compile_maps_removed_stdlib_modules_to_their_pypi_backports(tmp_path):
         else:
             assert distribution in names, module
             assert module not in names or module == distribution
+
+
+def test_compiled_docker_compose_file_is_valid_for_a_non_ascii_package_name(tmp_path):
+    """Compose service names only allow [a-zA-Z0-9._-]; the output folder
+    `café` is a valid Python package, but its compose file was rejected
+    ("services additional properties 'café' not allowed")."""
+    import yaml
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell("def add(a: int, b: int) -> int:\n    return a + b\n")
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    nbformat.write(notebook, str(notebook_path))
+    output_dir = tmp_path / "café"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    services = yaml.safe_load((output_dir / "docker-compose.yml").read_text(encoding="utf-8"))["services"]
+    assert list(services) == ["caf"]
+    assert "café.app:app" in (output_dir / "Dockerfile").read_text(encoding="utf-8")
