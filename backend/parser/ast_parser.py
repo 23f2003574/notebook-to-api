@@ -1076,7 +1076,16 @@ def generate_example_payload(args):
             default is None and arg_type in ("list", "dict", "tuple", "set")
         )
 
-        if arg.get("has_default") and not default_is_none_for_a_container_type:
+        if arg.get("has_default") and not arg.get("default_is_literal", True):
+            # "default" holds the raw source of a non-literal expression
+            # (`math.pi`, `Color.RED`), not a value: sending that text as
+            # the example got a real 422 from the compiled endpoint, in
+            # Swagger's pre-filled body and in the curl/Postman/app-call
+            # payloads alike. Use the type's own valid placeholder, or
+            # leave the key out so the server applies the real default.
+            if arg_type in _EXAMPLE_TYPE_DEFAULTS:
+                payload[arg_name] = _EXAMPLE_TYPE_DEFAULTS[arg_type]
+        elif arg.get("has_default") and not default_is_none_for_a_container_type:
             payload[arg_name] = default
         else:
             payload[arg_name] = _EXAMPLE_TYPE_DEFAULTS.get(

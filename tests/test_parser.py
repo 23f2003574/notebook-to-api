@@ -880,3 +880,19 @@ def test_from_google_cloud_import_maps_to_the_product_distribution():
         "google-cloud-firestore",
         "google-genai",
     }
+
+
+def test_example_payload_never_contains_the_source_text_of_a_non_literal_default():
+    """`def f(a: float = math.pi, c: Color = Color.RED)` used to get the
+    example {"a": "math.pi", "c": "Color.RED"} -- the default's source text,
+    which the compiled endpoint rejects with a 422."""
+    from backend.parser.ast_parser import generate_example_payload
+
+    code = (
+        "import math\n"
+        "def f(a: float = math.pi, c: 'Color' = Color.RED, n: int = 3) -> float:\n"
+        "    return a\n"
+    )
+    func = extract_functions_from_code(code)[0]
+
+    assert generate_example_payload(func["args"]) == {"a": 0.0, "n": 3}

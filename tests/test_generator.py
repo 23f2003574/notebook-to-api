@@ -9298,3 +9298,35 @@ def test_info_endpoints_by_tag_is_empty_without_functions(monkeypatch):
     from fastapi.testclient import TestClient
 
     assert TestClient(namespace["app"]).get("/info").json()["endpoints_by_tag"] == {}
+
+
+def test_endpoint_accepts_its_own_schema_example_when_a_default_is_not_a_literal(monkeypatch):
+    """`a: float = math.pi` put the default's source text, "math.pi", in the
+    request example, so Swagger's pre-filled body (and the curl/app-call
+    payloads built from it) got a 422 from the endpoint they document."""
+    import math
+
+    from backend.parser.ast_parser import extract_functions_from_code
+
+    source = (
+        "import math\n"
+        "def f(a: float = math.pi, n: int = 3) -> float:\n"
+        "    return a + n\n"
+    )
+    code = generate_fastapi_code(extract_functions_from_code(source))
+    notebook_module = _register_fake_notebook_module(monkeypatch)
+    notebook_module.math = math
+    notebook_module.f = lambda a=math.pi, n=3: a + n
+    monkeypatch.setenv("NOTEBOOK_API_KEY", "test-key")
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"], headers={"X-API-Key": "test-key"})
+    example = client.get("/openapi.json").json()["components"]["schemas"]["FRequest"]["example"]
+    response = client.post("/f", json=example)
+
+    assert example == {"a": 0.0, "n": 3}
+    assert response.status_code == 200, response.text
+    assert response.json() == {"result": 3.0}
