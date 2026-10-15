@@ -877,9 +877,14 @@ Interactive docs are served at `/docs` (Swagger UI) and `/redoc`, unless \
 
 ## Running locally
 
+Run these from the directory that *contains* `{package_name}/` -- the app is \
+imported as the `{package_name}` package, so `uvicorn` can't find it from \
+inside the folder this README is in:
+
 ```bash
-pip install -r requirements.txt
-uvicorn {package_name}.app:app --reload
+cd ..
+pip install -r {package_name}/requirements.txt
+uvicorn {package_name}.app:app --reload --reload-dir {package_name}
 ```
 
 Or with Docker:

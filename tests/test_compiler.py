@@ -15369,3 +15369,38 @@ def test_compile_keeps_git_and_url_pip_installs_and_installs_git_in_the_image(tm
     assert "numpy" in lines
     assert not any("local_pkg" in line or "#" in line for line in lines)
     assert "    git \\" in (output_dir / "Dockerfile").read_text()
+
+
+def test_readme_running_locally_commands_work_from_where_they_say(tmp_path):
+    """The README ran `pip install -r requirements.txt` and `uvicorn pkg.app:app`
+    as if from one folder, but the app only imports as `pkg` from the folder
+    that contains it -- from inside the generated folder, uvicorn died with
+    ModuleNotFoundError. Follow the documented block for real."""
+    import re
+    import subprocess
+    import sys
+    from backend.compiler import compile_notebook
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook_importing(notebook_path, "def f(n: int) -> int:\n    return n\n")
+    output_dir = tmp_path / "work" / "myapp"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    readme = (output_dir / "README.md").read_text()
+    block = re.search(r"## Running locally.*?```bash\n(.*?)```", readme, re.DOTALL).group(1)
+    commands = [line for line in block.splitlines() if line.strip()]
+    assert commands[0] == "cd .."
+    assert "pip install -r myapp/requirements.txt" in commands
+    assert (output_dir.parent / "myapp" / "requirements.txt").is_file()
+    target = re.search(r"uvicorn (\S+):app", block).group(1)
+
+    # `cd ..` from the generated folder, then the uvicorn target must import.
+    check = f"import importlib; importlib.import_module({target!r}).app"
+    from_parent = subprocess.run(
+        [sys.executable, "-c", check], cwd=output_dir.parent, capture_output=True, text=True
+    )
+    assert from_parent.returncode == 0, from_parent.stderr
+    from_inside = subprocess.run(
+        [sys.executable, "-c", check], cwd=output_dir, capture_output=True, text=True
+    )
+    assert from_inside.returncode != 0
