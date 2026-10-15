@@ -970,7 +970,65 @@ _EXAMPLE_TYPE_DEFAULTS = {
     "time": "12:00:00",
     "UUID": "00000000-0000-0000-0000-000000000000",
     "Decimal": 0,
+    "timedelta": "PT0S",
+    "frozenset": [],
 }
+
+
+def _example_placeholder(raw_type):
+    """A schema-valid placeholder value for the annotation `raw_type`, or
+    None when there isn't one. Beyond the plain table lookup this resolves
+    a module-qualified name (`datetime.datetime`, `uuid.UUID`,
+    `decimal.Decimal` -- they got null, which the endpoint rejects) and
+    builds a fixed-length tuple (`tuple[int, str]` -> [0, ""]) from its
+    element types, since the schema requires exactly that many items."""
+    normalized = normalize_type_annotation(raw_type)
+    if normalized in _EXAMPLE_TYPE_DEFAULTS:
+        if normalized == "tuple":
+            elements = _fixed_tuple_elements(raw_type)
+            if elements:
+                values = [_example_placeholder(element) for element in elements]
+                if all(value is not None for value in values):
+                    return values
+        return _EXAMPLE_TYPE_DEFAULTS[normalized]
+    if normalized and re.fullmatch(r"\w+(\.\w+)+", normalized):
+        return _EXAMPLE_TYPE_DEFAULTS.get(normalized.rsplit(".", 1)[-1])
+    return None
+
+
+def _fixed_tuple_elements(raw_type):
+    """Element annotations of `tuple[A, B]` / `Tuple[A, B]` (also inside
+    `Optional[...]`), or [] for a variadic `tuple[int, ...]`, a bare tuple
+    or anything else."""
+    try:
+        node = ast.parse(normalize_tuple_wrapper(raw_type), mode="eval").body
+    except SyntaxError:
+        return []
+    if not (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name)
+            and node.value.id in ("tuple", "Tuple")):
+        return []
+    inner = node.slice
+    elements = list(inner.elts) if isinstance(inner, ast.Tuple) else [inner]
+    if any(isinstance(e, ast.Constant) and e.value is Ellipsis for e in elements):
+        return []
+    return [ast.unparse(e) for e in elements]
+
+
+def normalize_tuple_wrapper(raw_type):
+    """`raw_type` with an outer Optional[...] / Annotated[...] / `| None`
+    removed, so the tuple inside can be parsed."""
+    text = (raw_type or "").strip()
+    while True:
+        if text.startswith("Optional["):
+            text = _matching_bracket_content(text[len("Optional["):]).strip()
+        elif text.startswith("Annotated["):
+            text = _first_top_level_segment(
+                _matching_bracket_content(text[len("Annotated["):]), ","
+            ).strip()
+        elif "|" in text and _first_top_level_segment(text, "|").strip() != text:
+            text = _first_top_level_segment(text, "|").strip()
+        else:
+            return text
 
 
 def generate_example_response(return_type):
@@ -1001,10 +1059,7 @@ def generate_example_response(return_type):
         }
 
     return {
-        "result": _EXAMPLE_TYPE_DEFAULTS.get(
-            return_type,
-            None
-        )
+        "result": _example_placeholder(return_type)
     }
 
 
@@ -1088,10 +1143,7 @@ def generate_example_payload(args):
         elif arg.get("has_default") and not default_is_none_for_a_container_type:
             payload[arg_name] = default
         else:
-            payload[arg_name] = _EXAMPLE_TYPE_DEFAULTS.get(
-                arg_type,
-                None
-            )
+            payload[arg_name] = _example_placeholder(arg.get("type"))
 
     return payload
 

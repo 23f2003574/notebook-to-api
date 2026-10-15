@@ -9366,3 +9366,43 @@ def test_generated_app_accepts_zero_for_numeric_settings(monkeypatch):
     exec(compile(code, "<generated>", "exec"), namespace)
 
     assert namespace["REQUEST_TIMEOUT_SECONDS"] == 0
+
+
+def test_openapi_request_example_is_accepted_for_qualified_and_fixed_tuple_types(monkeypatch):
+    """The documented example for `datetime.datetime`, `datetime.date`,
+    `uuid.UUID`, `decimal.Decimal`, `datetime.timedelta` and `tuple[int, str]`
+    parameters was null / [] -- values the request schema itself rejects --
+    so Swagger's pre-filled body and every SDK/curl example built from it
+    returned 422."""
+    import datetime
+    import decimal
+    import uuid
+
+    from backend.parser.ast_parser import extract_functions_from_code
+
+    source = (
+        "import datetime, decimal, uuid\n"
+        "from typing import Tuple\n"
+        "def f(t: tuple[int, str], rgb: Tuple[int, int, int], when: datetime.datetime,\n"
+        "      day: datetime.date, uid: uuid.UUID, price: decimal.Decimal,\n"
+        "      span: datetime.timedelta, tags: frozenset) -> int:\n"
+        "    return 1\n"
+    )
+    code = generate_fastapi_code(extract_functions_from_code(source))
+    notebook_module = _register_fake_notebook_module(monkeypatch)
+    notebook_module.f = lambda *args, **kwargs: 1
+    notebook_module.datetime, notebook_module.decimal, notebook_module.uuid = datetime, decimal, uuid
+    monkeypatch.setenv("NOTEBOOK_API_KEY", "test-key")
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"], headers={"X-API-Key": "test-key"})
+    example = client.get("/openapi.json").json()["components"]["schemas"]["FRequest"]["example"]
+    response = client.post("/f", json=example)
+
+    assert example["t"] == [0, ""]
+    assert example["rgb"] == [0, 0, 0]
+    assert example["when"] == "2024-01-01T00:00:00"
+    assert response.status_code == 200, response.text
