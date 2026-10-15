@@ -2367,21 +2367,40 @@ def generate_fastapi_code(
     lines.append("    except (SystemExit, KeyboardInterrupt) as e:")
     lines.append("        raise RuntimeError(f'notebook function raised {type(e).__name__}') from None")
     lines.append("")
+    # A TimeoutError the notebook function itself raises (a socket or HTTP
+    # call timing out) is the function's own failure, not this app's request
+    # timeout; it is re-raised wrapped so the 504 "did not finish within
+    # ..." handlers, which catch TimeoutError, don't mislabel it.
+    lines.append("class _NotebookTimeoutError(Exception):")
+    lines.append("    def __init__(self, original):")
+    lines.append("        super().__init__(str(original))")
+    lines.append("        self.original = original")
+    lines.append("")
+    lines.append("")
     lines.append("async def _call_notebook_function(call, is_async=False, timeout=None):")
     lines.append("    call = _shield_exit(call)")
     lines.append("    limit = REQUEST_TIMEOUT_SECONDS if timeout is None else timeout")
-    lines.append("    with anyio.fail_after(limit or None):")
-    lines.append("        async with _call_slot():")
-    lines.append("            if is_async:")
+    lines.append("    try:")
+    lines.append("        with anyio.fail_after(limit or None) as scope:")
+    lines.append("            return await _invoke_notebook_function(call, is_async)")
+    lines.append("    except TimeoutError as exc:")
+    lines.append("        if scope.cancelled_caught:")
+    lines.append("            raise")
+    lines.append("        raise _NotebookTimeoutError(exc) from exc")
+    lines.append("")
+    lines.append("")
+    lines.append("async def _invoke_notebook_function(call, is_async):")
+    lines.append("    async with _call_slot():")
+    lines.append("        if is_async:")
     # An `async def` that yields is an async *generator* function: calling
     # it returns an async generator, which can't be awaited ("object
     # async_generator can't be used in 'await' expression" -- a 500). It is
     # drained into a list instead, the async twin of a sync generator.
-    lines.append("                result = call()")
-    lines.append("                if inspect.isasyncgen(result):")
-    lines.append("                    return await _drain_async_gen(result)")
-    lines.append("                return await result")
-    lines.append("            return await anyio.to_thread.run_sync(call, abandon_on_cancel=True)")
+    lines.append("            result = call()")
+    lines.append("            if inspect.isasyncgen(result):")
+    lines.append("                return await _drain_async_gen(result)")
+    lines.append("            return await result")
+    lines.append("        return await anyio.to_thread.run_sync(call, abandon_on_cancel=True)")
     lines.append("")
     # Bounds _deliver_task_webhook's own single delivery attempt below --
     # a caller-supplied ?callback_url= pointing at a slow or unresponsive
@@ -5899,6 +5918,13 @@ def generate_fastapi_code(
             # (both generated SDKs retry 504) knows retrying would just
             # re-run the same slow notebook function, side effects and all.
             lines.append("            headers={'X-Notebook-API-Timeout': 'true'},")
+            lines.append("        )")
+            lines.append("    except _NotebookTimeoutError as e:")
+            lines.append("        raise HTTPException(")
+            lines.append("            status_code=500,")
+            lines.append(
+                f"            detail=f\"'{func_name}' raised TimeoutError: {{e}}\","
+            )
             lines.append("        )")
             lines.append("    except Exception as e:")
             lines.append("        raise HTTPException(")

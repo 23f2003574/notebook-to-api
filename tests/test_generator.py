@@ -8397,6 +8397,23 @@ def test_request_timeout_504_carries_the_timeout_marker_header(monkeypatch):
     assert response.headers["X-Notebook-API-Timeout"] == "true"
 
 
+def test_timeout_error_raised_by_the_notebook_function_is_a_500_not_the_request_timeout(monkeypatch):
+    """A function's own TimeoutError (a socket or HTTP call timing out) used
+    to come back as the app's request-timeout 504 -- naming a 0s limit that
+    never elapsed, with the marker header telling clients not to retry."""
+
+    def upstream_timed_out():
+        raise TimeoutError("upstream timed out")
+
+    client = _request_timeout_client(monkeypatch, 0, upstream_timed_out)
+
+    response = client.post("/slow", json={})
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "'slow' raised TimeoutError: upstream timed out"
+    assert "X-Notebook-API-Timeout" not in response.headers
+
+
 def _background_timeout_client(monkeypatch, overrides, impl, global_timeout=None):
     code = generate_fastapi_code(
         [{"name": "train_model", "args": [], "return_type": "int"}],
