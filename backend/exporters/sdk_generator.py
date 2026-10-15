@@ -170,6 +170,27 @@ def _split_top_level(text, separator=","):
     return [part.strip() for part in parts]
 
 
+def _ts_http_error_lines(indent, path_expr):
+    """TypeScript lines declaring `error` for a failed response. The server's
+    JSON body is kept on `error.body` / `error.detail` and its `detail` is
+    appended to the message: the client used to throw only "failed with
+    status 422", hiding why (which field was invalid, what the notebook
+    function raised) -- the Python client's HTTPError keeps the response."""
+    lines = [
+        "let body: any = undefined;",
+        "try { body = await response.json(); } catch { body = undefined; }",
+        "const detail: any = body && typeof body === \"object\" ? body.detail : undefined;",
+        "const detailText = detail === undefined ? \"\" : "
+        "`: ${typeof detail === \"string\" ? detail : JSON.stringify(detail)}`;",
+        "const error: any = new Error(`Request to " + path_expr
+        + " failed with status ${response.status}${detailText}`);",
+        "error.status = response.status;",
+        "error.body = body;",
+        "error.detail = detail;",
+    ]
+    return [indent + line for line in lines]
+
+
 def _as_typescript_array_element(ts_type):
     """`ts_type` wrapped as a TypeScript array element type -- parenthesized
     when it's itself a union ("number | null"), since "number | null[]"
@@ -2570,11 +2591,7 @@ def generate_typescript_sdk(
         "gone.get(\"X-Deprecation-Reason\"), gone.get(\"Sunset\"));"
     )
     lines.append("        }")
-    lines.append(
-        "        const error: any = new Error(`Request to ${path} failed "
-        "with status ${response.status}`);"
-    )
-    lines.append("        error.status = response.status;")
+    lines.extend(_ts_http_error_lines("        ", "${path}"))
     lines.append("        throw error;")
     lines.append("      }")
     lines.append("      this.warnIfServerDeprecated(path, response);")
@@ -2699,11 +2716,7 @@ def generate_typescript_sdk(
     # message) is what lets waitForTask below tell a transient failure
     # (429/502/503/504) from a real one without re-parsing the message
     # string it throws.
-    lines.append(
-        "      const error: any = new Error(`Request to /tasks/${taskId} "
-        "failed with status ${response.status}`);"
-    )
-    lines.append("      error.status = response.status;")
+    lines.extend(_ts_http_error_lines("      ", "/tasks/${taskId}"))
     lines.append("      throw error;")
     lines.append("    }")
     lines.append("    return response.json();")

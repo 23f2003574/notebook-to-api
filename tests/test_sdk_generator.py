@@ -7838,3 +7838,65 @@ def test_typescript_sdk_never_posts_to_a_literal_templated_path(tmp_path):
     assert "async retryTask(taskId: string" in source
     assert "async redeliverTaskWebhook(taskId: string" in source
     assert "async add(payload: AddRequest)" in source
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="requires a Node.js runtime to execute the generated TypeScript client",
+)
+def test_typescript_sdk_error_carries_the_servers_detail(tmp_path):
+    """A failed call threw only "Request to /x failed with status 422", hiding
+    which field was invalid or what the notebook function raised. The server's
+    JSON detail now rides on the error's message, `.detail` and `.body`; a
+    non-JSON error body still throws the status-only error."""
+
+    schema_path = _write_schema(
+        tmp_path,
+        {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    client_path = tmp_path / "client.ts"
+    generate_typescript_sdk(str(schema_path), str(client_path))
+
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        const responses = [
+          {{ ok: false, status: 500, json: async () => ({{ detail: "'f' raised KeyError: 'k'" }}) }},
+          {{ ok: false, status: 422, json: async () => ({{ detail: [{{ loc: ["body", "n"], msg: "bad" }}] }}) }},
+          {{ ok: false, status: 404, json: async () => {{ throw new Error("not json"); }} }},
+          {{ ok: false, status: 404, json: async () => ({{ detail: "Task x not found" }}) }},
+        ];
+        globalThis.fetch = async () => responses.shift();
+
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000");
+        const out = [];
+        for (const call of [
+          () => client.train_model({{ a: 1 }}),
+          () => client.train_model({{ a: 1 }}),
+          () => client.train_model({{ a: 1 }}),
+          () => client.getTask("x"),
+        ]) {{
+          try {{ await call(); }} catch (e) {{
+            out.push({{ status: e.status, message: e.message, detail: e.detail }});
+          }}
+        }}
+        console.log(JSON.stringify(out));
+        """,
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(["node", str(runner_path)], capture_output=True, text=True, timeout=30)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    errors = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert errors[0] == {
+        "status": 500,
+        "message": "Request to /train_model failed with status 500: 'f' raised KeyError: 'k'",
+        "detail": "'f' raised KeyError: 'k'",
+    }
+    assert errors[1]["status"] == 422
+    assert errors[1]["detail"] == [{"loc": ["body", "n"], "msg": "bad"}]
+    assert '"msg":"bad"' in errors[1]["message"]
+    assert errors[2] == {"status": 404, "message": "Request to /train_model failed with status 404"}
+    assert errors[3]["message"] == "Request to /tasks/x failed with status 404: Task x not found"
