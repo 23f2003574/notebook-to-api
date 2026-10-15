@@ -1,5 +1,6 @@
 import ast
 import json
+import keyword
 import re
 from pathlib import Path
 
@@ -94,6 +95,12 @@ def _method_name_from_path(path: str) -> str:
         name = "root"
     elif name[0].isdigit():
         name = f"_{name}"
+
+    # `def class(self, ...)` is a SyntaxError that makes the whole generated
+    # client unimportable. The strip above is what removed the underscore
+    # from a function named `class_` (the usual way to dodge a keyword).
+    if keyword.iskeyword(name):
+        name = f"{name}_"
 
     return name
 

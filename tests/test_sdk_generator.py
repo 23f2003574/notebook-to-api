@@ -7900,3 +7900,26 @@ def test_typescript_sdk_error_carries_the_servers_detail(tmp_path):
     assert '"msg":"bad"' in errors[1]["message"]
     assert errors[2] == {"status": 404, "message": "Request to /train_model failed with status 404"}
     assert errors[3]["message"] == "Request to /tasks/x failed with status 404: Task x not found"
+
+
+def test_python_sdk_is_importable_when_a_function_is_named_like_a_keyword(tmp_path, monkeypatch):
+    """A notebook function `class_` / `import_` (the usual way to dodge a
+    keyword) has path "/class_"; the sanitizer stripped the underscore, so
+    the client contained `def class(self, ...)` -- a SyntaxError that made
+    the whole generated SDK unimportable."""
+    schema_path = _write_schema(
+        tmp_path,
+        {
+            "/class_": {"post": {"operationId": "class_"}},
+            "/import_": {"post": {"operationId": "import_"}},
+            "/pass": {"post": {"operationId": "pass"}},
+            "/train": {"post": {"operationId": "train"}},
+        },
+    )
+    output_path = tmp_path / "client.py"
+
+    generate_python_sdk(str(schema_path), str(output_path))
+    client_cls = _exec_generated_client(output_path, monkeypatch)
+
+    for method in ("class_", "import_", "pass_", "train"):
+        assert callable(getattr(client_cls, method)), method
