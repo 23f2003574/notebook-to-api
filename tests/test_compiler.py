@@ -15551,8 +15551,6 @@ def test_compiled_docker_compose_file_is_valid_for_a_non_ascii_package_name(tmp_
     """Compose service names only allow [a-zA-Z0-9._-]; the output folder
     `café` is a valid Python package, but its compose file was rejected
     ("services additional properties 'café' not allowed")."""
-    import yaml
-
     notebook = nbformat.v4.new_notebook()
     notebook.cells.append(
         nbformat.v4.new_code_cell("def add(a: int, b: int) -> int:\n    return a + b\n")
@@ -15563,8 +15561,15 @@ def test_compiled_docker_compose_file_is_valid_for_a_non_ascii_package_name(tmp_
 
     compile_notebook(str(notebook_path), str(output_dir))
 
-    services = yaml.safe_load((output_dir / "docker-compose.yml").read_text(encoding="utf-8"))["services"]
-    assert list(services) == ["caf"]
+    # PyYAML is not in requirements.txt, so read the service key by hand: it is
+    # the first two-space-indented line under "services:".
+    compose = (output_dir / "docker-compose.yml").read_text(encoding="utf-8").splitlines()
+    services = [
+        line.strip().rstrip(":") for line in compose[1:]
+        if line.startswith("  ") and not line.startswith("   ")
+    ]
+    assert compose[0] == "services:"
+    assert services == ["caf"]
     assert "café.app:app" in (output_dir / "Dockerfile").read_text(encoding="utf-8")
 
 

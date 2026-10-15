@@ -5,10 +5,10 @@ polling), which no single-stage test can."""
 
 import importlib
 import sys
+import types
 
 import nbformat
 import pytest
-import requests
 from fastapi.testclient import TestClient
 
 from backend.compiler import compile_notebook
@@ -59,14 +59,17 @@ def sdk_client(tmp_path, monkeypatch):
     sdk_path = tmp_path / "client.py"
     generate_python_sdk(str(spec_path), str(sdk_path))
 
-    # Route the SDK's real `requests` calls into the in-process app.
+    # The generated client imports `requests`, which is not in this repo's
+    # requirements.txt: stand in a module whose calls go to the in-process app.
+    fake_requests = types.ModuleType("requests")
     for verb in ("get", "post", "delete"):
-        monkeypatch.setattr(
-            requests, verb,
+        setattr(
+            fake_requests, verb,
             lambda url, _verb=verb, **kw: getattr(http, _verb)(
                 url, **{k: v for k, v in kw.items() if k in ("json", "headers", "params")}
             ),
         )
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
     namespace = {}
     exec(compile(sdk_path.read_text(encoding="utf-8"), str(sdk_path), "exec"), namespace)
     yield namespace["NotebookAPIClient"]("http://api.test", api_key="wf-key")
