@@ -15476,3 +15476,35 @@ def test_docker_image_file_tree_still_starts_and_serves_a_shipped_helper_module(
         [sys.executable, "-c", script], cwd=image_app, capture_output=True, text=True, timeout=60
     )
     assert proc.returncode == 0, proc.stderr
+
+
+def test_compile_refuses_to_overwrite_a_users_own_files_but_recompiles_its_own_output(tmp_path):
+    """`--output .` in a project folder silently replaced the user's own
+    README.md / Dockerfile / app.py. A folder holding such files that no
+    earlier compile produced is refused untouched; a folder a compile wrote
+    (it has .compile_metadata.json) is still recompiled in place."""
+    import pytest
+    from backend.compiler import compile_notebook
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook_importing(notebook_path, "def f(n: int) -> int:\n    return n\n")
+
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "README.md").write_text("MY README")
+    (project / "Dockerfile").write_text("MY DOCKERFILE")
+    (project / "notes.txt").write_text("unrelated files are fine")
+
+    with pytest.raises(ValueError, match=r"already contains .*Dockerfile.*README\.md"):
+        compile_notebook(str(notebook_path), str(project))
+
+    assert (project / "README.md").read_text() == "MY README"
+    assert (project / "Dockerfile").read_text() == "MY DOCKERFILE"
+    assert not (project / "app.py").exists()
+
+    clean = tmp_path / "clean"
+    (clean).mkdir()
+    (clean / "notes.txt").write_text("unrelated files are fine")
+    compile_notebook(str(notebook_path), str(clean))
+    compile_notebook(str(notebook_path), str(clean))  # recompile in place
+    assert (clean / "app.py").is_file()

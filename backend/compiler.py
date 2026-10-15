@@ -4951,6 +4951,34 @@ def _filter_functions_by_name(functions, only, exclude):
     return [func for func in functions if func["name"] not in requested_names]
 
 
+# Files a compile writes at the top of its output directory.
+_COMPILE_OUTPUT_NAMES = (
+    "app.py", "Dockerfile", ".dockerignore", "docker-compose.yml",
+    "kubernetes.yaml", "README.md", "requirements.txt", ".env.example", "runtime",
+)
+
+
+def _refuse_to_overwrite_foreign_files(output_dir):
+    """Raise ValueError when `output_dir` holds files a compile would
+    overwrite but no earlier compile produced them (no .compile_metadata.json).
+    `--output .` in a project folder used to replace the user's own README.md,
+    Dockerfile, app.py or requirements.txt without a word. A directory a
+    previous compile wrote is recompiled in place, as before."""
+    if os.path.exists(os.path.join(output_dir, COMPILE_METADATA_FILENAME)):
+        return
+    existing = [
+        name for name in _COMPILE_OUTPUT_NAMES
+        if os.path.exists(os.path.join(output_dir, name))
+    ]
+    if existing:
+        raise ValueError(
+            f"Output directory {output_dir!r} already contains "
+            f"{', '.join(existing)}, which compile would overwrite, and it is not "
+            f"the output of an earlier compile (no {COMPILE_METADATA_FILENAME}). "
+            "Choose a new or empty --output directory, or remove those files."
+        )
+
+
 def compile_notebook_to_api(
     notebook_path,
     output_path,
@@ -4986,6 +5014,8 @@ def compile_notebook_to_api(
         os.makedirs(output_dir, exist_ok=True)
 
         package_name = package_name_for_output_dir(output_dir)
+
+        _refuse_to_overwrite_foreign_files(output_dir)
 
         notebook = load_notebook(notebook_path)
 
