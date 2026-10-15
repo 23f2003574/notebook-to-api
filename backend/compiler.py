@@ -1013,12 +1013,14 @@ def _extract_explicit_requirements(code_cells):
     # directive for the same package wins.
     for spec in _pip_install_specs(code_cells):
         package_name = _explicit_requirement_package_name(spec)
-        if package_name is None or spec in seen:
+        if spec in seen:
             continue
-        normalized_name = _normalize_distribution_name(package_name)
-        if normalized_name in spec_by_package_name:
-            continue
-        spec_by_package_name[normalized_name] = spec
+        # An unnamed spec (a bare `git+https://...` URL) is copied through.
+        if package_name is not None:
+            normalized_name = _normalize_distribution_name(package_name)
+            if normalized_name in spec_by_package_name:
+                continue
+            spec_by_package_name[normalized_name] = spec
         seen.add(spec)
         specs.append(spec)
 
@@ -1064,6 +1066,32 @@ def _shell_install_matches(cell, line_pattern, shell_cell_pattern):
     return sorted(matches, key=lambda match: match.start())
 
 
+_PIP_REMOTE_TARGET_PATTERN = re.compile(r"^(?:(?:git|hg|svn|bzr)\+\w+://|https?://)\S+$")
+_PIP_EGG_FRAGMENT_PATTERN = re.compile(r"#egg=(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)")
+
+
+def _is_remote_pip_target(token):
+    return bool(_PIP_REMOTE_TARGET_PATTERN.match(token))
+
+
+def _pip_direct_reference(token):
+    """The requirements.txt line for a `pip install` argument that points at
+    a remote source instead of a PyPI name -- `git+https://host/repo.git@tag`,
+    an https archive/wheel URL, or `name @ url` -- else None. A `#egg=name`
+    fragment becomes the PEP 508 `name @ url` form, so the line is named (and
+    de-duplicated against an import of the same package). Before this every
+    such install was dropped, leaving the deployed image without the package.
+    """
+    if re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[^\]]*\])?\s*@\s*\S+$", token):
+        return token
+    if not _is_remote_pip_target(token):
+        return None
+    egg = _PIP_EGG_FRAGMENT_PATTERN.search(token)
+    if egg:
+        return f"{egg.group('name')} @ {token[:egg.start()]}"
+    return token
+
+
 def _pip_install_specs(code_cells):
     """The requirement specs named by `!pip install` / `%pip install` /
     `!python -m pip install` lines (the notebook parser turns each into a
@@ -1084,25 +1112,41 @@ def _pip_install_specs(code_cells):
             if cell.count("\n", 0, match.start()) + 1 in unsafe_lines:
                 continue
             try:
-                tokens = shlex.split(match.group("args"), comments=True)
+                # comments=False keeps a `#egg=name` fragment inside a URL;
+                # a trailing `# comment` is cut at its own token instead.
+                tokens = shlex.split(match.group("args"), comments=False)
             except ValueError:
                 continue
+            for index, token in enumerate(tokens):
+                if token.startswith("#"):
+                    del tokens[index:]
+                    break
 
             skip_next = False
+            editable = False
             for token in tokens:
                 if skip_next:
                     skip_next = False
-                    continue
-                if token.startswith("-"):
+                    # `-e git+https://...` installs a remote repository the
+                    # same way a bare VCS URL does; only local paths are skipped.
+                    token = token if editable and _is_remote_pip_target(token) else None
+                    editable = False
+                    if token is None:
+                        continue
+                elif token.startswith("-"):
                     if "=" not in token and token in _PIP_OPTIONS_WITH_VALUE:
                         skip_next = True
+                        editable = token in ("-e", "--editable")
                     continue
-                if token.startswith((".", "/", "~")) or token.endswith((".txt", ".whl", ".zip", ".tar.gz")):
+                direct = _pip_direct_reference(token)
+                if direct is not None:
+                    token = direct
+                elif token.startswith((".", "/", "~")) or token.endswith((".txt", ".whl", ".zip", ".tar.gz")):
                     continue
                 package_name = _explicit_requirement_package_name(token)
-                if package_name is None:
+                if package_name is None and direct is None:
                     continue
-                key = _normalize_distribution_name(package_name)
+                key = _normalize_distribution_name(package_name) if package_name else token
                 has_version = any(op in token for op in ("==", ">=", "<=", "~=", "!=", ">", "<"))
                 if key not in by_name:
                     by_name[key] = token
@@ -1204,6 +1248,13 @@ def _extract_explicit_apt_packages(code_cells):
         if package not in seen:
             seen.add(package)
             packages.append(package)
+
+    # pip clones a `git+https://...` requirement, and python:slim has no git.
+    if "git" not in seen and any(
+        re.search(r"(?:^|@\s*)git\+", spec)
+        for spec in _extract_explicit_requirements(code_cells)
+    ):
+        packages.append("git")
 
     return packages
 

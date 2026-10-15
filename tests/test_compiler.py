@@ -12020,7 +12020,10 @@ def test_pip_install_specs_reads_pip_magic_and_shell_lines():
 
     specs = _pip_install_specs([strip_magic_commands(raw)])
 
-    assert specs == ["pandas>=1.0", "seaborn==0.13.0", "numpy==1.26.0", "scipy", "Pillow"]
+    assert specs == [
+        "pandas>=1.0", "seaborn==0.13.0", "numpy==1.26.0", "scipy",
+        "git+https://github.com/o/r.git", "Pillow",
+    ]
 
 
 def test_pip_install_specs_ignores_lines_inside_strings():
@@ -15339,3 +15342,30 @@ def test_var_keyword_annotation_is_enforced_and_documented_like_var_positional(t
         sys.path.remove(str(tmp_path))
         for name in [m for m in sys.modules if m.startswith("kwpkg")]:
             del sys.modules[name]
+
+
+def test_compile_keeps_git_and_url_pip_installs_and_installs_git_in_the_image(tmp_path):
+    """`%pip install git+https://...` (named by #egg=, `name @ url`, editable
+    or bare) was silently dropped from requirements.txt, so the deployed app
+    lacked the package; the image also needs git for pip to clone it."""
+    from backend.compiler import compile_notebook
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook_importing(
+        notebook_path,
+        "%pip install git+https://github.com/a/b.git@v1#egg=bpkg\n"
+        "!pip install -e git+https://github.com/a/c.git -q  # needed\n"
+        "!pip install 'dpkg @ https://x.io/d.zip' ./local_pkg numpy\n"
+        "def f(n: int) -> int:\n    return n\n",
+    )
+    output_dir = tmp_path / "out"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    lines = (output_dir / "requirements.txt").read_text().splitlines()
+    assert "bpkg @ git+https://github.com/a/b.git@v1" in lines
+    assert "git+https://github.com/a/c.git" in lines
+    assert "dpkg @ https://x.io/d.zip" in lines
+    assert "numpy" in lines
+    assert not any("local_pkg" in line or "#" in line for line in lines)
+    assert "    git \\" in (output_dir / "Dockerfile").read_text()
