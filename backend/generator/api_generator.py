@@ -6017,7 +6017,9 @@ def generate_fastapi_code(
             lines.append("            status_code=500,")
             lines.append(
                 f"            detail=f\"'{func_name}' returned a value that "
-                "is not JSON-serializable: {e}\","
+                "is not JSON-serializable: "
+                "{'it contains a circular reference or is nested too deeply' "
+                "if isinstance(e, RecursionError) else e}\","
             )
             lines.append("        )")
             if endpoint_cache_ttl:

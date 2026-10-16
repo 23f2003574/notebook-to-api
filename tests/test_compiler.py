@@ -10094,6 +10094,70 @@ print("DECORATED_DIRECTIVES_E2E_OK")
     assert "DECORATED_DIRECTIVES_E2E_OK" in proc.stdout
 
 
+def test_circular_return_value_reports_a_clear_error_and_valid_returns_still_serialize(tmp_path):
+    """Confirmed before this: a function returning a self-referencing dict
+    answered 500 "...not JSON-serializable: maximum recursion depth
+    exceeded" -- an interpreter message that never mentions the circular
+    reference. Ordinary (including deeply nested but finite) results and
+    other serialization failures keep their behavior."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "def circular() -> dict:\n    d = {}\n    d['self'] = d\n    return d\n\n"
+                    "def nested() -> dict:\n    return {'a': {'b': [1, {'c': float('nan')}]}}\n\n"
+                    "def opaque():\n    return int\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+resp = client.post("/circular", json={{}}, headers=headers)
+assert resp.status_code == 500, resp.text
+detail = resp.json()["detail"]
+assert "circular reference" in detail and "recursion" not in detail, detail
+
+assert client.post("/nested", json={{}}, headers=headers).json() == {{
+    "result": {{"a": {{"b": [1, {{"c": None}}]}}}}
+}}
+
+resp = client.post("/opaque", json={{}}, headers=headers)
+assert resp.status_code == 500 and "not JSON-serializable" in resp.json()["detail"]
+assert "circular" not in resp.json()["detail"]
+print("CIRCULAR_RETURN_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script], cwd=str(workdir),
+        capture_output=True, text=True, timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "CIRCULAR_RETURN_E2E_OK" in proc.stdout
+
+
 def test_compiled_app_serves_intenum_and_strenum_parameters_with_enum_defaults(tmp_path):
     """IntEnum / StrEnum parameters: the notebook receives real enum members
     (so `level + 1` and isinstance work), omitted ones use the enum default,
