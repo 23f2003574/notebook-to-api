@@ -2240,6 +2240,7 @@ def _extract_excluded_imports(code_cells):
 PRIVATE_FUNCTION_DIRECTIVE_PATTERN = re.compile(
     r"^[ \t]*#\s*notebook-to-api:\s*private\s*$"
     r"(?:\n[ \t]*(?:#\s*notebook-to-api:[^\n]*)?)*"
+    r"(?:\n[ \t]*@[^\n]*)*"
     r"\n[ \t]*(?:async\s+)?def\s+(?P<name>[A-Za-z_]\w*)\s*\(",
     re.MULTILINE,
 )
@@ -2344,6 +2345,7 @@ def _drop_private_functions(functions, code_cells, only=None, exclude=None):
 BACKGROUND_OVERRIDE_DIRECTIVE_PATTERN = re.compile(
     r"^[ \t]*#\s*notebook-to-api:\s*(?P<mode>background|sync)\s*$"
     r"(?:\n[ \t]*(?:#\s*notebook-to-api:[^\n]*)?)*"
+    r"(?:\n[ \t]*@[^\n]*)*"
     r"\n[ \t]*(?:async\s+)?def\s+(?P<name>[A-Za-z_]\w*)\s*\(",
     re.MULTILINE,
 )
@@ -2423,6 +2425,7 @@ def _extract_background_overrides(code_cells):
 DEPRECATED_FUNCTION_DIRECTIVE_PATTERN = re.compile(
     r"^[ \t]*#\s*notebook-to-api:\s*deprecated(?:\s*:\s*(?P<reason>\S.*?))?\s*$"
     r"(?:\n[ \t]*(?:#\s*notebook-to-api:[^\n]*)?)*"
+    r"(?:\n[ \t]*@[^\n]*)*"
     r"\n[ \t]*(?:async\s+)?def\s+(?P<name>[A-Za-z_]\w*)\s*\(",
     re.MULTILINE,
 )
@@ -2436,6 +2439,7 @@ DEPRECATED_FUNCTION_DIRECTIVE_PATTERN = re.compile(
 TIMEOUT_DIRECTIVE_PATTERN = re.compile(
     r"^[ \t]*#\s*notebook-to-api:\s*timeout\s+(?P<seconds>\d+)\s*$"
     r"(?:\n[ \t]*(?:#\s*notebook-to-api:[^\n]*)?)*"
+    r"(?:\n[ \t]*@[^\n]*)*"
     r"\n[ \t]*(?:async\s+)?def\s+(?P<name>[A-Za-z_]\w*)\s*\(",
     re.MULTILINE,
 )
@@ -2448,6 +2452,7 @@ TIMEOUT_DIRECTIVE_PATTERN = re.compile(
 TAG_DIRECTIVE_PATTERN = re.compile(
     r"^[ \t]*#\s*notebook-to-api:\s*tag\s+(?P<tag>[A-Za-z0-9][A-Za-z0-9 _-]{0,39}?)\s*$"
     r"(?:\n[ \t]*(?:#\s*notebook-to-api:[^\n]*)?)*"
+    r"(?:\n[ \t]*@[^\n]*)*"
     r"\n[ \t]*(?:async\s+)?def\s+(?P<name>[A-Za-z_]\w*)\s*\(",
     re.MULTILINE,
 )
@@ -2474,6 +2479,7 @@ def _extract_tag_overrides(code_cells):
 CACHE_DIRECTIVE_PATTERN = re.compile(
     r"^[ \t]*#\s*notebook-to-api:\s*cache\s+(?P<ttl>\d+)\s*$"
     r"(?:\n[ \t]*(?:#\s*notebook-to-api:[^\n]*)?)*"
+    r"(?:\n[ \t]*@[^\n]*)*"
     r"\n[ \t]*(?:async\s+)?def\s+(?P<name>[A-Za-z_]\w*)\s*\(",
     re.MULTILINE,
 )
@@ -2501,6 +2507,7 @@ def _extract_cache_overrides(code_cells):
 RATE_LIMIT_DIRECTIVE_PATTERN = re.compile(
     r"^[ \t]*#\s*notebook-to-api:\s*rate-limit\s+(?P<limit>\d+)\s*$"
     r"(?:\n[ \t]*(?:#\s*notebook-to-api:[^\n]*)?)*"
+    r"(?:\n[ \t]*@[^\n]*)*"
     r"\n[ \t]*(?:async\s+)?def\s+(?P<name>[A-Za-z_]\w*)\s*\(",
     re.MULTILINE,
 )

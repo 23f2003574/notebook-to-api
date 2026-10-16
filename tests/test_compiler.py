@@ -10022,6 +10022,78 @@ print("BUILTIN_FUNC_ANNOTATION_E2E_OK")
     assert "BUILTIN_FUNC_ANNOTATION_E2E_OK" in proc.stdout
 
 
+def test_directives_above_a_decorated_function_still_apply(tmp_path):
+    """Confirmed before this: a "# notebook-to-api: background" / "private"
+    comment directly above `@functools.lru_cache` (a decorator line between
+    the directive and the def) was silently ignored -- the function stayed
+    synchronous, and a "private" one was exposed as a public endpoint."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "import functools\n"
+                    "# notebook-to-api: background\n"
+                    "@functools.lru_cache(maxsize=None)\n"
+                    "def slow(n: int = 3) -> int:\n    return n * 2\n\n"
+                    "# notebook-to-api: private\n"
+                    "@functools.lru_cache\n"
+                    "def hidden(n: int = 1) -> int:\n    return n\n\n"
+                    "# notebook-to-api: background\n"
+                    "def plain_bg(n: int = 1) -> int:\n    return n\n\n"
+                    "@functools.lru_cache\n"
+                    "def sync_fn(n: int = 1) -> int:\n    return n + 1\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys, time
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+for name in ("/slow", "/plain_bg"):
+    body = client.post(name, json={{}}, headers=headers).json()
+    assert "task_id" in body, (name, body)
+task_id = client.post("/slow", json={{"n": 4}}, headers=headers).json()["task_id"]
+for _ in range(50):
+    task = client.get("/tasks/" + task_id, headers=headers).json()
+    if task["status"] != "processing":
+        break
+    time.sleep(0.1)
+assert task["status"] == "completed" and task["result"] == 8, task
+
+assert client.post("/hidden", json={{}}, headers=headers).status_code == 404
+assert client.post("/sync_fn", json={{}}, headers=headers).json() == {{"result": 2}}
+print("DECORATED_DIRECTIVES_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script], cwd=str(workdir),
+        capture_output=True, text=True, timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "DECORATED_DIRECTIVES_E2E_OK" in proc.stdout
+
+
 def test_compiled_app_serves_intenum_and_strenum_parameters_with_enum_defaults(tmp_path):
     """IntEnum / StrEnum parameters: the notebook receives real enum members
     (so `level + 1` and isinstance work), omitted ones use the enum default,
