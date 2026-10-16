@@ -10158,6 +10158,67 @@ print("CIRCULAR_RETURN_E2E_OK")
     assert "CIRCULAR_RETURN_E2E_OK" in proc.stdout
 
 
+def test_instance_defaults_are_not_shared_between_requests(tmp_path):
+    """Confirmed before this: `p: Plain = Plain()` was built once at import and
+    Pydantic only copies *unhashable* defaults, so a function mutating its
+    default saw (and leaked) state from every earlier request: item counts
+    went 1, 2, 3. Mutable instances now get a per-request copy; scalar,
+    date and enum call-defaults keep their value and their OpenAPI default."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "import datetime as dt\n"
+                    "class Plain:\n    def __init__(self):\n        self.items = []\n\n"
+                    "def grow(p: Plain = Plain()) -> int:\n"
+                    "    p.items.append(1)\n    return len(p.items)\n\n"
+                    "def scalars(x: float = float('2.5'), d: dt.date = dt.date(2020, 1, 2)) -> str:\n"
+                    "    return f'{x} {d}'\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+counts = [client.post("/grow", json={{}}, headers=headers).json()["result"] for _ in range(3)]
+assert counts == [1, 1, 1], counts
+
+assert client.post("/scalars", json={{}}, headers=headers).json() == {{"result": "2.5 2020-01-02"}}
+props = client.get("/openapi.json").json()["components"]["schemas"]["ScalarsRequest"]["properties"]
+assert props["x"]["default"] == 2.5 and props["d"]["default"] == "2020-01-02", props
+print("INSTANCE_DEFAULT_ISOLATION_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script], cwd=str(workdir),
+        capture_output=True, text=True, timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "INSTANCE_DEFAULT_ISOLATION_E2E_OK" in proc.stdout
+
+
 def test_compiled_app_serves_intenum_and_strenum_parameters_with_enum_defaults(tmp_path):
     """IntEnum / StrEnum parameters: the notebook receives real enum members
     (so `level + 1` and isinstance work), omitted ones use the enum default,

@@ -170,7 +170,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # 'req'", nothing to do with train_model's own logic at all.
     "_evict_expired_tasks", "_run_background_task", "_json_safe",
     "_coerce_array_like", "_safe_annotation", "_shield_exit",
-    "_png_data_uri", "_bytes_json", "_openapi_json_safe",
+    "_png_data_uri", "_bytes_json", "_openapi_json_safe", "_default_kwargs",
     # Every name below is one of this file's own top-level `import`s --
     # never previously reserved at all, on the (never actually verified)
     # assumption that only names *this file itself defines* (a constant,
@@ -1029,6 +1029,13 @@ _RISKY_TYPING_NAMES = frozenset({
     # Builtin *functions* written as annotations (`x: any`, `cb: callable`).
     "any", "callable",
 })
+
+
+def _is_call_expression(source):
+    try:
+        return isinstance(ast.parse(source, mode="eval").body, ast.Call)
+    except (SyntaxError, TypeError, ValueError):
+        return False
 
 
 def _needs_safe_annotation(annotation_source):
@@ -2858,6 +2865,32 @@ def generate_fastapi_code(
     lines.append("        return text")
     lines.append("    except UnicodeEncodeError:")
     lines.append("        return ''.join('\\ufffd' if '\\ud800' <= c <= '\\udfff' else c for c in text)")
+    lines.append("")
+    # _default_kwargs: a non-literal default built by a call (`cfg: Settings =
+    # Settings()`, `Plain()`) is created once at import, and Pydantic only
+    # copies *unhashable* defaults per request -- so a plain class instance
+    # was shared, and mutated, across requests (one caller's appended item
+    # showed up in the next caller's result). Mutable, copyable instances
+    # get a per-request deep copy; scalars, dates, enums and anything that
+    # can't be copied keep the plain default (and its OpenAPI default).
+    lines.append("def _default_kwargs(value):")
+    lines.append("    import copy as _copy, enum as _enum")
+    lines.append("    try:")
+    lines.append("        hash(value)")
+    lines.append("    except TypeError:")
+    lines.append("        return {'default': value}")
+    lines.append("    cls = type(value)")
+    lines.append(
+        "    if value is None or cls.__module__ in ('builtins', 'datetime', 'decimal', "
+        "'uuid', 'pathlib', 'enum', 'fractions') or isinstance(value, _enum.Enum) "
+        "or any(c.__module__ == 'numpy' and c.__name__ == 'generic' for c in cls.__mro__):"
+    )
+    lines.append("        return {'default': value}")
+    lines.append("    try:")
+    lines.append("        _copy.deepcopy(value)")
+    lines.append("    except Exception:")
+    lines.append("        return {'default': value}")
+    lines.append("    return {'default_factory': lambda: _copy.deepcopy(value)}")
     lines.append("")
     lines.append("def _json_safe(value, _depth=0):")
     lines.append("    if _depth > 50:")
@@ -5245,6 +5278,11 @@ def generate_fastapi_code(
                     and isinstance(default_value, (set, frozenset))
                 ):
                     default_kw = f"default_factory=lambda: {default_expr}"
+                elif (
+                    not arg.get("default_is_literal", True)
+                    and _is_call_expression(default_value)
+                ):
+                    default_kw = f"**_default_kwargs({default_expr})"
                 else:
                     default_kw = f"default={default_expr}"
                 if field_description is not None:
