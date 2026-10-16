@@ -10219,6 +10219,61 @@ print("INSTANCE_DEFAULT_ISOLATION_E2E_OK")
     assert "INSTANCE_DEFAULT_ISOLATION_E2E_OK" in proc.stdout
 
 
+def test_non_utf8_bytes_default_does_not_break_openapi_json(tmp_path):
+    """Confirmed before this: `b: bytes = b'\\xff\\x00'` made /openapi.json
+    raise UnicodeDecodeError (a 500), taking /docs and SDK generation down
+    for the whole app. The function still receives the real bytes, and a
+    valid-UTF-8 bytes default keeps its OpenAPI default."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "def raw(b: bytes = b'\\xff\\x00', t: bytes = b'ab') -> list:\n"
+                    "    return [list(b), list(t)]\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+resp = client.get("/openapi.json")
+assert resp.status_code == 200, resp.text
+props = resp.json()["components"]["schemas"]["RawRequest"]["properties"]
+assert props["t"]["default"] == "ab", props
+assert client.post("/raw", json={{}}, headers=headers).json() == {{"result": [[255, 0], [97, 98]]}}
+print("BYTES_DEFAULT_OPENAPI_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script], cwd=str(workdir),
+        capture_output=True, text=True, timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "BYTES_DEFAULT_OPENAPI_E2E_OK" in proc.stdout
+
+
 def test_compiled_app_serves_intenum_and_strenum_parameters_with_enum_defaults(tmp_path):
     """IntEnum / StrEnum parameters: the notebook receives real enum members
     (so `level + 1` and isinstance work), omitted ones use the enum default,

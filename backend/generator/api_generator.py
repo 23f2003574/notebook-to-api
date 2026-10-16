@@ -1031,6 +1031,16 @@ _RISKY_TYPING_NAMES = frozenset({
 })
 
 
+def _is_undecodable_bytes(value):
+    if not isinstance(value, (bytes, bytearray)):
+        return False
+    try:
+        bytes(value).decode("utf-8")
+        return False
+    except UnicodeDecodeError:
+        return True
+
+
 def _is_call_expression(source):
     try:
         return isinstance(ast.parse(source, mode="eval").body, ast.Call)
@@ -5273,9 +5283,16 @@ def generate_fastapi_code(
                 # with it /docs and SDK generation -- for the whole app. A
                 # default_factory is evaluated per request and left out of the
                 # schema, so the function still gets its set.
+                # A bytes default that isn't valid UTF-8 (b'\xff\x00') makes
+                # Pydantic raise UnicodeDecodeError while building the JSON
+                # schema, so /openapi.json (and /docs, SDK generation) was a
+                # 500 for the whole app; the same factory treatment applies.
                 if (
                     arg.get("default_is_literal", True)
-                    and isinstance(default_value, (set, frozenset))
+                    and (
+                        isinstance(default_value, (set, frozenset))
+                        or _is_undecodable_bytes(default_value)
+                    )
                 ):
                     default_kw = f"default_factory=lambda: {default_expr}"
                 elif (
