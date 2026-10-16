@@ -9966,6 +9966,74 @@ print("RANGE_PARAM_E2E_OK")
     assert "RANGE_PARAM_E2E_OK" in proc.stdout
 
 
+def test_compiled_app_serves_intenum_and_strenum_parameters_with_enum_defaults(tmp_path):
+    """IntEnum / StrEnum parameters: the notebook receives real enum members
+    (so `level + 1` and isinstance work), omitted ones use the enum default,
+    values outside the enum are 422s, the OpenAPI schema carries the default,
+    and an enum return value serializes as its value."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "import enum\n"
+                    "class Level(enum.IntEnum):\n    LOW = 1\n    HIGH = 5\n"
+                    "class Mode(enum.StrEnum):\n    FAST = 'fast'\n    SLOW = 'slow'\n"
+                    "def rate(level: Level = Level.HIGH, mode: Mode = Mode.FAST) -> dict:\n"
+                    "    return {'level': level, 'is_level': isinstance(level, Level),\n"
+                    "            'mode': mode, 'is_mode': isinstance(mode, Mode), 'next': level + 1}\n"
+                    "def back() -> Level:\n    return Level.LOW\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def post(path, body):
+    return client.post(path, json=body, headers=headers)
+
+default = post("/rate", {{}}).json()["result"]
+assert default == {{"level": 5, "is_level": True, "mode": "fast", "is_mode": True, "next": 6}}, default
+explicit = post("/rate", {{"level": 1, "mode": "slow"}}).json()["result"]
+assert explicit == {{"level": 1, "is_level": True, "mode": "slow", "is_mode": True, "next": 2}}, explicit
+assert post("/rate", {{"level": 3}}).status_code == 422
+assert post("/rate", {{"mode": "x"}}).status_code == 422
+assert post("/back", {{}}).json() == {{"result": 1}}
+
+props = client.get("/openapi.json").json()["components"]["schemas"]["RateRequest"]["properties"]
+assert props["level"]["default"] == 5 and props["mode"]["default"] == "fast", props
+print("ENUM_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script], cwd=str(workdir),
+        capture_output=True, text=True, timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ENUM_E2E_OK" in proc.stdout
+
+
 def test_forward_reference_conversion_applies_to_annotations_not_default_expressions():
     from backend.generator.api_generator import _resolve_annotation_source
 
