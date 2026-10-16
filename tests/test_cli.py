@@ -1401,6 +1401,35 @@ def test_export_openapi_command_writes_yaml_when_requested(tmp_path):
     assert "/add:" in yaml_path.read_text(encoding="utf-8")
 
 
+def test_export_openapi_command_infers_yaml_from_the_output_extension(tmp_path):
+    """Confirmed before this: `--output api.yaml` without `--format yaml`
+    wrote JSON into the .yaml file. An explicit --format still wins, and a
+    .json output stays JSON."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+    compile_proc = _run_cli(["compile", str(notebook_path), "--output", "built"], cwd=workdir)
+    assert compile_proc.returncode == 0, compile_proc.stdout + compile_proc.stderr
+
+    for name in ("api.yaml", "api.yml"):
+        proc = _run_cli(["export-openapi", "--app-dir", "built", "--output", name], cwd=workdir)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        text = (workdir / name).read_text(encoding="utf-8")
+        assert "/add:" in text and not text.lstrip().startswith("{"), name
+
+    proc = _run_cli(["export-openapi", "--app-dir", "built", "--output", "api.json"], cwd=workdir)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "/add" in json.loads((workdir / "api.json").read_text(encoding="utf-8"))["paths"]
+
+    proc = _run_cli(
+        ["export-openapi", "--app-dir", "built", "--format", "json", "--output", "forced.yaml"],
+        cwd=workdir,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads((workdir / "forced.yaml").read_text(encoding="utf-8"))["paths"]
+
+
 def test_export_openapi_command_defaults_output_next_to_the_app_dir(tmp_path):
     """Confirmed broken before this fix: without an explicit --output,
     export-openapi wrote to a literal "generated/openapi.json" regardless

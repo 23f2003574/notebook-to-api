@@ -2406,6 +2406,14 @@ def _dispatch_core_command(args):
         # the schema to "generated/openapi.json" -- a directory unrelated
         # to, and possibly not even containing, the app it was just
         # exported from.
+        # No explicit --format: follow --output's extension, so
+        # `--output api.yaml` writes YAML rather than JSON into a .yaml file.
+        if args.format is None:
+            args.format = (
+                "yaml" if (args.output or "").lower().endswith((".yaml", ".yml"))
+                else "json"
+            )
+
         default_output = (
             os.path.join(args.app_dir, "openapi.yaml") if args.format == "yaml"
             else os.path.join(args.app_dir, "openapi.json")
@@ -10496,8 +10504,11 @@ def main():
     openapi_parser.add_argument(
         "--format",
         choices=["json", "yaml"],
-        default="json",
-        help="Output format for the exported schema. Default: json."
+        default=None,
+        help=(
+            "Output format for the exported schema. Default: yaml when "
+            "--output ends in .yaml/.yml, otherwise json."
+        )
     )
     openapi_parser.add_argument(
         "--output",
