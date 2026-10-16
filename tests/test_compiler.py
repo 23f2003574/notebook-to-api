@@ -15712,6 +15712,31 @@ def test_requirements_name_the_pypi_projects_behind_socketio_mysql_paho_and_ffmp
     assert not names & {"socketio", "engineio", "paho", "mysql", "ffmpeg"}
 
 
+def test_requirements_name_the_pypi_projects_behind_websocket_cpuinfo_xdg_and_nmap_imports(tmp_path):
+    """`import websocket` / `cpuinfo` / `xdg` / `nmap` went into
+    requirements.txt verbatim, so `pip install -r` failed or installed an
+    unrelated project."""
+    import re
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "import websocket\nimport cpuinfo\nimport xdg\nimport nmap\n"
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    nbformat.write(notebook, str(notebook_path))
+    output_dir = tmp_path / "svc"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    lines = (output_dir / "requirements.txt").read_text(encoding="utf-8").splitlines()
+    names = {re.split(r"[=<>~! ]", line, maxsplit=1)[0].lower() for line in lines if line}
+    assert {"websocket-client", "py-cpuinfo", "pyxdg", "python-nmap"} <= names
+    assert not names & {"websocket", "cpuinfo", "xdg", "nmap"}
+
+
 @pytest.mark.skipif(not hasattr(os, "symlink"), reason="needs symlinks")
 def test_local_package_symlink_pointing_outside_is_not_shipped_into_the_output(tmp_path):
     """`pkg/leak.txt -> ../../private/secret.txt` was followed by copytree,

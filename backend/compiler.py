@@ -168,6 +168,12 @@ KNOWN_IMPORT_TO_DISTRIBUTION = {
     "paho": "paho-mqtt",
     "mysql": "mysql-connector-python",
     "ffmpeg": "ffmpeg-python",
+    # Likewise `import websocket` is websocket-client, `import cpuinfo` is
+    # py-cpuinfo, `import xdg` is pyxdg and `import nmap` is python-nmap.
+    "websocket": "websocket-client",
+    "cpuinfo": "py-cpuinfo",
+    "xdg": "pyxdg",
+    "nmap": "python-nmap",
     "Crypto": "pycryptodome",
     "nacl": "PyNaCl",
     "OpenSSL": "pyOpenSSL",
