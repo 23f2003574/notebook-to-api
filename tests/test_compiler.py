@@ -9911,7 +9911,8 @@ print("ANNOTATION_ROBUSTNESS_E2E_OK")
 def test_needs_safe_annotation_flags_builtin_classes_pydantic_cannot_model():
     from backend.generator.api_generator import _needs_safe_annotation
 
-    for risky in ("range", "slice", "memoryview", "Optional[range]", "List[slice]"):
+    for risky in ("range", "slice", "memoryview", "Optional[range]", "List[slice]",
+                  "any", "callable", "Optional[callable]"):
         assert _needs_safe_annotation(risky), risky
 
 
@@ -9964,6 +9965,61 @@ print("RANGE_PARAM_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "RANGE_PARAM_E2E_OK" in proc.stdout
+
+
+def test_compiled_app_with_builtin_function_annotations_imports_and_serves(tmp_path):
+    """Confirmed before this: `a: any` / `cb: callable` (the builtin
+    functions, a common slip for typing.Any / Callable) made the generated
+    app raise PydanticSchemaGenerationError at import, taking every
+    endpoint and /openapi.json down."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "def loose(a: any = 1, cb: callable = None, n: int = 2) -> int:\n"
+                    "    return n\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+assert client.get("/openapi.json").status_code == 200
+assert client.post("/loose", json={{}}, headers=headers).json() == {{"result": 2}}
+resp = client.post("/loose", json={{"a": [1], "cb": "x", "n": 5}}, headers=headers)
+assert resp.json() == {{"result": 5}}, resp.text
+assert client.post("/loose", json={{"n": "z"}}, headers=headers).status_code == 422
+print("BUILTIN_FUNC_ANNOTATION_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script], cwd=str(workdir),
+        capture_output=True, text=True, timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "BUILTIN_FUNC_ANNOTATION_E2E_OK" in proc.stdout
 
 
 def test_compiled_app_serves_intenum_and_strenum_parameters_with_enum_defaults(tmp_path):

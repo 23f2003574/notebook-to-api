@@ -1026,6 +1026,8 @@ _RISKY_TYPING_NAMES = frozenset({
     # Builtin classes Pydantic has no schema for (`r: range`, `s: slice`).
     "range", "slice", "memoryview", "bytearray", "type", "BaseException",
     "Exception",
+    # Builtin *functions* written as annotations (`x: any`, `cb: callable`).
+    "any", "callable",
 })
 
 
