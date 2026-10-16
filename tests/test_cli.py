@@ -13730,6 +13730,44 @@ def test_local_smoke_test_names_the_exception_type_when_notebook_code_fails_at_s
     assert "failed to import: KeyError: 'SMOKE_TEST_MISSING_KEY_XYZ'" in result["detail"]
 
 
+def test_validate_docker_image_tag_accepts_real_references_and_rejects_malformed_ones():
+    from backend.cli import _validate_docker_image_tag
+
+    for good in ("app", "app:latest", "my_app.v2:1.0", "me/app:v1", "reg.io/me/app:v1",
+                 "localhost:5000/app", "reg.io:5000/a/b-c:Tag_1"):
+        _validate_docker_image_tag(good)
+
+    for bad in ("UPPER:1", "a:b:c", ":latest", "app:", "my app", "reg.io//app", "a/B", "app:" + "x" * 129):
+        with pytest.raises(ValueError, match="Invalid --tag"):
+            _validate_docker_image_tag(bad)
+
+
+def test_deploy_dry_run_rejects_a_malformed_tag_before_compiling_but_accepts_a_valid_one(tmp_path):
+    """Confirmed before this: `deploy --tag UPPER:1 --dry-run` printed
+    "Would build Docker image 'UPPER:1'" and a real deploy only failed
+    later, inside `docker build`."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    bad = _run_cli(
+        ["deploy", str(notebook_path), "--output", "built", "--dry-run", "--tag", "UPPER:1"],
+        cwd=workdir,
+    )
+    assert bad.returncode != 0, bad.stdout + bad.stderr
+    assert "Invalid --tag 'UPPER:1'" in bad.stdout + bad.stderr
+    assert "Would build" not in bad.stdout
+    assert not (workdir / "built" / "app.py").exists()
+
+    good = _run_cli(
+        ["deploy", str(notebook_path), "--output", "built", "--dry-run", "--tag", "reg.io/me/app:v1"],
+        cwd=workdir,
+    )
+    assert good.returncode == 0, good.stdout + good.stderr
+    assert "Would build Docker image 'reg.io/me/app:v1'" in good.stdout
+
+
 def test_validate_command_json_flag_emits_a_machine_readable_status(tmp_path):
 
     workdir = tmp_path / "workdir"

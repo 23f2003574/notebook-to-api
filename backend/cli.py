@@ -857,6 +857,35 @@ def _deprecation_state_marker(entry):
     return ""
 
 
+_DOCKER_NAME_COMPONENT_RE = re.compile(r"[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*")
+_DOCKER_DOMAIN_RE = re.compile(r"[A-Za-z0-9.-]+(?::\d+)?")
+_DOCKER_TAG_RE = re.compile(r"\w[\w.-]{0,127}")
+
+
+def _validate_docker_image_tag(tag):
+    """Raise ValueError unless `tag` is a valid `[registry[:port]/]name[:tag]`
+    Docker image reference. `deploy --tag UPPER:1`, `a:b:c` or `:latest`
+    used to be accepted (even by --dry-run, which printed "Would build"),
+    failing only after the compile, deep inside `docker build`."""
+    colon, slash = tag.rfind(":"), tag.rfind("/")
+    name, version = (tag[:colon], tag[colon + 1:]) if colon > slash else (tag, None)
+    parts = name.split("/")
+    valid = version is None or _DOCKER_TAG_RE.fullmatch(version) is not None
+
+    if len(parts) > 1 and ("." in parts[0] or ":" in parts[0] or parts[0] == "localhost"):
+        valid = valid and _DOCKER_DOMAIN_RE.fullmatch(parts.pop(0)) is not None
+
+    valid = valid and all(_DOCKER_NAME_COMPONENT_RE.fullmatch(part) for part in parts)
+
+    if not valid:
+        raise ValueError(
+            f"Invalid --tag '{tag}': not a valid Docker image reference "
+            "([registry[:port]/]name[:tag] -- name in lowercase letters, "
+            "digits, '.', '_' and '-'; tag in letters, digits, '_', '.' and "
+            "'-', at most 128 characters)."
+        )
+
+
 def _parse_comma_separated_names(value):
     """Parse a `--only`/`--exclude` argparse value ("add,subtract", or
     None) into a list of names, or None if nothing was given.
@@ -2677,6 +2706,8 @@ def _dispatch_core_command(args):
             tags=_parse_comma_separated_names(args.tag),
         )
     elif args.command == "deploy":
+        if args.tag:
+            _validate_docker_image_tag(args.tag)
         if args.fail_on_startup_warnings:
             # Checked before anything is compiled, built or pushed: an
             # image whose app can't start is what this gate keeps out of
