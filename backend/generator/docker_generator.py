@@ -897,9 +897,11 @@ pip install -r {package_name}/requirements.txt
 uvicorn {package_name}.app:app --reload --reload-dir {package_name}
 ```
 
-Or with Docker:
+Or with Docker, from inside `{package_name}/` -- `docker-compose.yml` lives \
+there, not in the directory above:
 
 ```bash
+cd {package_name}  # skip if you are already inside it
 docker compose up --build
 ```
 

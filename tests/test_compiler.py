@@ -1417,6 +1417,11 @@ def test_compiler_pipeline_generates_a_readme_file(tmp_path):
     assert "X-API-Key" in readme
     assert "docker compose up --build" in readme
     assert "NOTEBOOK_API_KEY" in readme
+    # The README's local-run block ends in the parent directory, but
+    # docker-compose.yml lives inside the output folder: the Docker step must
+    # say to cd there first, or `docker compose up` finds no compose file.
+    assert "cd generated  # skip if you are already inside it\ndocker compose up --build" in readme
+    assert (output_dir / "docker-compose.yml").is_file()
 
 
 def test_compiler_pipeline_readme_reflects_only_and_exclude_filtering(tmp_path):
