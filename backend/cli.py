@@ -1027,7 +1027,7 @@ def _run_local_compile_smoke_test(package_name, output_dir):
         return {
             "passed": False,
             "status_code": None,
-            "detail": f"Compiled app failed to import: {e}",
+            "detail": f"Compiled app failed to import: {type(e).__name__}: {e}",
         }
 
     finally:
@@ -1044,7 +1044,7 @@ def _run_local_compile_smoke_test(package_name, output_dir):
         return {
             "passed": False,
             "status_code": None,
-            "detail": f"Compiled app raised handling GET /health: {e}",
+            "detail": f"Compiled app raised handling GET /health: {type(e).__name__}: {e}",
         }
 
     return {

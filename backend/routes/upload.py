@@ -16738,7 +16738,7 @@ def _run_compile_smoke_test(package_name):
         return {
             "passed": False,
             "status_code": None,
-            "detail": f"Compiled app failed to import: {e}",
+            "detail": f"Compiled app failed to import: {type(e).__name__}: {e}",
         }
 
     try:
@@ -16750,7 +16750,7 @@ def _run_compile_smoke_test(package_name):
         return {
             "passed": False,
             "status_code": None,
-            "detail": f"Compiled app raised handling GET /health: {e}",
+            "detail": f"Compiled app raised handling GET /health: {type(e).__name__}: {e}",
         }
 
     return {

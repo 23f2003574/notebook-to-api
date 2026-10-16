@@ -23296,6 +23296,7 @@ def test_compile_smoke_test_fails_cleanly_when_the_compiled_app_cannot_import(
         assert result["passed"] is False
         assert result["status_code"] is None
         assert "failed to import" in result["detail"]
+        assert "SyntaxError" in result["detail"]
 
     finally:
         app_path.write_text(original, encoding="utf-8")

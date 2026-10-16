@@ -742,6 +742,7 @@ def test_run_local_compile_smoke_test_fails_cleanly_when_the_compiled_app_cannot
         assert result["passed"] is False
         assert result["status_code"] is None
         assert "failed to import" in result["detail"]
+        assert "SyntaxError" in result["detail"]
 
         # The parent directory this needed on sys.path to import the
         # package is removed again afterward, whether the import
@@ -13671,6 +13672,33 @@ def test_validate_command_fails_on_a_conflicting_requires_directive(tmp_path):
     assert "Conflicting requirements directive" in proc.stdout
     assert "numpy" in proc.stdout
     assert "Validation failed." in proc.stdout
+
+
+def test_local_smoke_test_names_the_exception_type_when_notebook_code_fails_at_startup(tmp_path):
+    """Confirmed before this: a notebook doing `os.environ['API_KEY']` or
+    `raise RuntimeError('todo')` at top level reported "failed to import:
+    'API_KEY'" / "failed to import: todo" -- no exception type, so a bare
+    KeyError looked like a stray quoted word."""
+    import nbformat
+    from backend.cli import _run_local_compile_smoke_test
+    from backend.compiler import compile_notebook, package_name_for_output_dir
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(nbformat.v4.new_code_cell(
+        "import os\nKEY = os.environ['SMOKE_TEST_MISSING_KEY_XYZ']\n"
+        "def f() -> int:\n    return 1\n"
+    ))
+    notebook_path = tmp_path / "nb.ipynb"
+    nbformat.write(notebook, str(notebook_path))
+    output_dir = tmp_path / "built_keyerr"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    result = _run_local_compile_smoke_test(
+        package_name_for_output_dir(str(output_dir)), str(output_dir)
+    )
+
+    assert result["passed"] is False
+    assert "failed to import: KeyError: 'SMOKE_TEST_MISSING_KEY_XYZ'" in result["detail"]
 
 
 def test_validate_command_json_flag_emits_a_machine_readable_status(tmp_path):
