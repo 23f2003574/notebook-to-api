@@ -1304,9 +1304,15 @@ def _extract_explicit_apt_packages(code_cells):
             packages.append(package)
 
     # pip clones a `git+https://...` requirement, and python:slim has no git.
+    # A conflicting-requires ValueError is reported by its own check
+    # (validate, compile); it must not abort apt-package discovery.
+    try:
+        explicit_specs = _extract_explicit_requirements(code_cells)
+    except ValueError:
+        explicit_specs = []
+
     if "git" not in seen and any(
-        re.search(r"(?:^|@\s*)git\+", spec)
-        for spec in _extract_explicit_requirements(code_cells)
+        re.search(r"(?:^|@\s*)git\+", spec) for spec in explicit_specs
     ):
         packages.append("git")
 
