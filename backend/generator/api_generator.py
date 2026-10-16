@@ -1023,6 +1023,9 @@ _SAFE_ANNOTATION_MODULES = (
 _RISKY_TYPING_NAMES = frozenset({
     "Iterator", "AsyncIterator", "AsyncIterable", "Awaitable", "Coroutine",
     "AsyncGenerator", "TypedDict",
+    # Builtin classes Pydantic has no schema for (`r: range`, `s: slice`).
+    "range", "slice", "memoryview", "bytearray", "type", "BaseException",
+    "Exception",
 })
 
 

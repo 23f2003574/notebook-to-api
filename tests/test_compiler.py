@@ -9903,6 +9903,64 @@ print("ANNOTATION_ROBUSTNESS_E2E_OK")
     assert "ANNOTATION_ROBUSTNESS_E2E_OK" in proc.stdout
 
 
+def test_needs_safe_annotation_flags_builtin_classes_pydantic_cannot_model():
+    from backend.generator.api_generator import _needs_safe_annotation
+
+    for risky in ("range", "slice", "memoryview", "Optional[range]", "List[slice]"):
+        assert _needs_safe_annotation(risky), risky
+
+
+def test_compiled_app_with_a_range_parameter_imports_and_serves(tmp_path):
+    """Confirmed before this: `r: range` made the generated app raise
+    PydanticSchemaGenerationError at import, taking every endpoint down."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "def span(r: range) -> int:\n    return len(r)\n\n"
+                    "def ok(n: int) -> int:\n    return n\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+assert client.get("/openapi.json").status_code == 200
+assert client.post("/ok", json={{"n": 3}}, headers=headers).json() == {{"result": 3}}
+assert client.post("/span", json={{"r": [2, 7]}}, headers=headers).json() == {{"result": 5}}
+print("RANGE_PARAM_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script], cwd=str(workdir),
+        capture_output=True, text=True, timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "RANGE_PARAM_E2E_OK" in proc.stdout
+
+
 def test_forward_reference_conversion_applies_to_annotations_not_default_expressions():
     from backend.generator.api_generator import _resolve_annotation_source
 
