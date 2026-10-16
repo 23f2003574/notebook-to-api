@@ -15938,6 +15938,52 @@ def test_requirements_name_the_pypi_projects_behind_websocket_cpuinfo_xdg_and_nm
     assert not names & {"websocket", "cpuinfo", "xdg", "nmap"}
 
 
+def test_requirements_name_the_azure_sdk_distributions_instead_of_the_bare_azure_package(tmp_path):
+    """`import azure.storage.blob` / `from azure.identity import ...` went into
+    requirements.txt as the obsolete "azure" meta-package, so the actual SDK
+    packages were never installed. A bare `import azure` names nothing."""
+    import re
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "import azure.storage.blob\n"
+            "from azure.identity import DefaultAzureCredential\n"
+            "from azure.keyvault.secrets import SecretClient\n"
+            "from azure.storage import queue\n"
+            "from azure import functions\n"
+            "def add(a: int, b: int) -> int:\n"
+            "    return a + b\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    nbformat.write(notebook, str(notebook_path))
+    output_dir = tmp_path / "svc"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    lines = (output_dir / "requirements.txt").read_text(encoding="utf-8").splitlines()
+    names = {re.split(r"[=<>~! ]", line, maxsplit=1)[0].lower() for line in lines if line}
+    assert {
+        "azure-storage-blob", "azure-identity", "azure-keyvault-secrets",
+        "azure-storage-queue", "azure-functions",
+    } <= names
+    assert "azure" not in names
+
+
+def test_azure_distribution_for_module_maps_namespaces_and_ignores_bare_azure():
+    from backend.parser.ast_parser import azure_distribution_for_module as dist
+
+    assert dist("azure.storage.blob.aio") == "azure-storage-blob"
+    assert dist("azure.identity") == "azure-identity"
+    assert dist("azure.ai.ml.entities") == "azure-ai-ml"
+    assert dist("azure.mgmt.compute") == "azure-mgmt-compute"
+    assert dist("azure.cosmos") == "azure-cosmos"
+    assert dist("azure") is None
+    assert dist("azure.storage") is None
+    assert dist("azurerm.x") is None
+
+
 @pytest.mark.skipif(not hasattr(os, "symlink"), reason="needs symlinks")
 def test_local_package_symlink_pointing_outside_is_not_shipped_into_the_output(tmp_path):
     """`pkg/leak.txt -> ../../private/secret.txt` was followed by copytree,

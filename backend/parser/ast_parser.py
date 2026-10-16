@@ -1184,8 +1184,8 @@ def extract_imports_from_code(code):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 base_module = alias.name.split(".")[0]
-                if base_module == "google":
-                    distribution = google_distribution_for_module(alias.name)
+                if base_module in ("google", "azure"):
+                    distribution = _namespace_distribution_for_module(alias.name)
                     if distribution:
                         imports.add(distribution)
                     continue
@@ -1194,15 +1194,16 @@ def extract_imports_from_code(code):
         elif isinstance(node, ast.ImportFrom):
             if node.module:
                 base_module = node.module.split(".")[0]
-                if base_module == "google" and not node.level:
+                if base_module in ("google", "azure") and not node.level:
                     # `from google import genai` / `from google.cloud import
                     # storage` name the product only in the imported alias.
                     modules = (
                         [f"{node.module}.{alias.name}" for alias in node.names if alias.name != "*"]
-                        if node.module in ("google", "google.cloud") else [node.module]
+                        if node.module in ("google", "google.cloud") or node.module in _AZURE_NAMESPACE_ONLY
+                        else [node.module]
                     )
                     for module in modules:
-                        distribution = google_distribution_for_module(module)
+                        distribution = _namespace_distribution_for_module(module)
                         if distribution:
                             imports.add(distribution)
                     continue
@@ -1222,8 +1223,8 @@ def extract_imports_from_code(code):
             if not target.value or target.value.startswith("."):
                 continue
             base_module = target.value.split(".")[0]
-            if base_module == "google":
-                distribution = google_distribution_for_module(target.value)
+            if base_module in ("google", "azure"):
+                distribution = _namespace_distribution_for_module(target.value)
                 if distribution:
                     imports.add(distribution)
                 continue
@@ -1235,6 +1236,39 @@ def extract_imports_from_code(code):
 # google.<x> imports of google.protobuf / google.auth / ... are separate
 # PyPI distributions sharing one namespace package; "google" itself is a
 # different, unrelated project.
+# azure.* packages are separate PyPI distributions sharing one namespace
+# (`import azure.storage.blob` is azure-storage-blob); the bare name "azure"
+# is an obsolete meta-package. Namespaces whose distributions take three
+# dotted parts (azure.<ns>.<name>); everything else takes two (azure.identity).
+_AZURE_THREE_PART_NAMESPACES = frozenset({
+    "storage", "keyvault", "ai", "mgmt", "data", "search", "monitor",
+    "communication", "cognitiveservices", "messaging",
+})
+_AZURE_NAMESPACE_ONLY = frozenset(
+    {"azure"} | {f"azure.{ns}" for ns in _AZURE_THREE_PART_NAMESPACES}
+)
+
+
+def azure_distribution_for_module(module):
+    """The PyPI distribution an `azure.*` module belongs to, or None for a
+    bare `azure` / namespace-only name that names nothing installable."""
+    parts = module.split(".")
+
+    if len(parts) < 2 or parts[0] != "azure":
+        return None
+
+    if parts[1] in _AZURE_THREE_PART_NAMESPACES:
+        return "-".join(parts[:3]) if len(parts) >= 3 else None
+
+    return "-".join(parts[:2]).replace("_", "-")
+
+
+def _namespace_distribution_for_module(module):
+    if module.startswith("azure"):
+        return azure_distribution_for_module(module)
+    return google_distribution_for_module(module)
+
+
 _GOOGLE_DISTRIBUTIONS = {
     "protobuf": "protobuf",
     "auth": "google-auth",
