@@ -10586,6 +10586,71 @@ print("OPENAPI_413_E2E_OK")
     assert "OPENAPI_413_E2E_OK" in proc.stdout
 
 
+def test_compile_output_is_identical_across_hash_seeds(tmp_path):
+    """Acceptance: compiling the same notebook in processes with different
+    PYTHONHASHSEED values (which reorders set/dict-of-set iteration) writes
+    byte-identical files, apart from .compile_metadata.json (timestamp and
+    absolute source path). A set-ordered requirements.txt, env example or
+    route list would otherwise churn on every build."""
+    source = (
+        "import os, sys, json, re, math, numpy, pandas, requests, yaml, PIL, sklearn, cv2, scipy, bs4\n"
+        "from typing import Optional, List, Dict, Set, Tuple\n"
+        "import enum\n"
+        "class C(enum.Enum):\n"
+        "    A = 'a'\n"
+        "    B = 'b'\n"
+        "# notebook-to-api: tag math\n"
+        "def f1(a: int, b: Set[int] = {3, 1, 2}, c: C = C.A, d: Dict[str, int] = {'z': 1, 'a': 2}):\n"
+        "    return a\n"
+        "# notebook-to-api: background\n"
+        "def f3(n: int):\n"
+        "    return n\n"
+        "# notebook-to-api: cache 5\n"
+        "def f4(n: int):\n"
+        "    return n\n"
+        "def f5(tags: Optional[List[str]] = None, s: Tuple[int, ...] = (1, 2)):\n"
+        "    return 1\n"
+        "os.environ.get('ZED'); os.environ.get('ALPHA'); os.getenv('MID_KEY')\n"
+    )
+
+    trees = []
+    for seed in ("1", "2", "3"):
+        workdir = tmp_path / f"seed{seed}"
+        workdir.mkdir()
+        (workdir / "nb.ipynb").write_text(
+            json.dumps({
+                "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+                "cells": [{
+                    "cell_type": "code", "execution_count": None, "metadata": {},
+                    "outputs": [], "source": source,
+                }],
+            }),
+            encoding="utf-8",
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c",
+             f"import sys; sys.path.insert(0, {str(PROJECT_ROOT)!r}); "
+             "from backend.compiler import compile_notebook; "
+             "compile_notebook('nb.ipynb', 'out')"],
+            cwd=str(workdir), capture_output=True, text=True, timeout=60,
+            env=dict(os.environ, PYTHONHASHSEED=seed),
+        )
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        out = workdir / "out"
+        trees.append({
+            str(path.relative_to(out)): path.read_bytes()
+            for path in sorted(out.rglob("*"))
+            if path.is_file() and path.name != ".compile_metadata.json"
+            and "__pycache__" not in path.parts
+        })
+
+    assert "app.py" in trees[0] and "requirements.txt" in trees[0]
+    for other in trees[1:]:
+        assert other.keys() == trees[0].keys()
+        differing = [name for name in trees[0] if trees[0][name] != other[name]]
+        assert not differing, differing
+
+
 def test_compiled_app_serves_intenum_and_strenum_parameters_with_enum_defaults(tmp_path):
     """IntEnum / StrEnum parameters: the notebook receives real enum members
     (so `level + 1` and isinstance work), omitted ones use the enum default,
