@@ -10339,6 +10339,58 @@ print("RESPONSE_PASSTHROUGH_E2E_OK")
     assert "RESPONSE_PASSTHROUGH_E2E_OK" in proc.stdout
 
 
+def test_non_finite_float_literal_default_does_not_break_app_import(tmp_path):
+    """Confirmed before this: `x: float = 1e400` (inf, also nested in a list)
+    was emitted as a bare `inf`, a NameError that kept the whole generated app
+    from importing. The function must still receive the real infinity."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "def big(x: float = 1e400, y: float = -1e400, z: list = [1e400, 2]) -> list:\n"
+                    "    return [x > 1e308, y < -1e308, z[0] > 1e308, z[1]]\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+assert client.get("/openapi.json").status_code == 200
+resp = client.post("/big", json={{}}, headers=headers)
+assert resp.json() == {{"result": [True, True, True, 2]}}, resp.text
+print("INF_DEFAULT_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script], cwd=str(workdir),
+        capture_output=True, text=True, timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "INF_DEFAULT_E2E_OK" in proc.stdout
+
+
 def test_compiled_app_serves_intenum_and_strenum_parameters_with_enum_defaults(tmp_path):
     """IntEnum / StrEnum parameters: the notebook receives real enum members
     (so `level + 1` and isinstance work), omitted ones use the enum default,

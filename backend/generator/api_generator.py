@@ -1115,6 +1115,23 @@ def _build_model_names(functions):
     return model_names
 
 
+def _literal_source(value):
+    """`repr(value)`, except a non-finite float (a default like `1e400`, which
+    Python folds to inf) is written `float('inf')` / `float('nan')`: a bare
+    `inf` is a NameError when the generated model class is built, taking the
+    whole app down at import."""
+    if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
+        return f"float({str(value)!r})"
+    if isinstance(value, (list, tuple)):
+        inner = ", ".join(_literal_source(item) for item in value)
+        if isinstance(value, list):
+            return f"[{inner}]"
+        return f"({inner},)" if len(value) == 1 else f"({inner})"
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{_literal_source(k)}: {_literal_source(v)}" for k, v in value.items()) + "}"
+    return repr(value)
+
+
 def _json_safe_example(value):
     """`value` reduced to what JSON can carry, for the request model's
     schema example: a set becomes a (sorted when possible) list, a tuple a
@@ -5258,7 +5275,7 @@ def generate_fastapi_code(
 
             if arg.get("has_default"):
                 if arg.get("default_is_literal", True):
-                    default_expr = repr(default_value)
+                    default_expr = _literal_source(default_value)
                 else:
                     # A non-literal default (e.g. a notebook-defined Enum
                     # member like `Priority.HIGH` -- see
