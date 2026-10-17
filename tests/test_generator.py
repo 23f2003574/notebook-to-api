@@ -4830,7 +4830,7 @@ def test_sync_endpoint_documents_401_429_and_500_in_its_openapi_schema(monkeypat
     schema = namespace["app"].openapi()
     responses = schema["paths"]["/add"]["post"]["responses"]
 
-    assert set(responses) == {"200", "401", "429", "500", "422"}
+    assert set(responses) == {"200", "401", "413", "429", "500", "422"}
     assert responses["401"]["description"] == "Missing or invalid X-API-Key header."
     assert "NOTEBOOK_API_RATE_LIMIT_PER_MINUTE" in responses["429"]["description"]
     assert "'add' raised" in responses["500"]["description"]
@@ -4917,7 +4917,7 @@ def test_background_endpoint_documents_400_401_429_and_503_in_its_openapi_schema
     schema = namespace["app"].openapi()
     responses = schema["paths"]["/train_model"]["post"]["responses"]
 
-    assert set(responses) == {"200", "400", "401", "429", "503", "422"}
+    assert set(responses) == {"200", "400", "401", "413", "429", "503", "422"}
     assert "callback_url" in responses["400"]["description"]
     assert "NOTEBOOK_API_MAX_TASKS" in responses["503"]["description"]
     assert responses["401"]["description"] == "Missing or invalid X-API-Key header."

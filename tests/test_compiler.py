@@ -10527,6 +10527,65 @@ def test_notebook_atexit_handlers_run_when_the_server_gets_sigterm(tmp_path):
     assert marker.read_text() == "x"
 
 
+def test_openapi_documents_the_413_every_post_endpoint_can_return(tmp_path):
+    """Confirmed before this: POST /plain (and background POST /bg) answered 413
+    for a body over NOTEBOOK_API_MAX_REQUEST_BYTES while their OpenAPI
+    responses listed only 200/401/422/429/500, so generated clients had no
+    413 in the contract. The documented status must match the real one."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "def plain(n: int = 1) -> int:\n"
+                    "    return n\n"
+                    "# notebook-to-api: background\n"
+                    "def bg(n: int = 1) -> int:\n"
+                    "    return n\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import json, os, sys
+
+os.environ["NOTEBOOK_API_MAX_REQUEST_BYTES"] = "1000"
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key", "Content-Type": "application/json"}}
+paths = client.get("/openapi.json").json()["paths"]
+
+for name in ("plain", "bg"):
+    actual = client.post("/" + name, content=json.dumps({{"n": 1, "pad": "x" * 2000}}), headers=headers)
+    assert actual.status_code == 413, (name, actual.status_code)
+    assert "413" in paths["/" + name]["post"]["responses"], (name, sorted(paths["/" + name]["post"]["responses"]))
+print("OPENAPI_413_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script], cwd=str(workdir),
+        capture_output=True, text=True, timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "OPENAPI_413_E2E_OK" in proc.stdout
+
+
 def test_compiled_app_serves_intenum_and_strenum_parameters_with_enum_defaults(tmp_path):
     """IntEnum / StrEnum parameters: the notebook receives real enum members
     (so `level + 1` and isinstance work), omitted ones use the enum default,

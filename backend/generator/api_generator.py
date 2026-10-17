@@ -819,6 +819,24 @@ def _auth_and_rate_limit_error_responses():
                 }
             },
         },
+        # MaxRequestBodySizeMiddleware answers 413 for any oversized POST body
+        # before the endpoint runs; the limit is a runtime env var, so the
+        # description names it rather than a number.
+        413: {
+            "description": (
+                "Request body larger than NOTEBOOK_API_MAX_REQUEST_BYTES."
+            ),
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": (
+                            "Request body exceeds the maximum allowed size "
+                            "of 10485760 bytes"
+                        )
+                    }
+                }
+            },
+        },
         429: {
             "description": (
                 "Rate limit exceeded (see "
