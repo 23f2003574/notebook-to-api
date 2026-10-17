@@ -2606,7 +2606,7 @@ def _find_unparseable_cells(code_cells):
     found = []
     for number, source in enumerate(code_cells, start=1):
         try:
-            ast.parse(source)
+            compile(source, "<cell>", "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
         except SyntaxError as exc:
             found.append({"cell": number, "line": exc.lineno, "message": exc.msg})
     return found

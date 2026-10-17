@@ -10707,6 +10707,62 @@ print("PEP695_E2E_OK")
     assert "PEP695_E2E_OK" in proc.stdout
 
 
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="except* needs Python 3.11+")
+def test_cell_that_parses_but_does_not_compile_is_dropped_not_shipped(tmp_path):
+    """Confirmed before this: `return` inside an `except*` block passes
+    ast.parse but not compile(), so it was copied into the runtime module and
+    the generated app crashed on import with SyntaxError -- taking the valid
+    cells' endpoints down too. It is now dropped (and reported) like any other
+    invalid cell, while a top-level `await` cell is still kept."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    sources = [
+        "def ok(n: int):\n    return n\n",
+        "def bad(n: int):\n    try:\n        r = 1\n    except* ValueError:\n        return 0\n    return r\n",
+        "import asyncio\nawait asyncio.sleep(0)\ndef ok2(n: int):\n    return n\n",
+    ]
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+            "cells": [
+                {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [], "source": src}
+                for src in sources
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+assert client.post("/ok", json={{"n": 1}}, headers=headers).json() == {{"result": 1}}
+assert client.post("/ok2", json={{"n": 2}}, headers=headers).json() == {{"result": 2}}
+assert client.post("/bad", json={{"n": 1}}, headers=headers).status_code == 404
+print("COMPILE_ERROR_CELL_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script], cwd=str(workdir),
+        capture_output=True, text=True, timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "COMPILE_ERROR_CELL_E2E_OK" in proc.stdout
+
+
 def test_compiled_app_serves_intenum_and_strenum_parameters_with_enum_defaults(tmp_path):
     """IntEnum / StrEnum parameters: the notebook receives real enum members
     (so `level + 1` and isinstance work), omitted ones use the enum default,

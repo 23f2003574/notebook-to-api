@@ -325,9 +325,15 @@ def is_parseable_python(code):
     stripping (e.g. the body of a `%%bash` cell magic) before they are
     written into the generated runtime module, rather than shipping a
     module that fails to import.
+
+    Compiled, not just parsed: some errors only surface at compile time
+    (`return` inside an `except*` block, `nonlocal` at module level), and such
+    a cell passed ast.parse yet made the generated module raise SyntaxError on
+    import. Top-level `await` stays allowed -- the runtime module runs those
+    cells with the same flag.
     """
     try:
-        ast.parse(code)
+        compile(code, "<cell>", "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
         return True
     except SyntaxError:
         return False
