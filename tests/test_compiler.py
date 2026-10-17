@@ -10274,6 +10274,71 @@ print("BYTES_DEFAULT_OPENAPI_E2E_OK")
     assert "BYTES_DEFAULT_OPENAPI_E2E_OK" in proc.stdout
 
 
+def test_endpoint_returning_a_response_object_is_served_as_is(tmp_path):
+    """Confirmed before this: returning HTMLResponse/JSONResponse(status_code=201)
+    produced {"result": {"status_code", "body", "raw_headers", ...}} and a
+    StreamingResponse produced a 500, instead of the response the notebook built."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "import io\n"
+                    "from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse\n"
+                    "def page(n: int):\n"
+                    "    return HTMLResponse('<b>hi</b>')\n"
+                    "def made(n: int):\n"
+                    "    return JSONResponse({'a': n}, status_code=201)\n"
+                    "def stream(n: int):\n"
+                    "    return StreamingResponse(io.BytesIO(b'abc'), media_type='text/plain')\n"
+                    "def plain(n: int):\n"
+                    "    return {'a': n}\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+r = client.post("/page", json={{"n": 1}}, headers=headers)
+assert r.status_code == 200 and r.text == "<b>hi</b>", r.text
+assert r.headers["content-type"].startswith("text/html"), r.headers
+r = client.post("/made", json={{"n": 1}}, headers=headers)
+assert r.status_code == 201 and r.json() == {{"a": 1}}, r.text
+r = client.post("/stream", json={{"n": 1}}, headers=headers)
+assert r.status_code == 200 and r.text == "abc", r.text
+assert client.post("/plain", json={{"n": 2}}, headers=headers).json() == {{"result": {{"a": 2}}}}
+print("RESPONSE_PASSTHROUGH_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script], cwd=str(workdir),
+        capture_output=True, text=True, timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "RESPONSE_PASSTHROUGH_E2E_OK" in proc.stdout
+
+
 def test_compiled_app_serves_intenum_and_strenum_parameters_with_enum_defaults(tmp_path):
     """IntEnum / StrEnum parameters: the notebook receives real enum members
     (so `level + 1` and isinstance work), omitted ones use the enum default,

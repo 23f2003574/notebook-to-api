@@ -6065,6 +6065,13 @@ def generate_fastapi_code(
             # a bare "Internal Server Error" with no detail at all, unlike
             # every other failure mode this generated app already reports
             # clearly (auth, reserved names, oversized bodies, ...).
+            # A function that builds its own Response (HTMLResponse,
+            # StreamingResponse, FileResponse, a custom status code) gets it
+            # served as-is; encoding it as data wrapped it in {"result":
+            # {"status_code", "body", "raw_headers", ...}} (or a 500 for a
+            # streaming body) instead of the content the notebook meant.
+            lines.append("    if isinstance(result, Response):")
+            lines.append("        return result")
             lines.append("    try:")
             lines.append("        result = _json_safe(jsonable_encoder(_json_safe(result)))")
             lines.append("    except Exception as e:")
