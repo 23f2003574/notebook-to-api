@@ -7391,6 +7391,22 @@ def test_readme_content_lists_the_retry_route_as_requiring_an_api_key():
     assert "`/tasks/{task_id}/retry`" in content
 
 
+def test_readme_content_lists_cache_and_deprecations_reset_as_requiring_an_api_key():
+    """Confirmed before this: a real request without X-API-Key to
+    `DELETE /cache` and `POST /deprecations/reset` answers 401, but neither
+    was named in the keyed list (only the keyless `GET /deprecations` was),
+    so the README implied only /tasks/... built-ins need a credential."""
+    from backend.generator.docker_generator import readme_content
+
+    content = readme_content()
+
+    assert "`DELETE /cache`" in content
+    assert "`POST /deprecations/reset`" in content
+    keyless = content.split("with no credential of its own:", 1)[1].split("\n\n", 1)[0]
+    assert "/cache" not in keyless
+    assert "/deprecations/reset" not in keyless
+
+
 def test_readme_content_lists_the_root_route_as_not_requiring_an_api_key():
     """The explicit "does NOT require an X-API-Key" list -- built
     specifically by this function's own first documentation-bug fix to

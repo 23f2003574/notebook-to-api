@@ -872,7 +872,8 @@ below.
 So do these built-in ones: `/auth/validate`, `/tasks`, and every other \
 `/tasks/...` route (`/tasks/{{task_id}}`, `/tasks/{{task_id}}/redeliver-webhook`, \
 `/tasks/{{task_id}}/retry`, `/tasks/completed`, `/tasks/failed`, \
-`/tasks/cleanup`, `/tasks/reset`).
+`/tasks/cleanup`, `/tasks/reset`), `DELETE /cache` and \
+`POST /deprecations/reset`.
 
 These built-in ones deliberately do **not** -- so a load balancer, a \
 Kubernetes liveness/readiness probe, or a Prometheus scraper can reach \
