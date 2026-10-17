@@ -10449,6 +10449,36 @@ print("RESPONSE_RATE_LIMIT_HEADERS_E2E_OK")
     assert "RESPONSE_RATE_LIMIT_HEADERS_E2E_OK" in proc.stdout
 
 
+def test_relative_imports_are_not_written_to_requirements(tmp_path):
+    """Confirmed before this: `from .pkg import x` / `from ..a import b`
+    put `pkg` / `a` in requirements.txt, so pip installed (or failed on) an
+    unrelated PyPI project named after a sibling file."""
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "from .pkg import x\n"
+                    "from ..a import b\n"
+                    "from . import sibling\n"
+                    "import yaml\n"
+                    "def f(n: int):\n"
+                    "    return n\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+    out = tmp_path / "out"
+    compile_notebook(str(notebook_path), str(out))
+    lines = (out / "requirements.txt").read_text().split()
+    names = {line.split("==")[0].lower() for line in lines}
+    assert "pyyaml" in names
+    assert not names & {"pkg", "a", "sibling"}, lines
+
+
 def test_compiled_app_serves_intenum_and_strenum_parameters_with_enum_defaults(tmp_path):
     """IntEnum / StrEnum parameters: the notebook receives real enum members
     (so `level + 1` and isinstance work), omitted ones use the enum default,

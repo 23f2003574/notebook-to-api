@@ -1192,7 +1192,10 @@ def extract_imports_from_code(code):
                 imports.add(pypi_mapping.get(base_module, base_module))
 
         elif isinstance(node, ast.ImportFrom):
-            if node.module:
+            # `from .pkg import x` is relative -- a sibling file, never a PyPI
+            # distribution; "pkg" in requirements.txt would install (or fail on)
+            # an unrelated project.
+            if node.module and not node.level:
                 base_module = node.module.split(".")[0]
                 if base_module in ("google", "azure") and not node.level:
                     # `from google import genai` / `from google.cloud import
