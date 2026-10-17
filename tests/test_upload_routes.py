@@ -31114,6 +31114,66 @@ def test_download_returns_a_zip_of_the_compiled_app():
     assert "def add(" in app_source
 
 
+def test_downloaded_zip_serves_the_notebook_function_under_real_uvicorn(tmp_path):
+    """Acceptance: upload -> /api/compile -> /api/download, unzip into a folder
+    named `generated` (what the Dockerfile's `COPY . generated/` produces), run
+    `uvicorn generated.app:app` as a real server, and POST to the endpoint over
+    HTTP. Existing download tests only list the zip's file names, so a bundle
+    that is missing a file or cannot be imported would still pass them."""
+    import time
+    import urllib.request
+
+    upload_resp = client.post(
+        "/api/upload",
+        files={"file": (
+            "served_download_test.ipynb",
+            io.BytesIO(_notebook_bytes("def add(a: int, b: int = 2) -> int:\n    return a + b\n")),
+            "application/json",
+        )},
+    )
+    assert upload_resp.status_code == 200
+    assert client.post(
+        "/api/compile", json={"notebook_path": "served_download_test.ipynb"}
+    ).status_code == 200
+    download_resp = client.get("/api/download")
+    assert download_resp.status_code == 200
+
+    workdir = tmp_path / "deploy"
+    with zipfile.ZipFile(io.BytesIO(download_resp.content)) as archive:
+        archive.extractall(workdir / "generated")
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    env = dict(os.environ, PYTHONPATH=str(workdir))
+    server = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "generated.app:app",
+         "--host", "127.0.0.1", "--port", str(port)],
+        cwd=str(workdir), env=env,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    base_url = f"http://127.0.0.1:{port}"
+    try:
+        deadline = time.time() + 30
+        while True:
+            try:
+                urllib.request.urlopen(f"{base_url}/health", timeout=2).close()
+                break
+            except OSError:
+                assert server.poll() is None and time.time() < deadline, "server never came up"
+                time.sleep(0.2)
+
+        request = urllib.request.Request(
+            f"{base_url}/add", data=b'{"a": 1}', method="POST",
+            headers={"X-API-Key": "notebook-to-api-dev-key", "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as resp:
+            assert json.loads(resp.read()) == {"result": 3}
+    finally:
+        server.terminate()
+        server.wait(timeout=10)
+
+
 def test_download_reports_a_bundle_sha256_matching_generated_checksums():
     """"X-Bundle-SHA256" summarizes this exact zip's own file set with the
     same _bundle_sha256 GET /api/generated?checksums=true's own
