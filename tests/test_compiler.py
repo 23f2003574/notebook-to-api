@@ -10651,6 +10651,62 @@ def test_compile_output_is_identical_across_hash_seeds(tmp_path):
         assert not differing, differing
 
 
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="PEP 695 syntax needs Python 3.12+")
+def test_pep695_generic_function_type_parameters_do_not_break_app_import(tmp_path):
+    """Confirmed before this: `def echo[T](x: T) -> T` (valid Python 3.12) left
+    the bare `T` in the generated request model, which raised AttributeError
+    (`notebook_module` has no attribute `T`) and kept the whole app from
+    importing. A type parameter now behaves like `Any`."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "def echo[T](x: T, n: int = 2) -> T:\n"
+                    "    return x\n"
+                    "def first[T: (int, str)](items: list[T], default: T | None = None) -> T | None:\n"
+                    "    return items[0] if items else default\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+assert client.get("/openapi.json").status_code == 200
+assert client.post("/echo", json={{"x": "hi"}}, headers=headers).json() == {{"result": "hi"}}
+assert client.post("/first", json={{"items": [7, 8]}}, headers=headers).json() == {{"result": 7}}
+print("PEP695_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script], cwd=str(workdir),
+        capture_output=True, text=True, timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "PEP695_E2E_OK" in proc.stdout
+
+
 def test_compiled_app_serves_intenum_and_strenum_parameters_with_enum_defaults(tmp_path):
     """IntEnum / StrEnum parameters: the notebook receives real enum members
     (so `level + 1` and isinstance work), omitted ones use the enum default,

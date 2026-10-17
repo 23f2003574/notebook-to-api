@@ -365,6 +365,28 @@ def _iter_module_level_statements(nodes):
             yield from _iter_module_level_statements(handler.body)
 
 
+class _TypeParamToAny(ast.NodeTransformer):
+    """Rewrites a PEP 695 type parameter (`def f[T](x: T)`) to `Any`: `T`
+    exists only inside the function's own scope, so the bare name left in an
+    annotation made the generated models fail with AttributeError at import."""
+
+    def __init__(self, names):
+        self.names = names
+
+    def visit_Name(self, node):
+        if node.id in self.names:
+            return ast.copy_location(ast.Name(id="Any", ctx=ast.Load()), node)
+        return node
+
+
+def _unparse_annotation(annotation, type_param_names):
+    if type_param_names:
+        annotation = _TypeParamToAny(type_param_names).visit(
+            ast.parse(ast.unparse(annotation), mode="eval").body
+        )
+    return ast.unparse(annotation)
+
+
 def extract_functions_from_code(code):
     try:
         tree = ast.parse(code)
@@ -379,6 +401,9 @@ def extract_functions_from_code(code):
     for node in _iter_module_level_statements(tree.body):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             args = []
+            type_param_names = {
+                param.name for param in getattr(node, "type_params", ())
+            }
 
             # Positional-only params (those before a bare `/`, e.g.
             # `def f(a, b, /, c)`) are extracted alongside regular
@@ -408,7 +433,7 @@ def extract_functions_from_code(code):
                 }
 
                 if arg.annotation:
-                    arg_info["type"] = ast.unparse(arg.annotation)
+                    arg_info["type"] = _unparse_annotation(arg.annotation, type_param_names)
 
                 default_index = idx - default_offset
 
@@ -447,7 +472,7 @@ def extract_functions_from_code(code):
             if node.args.vararg:
                 vararg = node.args.vararg
                 item_type = (
-                    ast.unparse(vararg.annotation) if vararg.annotation else "Any"
+                    _unparse_annotation(vararg.annotation, type_param_names) if vararg.annotation else "Any"
                 )
                 args.append({
                     "name": vararg.arg,
@@ -474,7 +499,7 @@ def extract_functions_from_code(code):
                 }
 
                 if arg.annotation:
-                    arg_info["type"] = ast.unparse(arg.annotation)
+                    arg_info["type"] = _unparse_annotation(arg.annotation, type_param_names)
 
                 default_node = node.args.kw_defaults[idx]
 
@@ -509,7 +534,7 @@ def extract_functions_from_code(code):
                 # a fixed Dict[str, Any], so the annotation was neither
                 # enforced nor shown in the OpenAPI schema.
                 kwarg_type = (
-                    ast.unparse(node.args.kwarg.annotation)
+                    _unparse_annotation(node.args.kwarg.annotation, type_param_names)
                     if node.args.kwarg.annotation else "Any"
                 )
                 args.append({
@@ -523,7 +548,7 @@ def extract_functions_from_code(code):
 
             return_type = None
             if node.returns:
-                return_type = ast.unparse(node.returns)
+                return_type = _unparse_annotation(node.returns, type_param_names)
 
             # ast.get_docstring(clean=True) strips the docstring's own
             # leading/trailing whitespace and dedents it (equivalent to
