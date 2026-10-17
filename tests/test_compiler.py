@@ -10479,6 +10479,54 @@ def test_relative_imports_are_not_written_to_requirements(tmp_path):
     assert not names & {"pkg", "a", "sibling"}, lines
 
 
+def test_notebook_atexit_handlers_run_when_the_server_gets_sigterm(tmp_path):
+    """Confirmed before this: uvicorn re-raises SIGTERM (what `docker stop` and
+    Kubernetes send) after its graceful shutdown, which skips atexit, so a
+    notebook's own cleanup (closing connections, removing temp files) never ran.
+    Handlers must run exactly once, on SIGTERM and on a plain interpreter exit."""
+    import signal
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    marker = tmp_path / "marker.txt"
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+            "cells": [{
+                "cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (
+                    "import atexit, os\n"
+                    "def _cleanup():\n"
+                    "    with open(os.environ['N2A_MARKER'], 'a') as f:\n"
+                    "        f.write('x')\n"
+                    "atexit.register(_cleanup)\n"
+                    "def ping(n: int):\n"
+                    "    return n\n"
+                ),
+            }],
+        }),
+        encoding="utf-8",
+    )
+    compile_notebook(str(notebook_path), str(workdir / "generated"))
+    port = _free_tcp_port()
+    env = dict(os.environ, N2A_MARKER=str(marker))
+    env["PYTHONPATH"] = f"{PROJECT_ROOT}{os.pathsep}{workdir}{os.pathsep}{env.get('PYTHONPATH', '')}"
+    server = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "generated.app:app", "--host", "127.0.0.1", "--port", str(port)],
+        cwd=str(workdir), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    try:
+        _wait_until_serving(f"http://127.0.0.1:{port}", time.time() + 20)
+        server.send_signal(signal.SIGTERM)
+        server.wait(timeout=15)
+    finally:
+        if server.poll() is None:
+            server.kill()
+
+    assert marker.read_text() == "x"
+
+
 def test_compiled_app_serves_intenum_and_strenum_parameters_with_enum_defaults(tmp_path):
     """IntEnum / StrEnum parameters: the notebook receives real enum members
     (so `level + 1` and isinstance work), omitted ones use the enum default,

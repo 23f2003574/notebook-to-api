@@ -1593,7 +1593,33 @@ def generate_fastapi_code(
     lines.append("from typing import Any as _AnyType")
     if needed_typing_names:
         lines.append(f"from typing import {', '.join(sorted(needed_typing_names))}")
-    lines.append(f"import {package_name}.runtime.notebook_module as notebook_module")
+    # Remember what the notebook registers with atexit while it imports: uvicorn
+    # re-raises SIGTERM (what `docker stop` / Kubernetes send) after its graceful
+    # shutdown, which skips atexit, so the notebook's own cleanup never ran.
+    # _nb_lifespan below runs those handlers itself.
+    lines.append("import atexit as _nb_atexit")
+    lines.append("import contextlib as _nb_contextlib")
+    lines.append("_nb_atexit_handlers = []")
+    lines.append("_nb_real_atexit_register = _nb_atexit.register")
+    lines.append("def _nb_recording_register(func, *args, **kwargs):")
+    lines.append("    _nb_atexit_handlers.append((func, args, kwargs))")
+    lines.append("    return _nb_real_atexit_register(func, *args, **kwargs)")
+    lines.append("_nb_atexit.register = _nb_recording_register")
+    lines.append("try:")
+    lines.append(f"    import {package_name}.runtime.notebook_module as notebook_module")
+    lines.append("finally:")
+    lines.append("    _nb_atexit.register = _nb_real_atexit_register")
+    lines.append("")
+    lines.append("@_nb_contextlib.asynccontextmanager")
+    lines.append("async def _nb_lifespan(_app):")
+    lines.append("    yield")
+    lines.append("    while _nb_atexit_handlers:")
+    lines.append("        func, args, kwargs = _nb_atexit_handlers.pop()")
+    lines.append("        _nb_atexit.unregister(func)")
+    lines.append("        try:")
+    lines.append("            func(*args, **kwargs)")
+    lines.append("        except Exception as e:")
+    lines.append("            print(f'notebook shutdown handler {func!r} failed: {e!r}', file=sys.stderr)")
     lines.append("")
     # Read before app = FastAPI(...) below (the servers= kwarg needs it
     # at construction time) -- see GET /api/env-vars-preview's own
@@ -1661,7 +1687,8 @@ def generate_fastapi_code(
         '"description": "This deployment"}], '
         'docs_url=None if DISABLE_DOCS else "/docs", '
         'redoc_url=None if DISABLE_DOCS else "/redoc", '
-        'openapi_url=None if DISABLE_DOCS else "/openapi.json"'
+        'openapi_url=None if DISABLE_DOCS else "/openapi.json", '
+        'lifespan=_nb_lifespan'
         ')'
     )
     lines.append("")
