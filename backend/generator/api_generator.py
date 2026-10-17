@@ -5977,7 +5977,12 @@ def generate_fastapi_code(
                 # endpoint returns its own JSONResponse -- _with_quota_headers
                 # copies those headers across.
                 + ("" if endpoint_rate_limit else "_rl_response: Response = None, ")
-                if endpoint_cache_ttl else ""
+                if endpoint_cache_ttl else
+                # Without a cache, only an endpoint that can return its own
+                # Response (dropping the X-RateLimit-* the dependencies
+                # wrote) needs the handle -- take it unless the endpoint
+                # rate limit already added it.
+                ("" if endpoint_rate_limit else "_rl_response: Response = None, ")
             )
             lines.append(f"async def {_endpoint_python_name(func_name)}(req: {model_name}, {rate_limit_param}{cache_param}_: None = Depends(verify_api_key)):")
             lines.extend(rate_limit_lines)
@@ -6088,7 +6093,7 @@ def generate_fastapi_code(
             # {"status_code", "body", "raw_headers", ...}} (or a 500 for a
             # streaming body) instead of the content the notebook meant.
             lines.append("    if isinstance(result, Response):")
-            lines.append("        return result")
+            lines.append("        return _with_quota_headers(result, _rl_response)")
             lines.append("    try:")
             lines.append("        result = _json_safe(jsonable_encoder(_json_safe(result)))")
             lines.append("    except Exception as e:")
