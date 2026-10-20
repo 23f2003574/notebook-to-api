@@ -386,6 +386,12 @@ def _notebook_structure_problem(notebook_path):
     if not isinstance(data, dict) or "cells" not in data:
         return None
     cells = data["cells"]
+    metadata = data.get("metadata")
+    if metadata is not None and not isinstance(metadata, dict):
+        return (
+            f"Invalid notebook: 'metadata' must be an object, not "
+            f"{type(metadata).__name__}."
+        )
     if not isinstance(cells, list):
         return (
             f"Invalid notebook: 'cells' must be a list of cells, not "
@@ -397,6 +403,15 @@ def _notebook_structure_problem(notebook_path):
                 f"Invalid notebook: cell {position} must be an object with "
                 f"'cell_type' and 'source', not {type(cell).__name__}."
             )
+        source = cell.get("source")
+        if isinstance(source, list):
+            for line_number, line in enumerate(source, start=1):
+                if not isinstance(line, str):
+                    return (
+                        f"Invalid notebook: cell {position} 'source' must be "
+                        f"text or a list of text lines, but line {line_number} "
+                        f"is {type(line).__name__}."
+                    )
     return None
 
 

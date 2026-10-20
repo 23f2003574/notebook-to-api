@@ -31504,6 +31504,35 @@ def test_compile_names_the_malformed_cells_field_or_cell_instead_of_a_missing_ke
         assert "Traceback" not in proc.stderr
 
 
+def test_compile_names_a_non_object_metadata_and_a_non_text_source_line(tmp_path):
+    """Confirmed before this: "metadata": [] was reported as "valid JSON but not
+    a Jupyter notebook ... pop expected at most 1 argument, got 2" and a
+    source list holding a number as "sequence item 1: expected str instance,
+    int found" -- internal Python messages naming neither field nor cell."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    code = {"cell_type": "code", "metadata": {}, "outputs": [], "execution_count": None}
+    cases = {
+        "metadata_list.ipynb": (
+            {"nbformat": 4, "nbformat_minor": 5, "metadata": [], "cells": [{**code, "source": "x = 1\n"}]},
+            "'metadata' must be an object, not list",
+        ),
+        "source_line_int.ipynb": (
+            {"nbformat": 4, "nbformat_minor": 5, "metadata": {}, "cells": [{**code, "source": ["x = 1\n", 3]}]},
+            "cell 1 'source' must be text or a list of text lines, but line 2 is int",
+        ),
+    }
+
+    for name, (content, message) in cases.items():
+        path = workdir / name
+        path.write_text(json.dumps(content), encoding="utf-8")
+        proc = _run_cli(["compile", str(path), "--output", "out"], cwd=workdir)
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert message in proc.stderr
+        assert "valid JSON but not a Jupyter notebook" not in proc.stderr
+        assert "Traceback" not in proc.stderr
+
+
 def test_inspect_fail_on_startup_warnings_gates_ci(tmp_path):
     workdir = tmp_path / "workdir"
     workdir.mkdir()
