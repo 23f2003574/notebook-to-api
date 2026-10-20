@@ -2085,6 +2085,14 @@ IMPORT_APT_PACKAGES = {
     "ffmpeg": ("ffmpeg",),
     "tabula": ("default-jre-headless",),
     "camelot": ("ghostscript",),
+    # GitPython raises ImportError at import time without a git executable;
+    # xgboost's wheel links libgomp; pyusb loads libusb; mysqlclient has no
+    # wheel, so `pip install` itself builds it and fails without a compiler
+    # and the MySQL client headers.
+    "git": ("git",),
+    "xgboost": ("libgomp1",),
+    "usb": ("libusb-1.0-0",),
+    "MySQLdb": ("build-essential", "pkg-config", "default-libmysqlclient-dev"),
 }
 
 

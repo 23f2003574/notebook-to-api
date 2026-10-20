@@ -14410,6 +14410,19 @@ def test_imports_of_binding_packages_add_the_system_package_they_load():
     assert _extract_explicit_apt_packages(["# notebook-to-api: exclude graphviz\nimport graphviz\n"]) == []
 
 
+def test_imports_of_gitpython_xgboost_pyusb_and_mysqlclient_add_their_apt_packages():
+    """python:3.x-slim has no git binary (GitPython fails on import), no
+    libgomp (xgboost), no libusb (pyusb), and mysqlclient has no wheel so
+    `pip install` fails building it without a compiler and MySQL headers."""
+    cells = ["import git\nimport xgboost as xgb\nimport usb.core\nimport MySQLdb\n"]
+
+    assert _extract_explicit_apt_packages(cells) == [
+        "git", "libgomp1", "libusb-1.0-0",
+        "build-essential", "pkg-config", "default-libmysqlclient-dev",
+    ]
+    assert _extract_explicit_apt_packages(["# notebook-to-api: exclude git\nimport git\n"]) == []
+
+
 def test_excluded_and_local_imports_add_no_apt_packages():
     cells = [
         "# notebook-to-api: exclude cv2\nimport cv2\n",
