@@ -655,6 +655,17 @@ def serve_notebook(
     # until now. Explicitly pointing it at output_dir itself (resolved,
     # independent of cwd) narrows it to exactly the compiled app's own
     # files, regardless of how many path segments --output has.
+    # The app's OpenAPI "servers" entry (what Swagger UI's "Try it out" sends
+    # requests to) defaults to http://localhost:8000, so `serve --port 9000`
+    # showed /docs whose every "Try it out" call went to the wrong port. Point
+    # it at the port actually served, unless the user set it themselves.
+    server_env = dict(os.environ)
+    if not server_env.get("NOTEBOOK_API_PUBLIC_URL"):
+        public_host = "localhost" if str(host) in ("", "0.0.0.0", "::") else str(host)
+        if ":" in public_host:
+            public_host = f"[{public_host}]"
+        server_env["NOTEBOOK_API_PUBLIC_URL"] = f"http://{public_host}:{port}"
+
     server_process = subprocess.Popen(
         [
             sys.executable,
@@ -670,6 +681,7 @@ def serve_notebook(
             str(port),
         ],
         cwd=str(Path(output_dir).resolve().parent),
+        env=server_env,
     )
 
     try:

@@ -2464,7 +2464,7 @@ def test_serve_command_only_and_exclude_are_mutually_exclusive(tmp_path):
     proc = _run_cli(
         [
             "serve", str(notebook_path),
-            "--only", "add", "--exclude", "add", "--port", "0",
+            "--only", "add", "--exclude", "add", "--port", "58000",
         ],
         cwd=workdir,
     )
@@ -31753,3 +31753,46 @@ def test_compile_smoke_test_fails_instead_of_exiting_silently_on_top_level_sys_e
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "Smoke test: FAILED" in proc.stdout
     assert "sys.exit(3)" in proc.stdout
+
+
+def test_serve_points_the_openapi_servers_entry_at_the_port_it_serves(tmp_path):
+    """Confirmed before this: `serve --port 9123` ran the app on 9123 but its
+    OpenAPI "servers" entry stayed http://localhost:8000, so every Swagger UI
+    "Try it out" request from /docs went to the wrong port."""
+    import socket
+    import urllib.request
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook = workdir / "nb.ipynb"
+    _write_notebook_with_function(notebook, "def total(a: int) -> int:\n    return a\n")
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+
+    env = {k: v for k, v in os.environ.items() if k != "NOTEBOOK_API_PUBLIC_URL"}
+    env["PYTHONPATH"] = str(PROJECT_ROOT)
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "backend.cli", "serve", str(notebook),
+         "--port", str(port), "--host", "127.0.0.1", "--output", str(workdir / "out")],
+        cwd=str(workdir), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    try:
+        servers = None
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline and servers is None:
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/openapi.json", timeout=2) as resp:
+                    servers = json.load(resp).get("servers")
+            except OSError:
+                time.sleep(0.3)
+        assert servers is not None, "serve never answered /openapi.json"
+        assert servers[0]["url"] == f"http://127.0.0.1:{port}"
+    finally:
+        proc.send_signal(signal.SIGINT)
+        try:
+            proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
