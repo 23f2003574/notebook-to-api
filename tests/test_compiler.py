@@ -16809,3 +16809,23 @@ print("STARTED")
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "STARTED" in proc.stdout
+
+
+def test_compose_public_url_follows_port_and_env_example_does_not_pin_it():
+    """Confirmed before this: docker-compose.yml defaulted
+    NOTEBOOK_API_PUBLIC_URL to http://localhost:8000 whatever PORT was, and
+    .env.example (copied to .env) pinned that same value, so with PORT=9000
+    Swagger UI's "Try it out" still called port 8000."""
+    env_vars = [
+        {"name": "NOTEBOOK_API_PUBLIC_URL", "default": "http://localhost:8000", "description": "Public URL."},
+        {"name": "NOTEBOOK_API_KEY", "default": "dev-key", "description": "Key."},
+    ]
+
+    compose = docker_compose_content("myapp", env_vars)
+    assert "NOTEBOOK_API_PUBLIC_URL=${NOTEBOOK_API_PUBLIC_URL:-http://localhost:${PORT:-8000}}" in compose
+    assert "NOTEBOOK_API_KEY=${NOTEBOOK_API_KEY:-dev-key}" in compose
+
+    env_example = env_example_content(env_vars)
+    assert "\nNOTEBOOK_API_PUBLIC_URL=" not in env_example
+    assert "# NOTEBOOK_API_PUBLIC_URL=http://localhost:8000" in env_example
+    assert "\nNOTEBOOK_API_KEY=dev-key\n" in env_example

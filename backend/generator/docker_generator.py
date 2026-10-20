@@ -450,8 +450,16 @@ def docker_compose_content(package_name="generated", env_vars=None, notebook_env
 
     env_vars = env_vars or []
 
+    # The app's default public URL names port 8000, so with PORT=9000 compose
+    # still told Swagger UI's "Try it out" to call localhost:8000. Derive the
+    # default from PORT; an explicit NOTEBOOK_API_PUBLIC_URL still wins.
+    def _compose_default(entry):
+        if entry["name"] == "NOTEBOOK_API_PUBLIC_URL" and entry["default"] == "http://localhost:8000":
+            return "http://localhost:${PORT:-8000}"
+        return entry["default"]
+
     environment_lines = "\n".join(
-        f"      - {entry['name']}=${{{entry['name']}:-{entry['default']}}}"
+        f"      - {entry['name']}=${{{entry['name']}:-{_compose_default(entry)}}}"
         for entry in env_vars
     )
 
@@ -566,7 +574,13 @@ def env_example_content(env_vars=None, notebook_env_vars=None):
         for description_line in textwrap.wrap(entry["description"], width=76):
             lines.append(f"# {description_line}")
 
-        lines.append(f"{entry['name']}={entry['default']}")
+        if entry["name"] == "NOTEBOOK_API_PUBLIC_URL" and entry["default"] == "http://localhost:8000":
+            # Left commented out: set here it would pin port 8000 and defeat
+            # docker-compose.yml deriving the URL from PORT.
+            lines.append("# Unset, docker-compose.yml derives this from PORT above.")
+            lines.append(f"# {entry['name']}={entry['default']}")
+        else:
+            lines.append(f"{entry['name']}={entry['default']}")
         lines.append("")
 
     if notebook_env_vars:
