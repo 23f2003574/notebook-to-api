@@ -16760,3 +16760,52 @@ print("BASE_EXC_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "BASE_EXC_E2E_OK" in proc.stdout
+
+
+@pytest.mark.parametrize("blank_key", ["", "   ", " , ,"])
+def test_generated_app_refuses_to_start_with_a_blank_api_key(tmp_path, blank_key):
+    """Confirmed before this: NOTEBOOK_API_KEY set to an empty/blank value (a
+    blank line in .env, an unset CI secret) is not "unset", so no key was
+    accepted and the app started fine but answered every request 401 with no
+    hint why. It now fails at startup naming the variable; an unset variable
+    still falls back to the default key."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+            "cells": [{"cell_type": "code", "execution_count": None, "metadata": {},
+                       "outputs": [], "source": "def ok(n: int):\n    return n\n"}],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+import generated.app
+print("STARTED")
+"""
+    env = {**os.environ, "NOTEBOOK_API_KEY": blank_key}
+    proc = subprocess.run(
+        [sys.executable, "-c", script], cwd=str(workdir),
+        capture_output=True, text=True, timeout=60, env=env,
+    )
+    assert proc.returncode != 0
+    assert "STARTED" not in proc.stdout
+    assert "NOTEBOOK_API_KEY is set but contains no key" in proc.stderr
+
+    env.pop("NOTEBOOK_API_KEY")
+    proc = subprocess.run(
+        [sys.executable, "-c", script], cwd=str(workdir),
+        capture_output=True, text=True, timeout=60, env=env,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "STARTED" in proc.stdout

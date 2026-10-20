@@ -2577,6 +2577,15 @@ def generate_fastapi_code(
         ').split(",") if k.strip()'
         ')'
     )
+    # An empty/blank value (a blank line in .env, an unset CI secret that
+    # expanded to "") is not "unset": os.getenv returns "" instead of the
+    # default, so no key was accepted and every request answered 401 with no
+    # hint why. Fail at startup, like the other misconfigured env vars.
+    lines.append("if not API_KEYS:")
+    lines.append("    raise RuntimeError(")
+    lines.append("        'NOTEBOOK_API_KEY is set but contains no key (empty or only commas/spaces), '")
+    lines.append("        'so every request would be rejected with 401; set a secret key or unset the variable.'")
+    lines.append("    )")
     lines.append("API_KEY_HEADER_NAME = 'X-API-Key'")
     lines.append(f"DEFAULT_API_KEY = {_generated_app_env_var_default('NOTEBOOK_API_KEY')!r}")
     lines.append("USING_DEFAULT_API_KEY = DEFAULT_API_KEY in API_KEYS")
