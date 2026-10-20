@@ -16690,3 +16690,60 @@ def test_local_package_symlink_pointing_outside_is_not_shipped_into_the_output(t
         p.read_text(encoding="utf-8", errors="ignore")
         for p in output_dir.rglob("*") if p.is_file()
     )
+
+
+def test_function_raising_cancellederror_or_generatorexit_returns_500_with_detail(tmp_path):
+    """Confirmed before this: BaseException-only errors other than
+    SystemExit/KeyboardInterrupt escaped the call shield, so a notebook
+    function raising asyncio.CancelledError (e.g. task.result() on a cancelled
+    task) or GeneratorExit answered a bare 500 with no detail. They are now
+    reported like sys.exit(), and the app keeps serving."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    sources = [
+        "import asyncio\ndef cancelled(n: int):\n    raise asyncio.CancelledError()\n",
+        "def genexit(n: int):\n    raise GeneratorExit()\n",
+        "def ok(n: int):\n    return n\n",
+    ]
+    notebook_path.write_text(
+        json.dumps({
+            "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+            "cells": [
+                {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [], "source": src}
+                for src in sources
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+for name, exc in (("cancelled", "CancelledError"), ("genexit", "GeneratorExit")):
+    resp = client.post("/" + name, json={{"n": 1}}, headers=headers)
+    assert resp.status_code == 500, (name, resp.status_code, resp.text)
+    assert exc in resp.json()["detail"], (name, resp.text)
+assert client.post("/ok", json={{"n": 4}}, headers=headers).json() == {{"result": 4}}
+print("BASE_EXC_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script], cwd=str(workdir),
+        capture_output=True, text=True, timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "BASE_EXC_E2E_OK" in proc.stdout

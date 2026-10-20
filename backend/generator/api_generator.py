@@ -2427,10 +2427,11 @@ def generate_fastapi_code(
     lines.append("    return _CALL_LIMITER")
     lines.append("")
     lines.append("def _shield_exit(func):")
+    lines.append("    import asyncio as _asyncio")
     lines.append("    def _exit_error(e):")
     lines.append("        if isinstance(e, SystemExit):")
     lines.append("            return RuntimeError(f'notebook function called sys.exit({e.code!r})')")
-    lines.append("        return RuntimeError('notebook function raised KeyboardInterrupt')")
+    lines.append("        return RuntimeError(f'notebook function raised {type(e).__name__}')")
     # Async generator functions are returned as-is: _drain_async_gen applies
     # the same shielding while iterating, and callers must still be able to
     # recognize them with inspect.isasyncgenfunction.
@@ -2441,14 +2442,18 @@ def generate_fastapi_code(
     lines.append("        async def _shielded(*args, **kwargs):")
     lines.append("            try:")
     lines.append("                return await func(*args, **kwargs)")
-    lines.append("            except (SystemExit, KeyboardInterrupt) as e:")
+    lines.append("            except (SystemExit, KeyboardInterrupt, GeneratorExit) as e:")
     lines.append("                raise _exit_error(e) from None")
     lines.append("    else:")
     lines.append("        @functools.wraps(func)")
     lines.append("        def _shielded(*args, **kwargs):")
     lines.append("            try:")
     lines.append("                return func(*args, **kwargs)")
-    lines.append("            except (SystemExit, KeyboardInterrupt) as e:")
+    # A sync function runs in a worker thread, where a real cancellation never
+    # surfaces as CancelledError -- one raised here is the notebook's own
+    # (e.g. task.result() on a cancelled asyncio task) and would otherwise
+    # escape as a bare 500 with no detail.
+    lines.append("            except (SystemExit, KeyboardInterrupt, GeneratorExit, _asyncio.CancelledError) as e:")
     lines.append("                raise _exit_error(e) from None")
     lines.append("    return _shielded")
     lines.append("")
