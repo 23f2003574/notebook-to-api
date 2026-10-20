@@ -411,6 +411,10 @@ def test_doctor_command_warns_when_docker_daemon_is_not_reachable(tmp_path):
     assert "Docker daemon isn't reachable" in proc.stdout
 
 
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root ignores directory permissions, so the directory stays writable",
+)
 def test_doctor_command_fails_when_the_output_directory_is_not_writable(tmp_path):
 
     readonly_dir = tmp_path / "readonly"
@@ -26227,7 +26231,13 @@ def test_app_status_command_watch_polls_repeatedly_and_stops_cleanly_on_interrup
         text=True,
     )
 
-    time.sleep(2.5)
+    # Wait until the child has really polled (3 iterations x 4 requests, so at
+    # least two reports are fully printed) instead of sleeping a fixed time: a
+    # fixed sleep sent SIGINT before the CLI finished importing on a loaded
+    # machine, which failed this test intermittently.
+    deadline = time.monotonic() + 60
+    while len(handler.requests) < 12 and time.monotonic() < deadline:
+        time.sleep(0.05)
     proc.send_signal(signal.SIGINT)
 
     stdout, stderr = proc.communicate(timeout=10)

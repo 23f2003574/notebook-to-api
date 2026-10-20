@@ -32483,6 +32483,10 @@ def test_health_check_check_writable_reports_true_for_a_generated_dir_that_does_
     assert not not_yet_created.exists()
 
 
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root ignores directory permissions, so the directory stays writable",
+)
 def test_health_check_check_writable_reports_false_for_an_unwritable_directory(
     monkeypatch, tmp_path
 ):
