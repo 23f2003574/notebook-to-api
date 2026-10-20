@@ -709,6 +709,21 @@ def _add_tag_selection_argument(parser):
     )
 
 
+def _port_number(value):
+    """argparse type for every --port: an int in 1-65535. Without it,
+    `serve --port 99999` let uvicorn die with a raw OverflowError traceback
+    and `--port 0` bound a random port while every printed URL said :0."""
+    try:
+        port = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid int value: {value!r}")
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError(
+            f"port must be between 1 and 65535, got {port}"
+        )
+    return port
+
+
 def _add_debounce_argument(parser):
     """Add --debounce to `parser` -- shared by the `serve` and `watch`
     subparsers below, so their help text and dest names can't drift apart
@@ -1639,7 +1654,7 @@ def _add_app_host_port_arguments(parser, default_timeout=10.0):
     )
     parser.add_argument(
         "--port",
-        type=int,
+        type=_port_number,
         default=8000,
         help="Port the compiled app is actually reachable at (default: 8000, matching `serve`'s own default)."
     )
@@ -10691,7 +10706,7 @@ def main():
     )
     curl_parser.add_argument(
         "--port",
-        type=int,
+        type=_port_number,
         default=8000,
         help="Port the generated commands target (default: 8000, matching `serve`'s own default)."
     )
@@ -10752,7 +10767,7 @@ def main():
     )
     postman_parser.add_argument(
         "--port",
-        type=int,
+        type=_port_number,
         default=8000,
         help="Port the generated requests target (default: 8000, matching `serve`'s own default)."
     )
@@ -10830,7 +10845,7 @@ def main():
     )
     serve_parser.add_argument(
         "--port",
-        type=int,
+        type=_port_number,
         default=8000,
         help="Port to run the live API server on (default: 8000). Lets more than one notebook be served at once."
     )
@@ -15014,7 +15029,7 @@ def main():
     )
     curl_preview_parser.add_argument(
         "--port",
-        type=int,
+        type=_port_number,
         default=8000,
         help="Port the generated commands target (default: 8000, matching `serve`'s own default)."
     )
@@ -15094,7 +15109,7 @@ def main():
     )
     postman_preview_parser.add_argument(
         "--port",
-        type=int,
+        type=_port_number,
         default=8000,
         help="Port the generated requests target (default: 8000, matching `serve`'s own default)."
     )
@@ -17208,7 +17223,7 @@ def main():
     )
     remote_curl_parser.add_argument(
         "--port",
-        type=int,
+        type=_port_number,
         default=8000,
         help="Port the generated commands target (default: 8000, matching `serve`'s own default)."
     )
@@ -17315,7 +17330,7 @@ def main():
     )
     remote_postman_parser.add_argument(
         "--port",
-        type=int,
+        type=_port_number,
         default=8000,
         help="Port the generated requests target (default: 8000, matching `serve`'s own default)."
     )
@@ -18219,7 +18234,7 @@ def main():
     )
     app_status_parser.add_argument(
         "--port",
-        type=int,
+        type=_port_number,
         default=8000,
         help="Port the compiled app is actually reachable at (default: 8000, matching `serve`'s own default)."
     )
@@ -18356,7 +18371,7 @@ def main():
     )
     app_metrics_parser.add_argument(
         "--port",
-        type=int,
+        type=_port_number,
         default=8000,
         help="Port the compiled app is actually reachable at (default: 8000, matching `serve`'s own default)."
     )
@@ -18463,7 +18478,7 @@ def main():
     )
     app_deprecations_parser.add_argument(
         "--port",
-        type=int,
+        type=_port_number,
         default=8000,
         help="Port the compiled app is actually reachable at (default: 8000, matching `serve`'s own default)."
     )
@@ -18633,7 +18648,7 @@ def main():
     )
     app_call_parser.add_argument(
         "--port",
-        type=int,
+        type=_port_number,
         default=8000,
         help="Port the compiled app is actually reachable at (default: 8000, matching `serve`'s own default)."
     )

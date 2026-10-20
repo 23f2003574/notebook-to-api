@@ -31668,3 +31668,23 @@ def test_export_sdk_after_compile_exports_the_schema_itself_when_none_exists_yet
     )
     assert missing.returncode == 1
     assert "nowhere/openapi.json" in missing.stdout + missing.stderr
+
+
+@pytest.mark.parametrize("bad_port", ["0", "65536", "99999", "-1"])
+def test_serve_rejects_an_out_of_range_port_before_compiling(tmp_path, bad_port):
+    """Confirmed before this: `serve --port 99999` compiled, started uvicorn
+    and died with a raw OverflowError traceback, and `--port 0` bound a random
+    port while every printed URL said :0. --port is now validated up front."""
+    notebook = tmp_path / "nb.ipynb"
+    _write_notebook(notebook)
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "backend.cli", "serve", str(notebook),
+         "--port", bad_port, "--output", str(tmp_path / "out")],
+        cwd=str(PROJECT_ROOT), capture_output=True, text=True, timeout=60,
+    )
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "port must be between 1 and 65535" in proc.stderr
+    assert "Traceback" not in proc.stderr
+    assert not (tmp_path / "out").exists()
