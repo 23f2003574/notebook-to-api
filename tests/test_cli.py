@@ -31796,3 +31796,27 @@ def test_serve_points_the_openapi_servers_entry_at_the_port_it_serves(tmp_path):
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
+
+
+def test_export_curl_handles_set_defaults_and_path_parameters(tmp_path):
+    """Confirmed before this: a `set[int] = {1}` default put a Python set in
+    the example payload, so `export-curl` (and export-postman / app-call)
+    crashed with `TypeError: Object of type set is not JSON serializable`;
+    a `pathlib.Path` parameter got a null example the endpoint rejects."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook,
+        "import pathlib\n"
+        "def f(q: pathlib.Path, s: set[int] = {2, 1}):\n"
+        "    return len(s)\n",
+    )
+
+    proc = _run_cli(["export-curl", str(notebook), "--output", "req.sh"], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Traceback" not in proc.stderr
+    script = (workdir / "req.sh").read_text(encoding="utf-8")
+    assert '"s": [1, 2]' in script or '"s":[1,2]' in script
+    assert '"q": "."' in script or '"q":"."' in script

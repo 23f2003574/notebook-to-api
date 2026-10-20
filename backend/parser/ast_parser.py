@@ -1003,7 +1003,25 @@ _EXAMPLE_TYPE_DEFAULTS = {
     "Decimal": 0,
     "timedelta": "PT0S",
     "frozenset": [],
+    "Path": ".",
 }
+
+
+def _json_safe_example(value):
+    """`value` (a literal default read from the source) as something
+    json.dumps accepts: a `{1, 2}` / `frozenset(...)` default is a Python set,
+    which crashed export-curl / export-postman / app-call with a TypeError."""
+    if isinstance(value, (set, frozenset)):
+        try:
+            value = sorted(value)
+        except TypeError:
+            value = list(value)
+        return [_json_safe_example(item) for item in value]
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_example(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _json_safe_example(item) for key, item in value.items()}
+    return value
 
 
 def _example_placeholder(raw_type):
@@ -1172,7 +1190,7 @@ def generate_example_payload(args):
             if arg_type in _EXAMPLE_TYPE_DEFAULTS:
                 payload[arg_name] = _EXAMPLE_TYPE_DEFAULTS[arg_type]
         elif arg.get("has_default") and not default_is_none_for_a_container_type:
-            payload[arg_name] = default
+            payload[arg_name] = _json_safe_example(default)
         else:
             payload[arg_name] = _example_placeholder(arg.get("type"))
 
