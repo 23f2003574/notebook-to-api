@@ -31717,3 +31717,29 @@ def test_serve_rejects_an_out_of_range_port_before_compiling(tmp_path, bad_port)
     assert "port must be between 1 and 65535" in proc.stderr
     assert "Traceback" not in proc.stderr
     assert not (tmp_path / "out").exists()
+
+
+def test_compile_smoke_test_fails_instead_of_exiting_silently_on_top_level_sys_exit(tmp_path):
+    """Confirmed before this: a notebook calling sys.exit() at its top level
+    raised SystemExit during the smoke test's import of the compiled app,
+    which `except Exception` does not catch -- so `compile --smoke-test` ended
+    with exit status 0 and no smoke-test verdict at all, while a real
+    `uvicorn` start of the same app exits immediately."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook = workdir / "nb.ipynb"
+    notebook.write_text(json.dumps({
+        "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+        "cells": [
+            {"cell_type": "code", "metadata": {}, "outputs": [], "execution_count": None,
+             "source": "import sys\nsys.exit(3)\n"},
+            {"cell_type": "code", "metadata": {}, "outputs": [], "execution_count": None,
+             "source": "def f(n: int):\n    return n\n"},
+        ],
+    }), encoding="utf-8")
+
+    proc = _run_cli(["compile", str(notebook), "--smoke-test", "--output", "out"], cwd=workdir)
+
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "Smoke test: FAILED" in proc.stdout
+    assert "sys.exit(3)" in proc.stdout

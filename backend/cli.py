@@ -1066,7 +1066,21 @@ def _run_local_compile_smoke_test(package_name, output_dir):
         module = importlib.import_module(f"{package_name}.app")
         app = module.app
 
-    except Exception as e:
+    except (Exception, SystemExit) as e:
+
+        # sys.exit() at a notebook's top level raises SystemExit, which is not
+        # an Exception: uncaught here it ended this whole process silently
+        # (exit status 0, no smoke-test verdict) -- just as uvicorn would exit
+        # on startup.
+        if isinstance(e, SystemExit):
+            return {
+                "passed": False,
+                "status_code": None,
+                "detail": (
+                    f"Compiled app failed to import: it called sys.exit({e.code!r}) "
+                    "at the top level, so a real server would exit on startup"
+                ),
+            }
 
         return {
             "passed": False,
