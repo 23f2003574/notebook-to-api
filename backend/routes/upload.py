@@ -526,6 +526,9 @@ def _resolve_path_within(root_dir: str, name: str, dir_label: str) -> Path:
     return candidate
 
 
+MAX_UPLOAD_FILENAME_BYTES = 200
+
+
 def resolve_upload_path(name: str) -> Path:
     """Resolve `name` against UPLOAD_DIR, rejecting anything that would
     escape it -- and, unlike resolve_generated_path below, anything that
@@ -561,6 +564,19 @@ def resolve_upload_path(name: str) -> Path:
             detail=(
                 "Invalid path: must be a single filename within the "
                 "uploads directory, not a nested path"
+            )
+        )
+
+    # Filesystems cap one name at 255 bytes (NAME_MAX); upload_notebook also
+    # derives a temp name and version-history names from this one, so a name
+    # near that cap raised OSError("File name too long") from the write --
+    # a bare 500 instead of the 400 every other malformed name gets.
+    if isinstance(name, str) and len(name.encode("utf-8", "surrogatepass")) > MAX_UPLOAD_FILENAME_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid filename: must be at most "
+                f"{MAX_UPLOAD_FILENAME_BYTES} bytes long"
             )
         )
 

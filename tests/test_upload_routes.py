@@ -427,6 +427,24 @@ def test_upload_rejects_a_filename_containing_a_nested_directory():
     assert not os.path.isdir("uploads/nested_dir_test")
 
 
+def test_upload_rejects_an_over_long_filename_with_400_not_500():
+    """Confirmed before this fix: a 300-character filename passed every
+    earlier check and then crashed the write with OSError("File name too
+    long") -- a bare 500 "Internal Server Error" -- instead of the clean 400
+    other malformed names get. A normal-length name must still upload."""
+
+    long_name = "a" * 300 + ".ipynb"
+    resp = client.post(
+        "/api/upload",
+        files={"file": (long_name, io.BytesIO(b"data"), "application/json")},
+    )
+
+    assert resp.status_code == 400
+    assert "at most" in resp.json()["detail"]
+    assert not os.path.exists(os.path.join("uploads", long_name))
+    assert client.get("/api/notebooks/" + long_name).status_code in (400, 404)
+
+
 def test_compile_rejects_a_notebook_path_containing_a_nested_directory():
     """The same flat-filename restriction applies to notebook_path on
     every route that resolves it via resolve_upload_path, not just
