@@ -705,6 +705,17 @@ GENERATED_APP_ENV_VARS = [
         ),
     },
     {
+        "name": "NOTEBOOK_API_HIDE_ERROR_DETAILS",
+        "default": "false",
+        "description": (
+            "Set to \"true\" in production to keep notebook exception "
+            "messages out of 500 responses: clients get \"'fn' raised "
+            "ValueError\" with no message text, which can hold file "
+            "paths, query fragments or tokens. The full message and "
+            "traceback are still written to the server log."
+        ),
+    },
+    {
         "name": "NOTEBOOK_API_JSON_LOGS",
         "default": "false",
         "description": (
@@ -2494,10 +2505,13 @@ def generate_fastapi_code(
     # The text of a notebook exception goes into the 500 body. Bound it, and
     # survive an exception whose own __str__ raises (previously a bare
     # "Internal Server Error" with no detail).
+    lines.append('HIDE_ERROR_DETAILS = _env_flag("NOTEBOOK_API_HIDE_ERROR_DETAILS", "false")')
     lines.append("MAX_ERROR_DETAIL_CHARS = 1000")
     lines.append("")
     lines.append("")
     lines.append("def _error_text(exc):")
+    lines.append("    if HIDE_ERROR_DETAILS:")
+    lines.append("        return '[details hidden by NOTEBOOK_API_HIDE_ERROR_DETAILS]'")
     lines.append("    try:")
     lines.append("        text = str(exc)")
     lines.append("    except Exception:")

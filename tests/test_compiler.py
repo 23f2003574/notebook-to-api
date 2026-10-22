@@ -513,6 +513,65 @@ print("ERROR_DETAIL_OK")
     assert "ERROR_DETAIL_OK" in proc.stdout
 
 
+def test_compiled_app_hides_notebook_exception_messages_when_asked(tmp_path):
+    """NOTEBOOK_API_HIDE_ERROR_DETAILS=true keeps exception text (paths, tokens)
+    out of 500 bodies; the exception type is still named."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "class Boom(Exception):\n"
+            "    def __str__(self):\n        raise RuntimeError('str fails')\n"
+            "def big() -> int:\n    raise ValueError('x' * 100000)\n"
+            "def unprintable() -> int:\n    raise Boom()\n"
+            "def small() -> int:\n    raise KeyError('missing')\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+for name in ("big", "unprintable", "small"):
+    response = client.post("/" + name, json={{}}, headers=headers)
+    assert response.status_code == 500, response.text
+    assert "details hidden" in response.json()["detail"], response.text
+    assert "missing" not in response.text and "xxxx" not in response.text
+
+print("HIDDEN_DETAIL_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        env=dict(os.environ, NOTEBOOK_API_HIDE_ERROR_DETAILS="true"),
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "HIDDEN_DETAIL_OK" in proc.stdout
+
+
 def test_compiled_app_rejects_unrecognized_boolean_env_values(tmp_path):
     """NOTEBOOK_API_REQUIRE_CUSTOM_KEY=enabled (or a typo like "ture") was
     silently read as false, leaving the public default key accepted. Flags

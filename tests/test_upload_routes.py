@@ -27838,6 +27838,7 @@ def test_env_vars_preview_requires_no_notebook_and_needs_no_body():
         "NOTEBOOK_API_ENFORCE_SUNSET",
         "NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS",
         "NOTEBOOK_API_JSON_LOGS",
+        "NOTEBOOK_API_HIDE_ERROR_DETAILS",
     }
     assert env_vars["NOTEBOOK_API_KEY"]["default"] == "notebook-to-api-dev-key"
     assert env_vars["NOTEBOOK_API_ALLOWED_ORIGINS"]["default"] == "*"
@@ -27906,7 +27907,7 @@ def test_env_vars_preview_matches_what_an_actual_compiled_app_reads():
         in generated_app
     )
     assert (
-        'os.getenv("NOTEBOOK_API_DISABLE_DOCS", '
+        '_env_flag("NOTEBOOK_API_DISABLE_DOCS", '
         f'"{env_vars["NOTEBOOK_API_DISABLE_DOCS"]["default"]}")'
         in generated_app
     )

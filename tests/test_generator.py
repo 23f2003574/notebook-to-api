@@ -82,6 +82,7 @@ def test_generated_app_env_vars_default_matches_the_actual_generated_code():
         "NOTEBOOK_API_ENFORCE_SUNSET",
         "NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS",
         "NOTEBOOK_API_JSON_LOGS",
+        "NOTEBOOK_API_HIDE_ERROR_DETAILS",
     }
 
     for entry in GENERATED_APP_ENV_VARS:
