@@ -383,7 +383,13 @@ def _notebook_structure_problem(notebook_path):
             data = json.load(f)
     except (OSError, ValueError):
         return None
-    if not isinstance(data, dict) or "cells" not in data:
+    if not isinstance(data, dict):
+        return (
+            f"This file is valid JSON but not a Jupyter notebook: its "
+            f"top-level value is a {type(data).__name__}, but a notebook is "
+            f"a JSON object with a 'cells' list."
+        )
+    if "cells" not in data:
         return None
     cells = data["cells"]
     metadata = data.get("metadata")

@@ -896,3 +896,16 @@ def test_example_payload_never_contains_the_source_text_of_a_non_literal_default
     func = extract_functions_from_code(code)[0]
 
     assert generate_example_payload(func["args"]) == {"a": 0.0, "n": 3}
+
+
+def test_load_notebook_names_the_real_problem_for_a_top_level_list(tmp_path):
+    """A top-level list ended in "'list' object has no attribute 'get'",
+    Python internals that don't say what is wrong with the file."""
+    import json
+
+    listing = tmp_path / "list.ipynb"
+    listing.write_text(json.dumps([1, 2]), encoding="utf-8")
+    with pytest.raises(ValueError) as listed:
+        load_notebook(str(listing))
+    assert "top-level value is a list" in str(listed.value)
+    assert "has no attribute" not in str(listed.value)
