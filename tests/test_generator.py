@@ -85,10 +85,11 @@ def test_generated_app_env_vars_default_matches_the_actual_generated_code():
     }
 
     for entry in GENERATED_APP_ENV_VARS:
-        # Numeric settings are read through _env_number, text ones through os.getenv.
+        # Numeric settings go through _env_number, flags through _env_flag, text through os.getenv.
         assert (
             f'os.getenv("{entry["name"]}", "{entry["default"]}")' in code
             or f'_env_number("{entry["name"]}", "{entry["default"]}"' in code
+            or f'_env_flag("{entry["name"]}", "{entry["default"]}")' in code
         )
         assert entry["description"]
 
@@ -458,7 +459,7 @@ def test_generate_fastapi_code_defaults_to_docs_enabled():
 
     code = generate_fastapi_code(functions)
 
-    assert 'DISABLE_DOCS = os.getenv("NOTEBOOK_API_DISABLE_DOCS", "false")' in code
+    assert 'DISABLE_DOCS = _env_flag("NOTEBOOK_API_DISABLE_DOCS", "false")' in code
     assert 'docs_url=None if DISABLE_DOCS else "/docs"' in code
     assert 'redoc_url=None if DISABLE_DOCS else "/redoc"' in code
     assert 'openapi_url=None if DISABLE_DOCS else "/openapi.json"' in code
@@ -837,8 +838,7 @@ def test_generated_app_configures_a_json_request_log_middleware_registered_outer
     code = generate_fastapi_code(functions)
 
     assert (
-        'JSON_REQUEST_LOGS = os.getenv("NOTEBOOK_API_JSON_LOGS", "false")'
-        '.strip().lower() in ("true", "1", "yes", "on")' in code
+        'JSON_REQUEST_LOGS = _env_flag("NOTEBOOK_API_JSON_LOGS", "false")' in code
     )
     assert "async def _log_request_json(request, call_next):" in code
     assert "if JSON_REQUEST_LOGS:" in code

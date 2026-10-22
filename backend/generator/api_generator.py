@@ -1664,6 +1664,21 @@ def generate_fastapi_code(
     lines.append("        raise RuntimeError(f'{name} must not be negative, got {raw!r}')")
     lines.append("    return value")
     lines.append("")
+    # Flags took only "true/1/yes/on" as on and treated everything else --
+    # "y", "enabled", a typo like "ture" -- as off, silently: setting
+    # NOTEBOOK_API_REQUIRE_CUSTOM_KEY=enabled left the public default key
+    # accepted. Unrecognized values now fail at startup, like numbers do.
+    lines.append("def _env_flag(name, default):")
+    lines.append("    raw = os.getenv(name)")
+    lines.append("    if raw is None or not raw.strip():")
+    lines.append("        raw = default")
+    lines.append("    value = raw.strip().lower()")
+    lines.append("    if value in ('true', '1', 'yes', 'on', 'y', 't'):")
+    lines.append("        return True")
+    lines.append("    if value in ('false', '0', 'no', 'off', 'n', 'f'):")
+    lines.append("        return False")
+    lines.append("    raise RuntimeError(f'{name} must be true or false, got {raw!r}')")
+    lines.append("")
     lines.append(
         'PUBLIC_URL = os.getenv('
         '"NOTEBOOK_API_PUBLIC_URL", '
@@ -1682,16 +1697,16 @@ def generate_fastapi_code(
     # a default-on behavior off, this truthy set turns a default-off
     # behavior on.
     lines.append(
-        'DISABLE_DOCS = os.getenv('
+        'DISABLE_DOCS = _env_flag('
         '"NOTEBOOK_API_DISABLE_DOCS", '
         f'"{_generated_app_env_var_default("NOTEBOOK_API_DISABLE_DOCS")}"'
-        ').strip().lower() in ("true", "1", "yes", "on")'
+        ')'
     )
     lines.append(
-        'STRICT_REQUEST_FIELDS = os.getenv('
+        'STRICT_REQUEST_FIELDS = _env_flag('
         '"NOTEBOOK_API_STRICT_FIELDS", '
         f'"{_generated_app_env_var_default("NOTEBOOK_API_STRICT_FIELDS")}"'
-        ').strip().lower() in ("true", "1", "yes", "on")'
+        ')'
     )
     lines.append("")
     lines.append(
@@ -1957,10 +1972,10 @@ def generate_fastapi_code(
     # runs, and auth is deliberately not checked first, since the answer
     # ("this endpoint is gone") is the same for every caller.
     lines.append(
-        'REJECT_DEPRECATED_ENDPOINTS = os.getenv('
+        'REJECT_DEPRECATED_ENDPOINTS = _env_flag('
         '"NOTEBOOK_API_REJECT_DEPRECATED", '
         f'"{_generated_app_env_var_default("NOTEBOOK_API_REJECT_DEPRECATED")}"'
-        ').strip().lower() in ("true", "1", "yes", "on")'
+        ')'
     )
     # NOTEBOOK_API_ENFORCE_SUNSET (see GENERATED_APP_ENV_VARS): the
     # date-driven counterpart of the brownout switch above. Compared as
@@ -1968,10 +1983,10 @@ def generate_fastapi_code(
     # long-running process starts rejecting at midnight UTC on the day
     # itself, with no restart needed.
     lines.append(
-        'ENFORCE_DEPRECATION_SUNSET = os.getenv('
+        'ENFORCE_DEPRECATION_SUNSET = _env_flag('
         '"NOTEBOOK_API_ENFORCE_SUNSET", '
         f'"{_generated_app_env_var_default("NOTEBOOK_API_ENFORCE_SUNSET")}"'
-        ').strip().lower() in ("true", "1", "yes", "on")'
+        ')'
     )
     lines.append("def _sunset_has_passed(path):")
     lines.append("    sunset = _DEPRECATION_SUNSETS.get(path)")
@@ -2132,10 +2147,10 @@ def generate_fastapi_code(
     # reaches `docker logs`/a log-aggregation pipeline in real time, not
     # sitting in a buffer.
     lines.append(
-        'JSON_REQUEST_LOGS = os.getenv('
+        'JSON_REQUEST_LOGS = _env_flag('
         '"NOTEBOOK_API_JSON_LOGS", '
         f'"{_generated_app_env_var_default("NOTEBOOK_API_JSON_LOGS")}"'
-        ').strip().lower() in ("true", "1", "yes", "on")'
+        ')'
     )
     lines.append("@app.middleware('http')")
     lines.append("async def _log_request_json(request, call_next):")
@@ -2606,10 +2621,10 @@ def generate_fastapi_code(
     lines.append(f"DEFAULT_API_KEY = {_generated_app_env_var_default('NOTEBOOK_API_KEY')!r}")
     lines.append("USING_DEFAULT_API_KEY = DEFAULT_API_KEY in API_KEYS")
     lines.append(
-        'REQUIRE_CUSTOM_API_KEY = os.getenv('
+        'REQUIRE_CUSTOM_API_KEY = _env_flag('
         '"NOTEBOOK_API_REQUIRE_CUSTOM_KEY", '
         f'"{_generated_app_env_var_default("NOTEBOOK_API_REQUIRE_CUSTOM_KEY")}"'
-        ').strip().lower() in ("true", "1", "yes", "on")'
+        ')'
     )
     lines.append("if USING_DEFAULT_API_KEY:")
     lines.append("    if REQUIRE_CUSTOM_API_KEY:")

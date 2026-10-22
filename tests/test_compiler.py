@@ -513,6 +513,58 @@ print("ERROR_DETAIL_OK")
     assert "ERROR_DETAIL_OK" in proc.stdout
 
 
+def test_compiled_app_rejects_unrecognized_boolean_env_values(tmp_path):
+    """NOTEBOOK_API_REQUIRE_CUSTOM_KEY=enabled (or a typo like "ture") was
+    silently read as false, leaving the public default key accepted. Flags
+    now accept true/false spellings and fail at startup on anything else."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell("def add(a: int, b: int) -> int:\n    return a + b\n")
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    setup = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+"""
+    proc = subprocess.run(
+        [sys.executable, "-c", setup], cwd=str(workdir),
+        capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    def import_app(value):
+        env = dict(os.environ, NOTEBOOK_API_REQUIRE_CUSTOM_KEY=value)
+        return subprocess.run(
+            [sys.executable, "-c", "import generated.app"],
+            cwd=str(workdir), env=env, capture_output=True, text=True, timeout=60,
+        )
+
+    typo = import_app("enabled")
+    assert typo.returncode != 0
+    assert "NOTEBOOK_API_REQUIRE_CUSTOM_KEY must be true or false, got 'enabled'" in typo.stderr
+
+    # "false"/"off"/"no" still start; "y" turns the flag on (refusing the
+    # public default key), which is a different, deliberate startup error.
+    for value in ("false", "OFF", "no", "0", ""):
+        assert import_app(value).returncode == 0, value
+    on = import_app("y")
+    assert on.returncode != 0
+    assert "must be true or false" not in on.stderr
+
+
 def test_compiling_python_version_matches_the_running_interpreter():
 
     version = compiling_python_version()
