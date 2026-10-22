@@ -4443,6 +4443,40 @@ def test_compiler_pipeline_rejects_output_dir_colliding_with_this_tools_own_pack
     assert not (output_dir / "app.py").exists()
 
 
+def test_functions_used_as_decorators_are_not_exposed_as_endpoints(tmp_path):
+    """A decorator helper (`def deco(fn)`) used by `@deco` elsewhere in the
+    notebook used to become POST /deco, whose `fn` can never be a JSON value
+    -- every call 500ed. Dotted decorators don't count."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "import functools\n"
+            "def deco(fn):\n    return fn\n"
+            "def tagged(label):\n    return deco\n"
+            "@deco\ndef plain(n: int) -> int:\n    return n\n"
+            "@tagged('x')\ndef labelled(n: int) -> int:\n    return n\n"
+            "@functools.lru_cache(maxsize=None)\ndef cached(n: int) -> int:\n    return n\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+    output_dir = tmp_path / "generated"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    app_source = (output_dir / "app.py").read_text(encoding="utf-8")
+    assert '"/plain"' in app_source and '"/labelled"' in app_source
+    assert '"/cached"' in app_source
+    assert '"/deco"' not in app_source and '"/tagged"' not in app_source
+
+    with pytest.raises(ValueError, match="used as a decorator"):
+        compile_notebook(
+            str(notebook_path), str(tmp_path / "other"), only=["deco"]
+        )
+
+
 def test_compiler_pipeline_explains_an_output_path_that_is_a_file(tmp_path):
     """`--output notes.txt` surfaced as a bare "[Errno 17] File exists"."""
 

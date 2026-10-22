@@ -2254,6 +2254,27 @@ PRIVATE_FUNCTION_DIRECTIVE_PATTERN = re.compile(
 )
 
 
+# `@name` / `@name(...)` at the start of a line: a bare-name decorator use.
+# A dotted decorator (`@app.route`, `@functools.wraps(f)`) names an attribute
+# of something else, so it is deliberately not matched.
+DECORATOR_USE_PATTERN = re.compile(
+    r"^[ \t]*@(?P<name>[A-Za-z_]\w*)[ \t]*(?:\(|$)", re.MULTILINE
+)
+
+
+def _extract_decorator_function_names(code_cells):
+    """Names that some cell applies as a decorator (`@name`, `@name(...)`).
+    A function used this way takes a callable and returns a wrapper; as an
+    endpoint its `fn`/`func` parameter can only ever receive JSON, so every
+    call 500s. Such helpers are treated like "# notebook-to-api: private"
+    ones."""
+    return {
+        match.group("name")
+        for cell in code_cells
+        for match in DECORATOR_USE_PATTERN.finditer(cell)
+    }
+
+
 def _extract_private_function_names(code_cells):
     """Names of every function `code_cells` marks "# notebook-to-api:
     private" (immediately above its own `def`/`async def` line, see
@@ -2283,7 +2304,7 @@ def _extract_private_function_names(code_cells):
 
             private_names.add(match.group("name"))
 
-    return private_names
+    return private_names | _extract_decorator_function_names(code_cells)
 
 
 def _drop_private_functions(functions, code_cells, only=None, exclude=None):
@@ -2327,9 +2348,10 @@ def _drop_private_functions(functions, code_cells, only=None, exclude=None):
         if conflicting:
             raise ValueError(
                 f"Function(s) {', '.join(conflicting)} are marked "
-                '"# notebook-to-api: private" in the notebook and can\'t '
-                "be exposed via only/--only. Remove the directive in the "
-                "notebook to expose them."
+                '"# notebook-to-api: private" or used as a decorator in the '
+                "notebook and can't be exposed via only/--only. Remove the "
+                "directive (or the decorator use) in the notebook to "
+                "expose them."
             )
 
     if exclude:
