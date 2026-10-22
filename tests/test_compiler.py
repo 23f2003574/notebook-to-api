@@ -449,6 +449,70 @@ print("NON_ASCII_API_KEY_OK")
     assert "NON_ASCII_API_KEY_OK" in proc.stdout
 
 
+def test_compiled_app_bounds_and_survives_notebook_exception_messages(tmp_path):
+    """A notebook exception's text goes into the 500 body: a 100000-character
+    message was returned whole, and an exception whose __str__ raises gave a
+    bare "Internal Server Error" with no detail."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "class Boom(Exception):\n"
+            "    def __str__(self):\n        raise RuntimeError('str fails')\n"
+            "def big() -> int:\n    raise ValueError('x' * 100000)\n"
+            "def unprintable() -> int:\n    raise Boom()\n"
+            "def small() -> int:\n    raise KeyError('missing')\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+big = client.post("/big", json={{}}, headers=headers)
+assert big.status_code == 500 and len(big.text) < 1300, len(big.text)
+assert "truncated, 100000 characters" in big.json()["detail"]
+
+unprintable = client.post("/unprintable", json={{}}, headers=headers)
+assert unprintable.status_code == 500, unprintable.status_code
+assert unprintable.json()["detail"] == "'unprintable' raised Boom: <message unavailable>"
+
+small = client.post("/small", json={{}}, headers=headers)
+assert small.json()["detail"] == "'small' raised KeyError: 'missing'"
+
+print("ERROR_DETAIL_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ERROR_DETAIL_OK" in proc.stdout
+
+
 def test_compiling_python_version_matches_the_running_interpreter():
 
     version = compiling_python_version()

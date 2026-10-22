@@ -2476,6 +2476,22 @@ def generate_fastapi_code(
     # The client only gets "'f' raised X: msg"; without this the operator's
     # own logs (`docker logs`) showed nothing but the access-log's 500, with
     # no traceback to debug the notebook function from.
+    # The text of a notebook exception goes into the 500 body. Bound it, and
+    # survive an exception whose own __str__ raises (previously a bare
+    # "Internal Server Error" with no detail).
+    lines.append("MAX_ERROR_DETAIL_CHARS = 1000")
+    lines.append("")
+    lines.append("")
+    lines.append("def _error_text(exc):")
+    lines.append("    try:")
+    lines.append("        text = str(exc)")
+    lines.append("    except Exception:")
+    lines.append("        return '<message unavailable>'")
+    lines.append("    if len(text) > MAX_ERROR_DETAIL_CHARS:")
+    lines.append("        return f'{text[:MAX_ERROR_DETAIL_CHARS]}... [truncated, {len(text)} characters]'")
+    lines.append("    return text")
+    lines.append("")
+    lines.append("")
     lines.append("def _log_notebook_error(func_name, exc):")
     lines.append("    import logging as _logging")
     lines.append("    _logging.getLogger('uvicorn.error').error(")
@@ -6127,7 +6143,7 @@ def generate_fastapi_code(
             lines.append("        raise HTTPException(")
             lines.append("            status_code=500,")
             lines.append(
-                f"            detail=f\"'{func_name}' raised TimeoutError: {{e}}\","
+                f"            detail=f\"'{func_name}' raised TimeoutError: {{_error_text(e)}}\","
             )
             lines.append("        )")
             lines.append("    except Exception as e:")
@@ -6136,7 +6152,7 @@ def generate_fastapi_code(
             lines.append("            status_code=500,")
             lines.append(
                 f"            detail=f\"'{func_name}' raised "
-                "{type(e).__name__}: {e}\","
+                "{type(e).__name__}: {_error_text(e)}\","
             )
             lines.append("        )")
             # Same reasoning as _run_background_task's own jsonable_encoder
