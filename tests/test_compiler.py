@@ -565,6 +565,62 @@ compile_notebook({str(notebook_path)!r}, "generated")
     assert "must be true or false" not in on.stderr
 
 
+def test_response_cache_keeps_dict_argument_key_order_distinct(tmp_path):
+    """The cache key used sort_keys=True, so {"a":1,"b":2} and {"b":2,"a":1}
+    shared one cached answer even though a function iterating the dict
+    returns different results for them."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "# notebook-to-api: cache 60\n"
+            "def keys(d: dict) -> str:\n    return ','.join(d)\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+first = client.post("/keys", json={{"d": {{"a": 1, "b": 2}}}}, headers=headers)
+second = client.post("/keys", json={{"d": {{"b": 2, "a": 1}}}}, headers=headers)
+again = client.post("/keys", json={{"d": {{"b": 2, "a": 1}}}}, headers=headers)
+assert first.json() == {{"result": "a,b"}}, first.text
+assert second.json() == {{"result": "b,a"}}, second.text
+assert again.json() == {{"result": "b,a"}}, again.text
+
+print("CACHE_KEY_ORDER_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "CACHE_KEY_ORDER_OK" in proc.stdout
+
+
 def test_compiling_python_version_matches_the_running_interpreter():
 
     version = compiling_python_version()

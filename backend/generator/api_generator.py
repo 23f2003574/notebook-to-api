@@ -6084,9 +6084,12 @@ def generate_fastapi_code(
                 # still an authenticated, counted call. "Cache-Control:
                 # no-cache" skips the lookup (the fresh result still
                 # refreshes the entry), the standard way to force a re-run.
+                # No sort_keys: a dict argument's key order is part of its value
+                # (a function may iterate it), so {"a":1,"b":2} and
+                # {"b":2,"a":1} must not share one cached answer.
                 lines.append(
                     f"    _cache_key = ('/{func_name}', json.dumps("
-                    "jsonable_encoder(req), sort_keys=True, default=str))"
+                    "jsonable_encoder(req), default=str))"
                 )
                 lines.append(
                     "    _cached = None if 'no-cache' in (_cache_control or '').lower() "
