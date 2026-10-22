@@ -1926,6 +1926,17 @@ _OPTIONAL_RUNTIME_PACKAGES = [
 ]
 
 
+def _ensure_output_directory(output_dir):
+    """mkdir for --output, saying so when the path is an existing file
+    instead of surfacing a bare "[Errno 17] File exists"."""
+    if output_dir.exists() and not output_dir.is_dir():
+        raise ValueError(
+            f"Output path '{output_dir}' exists but is a file, not a "
+            "directory. Choose a directory for --output."
+        )
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+
 def _dispatch_core_command(args):
     """Run one of the core notebook-to-API commands.
 
@@ -2098,7 +2109,7 @@ def _dispatch_core_command(args):
         from backend.compiler import package_name_for_output_dir
 
         output_dir = Path(args.output)
-        output_dir.mkdir(parents=True, exist_ok=True)
+        _ensure_output_directory(output_dir)
         only = _parse_comma_separated_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
         # --tag: compile only the endpoints with these OpenAPI tags
@@ -2749,7 +2760,7 @@ def _dispatch_core_command(args):
                     + "\n".join(f"  - {line}" for line in startup_warning_lines(startup_data))
                 )
         output_dir = Path(args.output)
-        output_dir.mkdir(parents=True, exist_ok=True)
+        _ensure_output_directory(output_dir)
         only = _parse_comma_separated_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
         # --drop-past-sunset: see _apply_drop_past_sunset -- the image

@@ -4443,6 +4443,26 @@ def test_compiler_pipeline_rejects_output_dir_colliding_with_this_tools_own_pack
     assert not (output_dir / "app.py").exists()
 
 
+def test_compiler_pipeline_explains_an_output_path_that_is_a_file(tmp_path):
+    """`--output notes.txt` surfaced as a bare "[Errno 17] File exists"."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell("def add(a: int, b: int) -> int:\n    return a + b\n")
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_file = tmp_path / "notes"
+    output_file.write_text("mine", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="is a file, not a directory"):
+        compile_notebook(str(notebook_path), str(output_file))
+
+    assert output_file.read_text(encoding="utf-8") == "mine"
+
+
 def test_compiler_pipeline_rejects_output_dir_colliding_with_an_installed_package(
     tmp_path,
 ):

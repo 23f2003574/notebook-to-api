@@ -610,6 +610,24 @@ def test_compile_command_defaults_output_to_generated(tmp_path):
     assert (workdir / "generated" / "app.py").exists()
 
 
+def test_compile_command_explains_an_output_path_that_is_a_file(tmp_path):
+    """`--output notes.txt` used to print a bare "[Errno 17] File exists"."""
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(notebook_path)
+    output_file = tmp_path / "notes"
+    output_file.write_text("mine", encoding="utf-8")
+
+    proc = _run_cli(
+        ["compile", str(notebook_path), "--output", str(output_file)], cwd=tmp_path
+    )
+
+    assert proc.returncode == 1
+    assert "is a file, not a directory" in proc.stdout + proc.stderr
+    assert "Errno" not in proc.stdout + proc.stderr
+    assert output_file.read_text(encoding="utf-8") == "mine"
+
+
 def test_compile_command_smoke_test_passes_for_a_healthy_app(tmp_path):
     """`compile --smoke-test` actually imports the just-compiled app in
     this process and calls its own GET /health -- the same diagnostic

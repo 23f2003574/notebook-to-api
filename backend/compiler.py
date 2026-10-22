@@ -5092,6 +5092,14 @@ def compile_notebook_to_api(
 
         output_dir = os.path.dirname(output_path)
 
+        # `--output some_file` used to surface as a bare "[Errno 17] File
+        # exists" from makedirs, with nothing saying which argument was wrong.
+        if os.path.exists(output_dir) and not os.path.isdir(output_dir):
+            raise ValueError(
+                f"Output path '{output_dir}' exists but is a file, not a "
+                "directory. Choose a directory for --output."
+            )
+
         os.makedirs(output_dir, exist_ok=True)
 
         package_name = package_name_for_output_dir(output_dir)
