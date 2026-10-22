@@ -531,7 +531,7 @@ def test_api_key_check_uses_constant_time_comparison():
     code = generate_fastapi_code(functions)
 
     assert "import hmac" in code
-    assert "hmac.compare_digest(x_api_key, key) for key in API_KEYS" in code
+    assert "hmac.compare_digest(x_api_key.encode(), key.encode()) for key in API_KEYS" in code
     assert "x_api_key != " not in code
     assert "x_api_key in API_KEYS" not in code
 

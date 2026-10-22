@@ -393,6 +393,62 @@ print("EXAMPLE_PAYLOAD_DATE_UUID_E2E_OK")
     assert "EXAMPLE_PAYLOAD_DATE_UUID_E2E_OK" in proc.stdout
 
 
+def test_compiled_app_answers_401_not_500_for_a_non_ascii_api_key(tmp_path):
+    """hmac.compare_digest raises TypeError for a str with non-ASCII
+    characters, so `X-API-Key: clé` used to answer 500 instead of 401."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell("def add(a: int, b: int) -> int:\n    return a + b\n")
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+for key in ("cl\\xe9".encode("latin-1"), "\\u043a\\u043b\\u044e\\u0447".encode("utf-8")):
+    response = client.post(
+        "/add", json={{"a": 1, "b": 2}}, headers={{"X-API-Key": key}},
+    )
+    assert response.status_code == 401, (key, response.status_code)
+
+ok = client.post(
+    "/add", json={{"a": 1, "b": 2}},
+    headers={{"X-API-Key": "notebook-to-api-dev-key"}},
+)
+assert ok.status_code == 200, ok.text
+
+print("NON_ASCII_API_KEY_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "NON_ASCII_API_KEY_OK" in proc.stdout
+
+
 def test_compiling_python_version_matches_the_running_interpreter():
 
     version = compiling_python_version()
