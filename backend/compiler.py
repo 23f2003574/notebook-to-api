@@ -4438,6 +4438,29 @@ def find_local_modules(notebook_path, import_names, code_cells=None):
     return found
 
 
+# pandas I/O methods that import an optional engine pandas does not install
+# with itself (`pip install pandas` alone makes `pd.read_excel` raise
+# ImportError: Missing optional dependency 'openpyxl').
+_PANDAS_OPTIONAL_ENGINES = (
+    ("openpyxl", re.compile(r"\b(?:read_excel|to_excel|ExcelFile|ExcelWriter)\s*\(")),
+    ("pyarrow", re.compile(r"\b(?:read|to)_(?:parquet|feather|orc)\s*\(")),
+    ("lxml", re.compile(r"\bread_html\s*\(")),
+    ("tabulate", re.compile(r"\bto_markdown\s*\(")),
+)
+
+
+def pandas_implied_imports(code_cells, imports):
+    """Optional-engine packages the notebook's pandas calls need at runtime
+    but never import by name. Empty unless pandas itself is imported."""
+    if "pandas" not in imports:
+        return set()
+    return {
+        package
+        for package, pattern in _PANDAS_OPTIONAL_ENGINES
+        if any(pattern.search(cell) for cell in code_cells)
+    }
+
+
 def extract_third_party_imports(code_cells, notebook_path=None):
     """The raw, STANDARD_LIBS-filtered import names `code_cells` (already
     filtered to parseable cells, as compile_notebook_to_api's own
@@ -4464,6 +4487,8 @@ def extract_third_party_imports(code_cells, notebook_path=None):
 
     for cell in code_cells:
         imports.update(extract_imports_from_code(cell))
+
+    imports |= pandas_implied_imports(code_cells, imports)
 
     excluded = _extract_excluded_imports(code_cells)
 

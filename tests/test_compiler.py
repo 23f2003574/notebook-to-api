@@ -4485,6 +4485,31 @@ def test_functions_used_as_decorators_are_not_exposed_as_endpoints(tmp_path):
         )
 
 
+def test_pandas_io_calls_add_the_optional_engine_packages_to_requirements(tmp_path):
+    """`pd.read_excel` / `to_parquet` need openpyxl / pyarrow, which pandas
+    does not install and the notebook never imports -- the container
+    crashed at the first call with "Missing optional dependency"."""
+    from backend.compiler import extract_third_party_imports
+
+    cells = [
+        "import pandas as pd\n"
+        "def f(p: str) -> int:\n"
+        "    df = pd.read_excel(p)\n"
+        "    df.to_parquet('x.parquet')\n"
+        "    return len(df)\n"
+    ]
+    assert {"openpyxl", "pyarrow"} <= set(extract_third_party_imports(cells))
+    assert "lxml" not in extract_third_party_imports(cells)
+
+    # Not pandas, or no matching call: nothing is added.
+    assert "openpyxl" not in extract_third_party_imports(
+        ["def read_excel(p):\n    return p\nread_excel('x')\n"]
+    )
+    assert "openpyxl" not in extract_third_party_imports(
+        ["import pandas as pd\ndf = pd.read_csv('x')\n"]
+    )
+
+
 def test_compiler_pipeline_explains_an_output_path_that_is_a_file(tmp_path):
     """`--output notes.txt` surfaced as a bare "[Errno 17] File exists"."""
 

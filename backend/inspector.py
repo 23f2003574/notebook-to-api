@@ -30,6 +30,7 @@ from backend.compiler import (
     language_data_packages,
     torch_weight_prefetches,
     _extract_private_function_names,
+    pandas_implied_imports,
     _filter_functions_by_name,
     distribution_name_for_import,
     STANDARD_LIBS,
@@ -515,6 +516,7 @@ def inspect_notebook(notebook_path, output_dir="generated"):
     # a notebook author explicitly opted out of requirements.txt would
     # still show up here as a "dependency", even though it's never
     # actually pinned by an ensuing compile.
+    all_imports |= pandas_implied_imports(code_cells, all_imports)
     excluded_imports = _extract_excluded_imports(code_cells)
     all_imports -= excluded_imports
     all_imports -= set(find_local_modules(notebook_path, all_imports, code_cells))
@@ -741,6 +743,7 @@ def inspect_notebook_data(
     # all read it through this one function) from drifting out of sync
     # with what write_requirements/extract_third_party_imports
     # (backend/compiler.py) actually excludes.
+    all_imports |= pandas_implied_imports(code_cells, all_imports)
     excluded_imports = _extract_excluded_imports(code_cells)
     all_imports -= excluded_imports
     all_imports -= set(find_local_modules(notebook_path, all_imports, code_cells))
