@@ -1,5 +1,6 @@
 import json
 import os
+import signal
 import threading
 import time
 import subprocess
@@ -684,6 +685,21 @@ def serve_notebook(
         env=server_env,
     )
 
+    # Only Ctrl+C (SIGINT -> KeyboardInterrupt) reached the shutdown path
+    # below. `docker stop`, systemd, `kill` and CI timeouts send SIGTERM,
+    # whose default action ends this process on the spot -- leaving the
+    # uvicorn child orphaned and still holding the port, so the next
+    # `serve` died with "address already in use". Route SIGTERM through the
+    # same graceful shutdown. Signal handlers can only be installed from the
+    # main thread, so skip it elsewhere.
+    previous_sigterm = None
+    if threading.current_thread() is threading.main_thread() and hasattr(signal, "SIGTERM"):
+
+        def _raise_keyboard_interrupt(signum, frame):
+            raise KeyboardInterrupt
+
+        previous_sigterm = signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
+
     try:
         while True:
 
@@ -750,6 +766,10 @@ def serve_notebook(
             server_process.wait()
 
         print("✅ Server stopped.\n")
+
+    finally:
+        if previous_sigterm is not None:
+            signal.signal(signal.SIGTERM, previous_sigterm)
 
     observer.join()
 

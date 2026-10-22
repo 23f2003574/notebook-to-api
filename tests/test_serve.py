@@ -542,6 +542,36 @@ def test_serve_notebook_stops_server_and_observer_on_keyboard_interrupt(tmp_path
     assert _FakeObserver.instances[0].joined is True
 
 
+def test_serve_notebook_shuts_down_gracefully_on_sigterm_and_restores_the_handler(
+    tmp_path, monkeypatch
+):
+    """Confirmed before this fix: only Ctrl+C reached the shutdown path.
+    `kill <pid>`, `docker stop` or a CI timeout (SIGTERM) ended serve on the
+    spot and left the uvicorn child orphaned, still holding the port --
+    reproduced by terminating a real `serve` and finding uvicorn alive.
+    """
+    import signal
+
+    installed = []
+
+    def fake_signal(signum, handler):
+        installed.append((signum, handler))
+        return "previous-handler"
+
+    monkeypatch.setattr(serve_module.signal, "signal", fake_signal)
+
+    notebook_path = tmp_path / "nb.ipynb"
+    notebook_path.write_text("{}", encoding="utf-8")
+
+    _run_serve(monkeypatch, notebook_path, tmp_path / "generated")
+
+    assert [signum for signum, _ in installed] == [signal.SIGTERM, signal.SIGTERM]
+    with pytest.raises(KeyboardInterrupt):
+        installed[0][1](signal.SIGTERM, None)
+    assert installed[1][1] == "previous-handler"
+    assert _FakePopen.instances[0].terminated is True
+
+
 def test_serve_notebook_kills_the_server_process_if_it_does_not_stop_within_the_timeout(
     tmp_path, monkeypatch
 ):
