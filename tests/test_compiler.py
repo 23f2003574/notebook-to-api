@@ -4471,6 +4471,14 @@ def test_functions_used_as_decorators_are_not_exposed_as_endpoints(tmp_path):
     assert '"/cached"' in app_source
     assert '"/deco"' not in app_source and '"/tagged"' not in app_source
 
+    # Builtin/imported decorators are not "private functions" the notebook defines.
+    from backend.compiler import _extract_private_function_names
+    cells = [
+        "class C:\n    @classmethod\n    def m(cls): ...\n    @property\n    def p(self): ...\n",
+        "def deco(fn):\n    return fn\n@deco\ndef f(): ...\n",
+    ]
+    assert _extract_private_function_names(cells) == {"deco"}
+
     with pytest.raises(ValueError, match="used as a decorator"):
         compile_notebook(
             str(notebook_path), str(tmp_path / "other"), only=["deco"]

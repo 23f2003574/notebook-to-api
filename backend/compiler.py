@@ -2262,17 +2262,31 @@ DECORATOR_USE_PATTERN = re.compile(
 )
 
 
+DEF_NAME_PATTERN = re.compile(
+    r"^[ \t]*(?:async[ \t]+)?def[ \t]+(?P<name>[A-Za-z_]\w*)", re.MULTILINE
+)
+
+
 def _extract_decorator_function_names(code_cells):
     """Names that some cell applies as a decorator (`@name`, `@name(...)`).
     A function used this way takes a callable and returns a wrapper; as an
     endpoint its `fn`/`func` parameter can only ever receive JSON, so every
     call 500s. Such helpers are treated like "# notebook-to-api: private"
     ones."""
-    return {
+    used = {
         match.group("name")
         for cell in code_cells
         for match in DECORATOR_USE_PATTERN.finditer(cell)
     }
+    # Only functions this notebook defines: `@classmethod`, `@property` and
+    # other imported/builtin decorators would otherwise be reported as
+    # "private functions" in compile and inspect output.
+    defined = {
+        match.group("name")
+        for cell in code_cells
+        for match in DEF_NAME_PATTERN.finditer(cell)
+    }
+    return used & defined
 
 
 def _extract_private_function_names(code_cells):
