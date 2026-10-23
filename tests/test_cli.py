@@ -31838,3 +31838,35 @@ def test_export_curl_handles_set_defaults_and_path_parameters(tmp_path):
     script = (workdir / "req.sh").read_text(encoding="utf-8")
     assert '"s": [1, 2]' in script or '"s":[1,2]' in script
     assert '"q": "."' in script or '"q":"."' in script
+
+
+def test_compile_smoke_test_gives_up_on_a_notebook_that_never_finishes_importing(tmp_path):
+    """A top-level `while True:` loop (or an unguarded uvicorn.run) kept
+    `compile --smoke-test` importing the app forever, hanging the command
+    and any CI job running it. The import is now interrupted after the
+    smoke-test timeout and reported as a failed smoke test."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook = workdir / "nb.ipynb"
+    notebook.write_text(json.dumps({
+        "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+        "cells": [
+            {"cell_type": "code", "metadata": {}, "outputs": [], "execution_count": None,
+             "source": "import time\nwhile True:\n    time.sleep(0.1)\n"},
+            {"cell_type": "code", "metadata": {}, "outputs": [], "execution_count": None,
+             "source": "def f(n: int):\n    return n\n"},
+        ],
+    }), encoding="utf-8")
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(PROJECT_ROOT)
+    env["NOTEBOOK_API_DEPLOY_SMOKE_TEST_TIMEOUT_SECONDS"] = "2"
+    proc = subprocess.run(
+        [sys.executable, "-m", "backend.cli", "compile", str(notebook),
+         "--smoke-test", "--output", "out"],
+        cwd=str(workdir), env=env, capture_output=True, text=True, timeout=45,
+    )
+
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "Smoke test: FAILED" in proc.stdout
+    assert "did not finish within 2s" in proc.stdout

@@ -1062,6 +1062,35 @@ def _run_local_compile_smoke_test(package_name, output_dir):
     if not path_already_present:
         sys.path.insert(0, parent_dir)
 
+    # A notebook with a top-level `while True:` loop or an unguarded server
+    # call (uvicorn.run(...), demo.launch()) never finishes importing, so
+    # this smoke test -- and any CI job running it -- hung forever. Interrupt
+    # the import after the deploy smoke-test's own timeout (SIGALRM: main
+    # thread of a POSIX process only; elsewhere the old behaviour remains).
+    import signal
+    import threading
+
+    import_limit = DEPLOY_SMOKE_TEST_TIMEOUT_SECONDS
+    use_alarm = (
+        import_limit > 0
+        and hasattr(signal, "setitimer")
+        and threading.current_thread() is threading.main_thread()
+    )
+    previous_alarm_handler = None
+
+    if use_alarm:
+
+        def _import_timed_out(signum, frame):
+            raise TimeoutError(
+                f"importing it did not finish within {import_limit:g}s -- a "
+                "top-level `while True:` loop or an unguarded server call "
+                "(uvicorn.run(...), demo.launch()) never returns, so a real "
+                "server would never start"
+            )
+
+        previous_alarm_handler = signal.signal(signal.SIGALRM, _import_timed_out)
+        signal.setitimer(signal.ITIMER_REAL, import_limit)
+
     try:
         module = importlib.import_module(f"{package_name}.app")
         app = module.app
@@ -1089,6 +1118,10 @@ def _run_local_compile_smoke_test(package_name, output_dir):
         }
 
     finally:
+
+        if use_alarm:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous_alarm_handler)
 
         if not path_already_present:
             sys.path.remove(parent_dir)
