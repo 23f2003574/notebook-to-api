@@ -6,6 +6,14 @@ A tool that compiles a Jupyter notebook into a FastAPI microservice, automatical
 - Generation of a Dockerfile for containerized deployment
 - Creation of a runtime module to execute notebook code
 
+## Setup
+```bash
+python -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m backend.cli doctor   # checks Python, Docker and required packages
+```
+The compiled app imports the notebook's own libraries (pandas, scikit-learn, ...). To run it locally -- `serve`, `compile --smoke-test`, `export-openapi`, `export-sdk` -- install them into the same environment first: `.venv/bin/pip install -r generated/requirements.txt`. Docker builds install them for you.
+
 ## Usage
 ```bash
 # Compile a notebook (--output is a directory, not a file)

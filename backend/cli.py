@@ -1111,10 +1111,15 @@ def _run_local_compile_smoke_test(package_name, output_dir):
                 ),
             }
 
+        from backend.exporters.openapi_exporter import missing_dependency_hint
+
         return {
             "passed": False,
             "status_code": None,
-            "detail": f"Compiled app failed to import: {type(e).__name__}: {e}",
+            "detail": (
+                f"Compiled app failed to import: {type(e).__name__}: {e}"
+                f"{missing_dependency_hint(e, package_name, output_dir)}"
+            ),
         }
 
     finally:

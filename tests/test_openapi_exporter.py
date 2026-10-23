@@ -513,3 +513,46 @@ print("JSON_EXPORT_OK")
 
     schema = json.loads((workdir / "generated" / "openapi.json").read_text(encoding="utf-8"))
     assert "/add" in schema["paths"]
+
+
+def test_export_tells_the_user_to_install_the_notebooks_dependencies(tmp_path):
+    """The compiled app imports the notebook's own libraries; exporting from a
+    Python environment without them died with a bare "No module named
+    'pandas'" and no hint where those dependencies are listed."""
+    import pytest
+
+    from backend.exporters.openapi_exporter import export_openapi_schema
+
+    app_dir = tmp_path / "depapp"
+    app_dir.mkdir()
+    (app_dir / "__init__.py").write_text("", encoding="utf-8")
+    (app_dir / "app.py").write_text("import notebook_dep_that_is_not_installed\n", encoding="utf-8")
+    (app_dir / "requirements.txt").write_text("notebook_dep_that_is_not_installed\n", encoding="utf-8")
+
+    with pytest.raises(ModuleNotFoundError) as error:
+        export_openapi_schema(
+            str(tmp_path / "out.json"), package_name="depapp", app_dir=str(app_dir)
+        )
+
+    message = str(error.value)
+    assert "notebook_dep_that_is_not_installed" in message
+    assert f"pip install -r {app_dir / 'requirements.txt'}" in message
+    assert error.value.name == "notebook_dep_that_is_not_installed"
+
+
+def test_export_adds_no_install_hint_when_the_app_package_itself_is_missing(tmp_path):
+    import pytest
+
+    from backend.exporters.openapi_exporter import export_openapi_schema
+
+    app_dir = tmp_path / "wrongdir"
+    app_dir.mkdir()
+    (app_dir / "requirements.txt").write_text("x\n", encoding="utf-8")
+
+    with pytest.raises(ModuleNotFoundError) as error:
+        export_openapi_schema(
+            str(tmp_path / "out.json"), package_name="package_that_does_not_exist_here",
+            app_dir=str(app_dir),
+        )
+
+    assert "pip install" not in str(error.value)

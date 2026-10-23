@@ -166,6 +166,28 @@ def _to_yaml(value, indent=0):
     return f"{pad}{_yaml_scalar(value)}\n"
 
 
+def missing_dependency_hint(exc, package_name, app_dir):
+    """Text telling the user to install the notebook's dependencies when
+    importing a compiled app failed with a ModuleNotFoundError for one of
+    them (not for the app's own package, which is a wrong --app-dir). Empty
+    string otherwise. The compiled app imports the notebook's own libraries
+    (pandas, ...), which `pip install -r requirements.txt` for this tool
+    does not install -- the bare "No module named 'pandas'" gave no hint."""
+    missing = getattr(exc, "name", None)
+    if not isinstance(exc, ModuleNotFoundError) or not missing:
+        return ""
+    if missing.split(".")[0] == package_name or app_dir is None:
+        return ""
+    requirements = Path(app_dir) / "requirements.txt"
+    if not requirements.is_file():
+        return ""
+    return (
+        f" -- the compiled app imports the notebook's own dependencies, which "
+        f"aren't installed in this Python environment. Install them with: "
+        f"pip install -r {requirements}"
+    )
+
+
 def export_openapi_schema(output_path="generated/openapi.json", package_name="generated", format="json", app_dir=None):
     """Export the FastAPI OpenAPI schema to a JSON or YAML file.
 
@@ -207,6 +229,11 @@ def export_openapi_schema(output_path="generated/openapi.json", package_name="ge
     try:
         module = importlib.import_module(f"{package_name}.app")
         schema = module.app.openapi()
+    except ModuleNotFoundError as exc:
+        hint = missing_dependency_hint(exc, package_name, app_dir)
+        if not hint:
+            raise
+        raise ModuleNotFoundError(f"{exc}{hint}", name=exc.name) from exc
     finally:
         if path_added:
             sys.path.remove(parent_dir)

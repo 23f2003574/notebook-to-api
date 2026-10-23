@@ -31870,3 +31870,25 @@ def test_compile_smoke_test_gives_up_on_a_notebook_that_never_finishes_importing
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "Smoke test: FAILED" in proc.stdout
     assert "did not finish within 2s" in proc.stdout
+
+
+def test_compile_smoke_test_tells_the_user_to_install_the_notebooks_dependencies(tmp_path):
+    """A notebook importing a library that isn't installed locally failed the
+    smoke test with a bare "No module named ..." and no pointer to the
+    requirements.txt compile just wrote."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook = workdir / "nb.ipynb"
+    notebook.write_text(json.dumps({
+        "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+        "cells": [
+            {"cell_type": "code", "metadata": {}, "outputs": [], "execution_count": None,
+             "source": "import notebook_dep_that_is_not_installed\ndef f(n: int):\n    return n\n"},
+        ],
+    }), encoding="utf-8")
+
+    proc = _run_cli(["compile", str(notebook), "--smoke-test", "--output", "out"], cwd=workdir)
+
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "Smoke test: FAILED" in proc.stdout
+    assert "pip install -r out/requirements.txt" in proc.stdout
