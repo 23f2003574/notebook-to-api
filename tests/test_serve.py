@@ -2261,3 +2261,57 @@ def test_editing_a_loaded_dotenv_file_triggers_a_recompile(tmp_path, monkeypatch
     assert serve_module.extra_watch_directories(str(notebook_path)) == [
         ((tmp_path / "config").resolve(), False),
     ]
+
+
+def _notebook_with_imports(tmp_path, *modules):
+    import json
+
+    path = tmp_path / "deps.ipynb"
+    path.write_text(json.dumps({
+        "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+        "cells": [{
+            "cell_type": "code", "metadata": {}, "outputs": [], "execution_count": None,
+            "source": "".join(f"import {m}\n" for m in modules) + "def f(n: int):\n    return n\n",
+        }],
+    }), encoding="utf-8")
+    return path
+
+
+def test_warn_missing_notebook_dependencies_names_only_uninstalled_modules(tmp_path, capsys):
+    """`serve` runs the app in this environment: a notebook importing a library
+    that isn't installed here died inside uvicorn's import while serve kept
+    running, with no hint to install the notebook's requirements."""
+    notebook = _notebook_with_imports(
+        tmp_path, "json", "pytest", "notebook_dep_that_is_not_installed"
+    )
+
+    missing = serve_module.warn_missing_notebook_dependencies(notebook, tmp_path / "out")
+
+    assert missing == ["notebook_dep_that_is_not_installed"]
+    out = capsys.readouterr().out
+    assert "notebook_dep_that_is_not_installed" in out
+    assert f"pip install -r {tmp_path / 'out' / 'requirements.txt'}" in out
+    assert "uses: notebook_dep_that_is_not_installed." in out
+
+
+def test_warn_missing_notebook_dependencies_is_silent_when_everything_imports(tmp_path, capsys):
+    notebook = _notebook_with_imports(tmp_path, "json", "pytest")
+
+    assert serve_module.warn_missing_notebook_dependencies(notebook, tmp_path / "out") == []
+    assert capsys.readouterr().out == ""
+
+
+def test_warn_missing_notebook_dependencies_ignores_an_unreadable_notebook(tmp_path, capsys):
+    broken = tmp_path / "broken.ipynb"
+    broken.write_text("{}", encoding="utf-8")
+
+    assert serve_module.warn_missing_notebook_dependencies(broken, tmp_path / "out") == []
+    assert capsys.readouterr().out == ""
+
+
+def test_serve_notebook_warns_about_missing_notebook_dependencies(tmp_path, monkeypatch, capsys):
+    notebook = _notebook_with_imports(tmp_path, "notebook_dep_that_is_not_installed")
+
+    _run_serve(monkeypatch, notebook, tmp_path / "generated")
+
+    assert "can't import module(s) the notebook uses" in capsys.readouterr().out

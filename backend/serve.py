@@ -11,7 +11,7 @@ from watchdog.events import FileSystemEventHandler
 
 from backend.compiler import (
     SHIPPED_DATA_MANIFEST, _find_import_time_hazards, compile_notebook, dotenv_files, find_data_files, find_local_modules, package_name_for_output_dir,
-    read_notebook_env_vars,
+    extract_third_party_imports, read_notebook_env_vars,
 )
 from backend.parser.ast_parser import extract_imports_from_code
 from backend.parser.notebook_parser import extract_code_cells, load_notebook
@@ -87,6 +87,39 @@ def run_on_change_hook(on_change):
         print("🪝 On-change hook succeeded.\n")
     else:
         print(f"🪝 On-change hook exited with code {result.returncode}.\n")
+
+
+def warn_missing_notebook_dependencies(notebook_path, output_dir):
+    """Print a warning naming the libraries the notebook imports that this
+    Python environment can't import, and return their names.
+
+    `serve` runs the compiled app in this environment, so a notebook that
+    imports pandas, with pandas not installed here, died inside uvicorn's
+    import with a traceback while `serve` kept running as if healthy. Never
+    raises: a notebook that can't be read is the compile's problem to report."""
+    import importlib.util
+
+    try:
+        cells = extract_code_cells(load_notebook(notebook_path))
+        modules = sorted(set(extract_third_party_imports(cells, notebook_path)))
+    except Exception:
+        return []
+    missing = []
+    for module in modules:
+        try:
+            found = importlib.util.find_spec(module) is not None
+        except (ImportError, ValueError):
+            found = False
+        if not found:
+            missing.append(module)
+    if missing:
+        print(
+            "\n⚠️  This Python environment can't import module(s) the notebook "
+            f"uses: {', '.join(missing)}. The app will fail to start until they "
+            "are installed: pip install -r "
+            f"{Path(output_dir) / 'requirements.txt'}\n"
+        )
+    return missing
 
 
 def warn_unset_notebook_env_vars(output_dir, environ=None):
@@ -577,6 +610,7 @@ def serve_notebook(
     print_compile_summary(
         notebook_path, output_dir, only=initial_only, exclude=initial_exclude,
     )
+    warn_missing_notebook_dependencies(notebook_path, output_dir)
     warn_unset_notebook_env_vars(output_dir)
     if on_change:
         run_on_change_hook(on_change)
