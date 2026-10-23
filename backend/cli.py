@@ -1794,6 +1794,15 @@ def _flatten_completion_tree(tree, prefix=()):
     return entries
 
 
+def _completion_known_paths(entries):
+    """Space-joined subcommand paths (excluding the root) a completion script
+    may extend the typed path with. A typed word that doesn't continue a real
+    path -- the notebook after `compile`, the value after `--output` -- is an
+    argument, not a subcommand: counting it as one made every completion
+    after it come back empty (`compile nb.ipynb --o<TAB>`)."""
+    return [" ".join(path) for path in sorted(entries) if path]
+
+
 def _generate_bash_completion(parser):
     """A bash completion script for `parser`, offering this CLI's own
     subcommands and flags at every depth (`app-tasks <TAB>` -> `list get
@@ -1820,13 +1829,16 @@ def _generate_bash_completion(parser):
         "#   notebook-to-api completion bash >> ~/.bashrc",
         "_notebook_to_api_complete() {",
         '    local cur="${COMP_WORDS[COMP_CWORD]}"',
-        '    local path="" i word',
+        '    local path="" cand i word',
         "    for ((i = 1; i < COMP_CWORD; i++)); do",
         '        word="${COMP_WORDS[i]}"',
         "        case \"$word\" in",
         "            -*) continue ;;",
         "        esac",
-        '        path="${path:+$path }$word"',
+        '        cand="${path:+$path }$word"',
+        '        case "$cand" in',
+        "            " + "|".join(f'"{known}"' for known in _completion_known_paths(entries)) + ') path="$cand" ;;',
+        "        esac",
         "    done",
         "    local opts",
         '    case "$path" in',
@@ -1860,13 +1872,16 @@ def _generate_zsh_completion(parser):
         "# Install: notebook-to-api completion zsh > \"${fpath[1]}/_notebook_to_api\"",
         "# (then start a new shell, or `compinit` again).",
         "_notebook_to_api() {",
-        '    local path="" i word',
+        '    local path="" cand i word',
         "    for ((i = 2; i < CURRENT; i++)); do",
         '        word="${words[i]}"',
         "        case \"$word\" in",
         "            -*) continue ;;",
         "        esac",
-        '        path="${path:+$path }$word"',
+        '        cand="${path:+$path }$word"',
+        '        case "$cand" in',
+        "            " + "|".join(f'"{known}"' for known in _completion_known_paths(entries)) + ') path="$cand" ;;',
+        "        esac",
         "    done",
         "    local -a opts",
         '    case "$path" in',
@@ -1910,12 +1925,15 @@ def _generate_fish_completion(parser):
         "function __notebook_to_api_path",
         "    set -l cmd (commandline -opc)",
         "    set -l path",
+        "    set -l known " + " ".join(f"'{known}'" for known in _completion_known_paths(entries)),
         "    for word in $cmd[2..-1]",
         "        switch $word",
         "            case '-*'",
         "                continue",
         "        end",
-        "        set path $path $word",
+        "        if contains -- (string join ' ' $path $word) $known",
+        "            set path $path $word",
+        "        end",
         "    end",
         '    echo "$path"',
         "end",

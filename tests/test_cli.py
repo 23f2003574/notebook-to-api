@@ -235,6 +235,42 @@ def test_completion_bash_script_actually_completes_a_nested_subcommand(tmp_path)
     assert bash_proc.stdout.split() == ["purge-completed", "purge-failed"]
 
 
+def test_completion_bash_script_still_completes_flags_after_a_notebook_and_option_values(tmp_path):
+    """The typed words before the cursor were all treated as subcommands unless
+    they started with '-': once `compile nb.ipynb` or `--output out` had been
+    typed the path no longer matched anything, so `compile nb.ipynb --o<TAB>`
+    -- the most common completion -- offered nothing."""
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    proc = _run_cli(["completion", "bash"], cwd=workdir)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    script_path = workdir / "completion.bash"
+    script_path.write_text(proc.stdout, encoding="utf-8")
+
+    def complete(*words):
+        quoted = " ".join(f"'{word}'" for word in words)
+        bash_proc = subprocess.run(
+            ["bash", "-c", f"""
+            source {script_path}
+            COMP_WORDS=({quoted})
+            COMP_CWORD={len(words) - 1}
+            _notebook_to_api_complete
+            echo "${{COMPREPLY[@]}}"
+            """],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert bash_proc.returncode == 0, bash_proc.stdout + bash_proc.stderr
+        return bash_proc.stdout.split()
+
+    assert complete("notebook-to-api", "compile", "nb.ipynb", "--o") == ["--only", "--output"]
+    assert complete("notebook-to-api", "compile", "nb.ipynb", "--output", "out", "--on") == ["--only"]
+    assert complete("notebook-to-api", "export-sdk", "--language", "typescript", "--o") == ["--openapi", "--output"]
+    # Nested subcommands still resolve, with and without flag values in between.
+    assert complete("notebook-to-api", "app-tasks", "pu") == ["purge-completed", "purge-failed"]
+    assert "--json" in complete("notebook-to-api", "versions", "list", "nb.ipynb", "--j")
+
+
 @pytest.mark.skipif(
     shutil.which("zsh") is None,
     reason="requires a real zsh to syntax-check the generated completion script",
@@ -31912,3 +31948,30 @@ def test_an_empty_only_flag_is_an_error_not_a_request_to_compile_everything(tmp_
 
     ok = _run_cli(["compile", str(notebook), "--only", "add", "--output", "out"], cwd=workdir)
     assert ok.returncode == 0, ok.stdout + ok.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("fish") is None,
+    reason="requires a real fish to execute the generated completion script",
+)
+def test_completion_fish_script_still_completes_flags_after_a_notebook_and_option_values(tmp_path):
+    """Fish counterpart of the bash test: `compile nb.ipynb --o<TAB>` offered
+    nothing because the notebook path was counted as a subcommand."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    proc = _run_cli(["completion", "fish"], cwd=workdir)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    script_path = workdir / "completion.fish"
+    script_path.write_text(proc.stdout, encoding="utf-8")
+
+    def complete(line):
+        fish_proc = subprocess.run(
+            ["fish", "--no-config", "-c", f'source {script_path}; complete -C"{line}"'],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert fish_proc.returncode == 0, fish_proc.stdout + fish_proc.stderr
+        return fish_proc.stdout.split()
+
+    assert complete("notebook-to-api compile nb.ipynb --o") == ["--only", "--output"]
+    assert complete("notebook-to-api export-sdk --language typescript --o") == ["--openapi", "--output"]
+    assert complete("notebook-to-api app-tasks pu") == ["purge-completed", "purge-failed"]
