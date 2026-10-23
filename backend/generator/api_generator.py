@@ -1849,7 +1849,10 @@ def generate_fastapi_code(
     lines.append("@app.exception_handler(RequestValidationError)")
     lines.append("async def _request_validation_error_handler(request, exc):")
     lines.append("    try:")
-    lines.append("        detail = jsonable_encoder(exc.errors())")
+    # The error's "input" echoes the request value: a body like {"x": NaN}
+    # (Python's json accepts NaN/Infinity) put a non-finite float in the 422
+    # payload, which JSONResponse refuses -- a bare 500 instead of the 422.
+    lines.append("        detail = _json_safe(jsonable_encoder(exc.errors()))")
     lines.append("    except RecursionError:")
     lines.append("        detail = [{'type': 'value_error', 'loc': ['body'], 'msg': 'Request body is nested too deeply'}]")
     lines.append("    return JSONResponse(status_code=422, content={'detail': detail})")

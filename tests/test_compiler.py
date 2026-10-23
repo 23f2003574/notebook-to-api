@@ -680,6 +680,60 @@ print("CACHE_KEY_ORDER_OK")
     assert "CACHE_KEY_ORDER_OK" in proc.stdout
 
 
+def test_compiled_app_answers_422_not_500_for_a_nan_request_value(tmp_path):
+    """{"x": NaN} fails validation for an int field, and the 422 payload echoed
+    the NaN back as `input`, which JSONResponse refuses to serialize -- a bare
+    500 Internal Server Error instead of a validation error."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell("def add(a: int, b: int) -> int:\n    return a + b\n")
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{
+    "X-API-Key": "notebook-to-api-dev-key",
+    "Content-Type": "application/json",
+}}
+for body in (b'{{"a": NaN, "b": 1}}', b'{{"a": Infinity, "b": 1}}', b'{{"a": 1, "b": -Infinity}}'):
+    response = client.post("/add", content=body, headers=headers)
+    assert response.status_code == 422, (body, response.status_code, response.text)
+    assert response.json()["detail"][0]["loc"][-1] in ("a", "b")
+
+print("NAN_422_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "NAN_422_OK" in proc.stdout
+
+
 def test_compiling_python_version_matches_the_running_interpreter():
 
     version = compiling_python_version()
