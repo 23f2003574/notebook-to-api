@@ -393,6 +393,15 @@ def _unparse_annotation(annotation, type_param_names):
     return ast.unparse(annotation)
 
 
+def _treat_ellipsis_default_as_required(arg_info):
+    """`def f(x: int = ...)` -- a stub-style default -- parsed to the Ellipsis
+    object, which no JSON body can carry: it became the field's example
+    (`{"x": Ellipsis}`) and made /openapi.json, and with it /docs and every
+    SDK export, fail with a 500. The parameter is a required field instead."""
+    arg_info["has_default"] = False
+    arg_info["default"] = None
+
+
 def extract_functions_from_code(code):
     try:
         tree = ast.parse(code)
@@ -450,6 +459,8 @@ def extract_functions_from_code(code):
                         arg_info["default"] = ast.literal_eval(
                             defaults[default_index]
                         )
+                        if arg_info["default"] is Ellipsis:
+                            _treat_ellipsis_default_as_required(arg_info)
                     except Exception:
                         # Not a literal (e.g. a notebook-defined Enum
                         # member like `Priority.HIGH`, or any other
@@ -516,6 +527,8 @@ def extract_functions_from_code(code):
                         arg_info["default"] = ast.literal_eval(
                             default_node
                         )
+                        if arg_info["default"] is Ellipsis:
+                            _treat_ellipsis_default_as_required(arg_info)
                     except Exception:
                         # See the identical positional-arg branch above.
                         arg_info["default_is_literal"] = False

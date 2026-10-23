@@ -882,6 +882,67 @@ def test_generated_readme_documents_loading_dot_env_for_a_local_run(tmp_path):
     assert proc.stdout.strip().splitlines()[-1] == "200 401"
 
 
+def test_stub_style_ellipsis_default_does_not_break_openapi_or_docs(tmp_path):
+    """`def f(x: int = ...)` parsed to the Ellipsis object, which became the
+    field's example and made GET /openapi.json -- so /docs and every SDK
+    export -- answer 500 even though calling the endpoint worked."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def f(x: int = ..., *, y: str = ...) -> int:\n    return x\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+for path in ("/openapi.json", "/docs"):
+    response = client.get(path)
+    assert response.status_code == 200, (path, response.status_code)
+
+schema = client.get("/openapi.json").json()["components"]["schemas"]["FRequest"]
+assert sorted(schema["required"]) == ["x", "y"], schema
+assert schema["example"] == {{"x": 0, "y": ""}}, schema["example"]
+
+ok = client.post("/f", json={{"x": 3, "y": "a"}}, headers=headers)
+assert ok.status_code == 200 and ok.json() == {{"result": 3}}, ok.text
+assert client.post("/f", json={{}}, headers=headers).status_code == 422
+
+print("ELLIPSIS_DEFAULT_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ELLIPSIS_DEFAULT_OK" in proc.stdout
+
+
 def test_compiling_python_version_matches_the_running_interpreter():
 
     version = compiling_python_version()
