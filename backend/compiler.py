@@ -3636,6 +3636,39 @@ def _is_gpu_call(label, name, call):
     return _is_cuda_literal(keywords.get("map_location"))
 
 
+def _is_endless_loop(node):
+    """A module-level `while True:` (or `while 1:`) with no `break` of its
+    own: importing the notebook never finishes. A `break` inside a nested
+    loop or function belongs to that one, so it does not count."""
+    test = node.test
+    if not (isinstance(test, ast.Constant) and test.value is True or
+            isinstance(test, ast.Constant) and isinstance(test.value, int) and test.value):
+        return False
+
+    def has_break(statements):
+        for statement in statements:
+            if isinstance(statement, ast.Break):
+                return True
+            if isinstance(statement, (ast.For, ast.AsyncFor, ast.While,
+                                      ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                # Its own `break`s are its own, but its `else` runs in this loop.
+                if isinstance(statement, (ast.For, ast.AsyncFor, ast.While)) and has_break(statement.orelse):
+                    return True
+                continue
+            for field in ("body", "orelse", "finalbody"):
+                if has_break(getattr(statement, field, None) or []):
+                    return True
+            for handler in getattr(statement, "handlers", None) or []:
+                if has_break(handler.body):
+                    return True
+            for case in getattr(statement, "cases", None) or []:
+                if has_break(case.body):
+                    return True
+        return False
+
+    return not has_break(node.body)
+
+
 def _is_blocking_call(label, name, call):
     if name in _BLOCKING_CALL_NAMES or label in _BLOCKING_CALL_LABELS:
         return True
@@ -3731,6 +3764,11 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
             if isinstance(node, ast.Raise) and _raises_system_exit(node):
                 hazards.append({
                     "kind": "exit_call", "call": "raise SystemExit", "path": None,
+                    "cell": cell_number, "line": node.lineno,
+                })
+            if isinstance(node, ast.While) and _is_endless_loop(node):
+                hazards.append({
+                    "kind": "infinite_loop", "call": "while True", "path": None,
                     "cell": cell_number, "line": node.lineno,
                 })
             colab_module = _colab_import(node)

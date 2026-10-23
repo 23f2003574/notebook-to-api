@@ -1003,6 +1003,8 @@ def hazard_message(hazard):
             f"`{hazard['call']}` ran in Jupyter's shell, not in the compiled app, "
             "so what it fetched or unpacked won't exist"
         )
+    elif kind == "infinite_loop":
+        what = "`while True:` has no `break`, so the app would hang while starting"
     elif kind == "blocking_call":
         what = f"`{hazard['call']}(...)` never returns, so the app would hang while starting"
     elif kind == "gpu_call":

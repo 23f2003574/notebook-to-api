@@ -734,6 +734,29 @@ print("NAN_422_OK")
     assert "NAN_422_OK" in proc.stdout
 
 
+def test_import_time_hazards_flag_a_top_level_loop_that_never_ends():
+    """`while True:` with no `break` at module level never finishes importing,
+    so the compiled app hangs on startup -- and compile said nothing."""
+    from backend.compiler import _find_import_time_hazards
+
+    def kinds(source):
+        return [h["kind"] for h in _find_import_time_hazards([source])]
+
+    endless = "import time\nwhile True:\n    time.sleep(1)\n"
+    assert kinds(endless) == ["infinite_loop"]
+    assert kinds("while 1:\n    pass\n") == ["infinite_loop"]
+
+    # A break of its own ends it, however it is nested in ifs/try blocks.
+    assert kinds("while True:\n    if ready():\n        break\n") == []
+    assert kinds("while True:\n    try:\n        x = 1\n    except Exception:\n        break\n") == []
+    # A break that belongs to an inner loop or function does not.
+    assert kinds("while True:\n    for i in range(3):\n        break\n") == ["infinite_loop"]
+    # Not at module level / not endless / guarded.
+    assert kinds("def serve():\n    while True:\n        pass\n") == []
+    assert kinds("while running:\n    pass\n") == []
+    assert kinds("if __name__ == '__main__':\n    while True:\n        pass\n") == []
+
+
 def test_compiling_python_version_matches_the_running_interpreter():
 
     version = compiling_python_version()
