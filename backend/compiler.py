@@ -4761,6 +4761,10 @@ def resolve_requirements(imports, explicit_requirements=None, excluded_imports=N
     return sorted(set(pinned_deps) | set(explicit_requirements))
 
 
+# A requirement spec carrying a version operator or a direct reference.
+_REQUIREMENT_HAS_VERSION = re.compile(r"(===|==|~=|!=|>=|<=|<|>|@|://)")
+
+
 def write_requirements(
     imports, output_dir, explicit_requirements=None, excluded_imports=None
 ):
@@ -4779,6 +4783,20 @@ def write_requirements(
     print(
         f"requirements.txt generated with dependencies: {all_deps}"
     )
+
+    # A library the notebook imports is pinned to the version installed where
+    # the compile runs; one that isn't installed there is written bare, so the
+    # image builds with whatever pip resolves that day -- not the version the
+    # notebook was developed against. Say so instead of staying silent.
+    unpinned = [dep for dep in all_deps if not _REQUIREMENT_HAS_VERSION.search(dep)]
+    if unpinned:
+        print(
+            "\n⚠ Not version-pinned in requirements.txt: "
+            f"{', '.join(unpinned)}.\n"
+            "  Installs will use the latest versions. For libraries the notebook "
+            "imports, install them in the Python environment running this "
+            "compile and recompile to pin the versions it was written against.\n"
+        )
 
 
 COMPILE_METADATA_FILENAME = ".compile_metadata.json"

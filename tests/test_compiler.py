@@ -757,6 +757,28 @@ def test_import_time_hazards_flag_a_top_level_loop_that_never_ends():
     assert kinds("if __name__ == '__main__':\n    while True:\n        pass\n") == []
 
 
+def test_write_requirements_warns_about_unpinned_libraries(tmp_path, capsys):
+    """A notebook library that isn't installed where the compile runs is
+    written to requirements.txt without a version -- the image then builds with
+    whatever pip resolves that day -- and the compile said nothing about it."""
+    from backend.compiler import write_requirements
+
+    write_requirements(
+        ["pytest", "notebook_dep_that_is_not_installed"], str(tmp_path)
+    )
+
+    out = capsys.readouterr().out
+    lines = (tmp_path / "requirements.txt").read_text(encoding="utf-8").splitlines()
+    assert "notebook_dep_that_is_not_installed" in lines
+    assert any(line.startswith("pytest==") for line in lines)
+    assert "Not version-pinned in requirements.txt: notebook_dep_that_is_not_installed." in out
+    assert "pytest==" not in out.split("Not version-pinned")[1]
+
+    # Everything pinned: no warning.
+    write_requirements(["pytest"], str(tmp_path))
+    assert "Not version-pinned" not in capsys.readouterr().out
+
+
 def test_compiling_python_version_matches_the_running_interpreter():
 
     version = compiling_python_version()
