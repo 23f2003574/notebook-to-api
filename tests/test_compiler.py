@@ -837,6 +837,51 @@ print("UNDEFINED_ANNOTATION_OK")
     assert "UNDEFINED_ANNOTATION_OK" in proc.stdout
 
 
+def test_generated_readme_documents_loading_dot_env_for_a_local_run(tmp_path):
+    """Copying .env.example to .env only works with docker compose: uvicorn
+    ignores it, so a custom NOTEBOOK_API_KEY in .env left the public default
+    key accepted when running locally per the README. The README now documents
+    loading it into the shell; run those exact commands and check they work."""
+    import re
+    import subprocess
+    import sys
+
+    from backend.compiler import compile_notebook
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook_importing(notebook_path, "def f(n: int) -> int:\n    return n\n")
+    output_dir = tmp_path / "work" / "myapp"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    readme = (output_dir / "README.md").read_text(encoding="utf-8")
+    local = readme.split("## Running locally", 1)[1].split("## Authentication", 1)[0]
+    blocks = re.findall(r"```bash\n(.*?)```", local, re.DOTALL)
+    env_block = next(block for block in blocks if "set -a" in block)
+    assert "`uvicorn` does not" in local
+
+    # Run the documented commands for real, with a custom key in .env.
+    (output_dir / ".env.example").write_text(
+        (output_dir / ".env.example").read_text(encoding="utf-8").replace(
+            "NOTEBOOK_API_KEY=notebook-to-api-dev-key", "NOTEBOOK_API_KEY=my-own-key"
+        ),
+        encoding="utf-8",
+    )
+    check = (
+        "from fastapi.testclient import TestClient\n"
+        "import myapp.app as a\n"
+        "c = TestClient(a.app)\n"
+        "post = lambda k: c.post('/f', json={'n': 1}, headers={'X-API-Key': k}).status_code\n"
+        "print(post('my-own-key'), post('notebook-to-api-dev-key'))\n"
+    )
+    proc = subprocess.run(
+        ["sh", "-c", env_block + f"\n{sys.executable} -c \"$CHECK\"\n"],
+        cwd=output_dir.parent, capture_output=True, text=True,
+        env={**os.environ, "CHECK": check},
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.strip().splitlines()[-1] == "200 401"
+
+
 def test_compiling_python_version_matches_the_running_interpreter():
 
     version = compiling_python_version()

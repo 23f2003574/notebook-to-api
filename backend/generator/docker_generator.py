@@ -561,6 +561,9 @@ def env_example_content(env_vars=None, notebook_env_vars=None):
         "# one already matches the same default the compiled app (or, for",
         "# PORT, docker-compose.yml/the Dockerfile) itself falls back to,",
         "# so this file alone already reproduces the unconfigured behavior.",
+        "#",
+        "# docker compose reads .env by itself. uvicorn does not: to use it when",
+        "# running locally, load it into your shell first: set -a; . .env; set +a",
         "",
         "# Host:container port docker-compose.yml's own \"ports\"/",
         "# \"environment\" sections map, and the Dockerfile's own CMD/",
@@ -910,6 +913,16 @@ inside the folder this README is in:
 cd ..
 pip install -r {package_name}/requirements.txt
 uvicorn {package_name}.app:app --reload --reload-dir {package_name}
+```
+
+`docker compose` reads a `.env` file by itself, but `uvicorn` does not -- settings \
+copied from `.env.example` into `.env` are ignored when running locally (the \
+public default API key stays active) unless you load the file into your shell \
+before starting `uvicorn` (same directory as above):
+
+```bash
+cp {package_name}/.env.example {package_name}/.env  # skip if you already have one
+set -a; . {package_name}/.env; set +a
 ```
 
 Or with Docker, from inside `{package_name}/` -- `docker-compose.yml` lives \
