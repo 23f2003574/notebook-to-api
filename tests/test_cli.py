@@ -31892,3 +31892,23 @@ def test_compile_smoke_test_tells_the_user_to_install_the_notebooks_dependencies
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "Smoke test: FAILED" in proc.stdout
     assert "pip install -r out/requirements.txt" in proc.stdout
+
+
+def test_an_empty_only_flag_is_an_error_not_a_request_to_compile_everything(tmp_path):
+    """`--only ""` (what `--only "$ENDPOINTS"` expands to with the variable
+    unset) used to read as "no restriction" and compiled every function in the
+    notebook into an endpoint -- the opposite of an allow-list."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook = workdir / "nb.ipynb"
+    _write_notebook(notebook)
+
+    for command, extra in (("compile", ["--output", "out"]), ("validate", [])):
+        for empty in ("", ",", " , "):
+            proc = _run_cli([command, str(notebook), "--only", empty, *extra], cwd=workdir)
+            assert proc.returncode == 1, (command, empty, proc.stdout + proc.stderr)
+            assert "--only was given but names no function" in proc.stdout + proc.stderr
+    assert not (workdir / "out").exists()
+
+    ok = _run_cli(["compile", str(notebook), "--only", "add", "--output", "out"], cwd=workdir)
+    assert ok.returncode == 0, ok.stdout + ok.stderr

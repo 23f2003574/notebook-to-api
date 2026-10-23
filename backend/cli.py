@@ -918,6 +918,23 @@ def _parse_comma_separated_names(value):
     return names or None
 
 
+def _parse_only_names(value):
+    """`--only` as a list of names, or None when the flag wasn't given.
+
+    A flag that was given but names nothing (`--only ""`, `--only ","` -- what
+    `--only "$ENDPOINTS"` expands to when the variable is unset) used to read
+    as "no restriction" and compile every function in the notebook as an
+    endpoint, the opposite of what an allow-list asks for."""
+    names = _parse_comma_separated_names(value)
+    if value is not None and names is None:
+        raise ValueError(
+            "--only was given but names no function. Pass one or more "
+            "comma-separated function names, or omit --only to compile every "
+            "function."
+        )
+    return names
+
+
 def _filter_local_notebook_diff_by_name(diff, only, exclude):
     """Restrict a diff_notebook_functions result to only the named
     functions -- the local-file counterpart of _filter_notebook_diff_by_name
@@ -2146,10 +2163,10 @@ def _dispatch_core_command(args):
     elif args.command == "compile":
         from backend.compiler import package_name_for_output_dir
 
+        only = _parse_only_names(args.only)
+        exclude = _parse_comma_separated_names(args.exclude)
         output_dir = Path(args.output)
         _ensure_output_directory(output_dir)
-        only = _parse_comma_separated_names(args.only)
-        exclude = _parse_comma_separated_names(args.exclude)
         # --tag: compile only the endpoints with these OpenAPI tags
         # (apply_tag_selection) -- e.g. a deployment serving just the
         # "Inference" endpoints of a notebook that also trains.
@@ -2305,7 +2322,7 @@ def _dispatch_core_command(args):
         # only the notebook itself.
         data = inspect_notebook_data(notebook_path=args.notebook)
 
-        only = _parse_comma_separated_names(args.only)
+        only = _parse_only_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
         # --tag: validate only the endpoints with these OpenAPI tags (see
         # apply_tag_selection's own docstring) -- the same --tag
@@ -2680,7 +2697,7 @@ def _dispatch_core_command(args):
         if not valid:
             sys.exit(1)
     elif args.command == "export-curl":
-        only = _parse_comma_separated_names(args.only)
+        only = _parse_only_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
         only, exclude = apply_tag_selection(
             args.notebook, _parse_comma_separated_names(args.tag), only, exclude,
@@ -2727,7 +2744,7 @@ def _dispatch_core_command(args):
         else:
             print(f"\ncURL script written to: {output} ({len(commands)} request(s))")
     elif args.command == "export-postman":
-        only = _parse_comma_separated_names(args.only)
+        only = _parse_only_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
         only, exclude = apply_tag_selection(
             args.notebook, _parse_comma_separated_names(args.tag), only, exclude,
@@ -2763,7 +2780,7 @@ def _dispatch_core_command(args):
     elif args.command == "serve":
         if args.debounce_seconds < 0:
             raise ValueError("--debounce must be zero or positive")
-        only = _parse_comma_separated_names(args.only)
+        only = _parse_only_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
         serve_notebook(
             args.notebook, args.output, args.port, args.host,
@@ -2775,7 +2792,7 @@ def _dispatch_core_command(args):
     elif args.command == "watch":
         if args.debounce_seconds < 0:
             raise ValueError("--debounce must be zero or positive")
-        only = _parse_comma_separated_names(args.only)
+        only = _parse_only_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
         watch_notebook(
             args.notebook, args.output, only=only, exclude=exclude,
@@ -2797,10 +2814,10 @@ def _dispatch_core_command(args):
                     "(--fail-on-startup-warnings is set):\n"
                     + "\n".join(f"  - {line}" for line in startup_warning_lines(startup_data))
                 )
+        only = _parse_only_names(args.only)
+        exclude = _parse_comma_separated_names(args.exclude)
         output_dir = Path(args.output)
         _ensure_output_directory(output_dir)
-        only = _parse_comma_separated_names(args.only)
-        exclude = _parse_comma_separated_names(args.exclude)
         # --drop-past-sunset: see _apply_drop_past_sunset -- the image
         # this builds is what actually ships, so it's where a missed
         # removal matters most.
@@ -2976,7 +2993,7 @@ def _dispatch_core_command(args):
                 if smoke_test_result is not None and not smoke_test_result["passed"]:
                     sys.exit(1)
     elif args.command == "diff":
-        only = _parse_comma_separated_names(args.only)
+        only = _parse_only_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
         tags = _parse_comma_separated_names(args.tag)
         if only and exclude:
@@ -5653,7 +5670,7 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
-        only = _parse_comma_separated_names(args.only)
+        only = _parse_only_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
 
         request_body = {"notebook_path": args.filename}
@@ -5772,7 +5789,7 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
-        only = _parse_comma_separated_names(args.only)
+        only = _parse_only_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
 
         try:
@@ -5918,7 +5935,7 @@ def _dispatch_core_command(args):
         validate_body = {"notebook_path": args.filename, "strict": args.strict}
         if args.version_id:
             validate_body["version_id"] = args.version_id
-        only = _parse_comma_separated_names(args.only)
+        only = _parse_only_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
         if only:
             validate_body["only"] = only
@@ -6276,7 +6293,7 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
-        only = _parse_comma_separated_names(args.only)
+        only = _parse_only_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
 
         app_preview_body = {
@@ -6331,7 +6348,7 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
-        only = _parse_comma_separated_names(args.only)
+        only = _parse_only_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
 
         readme_preview_body = {
@@ -6386,7 +6403,7 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
-        only = _parse_comma_separated_names(args.only)
+        only = _parse_only_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
 
         openapi_preview_body = {
@@ -6445,7 +6462,7 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
-        only = _parse_comma_separated_names(args.only)
+        only = _parse_only_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
 
         curl_preview_body = {
@@ -6508,7 +6525,7 @@ def _dispatch_core_command(args):
 
         dashboard_url = args.dashboard_url.rstrip("/")
 
-        only = _parse_comma_separated_names(args.only)
+        only = _parse_only_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
 
         postman_preview_body = {
@@ -7537,7 +7554,7 @@ def _dispatch_core_command(args):
                 with os.fdopen(new_fd, "wb") as f:
                     f.write(new_content)
 
-                only = _parse_comma_separated_names(args.only)
+                only = _parse_only_names(args.only)
                 exclude = _parse_comma_separated_names(args.exclude)
                 tags = _parse_comma_separated_names(args.tag)
                 if only and exclude:
@@ -8065,7 +8082,7 @@ def _dispatch_core_command(args):
             with os.fdopen(remote_notebook_fd, "wb") as f:
                 f.write(response.content)
 
-            only = _parse_comma_separated_names(args.only)
+            only = _parse_only_names(args.only)
             exclude = _parse_comma_separated_names(args.exclude)
             tags = _parse_comma_separated_names(args.tag)
             if only and exclude:
@@ -8263,7 +8280,7 @@ def _dispatch_core_command(args):
             with os.fdopen(remote_notebook_fd, "wb") as f:
                 f.write(response.content)
 
-            only = _parse_comma_separated_names(args.only)
+            only = _parse_only_names(args.only)
             exclude = _parse_comma_separated_names(args.exclude)
             # --tag, resolved against the downloaded copy the same way
             # export-curl/export-postman resolve it locally.
@@ -8383,7 +8400,7 @@ def _dispatch_core_command(args):
             with os.fdopen(remote_notebook_fd, "wb") as f:
                 f.write(response.content)
 
-            only = _parse_comma_separated_names(args.only)
+            only = _parse_only_names(args.only)
             exclude = _parse_comma_separated_names(args.exclude)
             # --tag, resolved against the downloaded copy the same way
             # export-curl/export-postman resolve it locally.
