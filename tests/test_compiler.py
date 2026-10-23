@@ -779,6 +779,64 @@ def test_write_requirements_warns_about_unpinned_libraries(tmp_path, capsys):
     assert "Not version-pinned" not in capsys.readouterr().out
 
 
+def test_compiled_app_starts_when_an_annotation_names_something_the_notebook_never_defines(tmp_path):
+    """`def f(x: 'Undefined')` runs fine in the notebook (a quoted annotation is
+    never evaluated), but the generated model referenced
+    `notebook_module.Undefined` and the app crashed on import with an
+    AttributeError. The parameter now falls back to Any."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "class Known:\n    pass\n"
+            "def f(x: 'Undefined', k: 'Known' = None) -> int:\n    return 1\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+response = client.post(
+    "/f", json={{"x": {{"any": "value"}}}},
+    headers={{"X-API-Key": "notebook-to-api-dev-key"}},
+)
+assert response.status_code == 200, response.text
+assert response.json() == {{"result": 1}}, response.text
+import generated.runtime.notebook_module as nb
+assert not hasattr(nb, "Known") or nb.Known.__name__ == "Known"
+
+print("UNDEFINED_ANNOTATION_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "UNDEFINED_ANNOTATION_OK" in proc.stdout
+
+
 def test_compiling_python_version_matches_the_running_interpreter():
 
     version = compiling_python_version()

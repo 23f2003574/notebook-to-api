@@ -940,6 +940,11 @@ _TYPING_EXPORTS = frozenset(typing.__all__)
 _BUILTIN_NAMES = frozenset(dir(builtins))
 
 
+# Names the annotation rewriter pointed at notebook_module during the current
+# generate_fastapi_code call (see the fallback emitted after the notebook import).
+_ANNOTATION_NOTEBOOK_NAMES = set()
+
+
 class _AnnotationNameQualifier(ast.NodeTransformer):
     """Rewrites bare names in a type-annotation AST so every name the
     generated Pydantic model references is actually resolvable.
@@ -1035,6 +1040,7 @@ class _AnnotationNameQualifier(ast.NodeTransformer):
         if node.id in _BUILTIN_NAMES:
             return node
 
+        _ANNOTATION_NOTEBOOK_NAMES.add(node.id)
         return ast.copy_location(
             ast.Attribute(
                 value=ast.Name(id="notebook_module", ctx=ast.Load()),
@@ -1549,6 +1555,7 @@ def generate_fastapi_code(
     commonly), preserving this function's previous literal exactly for
     it rather than silently changing behavior no caller asked for.
     """
+    _ANNOTATION_NOTEBOOK_NAMES.clear()
     colliding_names = sorted(
         {func["name"] for func in functions} & RESERVED_INFRASTRUCTURE_NAMES
     )
@@ -6261,6 +6268,20 @@ def generate_fastapi_code(
             f"content={{'detail': {repr(detail)}}}, headers={repr(headers)})"
         )
         lines.append("")
+    # A quoted annotation naming something the notebook never defines
+    # (`x: 'Undefined'`) runs fine in the notebook -- Python never evaluates it
+    # -- but the model's `notebook_module.Undefined` reference crashed the
+    # app's import with an AttributeError. Missing names fall back to `object`
+    # (accepts any value; typing.Any can't be used with isinstance()).
+    if _ANNOTATION_NOTEBOOK_NAMES:
+        anchor = "    _nb_atexit.register = _nb_real_atexit_register"
+        names = ", ".join(repr(n) for n in sorted(_ANNOTATION_NOTEBOOK_NAMES))
+        fallback = [
+            f"for _nb_type_name in ({names},):",
+            "    if not hasattr(notebook_module, _nb_type_name):",
+            "        setattr(notebook_module, _nb_type_name, object)",
+        ]
+        lines[lines.index(anchor) + 1:lines.index(anchor) + 1] = fallback
     return "\n".join(lines)
 
 # Helper to write the generated FastAPI source file
