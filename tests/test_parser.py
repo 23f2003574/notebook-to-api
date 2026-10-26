@@ -909,3 +909,28 @@ def test_load_notebook_names_the_real_problem_for_a_top_level_list(tmp_path):
         load_notebook(str(listing))
     assert "top-level value is a list" in str(listed.value)
     assert "has no attribute" not in str(listed.value)
+
+
+def test_strip_magic_commands_comments_out_backslash_continued_shell_lines():
+    """`!pip install \\` + an indented package line left the second line as
+    code: "unexpected indent" dropped the whole cell, every function in it
+    included, with the compile only warning that the cell was left out."""
+    import ast
+
+    from backend.parser.notebook_parser import strip_magic_commands
+
+    for first in ("!pip install -q \\", "%pip install -q \\"):
+        source = f"{first}\n    pandas \\\n    numpy\ndef f(n):\n    return n\n"
+        cleaned = strip_magic_commands(source)
+
+        ast.parse(cleaned)
+        assert "def f(n):" in cleaned
+        assert cleaned.count("\n") == source.count("\n")
+
+    # A backslash continuing ordinary Python (no magic) is left alone.
+    plain = "total = a \\\n    % b"
+    assert strip_magic_commands(plain) == plain
+
+    # An even number of trailing backslashes is a literal backslash, not a
+    # continuation.
+    assert strip_magic_commands("!echo \\\\\ny = 1") == "# !echo \\\\\ny = 1"

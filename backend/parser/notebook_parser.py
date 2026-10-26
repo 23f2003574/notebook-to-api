@@ -271,7 +271,25 @@ def strip_magic_commands(source):
     cleaned_lines = []
     commented_indented = []
 
+    continues_magic = False
+
+    def comment_out(line, indent):
+        # A magic/shell line ending in an odd number of backslashes continues
+        # onto the next line (`!pip install \\\n  foo`): that line is shell
+        # text too, and left as code it is an "unexpected indent" that
+        # dropped the whole cell.
+        nonlocal continues_magic
+        cleaned_lines.append(f"{indent}# {line.strip()}")
+        if indent:
+            commented_indented.append(len(cleaned_lines) - 1)
+        stripped = line.rstrip()
+        continues_magic = (len(stripped) - len(stripped.rstrip("\\"))) % 2 == 1
+
     for line_number, line in enumerate(source.split("\n"), start=1):
+
+        if continues_magic:
+            comment_out(line, "")
+            continue
 
         if line_number in unsafe_lines:
             cleaned_lines.append(line)
@@ -289,9 +307,7 @@ def strip_magic_commands(source):
             if prefix == "%" and timed:
                 cleaned_lines.append(f"{indent}{target} {timed.group(1)}")
             else:
-                cleaned_lines.append(f"{indent}# {line.strip()}")
-                if indent:
-                    commented_indented.append(len(cleaned_lines) - 1)
+                comment_out(line, indent)
             continue
 
         match = (
@@ -301,10 +317,7 @@ def strip_magic_commands(source):
         )
 
         if match:
-            indent = match.group(1)
-            cleaned_lines.append(f"{indent}# {line.strip()}")
-            if indent:
-                commented_indented.append(len(cleaned_lines) - 1)
+            comment_out(line, match.group(1))
         else:
             cleaned_lines.append(line)
 
