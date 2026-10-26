@@ -594,6 +594,49 @@ def _run_top_level_awaits(combined_code):
     return "\n".join(lines), _TOP_LEVEL_AWAIT_RUNNER
 
 
+def _hoist_future_imports(combined_code):
+    """`combined_code` with every `from __future__ import ...` moved to the
+    top (after a module docstring). Notebook cells are joined into one
+    module, and Python only allows those imports as the module's first
+    statements -- one in a later cell (legal in Jupyter) made the whole
+    generated module a SyntaxError."""
+    try:
+        body = ast.parse(combined_code).body
+    except SyntaxError:
+        return combined_code
+
+    lines = combined_code.split("\n")
+    leading = 0
+    if (
+        body and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str)
+    ):
+        leading = 1
+    while (
+        leading < len(body) and isinstance(body[leading], ast.ImportFrom)
+        and body[leading].module == "__future__"
+    ):
+        leading += 1
+
+    hoisted = []
+    for node in body[leading:]:
+        if not (isinstance(node, ast.ImportFrom) and node.module == "__future__"):
+            continue
+        first, last = node.lineno - 1, node.end_lineno
+        if node.col_offset or "".join(lines[first:last]).count(";"):
+            continue
+        hoisted.append("\n".join(lines[first:last]))
+        lines[first:last] = [""] * (last - first)
+    if not hoisted:
+        return combined_code
+
+    insert_at = 0
+    if leading and body:
+        insert_at = body[leading - 1].end_lineno
+    lines[insert_at:insert_at] = hoisted
+    return "\n".join(lines)
+
+
 def _with_jupyter_prelude(combined_code, extra_prelude=""):
     """`combined_code` with _jupyter_builtin_prelude's stubs inserted -- at the
     very top, or, for a notebook that opens with `from __future__` imports
@@ -791,7 +834,7 @@ def write_runtime_module(code_cells, output_dir, local_modules=None, data_files=
 
     rewritten_cells = _rewrite_request_time_reads(code_cells, data_files or {})
     reads_at_request_time = rewritten_cells != list(code_cells)
-    combined_code = "\n\n".join(rewritten_cells)
+    combined_code = _hoist_future_imports("\n\n".join(rewritten_cells))
     shipped_scripts = [p for p in _run_magic_scripts(code_cells) if p in (data_files or {})]
     if shipped_scripts:
         combined_code = _RUN_MAGIC_PATTERN.sub(
