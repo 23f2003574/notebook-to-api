@@ -17975,3 +17975,60 @@ print("CONFIG_PARAM_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "CONFIG_PARAM_OK" in proc.stdout
+
+
+def test_function_named_like_another_functions_request_model_keeps_the_app_importable(tmp_path):
+    """`t` gets the request model `TRequest`; a notebook function that is
+    itself called `TRequest` became an endpoint function of that name,
+    rebinding the class so the generated app failed to import."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def TRequest(a=1):\n"
+            "    return ['TRequest', a]\n"
+            "\n"
+            "def t(b=2):\n"
+            "    return ['t', b]\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+assert client.post("/TRequest", json={{"a": 5}}, headers=headers).json() == {{"result": ["TRequest", 5]}}
+assert client.post("/t", json={{"b": 6}}, headers=headers).json() == {{"result": ["t", 6]}}
+assert client.get("/openapi.json").status_code == 200
+
+print("MODEL_NAME_COLLISION_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "MODEL_NAME_COLLISION_OK" in proc.stdout

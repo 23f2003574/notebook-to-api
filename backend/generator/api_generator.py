@@ -1167,8 +1167,12 @@ def _build_model_names(functions):
     name "Get_dataRequest", and the second definition silently shadowed
     the first's fields: whichever endpoint referenced that name ended up
     validating requests against the *other* function's parameters).
+
+    A function's own name is taken too: `def TRequest()` next to `def t()`
+    had `t`'s model class `TRequest` rebound to the endpoint function, so
+    the app failed to import (`Body(PydanticUndefined)` is not a field).
     """
-    used_names = set()
+    used_names = {func["name"] for func in functions}
     model_names = {}
 
     for func in functions:
