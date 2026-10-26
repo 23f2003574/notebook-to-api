@@ -4525,8 +4525,11 @@ def find_local_modules(notebook_path, import_names, code_cells=None):
 _PANDAS_OPTIONAL_ENGINES = (
     ("openpyxl", re.compile(r"\b(?:read_excel|to_excel|ExcelFile|ExcelWriter)\s*\(")),
     ("pyarrow", re.compile(r"\b(?:read|to)_(?:parquet|feather|orc)\s*\(")),
-    ("lxml", re.compile(r"\bread_html\s*\(")),
+    ("lxml", re.compile(r"\bread_(?:html|xml)\s*\(")),
     ("tabulate", re.compile(r"\bto_markdown\s*\(")),
+    ("jinja2", re.compile(r"\bto_latex\s*\(|\.style\b")),
+    ("tables", re.compile(r"\b(?:read|to)_hdf\s*\(")),
+    ("matplotlib", re.compile(r"\.plot(?:\.\w+)?\s*\(|\.(?:hist|boxplot)\s*\(")),
 )
 
 

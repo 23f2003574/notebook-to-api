@@ -17782,3 +17782,34 @@ print("DEF_TIME_DEFAULT_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "DEF_TIME_DEFAULT_OK" in proc.stdout
+
+
+@pytest.mark.parametrize(
+    "call, package",
+    [
+        ("pd.read_xml(p)", "lxml"),
+        ("df.style.format()", "jinja2"),
+        ("df.to_latex()", "jinja2"),
+        ("df.to_hdf('x.h5', key='k')", "tables"),
+        ("df.plot(kind='bar')", "matplotlib"),
+        ("df.plot.scatter(x='a', y='b')", "matplotlib"),
+        ("df['a'].hist()", "matplotlib"),
+    ],
+)
+def test_more_pandas_calls_add_their_optional_packages_to_requirements(call, package):
+    """`df.plot()`, `read_xml`, `.style`, `to_latex` and the HDF methods raise
+    ImportError ("Missing optional dependency" / "matplotlib is required")
+    in the container because pandas does not install these packages and the
+    notebook never imports them by name."""
+    from backend.compiler import extract_third_party_imports
+
+    cells = [
+        "import pandas as pd\n"
+        f"def f(p: str):\n    df = pd.DataFrame()\n    return {call}\n"
+    ]
+    assert package in extract_third_party_imports(cells)
+
+    # Without pandas imported, nothing is added.
+    assert package not in extract_third_party_imports(
+        [f"def f(p, df):\n    return {call}\n"]
+    )
