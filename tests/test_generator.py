@@ -5325,9 +5325,13 @@ def test_non_literal_default_is_embedded_as_a_qualified_expression_not_a_string(
 
     code = generate_fastapi_code(functions)
 
+    # The default is the value the notebook's own `def` bound (looked up via
+    # _function_default), with the qualified expression only as the fallback
+    # -- never the string "Priority.HIGH".
     assert (
         "priority: _safe_annotation(notebook_module.Priority) = Field("
-        "default=notebook_module.Priority.HIGH, "
+        "default=_function_default(notebook_module.set_priority, 'priority', "
+        "lambda: notebook_module.Priority.HIGH), "
         in code
     )
     assert "default='Priority.HIGH'" not in code

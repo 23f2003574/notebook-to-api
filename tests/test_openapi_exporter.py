@@ -548,6 +548,7 @@ def test_export_adds_no_install_hint_when_the_app_package_itself_is_missing(tmp_
     app_dir = tmp_path / "wrongdir"
     app_dir.mkdir()
     (app_dir / "requirements.txt").write_text("x\n", encoding="utf-8")
+    (app_dir / "app.py").write_text("", encoding="utf-8")
 
     with pytest.raises(ModuleNotFoundError) as error:
         export_openapi_schema(
