@@ -39,6 +39,7 @@ if __name__ == "__main__":
 from nbformat import ValidationError as NotebookValidationError
 
 # Import the compiler function
+from backend.generator.docker_generator import default_image_tag
 from backend.compiler import (
     NOTEBOOK_TO_API_VERSION,
     compile_notebook,
@@ -2857,7 +2858,7 @@ def _dispatch_core_command(args):
         # removal matters most.
         if args.drop_past_sunset:
             only, exclude = apply_drop_past_sunset(args.notebook, only, exclude)
-        tag = args.tag or f"{output_dir.name.lower()}:latest"
+        tag = args.tag or default_image_tag(output_dir.name)
         # `docker build`'s own default target platform is whatever the
         # local Docker daemon's host architecture is -- correct for a
         # plain `docker run` on that same machine, but not for the common

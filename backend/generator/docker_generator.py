@@ -1,6 +1,7 @@
 import re
 import shlex
 import textwrap
+import unicodedata
 
 from backend.generator.api_generator import (
     _deprecation_sunset_date, resolve_deprecation, resolve_endpoint_tag,
@@ -384,6 +385,18 @@ def generate_dockerfile(
         ))
 
     print(f"Dockerfile generated at: {output_path}")
+
+
+def default_image_tag(name):
+    """The default `name:latest` Docker image reference for a compiled app
+    directory/package name. Docker names are lowercase ASCII, must start and
+    end with a letter or digit, and allow at most two underscores in a row, so
+    `_x`, `café` and `a___b` -- all valid Python package names -- made
+    `deploy` fail inside `docker build` with "invalid reference format"."""
+    folded = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii")
+    image = re.sub(r"[^a-z0-9._-]+", "-", folded.lower())
+    image = re.sub(r"_{3,}", "__", image).strip("._-")
+    return f"{image or 'generated'}:latest"
 
 
 def docker_compose_content(package_name="generated", env_vars=None, notebook_env_vars=None):

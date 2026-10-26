@@ -1,6 +1,7 @@
 import re
 
 from backend.exporters.openapi_exporter import _yaml_scalar
+from backend.generator.docker_generator import default_image_tag
 
 # Kubernetes' own DNS-1123 label rule for a resource's "metadata.name" (and,
 # identically, a label value): lowercase alphanumeric or '-', must start and
@@ -189,7 +190,7 @@ def kubernetes_manifest_content(
     than leaving this one path still baking in an invalid reference.
     """
     env_vars = env_vars or []
-    image = image or f"{package_name.lower()}:latest"
+    image = image or default_image_tag(package_name)
 
     package_name_scalar = _yaml_scalar(_k8s_resource_name(package_name))
     image_scalar = _yaml_scalar(image)

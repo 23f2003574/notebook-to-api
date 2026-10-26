@@ -17869,3 +17869,51 @@ print("FIELD_COLLISION_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "FIELD_COLLISION_OK" in proc.stdout
+
+
+@pytest.mark.parametrize(
+    "name, expected",
+    [
+        ("My_App", "my_app:latest"),
+        ("_x", "x:latest"),
+        ("café", "cafe:latest"),
+        ("a___b", "a__b:latest"),
+        ("generated", "generated:latest"),
+        ("日本", "generated:latest"),
+    ],
+)
+def test_default_image_tag_is_a_valid_docker_reference_for_any_package_name(name, expected):
+    """The default `deploy` tag and the kubernetes.yaml image were
+    `<dir name lowercased>:latest`, which Docker rejects ("invalid reference
+    format") for `_x` (must start with a letter or digit), `café` (ASCII
+    only) and `a___b` (at most two underscores in a row)."""
+    from backend.cli import _validate_docker_image_tag
+    from backend.generator.docker_generator import default_image_tag
+
+    assert default_image_tag(name) == expected
+    _validate_docker_image_tag(default_image_tag(name))
+
+
+def test_kubernetes_manifest_and_deploy_use_the_same_valid_default_image(tmp_path):
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(nbformat.v4.new_code_cell("def f(n: int):\n    return n\n"))
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "_café"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    manifest = (output_dir / "kubernetes.yaml").read_text(encoding="utf-8")
+    assert "image: cafe:latest" in manifest
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "backend.cli", "deploy", str(notebook_path),
+         "--output", str(tmp_path / "_café2"), "--dry-run"],
+        cwd=str(PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Would build Docker image 'cafe2:latest'" in proc.stdout

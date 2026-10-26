@@ -70,6 +70,7 @@ from backend.generator.api_generator import (
     generate_fastapi_code,
 )
 from backend.generator.docker_generator import (
+    default_image_tag,
     dockerfile_content,
     dockerignore_content,
     docker_compose_content,
@@ -15930,7 +15931,7 @@ def k8s_preview_endpoint(image: str = None):
     return {
         "status": "success",
         "package_name": package_name,
-        "image": image or f"{package_name.lower()}:latest",
+        "image": image or default_image_tag(package_name),
         "kubernetes_manifest": kubernetes_manifest_content(
             package_name, GENERATED_APP_ENV_VARS, image
         ),
@@ -17492,7 +17493,7 @@ def deploy_generated_app(data: dict = None):
             detail="tag must be a string"
         )
 
-    tag = tag or f"{generated_path.name.lower()}:latest"
+    tag = tag or default_image_tag(generated_path.name)
     push = bool(data.get("push", False))
 
     platform = data.get("platform")
