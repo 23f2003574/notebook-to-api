@@ -251,20 +251,27 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     #   - "urlparse": used to validate a background endpoint's own
     #     callback_url scheme -- a collision turned that same validation
     #     path into an unhandled 500 instead of a clean 400.
-    # Every other top-level import (os, sys, FastAPI, BaseModel,
-    # CORSMiddleware, GZipMiddleware, Field, Header, Query, Response,
-    # JSONResponse, anyio, datetime, functools, inspect, urllib) was
+    #   - "BaseModel", "Response", "JSONResponse", "functools",
+    #     "inspect", "anyio": re-tested and confirmed reachable after all
+    #     (an earlier audit judged them module-load-only). "BaseModel" is
+    #     read by name inside custom_openapi(), so /openapi.json and
+    #     /docs answered 500; "Response" is a route's response_class, so
+    #     the module failed to import; "JSONResponse", "functools",
+    #     "inspect" and "anyio" are read by name while serving requests,
+    #     so every endpoint answered 500.
+    # Every other top-level import (os, sys, FastAPI, CORSMiddleware,
+    # GZipMiddleware, Field, Header, Query, datetime, urllib) was
     # individually tested the identical way and confirmed *not* reachable
     # this way in practice -- each is only
     # ever used at module-load time (a one-shot constructor call, a
     # default argument value on an endpoint already defined earlier than
     # any notebook function could be) rather than read back by name
     # later, so a notebook function reusing one of those names is
-    # confirmed harmless today. Not reserving them is a deliberate,
-    # verified choice, not an oversight matching the ones above. "json" is
-    # no longer among them -- see its own bullet above.
+    # confirmed harmless today. "json" is no longer among them -- see
+    # its own bullet above.
     "hmac", "uuid", "time", "json", "jsonable_encoder", "Depends", "BackgroundTasks",
     "HTTPException", "Optional", "get_openapi", "urlparse",
+    "BaseModel", "Response", "JSONResponse", "functools", "inspect", "anyio",
 })
 
 

@@ -17528,3 +17528,26 @@ print("MAIN_GUARD_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "MAIN_GUARD_OK" in proc.stdout
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["BaseModel", "Response", "JSONResponse", "functools", "inspect", "anyio"],
+)
+def test_function_named_like_an_import_the_generated_app_reads_is_rejected(tmp_path, name):
+    """A notebook function named like one of these imports replaced it in the
+    generated module: `BaseModel` made /openapi.json answer 500, `Response`
+    broke importing the app, and `JSONResponse`/`functools`/`inspect`/`anyio`
+    made every endpoint answer 500. compile_notebook must fail loudly."""
+    from backend.generator.api_generator import ReservedFunctionNameError
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(f"def {name}(x: int) -> int:\n    return x\n")
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    with pytest.raises(ReservedFunctionNameError, match=name):
+        compile_notebook(str(notebook_path), str(tmp_path / "generated"))
