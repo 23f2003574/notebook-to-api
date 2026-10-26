@@ -18193,3 +18193,33 @@ print("UNSERIALIZABLE_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "UNSERIALIZABLE_OK" in proc.stdout
+
+
+def test_kubernetes_manifest_reads_the_webhook_secret_from_the_secret_not_a_literal(tmp_path):
+    """NOTEBOOK_API_WEBHOOK_SECRET was emitted as a plain `value: ""` env
+    entry, so the only way to set it was typing the signing secret into a
+    manifest that lives in version control. It now comes from the same
+    Secret as the API key, optional so an unset key still sends webhooks
+    unsigned."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell("def add(a: int, b: int) -> int:\n    return a + b\n")
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    manifest = (output_dir / "kubernetes.yaml").read_text(encoding="utf-8")
+    assert (
+        "            - name: NOTEBOOK_API_WEBHOOK_SECRET\n"
+        "              valueFrom:\n"
+        "                secretKeyRef:\n"
+        "                  name: generated-secrets\n"
+        "                  key: NOTEBOOK_API_WEBHOOK_SECRET\n"
+        "                  optional: true\n"
+    ) in manifest
+    assert "NOTEBOOK_API_WEBHOOK_SECRET\n              value:" not in manifest

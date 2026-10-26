@@ -214,6 +214,18 @@ def kubernetes_manifest_content(
                 f"                  name: {secret_name}\n"
                 f"                  key: NOTEBOOK_API_KEY"
             )
+        # The webhook signing secret is a credential too: as a plain `value:`
+        # it would be typed into a manifest that lives in version control.
+        # Optional, since an empty/absent secret just sends webhooks unsigned.
+        if entry["name"] == "NOTEBOOK_API_WEBHOOK_SECRET":
+            return (
+                f"            - name: {name}\n"
+                f"              valueFrom:\n"
+                f"                secretKeyRef:\n"
+                f"                  name: {secret_name}\n"
+                f"                  key: NOTEBOOK_API_WEBHOOK_SECRET\n"
+                f"                  optional: true"
+            )
         value = "true" if entry["name"] == "NOTEBOOK_API_REQUIRE_CUSTOM_KEY" else entry["default"]
         return (
             f"            - name: {name}\n"
@@ -253,6 +265,7 @@ def kubernetes_manifest_content(
 # NOTEBOOK_API_KEY comes from a Secret. Create it before applying this file:
 #   kubectl create secret generic {resource_name}-secrets \\
 #     --from-literal=NOTEBOOK_API_KEY="$(openssl rand -hex 32)"{secret_comment}{optional_comment}
+# Optionally add NOTEBOOK_API_WEBHOOK_SECRET to the same Secret to sign webhooks.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
