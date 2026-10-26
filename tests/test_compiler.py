@@ -17466,3 +17466,65 @@ def test_compose_public_url_follows_port_and_env_example_does_not_pin_it():
     assert "\nNOTEBOOK_API_PUBLIC_URL=" not in env_example
     assert "# NOTEBOOK_API_PUBLIC_URL=http://localhost:8000" in env_example
     assert "\nNOTEBOOK_API_KEY=dev-key\n" in env_example
+
+
+def test_function_defined_under_main_guard_is_not_exposed_as_a_broken_endpoint(tmp_path):
+    """A function defined inside `if __name__ == "__main__":` got a route, but
+    the generated app imports the notebook as a module so that block never
+    runs: POST /e answered 500 "module has no attribute 'e'". It must have no
+    route and be reported as skipped; the `else` branch does run."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def a(n: int):\n    return n + 1\n"
+            "if __name__ == '__main__':\n    def e():\n        return 1\n"
+            "else:\n    def g():\n        return 2\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    from backend.parser.ast_parser import extract_skipped_functions_from_code
+
+    skipped = extract_skipped_functions_from_code(notebook.cells[0].source)
+    assert [s["name"] for s in skipped] == ["e"]
+    assert "__main__" in skipped[0]["reason"]
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+assert client.post("/e", json={{}}, headers=headers).status_code == 404
+assert client.post("/a", json={{"n": 1}}, headers=headers).json() == {{"result": 2}}
+assert client.post("/g", json={{}}, headers=headers).json() == {{"result": 2}}
+
+print("MAIN_GUARD_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "MAIN_GUARD_OK" in proc.stdout

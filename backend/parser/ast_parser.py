@@ -351,9 +351,24 @@ _SCOPE_BOUNDARY_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, as
 _TRANSPARENT_BODY_FIELDS = ("body", "orelse", "finalbody")
 
 
+def _is_main_guard_if(node):
+    """True for `if __name__ == "__main__":`. The generated app imports the
+    notebook as a module, so that block's body never runs there."""
+    test = node.test if isinstance(node, ast.If) else None
+    return (
+        isinstance(test, ast.Compare)
+        and isinstance(test.left, ast.Name) and test.left.id == "__name__"
+        and len(test.ops) == 1 and isinstance(test.ops[0], ast.Eq)
+        and isinstance(test.comparators[0], ast.Constant)
+        and test.comparators[0].value == "__main__"
+    )
+
+
 def _iter_module_level_statements(nodes):
     """Yield statements reachable at module scope, without descending into
-    function/class bodies (which define their own, unrelated scope)."""
+    function/class bodies (which define their own, unrelated scope) or an
+    `if __name__ == "__main__":` body (it never runs on import, so a function
+    defined there does not exist in the imported notebook module)."""
 
     for node in nodes:
         yield node
@@ -362,6 +377,8 @@ def _iter_module_level_statements(nodes):
             continue
 
         for field in _TRANSPARENT_BODY_FIELDS:
+            if field == "body" and _is_main_guard_if(node):
+                continue
             children = getattr(node, field, None)
 
             if children:
@@ -670,6 +687,14 @@ def extract_skipped_functions_from_code(code):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
 
+    main_guard_ids = {
+        id(inner)
+        for guard in ast.walk(tree) if _is_main_guard_if(guard)
+        for stmt in guard.body
+        for inner in _iter_module_level_statements([stmt])
+        if isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
     skipped = []
 
     for node in ast.walk(tree):
@@ -683,6 +708,9 @@ def extract_skipped_functions_from_code(code):
         skipped.append({
             "name": node.name,
             "reason": (
+                "defined under `if __name__ == \"__main__\":`, which never "
+                "runs when the generated app imports the notebook"
+                if id(node) in main_guard_ids else
                 "defined inside a class or nested function, so it isn't "
                 "callable as a standalone endpoint"
             ),
