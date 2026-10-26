@@ -3066,7 +3066,19 @@ def generate_fastapi_code(
     # or non-integer labels become ordinary leading columns; a plain
     # unnamed integer index (a fresh or filtered frame) is still dropped, as
     # before. An index name clashing with a column keeps the old output.
+    # Duplicate column names (a concat/merge result) collapsed to one key per
+    # row, keeping only the last column's values: a second "a" column is
+    # renamed "a.1" (pandas' own read_csv convention) so no data is lost.
     lines.append("def _frame_records(frame):")
+    lines.append("    if not frame.columns.is_unique:")
+    lines.append("        seen = {}")
+    lines.append("        names = []")
+    lines.append("        for name in frame.columns:")
+    lines.append("            count = seen.get(name, 0)")
+    lines.append("            seen[name] = count + 1")
+    lines.append("            names.append(name if count == 0 else f'{name}.{count}')")
+    lines.append("        frame = frame.copy()")
+    lines.append("        frame.columns = names")
     lines.append("    index = frame.index")
     lines.append("    named = any(name is not None for name in getattr(index, 'names', [index.name]))")
     lines.append("    if named or getattr(index, 'nlevels', 1) > 1 or getattr(index, 'inferred_type', 'integer') != 'integer':")

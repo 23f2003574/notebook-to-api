@@ -18290,3 +18290,62 @@ print("TASK_ERROR_OK")
 
         assert proc.returncode == 0, proc.stdout + proc.stderr
         assert "TASK_ERROR_OK" in proc.stdout
+
+
+def test_dataframe_with_duplicate_column_names_keeps_every_column(tmp_path):
+    """to_dict(orient='records') keyed rows by column name, so a frame with two
+    columns called "a" (an ordinary concat/merge result) came back with only
+    the last one's values -- the other column silently vanished."""
+
+    pytest.importorskip("pandas")
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "import pandas as pd\n"
+            "def dup():\n"
+            "    return pd.DataFrame([[1, 2, 3]], columns=['a', 'a', 'b'])\n"
+            "\n"
+            "def plain():\n"
+            "    return pd.DataFrame({'a': [1, 2], 'b': ['x', None]})\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+assert client.post("/dup", headers=headers).json() == {{"result": [{{"a": 1, "a.1": 2, "b": 3}}]}}
+assert client.post("/plain", headers=headers).json() == {{"result": [{{"a": 1, "b": "x"}}, {{"a": 2, "b": None}}]}}
+
+print("DUP_COLUMNS_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "DUP_COLUMNS_OK" in proc.stdout
