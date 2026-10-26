@@ -32022,3 +32022,30 @@ def test_export_curl_script_survives_quotes_in_a_default_value_and_the_api_key(t
     argv = json.loads(ran.stdout)
     assert argv[argv.index("-d") + 1] == json.dumps({"text": "it's'; touch pwned; '"})
     assert 'X-API-Key: k"$HOME`id`' in argv
+
+
+@pytest.mark.parametrize("package", ["watchdog", "nbformat"])
+def test_cli_names_the_missing_core_package_instead_of_a_traceback(package):
+    """With nbformat or watchdog not installed, every command -- `doctor`
+    included -- died with a bare ModuleNotFoundError traceback. It must exit
+    with a one-line message naming the package and the install command."""
+    import subprocess
+
+    script = (
+        "import runpy, sys\n"
+        f"sys.modules[{package!r}] = None\n"
+        "sys.argv = ['notebook-to-api', 'doctor']\n"
+        "runpy.run_module('backend.cli', run_name='__main__')\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert package in proc.stderr
+    assert "pip install -r requirements.txt" in proc.stderr
+    assert "Traceback" not in proc.stderr

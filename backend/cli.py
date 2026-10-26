@@ -15,6 +15,21 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
+# nbformat and watchdog are imported unconditionally below, so a partial
+# install failed every command -- `doctor` included -- with a bare
+# ModuleNotFoundError traceback. Say what to install instead.
+if __name__ == "__main__":
+    _missing_core_packages = [
+        package for package in ("nbformat", "watchdog")
+        if importlib.util.find_spec(package) is None
+    ]
+    if _missing_core_packages:
+        sys.exit(
+            "Error: missing required Python package(s): "
+            f"{', '.join(_missing_core_packages)}. Install this tool's "
+            "dependencies with `pip install -r requirements.txt`."
+        )
+
 # ValidationError is the exception nbformat raises for a syntactically valid
 # JSON file that is nonetheless missing required notebook keys (e.g. no
 # "cells"). It's distinct from nbformat.reader.NotJSONError (already a
@@ -1967,7 +1982,8 @@ def _generate_fish_completion(parser):
 # watchdog.observers import Observer" at its own top) -- so a machine
 # missing either already fails with a plain ModuleNotFoundError the
 # instant `notebook-to-api` (this `doctor` command included) is invoked
-# at all; checking for them here would be dead code that could never
+# at all (the guard at this file's top turns that into a one-line install
+# hint); checking for them here would be dead code that could never
 # actually run. Each entry is (the name `importlib.util.find_spec` looks
 # up, the name `pip install` / requirements.txt actually uses -- they
 # differ for python-multipart, whose importable module is "multipart",
