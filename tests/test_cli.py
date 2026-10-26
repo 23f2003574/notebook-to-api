@@ -31975,3 +31975,50 @@ def test_completion_fish_script_still_completes_flags_after_a_notebook_and_optio
     assert complete("notebook-to-api compile nb.ipynb --o") == ["--only", "--output"]
     assert complete("notebook-to-api export-sdk --language typescript --o") == ["--openapi", "--output"]
     assert complete("notebook-to-api app-tasks pu") == ["purge-completed", "purge-failed"]
+
+
+def test_export_curl_script_survives_quotes_in_a_default_value_and_the_api_key(tmp_path):
+    """A string default containing a single quote ended the single-quoted
+    `-d '...'` body early: the exported script was a shell syntax error, and a
+    default like `'; touch pwned; '` ran as a command. The same went for a
+    `"` or `$` in --api-key."""
+    import subprocess
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "def f(text: str = \"it's'; touch pwned; '\") -> str:\n    return text\n",
+    )
+    script_path = tmp_path / "requests.sh"
+
+    proc = _run_cli(
+        [
+            "export-curl", str(notebook_path),
+            "--api-key", 'k"$HOME`id`', "--output", str(script_path),
+        ],
+        cwd=tmp_path,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    # Run the script against a stub `curl` that records its argv.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "curl"
+    stub.write_text(
+        "#!/usr/bin/env python3\nimport json, sys\n"
+        "print(json.dumps(sys.argv[1:]))\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    ran = subprocess.run(
+        ["sh", str(script_path)],
+        cwd=tmp_path,
+        env={**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+    )
+    assert ran.returncode == 0, ran.stderr
+    assert not (tmp_path / "pwned").exists()
+    argv = json.loads(ran.stdout)
+    assert argv[argv.index("-d") + 1] == json.dumps({"text": "it's'; touch pwned; '"})
+    assert 'X-API-Key: k"$HOME`id`' in argv

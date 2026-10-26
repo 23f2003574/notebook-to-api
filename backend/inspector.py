@@ -1,6 +1,7 @@
 import difflib
 import json
 import os
+import shlex
 import sys
 from collections import Counter
 from pathlib import Path
@@ -2221,6 +2222,9 @@ def generate_curl_commands(
         if is_deprecated_by_path.get(f"/{name}"):
 
             reason = deprecated_functions.get(name)
+            # One line: a newline in the reason would end the comment and
+            # run the rest of it as a shell command.
+            reason = " ".join(reason.split()) if reason else reason
             comment = (
                 f"# DEPRECATED{': ' + reason if reason else ''}\n{comment}"
             )
@@ -2229,13 +2233,20 @@ def generate_curl_commands(
             f"{comment}\n"
             f"curl -X POST {url} \\\n"
             f'  -H "Content-Type: application/json" \\\n'
-            f'  -H "X-API-Key: {api_key}" \\\n'
-            f"  -d '{payload}'"
+            f'  -H "X-API-Key: {_double_quote_escape(api_key)}" \\\n'
+            f"  -d {shlex.quote(payload)}"
         )
 
         commands.append(command)
 
     return commands
+
+
+def _double_quote_escape(text):
+    """`text` safe inside a shell double-quoted string."""
+    for char in ("\\", '"', "$", "`"):
+        text = text.replace(char, "\\" + char)
+    return text
 
 
 _POSTMAN_DEPRECATION_CHECK_SCRIPT = [
