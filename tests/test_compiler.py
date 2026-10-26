@@ -18223,3 +18223,70 @@ def test_kubernetes_manifest_reads_the_webhook_secret_from_the_secret_not_a_lite
         "                  optional: true\n"
     ) in manifest
     assert "NOTEBOOK_API_WEBHOOK_SECRET\n              value:" not in manifest
+
+
+def test_background_task_error_honors_hide_error_details(tmp_path):
+    """NOTEBOOK_API_HIDE_ERROR_DETAILS kept exception text out of synchronous
+    500s, but a failed background task still stored `str(e)` as the task's
+    "error" -- readable via GET /tasks/{id} and sent in the webhook -- so a
+    message holding a path or token leaked through the async route."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "# notebook-to-api: background\n"
+            "def train():\n"
+            "    raise ValueError('cannot open /srv/secret/path.csv')\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import os, sys, time
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+task_id = client.post("/train", headers=headers).json()["task_id"]
+for _ in range(50):
+    task = client.get(f"/tasks/{{task_id}}", headers=headers).json()
+    if task["status"] != "processing":
+        break
+    time.sleep(0.1)
+
+assert task["status"] == "failed", task
+if os.environ.get("NOTEBOOK_API_HIDE_ERROR_DETAILS") == "true":
+    assert "/srv/secret" not in task["error"], task
+else:
+    assert "/srv/secret/path.csv" in task["error"], task
+
+print("TASK_ERROR_OK")
+"""
+
+    for hide in ("true", "false"):
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=str(workdir),
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env={**os.environ, "NOTEBOOK_API_HIDE_ERROR_DETAILS": hide},
+        )
+
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert "TASK_ERROR_OK" in proc.stdout

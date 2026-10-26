@@ -5310,12 +5310,12 @@ def generate_fastapi_code(
     lines.append("        if task_id in TASKS:")
     lines.append("            TASKS[task_id][\"status\"] = \"failed\"")
     lines.append("            TASKS[task_id][\"finished_at\"] = time.time()")
-    lines.append("            TASKS[task_id][\"error\"] = str(e)")
+    lines.append("            TASKS[task_id][\"error\"] = _error_text(e)")
     lines.append("        if callback_url:")
     lines.append("            webhook_result = await anyio.to_thread.run_sync(")
     lines.append(
         "                _deliver_task_webhook, callback_url, "
-        "{\"task_id\": task_id, \"status\": \"failed\", \"error\": str(e)}"
+        "{\"task_id\": task_id, \"status\": \"failed\", \"error\": _error_text(e)}"
     )
     lines.append("            )")
     lines.append(
