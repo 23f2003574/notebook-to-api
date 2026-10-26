@@ -2429,13 +2429,17 @@ def _dispatch_core_command(args):
             len(kept_names) if (only or exclude) else len(data["functions"])
         ) == 0
 
+        # Cells that are not valid Python are left out of the compiled app
+        # entirely (every function in them with it), so they are not "no issues".
+        unparseable_cells = data.get("unparseable_cells") or []
+
         has_blocking_issues = (
             bool(reserved_name_conflicts)
             or requirements_conflict is not None
-            or (args.strict and (bool(skipped_functions) or bool(duplicate_functions) or no_endpoints))
+            or (args.strict and (bool(skipped_functions) or bool(duplicate_functions) or no_endpoints or bool(unparseable_cells)))
         )
         has_warnings = (
-            bool(skipped_functions) or bool(duplicate_functions) or no_endpoints
+            bool(skipped_functions) or bool(duplicate_functions) or no_endpoints or bool(unparseable_cells)
         ) and not has_blocking_issues
 
         if has_blocking_issues:
@@ -2471,6 +2475,7 @@ def _dispatch_core_command(args):
                     "unrecognized_directives": data["unrecognized_directives"],
                     "import_time_hazards": data["import_time_hazards"],
                     "cells_with_errors": data["cells_with_errors"],
+                    "unparseable_cells": unparseable_cells,
                     "no_endpoints": no_endpoints,
                 },
                 indent=2,
@@ -2507,6 +2512,11 @@ def _dispatch_core_command(args):
             if no_endpoints:
                 marker = "✗" if args.strict else "⚠"
                 print(f"\n{marker} No endpoints: nothing in this notebook would be exposed, so the compiled app has no routes.")
+            if unparseable_cells:
+                marker = "✗" if args.strict else "⚠"
+                print(f"\n{marker} Cells that are not valid Python (compile leaves them out entirely):")
+                for broken in unparseable_cells:
+                    print(f"  - Cell {broken['cell']}, line {broken['line']}: {broken['message']}")
             for item in data["unrecognized_directives"]:
                 print(
                     f"⚠ Unrecognized directive ignored: {item['line']}"

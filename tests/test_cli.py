@@ -13564,6 +13564,32 @@ def test_validate_command_strict_flag_fails_on_skipped_functions(tmp_path):
     assert "Validation failed." in proc.stdout
 
 
+def test_validate_command_reports_cells_that_are_not_valid_python(tmp_path):
+    """compile leaves a cell with a syntax error out entirely (and every
+    function in it), but validate printed "No issues found" and exited 0."""
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "def lost(a):\n    print 'py2'\n    return a\n",
+    )
+
+    proc = _run_cli(["validate", str(notebook_path)], cwd=workdir)
+
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "not valid Python" in proc.stdout
+    assert "Cell 1, line 2" in proc.stdout
+    assert "No issues found" not in proc.stdout
+
+    strict = _run_cli(["validate", str(notebook_path), "--strict"], cwd=workdir)
+    assert strict.returncode == 2, strict.stdout + strict.stderr
+
+    as_json = _run_cli(["validate", str(notebook_path), "--json"], cwd=workdir)
+    assert json.loads(as_json.stdout)["unparseable_cells"][0]["cell"] == 1
+
+
 def test_validate_command_warns_but_does_not_fail_on_duplicate_functions(tmp_path):
 
     workdir = tmp_path / "workdir"
