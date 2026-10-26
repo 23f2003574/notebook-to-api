@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 from backend.compiler import (
+    _pinned_requirement,
     _find_cells_with_error_outputs,
     _find_unparseable_cells,
     _find_import_time_hazards,
@@ -1162,6 +1163,20 @@ def print_compile_summary(notebook_path, output_dir="generated", only=None, excl
 
     if data["dependencies"]:
         print(f"\nDependencies: {', '.join(data['dependencies'])}")
+
+        # A dependency that is not installed where this compile runs cannot be
+        # pinned, so requirements.txt lists the bare name and pip installs
+        # whatever PyPI has under it. For `import utils` / `import config`
+        # that is usually the notebook's own module whose .py file is not next
+        # to the notebook -- the app would silently get an unrelated package.
+        unpinned = [name for name in data["dependencies"] if _pinned_requirement(name) == name]
+        if unpinned:
+            print(
+                f"\n⚠ Not installed here, so requirements.txt lists them unpinned: "
+                f"{', '.join(unpinned)}\n"
+                "  pip will install whatever PyPI publishes under each name. If one is your "
+                "own module,\n  put its .py file next to the notebook so it is shipped instead."
+            )
 
     for line in build_addition_lines(data):
         print(line)

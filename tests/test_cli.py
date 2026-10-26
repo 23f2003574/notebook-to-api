@@ -32091,3 +32091,31 @@ def test_export_openapi_names_the_missing_compiled_app_instead_of_a_module_error
         assert f"compile <notebook.ipynb> --output {name}" in proc.stderr
         assert "No module named" not in proc.stderr
         assert "Traceback" not in proc.stderr
+
+
+def test_compile_warns_about_unpinned_dependencies_that_may_be_missing_local_modules(tmp_path):
+    """`import utils` with no utils.py next to the notebook silently became the
+    bare requirement `utils` -- whatever unrelated package PyPI has under that
+    name -- with nothing in the compile output saying so."""
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "from utils_not_next_to_notebook import clean\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    proc = _run_cli(["compile", str(notebook_path), "--output", "built"], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Not installed here, so requirements.txt lists them unpinned: utils_not_next_to_notebook" in proc.stdout
+    assert "put its .py file next to the notebook" in proc.stdout
+
+    clean = tmp_path / "clean"
+    clean.mkdir()
+    clean_nb = clean / "nb.ipynb"
+    _write_notebook_with_function(clean_nb, "def add(a: int, b: int) -> int:\n    return a + b\n")
+    clean_proc = _run_cli(["compile", str(clean_nb), "--output", "built"], cwd=clean)
+    assert "Not installed here" not in clean_proc.stdout
