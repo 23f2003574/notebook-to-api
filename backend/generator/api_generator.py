@@ -1065,6 +1065,12 @@ _SAFE_ANNOTATION_MODULES = (
 _RISKY_TYPING_NAMES = frozenset({
     "Iterator", "AsyncIterator", "AsyncIterable", "Awaitable", "Coroutine",
     "AsyncGenerator", "TypedDict",
+    # typing names Pydantic can't model or can't draw a JSON schema for:
+    # `cb: Callable[[int], int]` broke /openapi.json, the rest the import.
+    "Callable", "IO", "TextIO", "Match", "Sized", "ContextManager",
+    "AsyncContextManager", "ByteString", "SupportsInt", "SupportsFloat",
+    "SupportsAbs", "SupportsBytes", "SupportsComplex", "SupportsIndex",
+    "SupportsRound", "NoReturn", "Never", "ParamSpec", "Protocol",
     # Builtin classes Pydantic has no schema for (`r: range`, `s: slice`).
     "range", "slice", "memoryview", "bytearray", "type", "BaseException",
     "Exception",

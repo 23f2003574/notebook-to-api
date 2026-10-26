@@ -17551,3 +17551,64 @@ def test_function_named_like_an_import_the_generated_app_reads_is_rejected(tmp_p
 
     with pytest.raises(ReservedFunctionNameError, match=name):
         compile_notebook(str(notebook_path), str(tmp_path / "generated"))
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    ["Callable[[int], int]", "IO", "Sized", "ContextManager[int]", "NoReturn"],
+)
+def test_typing_annotation_pydantic_cannot_model_does_not_break_the_app(tmp_path, annotation):
+    """`cb: Callable[[int], int]` made GET /openapi.json -- so /docs and every
+    SDK export -- answer 500 ("Cannot generate a JsonSchema for
+    core_schema.CallableSchema"); `IO`, `Sized`, `ContextManager[int]` and
+    `NoReturn` failed importing the whole app. Such a parameter must degrade
+    to an untyped field and leave the other parameters working."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "from typing import *\n"
+            f"def f(cb: {annotation} = None, y: int = 2) -> int:\n    return y\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+assert client.get("/openapi.json").status_code == 200
+ok = client.post("/f", json={{"y": 5}}, headers=headers)
+assert ok.status_code == 200 and ok.json() == {{"result": 5}}, ok.text
+assert client.post("/f", json={{"y": "x"}}, headers=headers).status_code == 422
+
+print("TYPING_ANNOTATION_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "TYPING_ANNOTATION_OK" in proc.stdout
