@@ -170,7 +170,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # 'req'", nothing to do with train_model's own logic at all.
     "_evict_expired_tasks", "_run_background_task", "_json_safe",
     "_coerce_array_like", "_safe_annotation", "_shield_exit",
-    "_png_data_uri", "_bytes_json", "_openapi_json_safe", "_default_kwargs",
+    "_png_data_uri", "_bytes_json", "_openapi_json_safe", "_default_kwargs", "_function_default",
     # Every name below is one of this file's own top-level `import`s --
     # never previously reserved at all, on the (never actually verified)
     # assumption that only names *this file itself defines* (a constant,
@@ -3043,6 +3043,16 @@ def generate_fastapi_code(
     # showed up in the next caller's result). Mutable, copyable instances
     # get a per-request deep copy; scalars, dates, enums and anything that
     # can't be copied keep the plain default (and its OpenAPI default).
+    # _function_default: the default the notebook's own `def` bound for a
+    # parameter, read off the function; `fallback` re-evaluates the source
+    # expression only when the signature can't be read.
+    lines.append("def _function_default(func, name, fallback):")
+    lines.append("    try:")
+    lines.append("        default = inspect.signature(func).parameters[name].default")
+    lines.append("    except (TypeError, ValueError, KeyError):")
+    lines.append("        return fallback()")
+    lines.append("    return fallback() if default is inspect.Parameter.empty else default")
+    lines.append("")
     lines.append("def _default_kwargs(value):")
     lines.append("    import copy as _copy, enum as _enum")
     lines.append("    try:")
@@ -5441,6 +5451,13 @@ def generate_fastapi_code(
                     # qualified source is embedded directly as a code
                     # expression rather than a string literal.
                     default_expr, _ = _resolve_annotation_source(default_value, forward_refs=False)
+                    # The value Python bound when the notebook's `def` ran, not
+                    # the name looked up again now: `def f(n=DEFAULT)` followed
+                    # by `DEFAULT = 9` still defaults to the old value.
+                    default_expr = (
+                        f"_function_default(notebook_module.{func['name']}, "
+                        f"{arg_name!r}, lambda: {default_expr})"
+                    )
                 # Pydantic can't build a JSON schema for a set default
                 # ("unhashable type: 'set'"), which broke /openapi.json -- and
                 # with it /docs and SDK generation -- for the whole app. A

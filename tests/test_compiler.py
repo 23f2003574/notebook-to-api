@@ -17727,3 +17727,58 @@ print("FUTURE_IMPORT_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "FUTURE_IMPORT_OK" in proc.stdout
+
+
+def test_default_taken_from_a_name_is_the_value_bound_when_the_function_was_defined(tmp_path):
+    """`def f(n: int = DEFAULT)` followed by `DEFAULT = 9` defaults to the
+    value DEFAULT had at `def` time (7) in the notebook, but the generated
+    request model looked the name up again and defaulted to 9."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "DEFAULT = 7\n"
+            "def f(n: int = DEFAULT) -> int:\n    return n\n"
+            "DEFAULT = 9\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+assert client.post("/f", headers=headers).json() == {{"result": 7}}
+assert client.post("/f", json={{"n": 1}}, headers=headers).json() == {{"result": 1}}
+assert client.get("/openapi.json").status_code == 200
+
+print("DEF_TIME_DEFAULT_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "DEF_TIME_DEFAULT_OK" in proc.stdout
