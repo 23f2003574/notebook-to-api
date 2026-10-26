@@ -888,7 +888,14 @@ def _field_name(arg):
     name = arg["name"]
     if name in RESERVED_PYDANTIC_FIELD_NAMES or name in _ANNOTATION_SHADOWING_NAMES:
         return f"p_{name}"
-    return f"p{name}" if name.startswith("_") else name
+    if name.startswith("_"):
+        return f"p{name}"
+    # A real parameter already named like one of the renamed attributes
+    # (`p_x` next to `_x`, `p_json` next to `json`) would share its field and
+    # silently receive the other one's value, so it moves out of that range.
+    if re.match(r"p+_", name):
+        return f"p{name}"
+    return name
 
 
 def _arg_value_expr(arg):

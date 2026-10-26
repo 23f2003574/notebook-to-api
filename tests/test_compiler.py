@@ -17813,3 +17813,59 @@ def test_more_pandas_calls_add_their_optional_packages_to_requirements(call, pac
     assert package not in extract_third_party_imports(
         [f"def f(p, df):\n    return {call}\n"]
     )
+
+
+def test_parameters_whose_names_collide_after_renaming_each_get_their_own_value(tmp_path):
+    """`_x` is stored as the model attribute `p_x`, and `json` as `p_json`, so
+    a function that also had a real `p_x` / `p_json` parameter mapped both to
+    one field: `def f(_x=1, p_x=2)` called with {"_x": 10, "p_x": 20}
+    received (20, 20), and with defaults (2, 2)."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def f(_x=1, p_x=2, json=3, p_json=4, pp_x=5):\n"
+            "    return [_x, p_x, json, p_json, pp_x]\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+body = {{"_x": 10, "p_x": 20, "json": 30, "p_json": 40, "pp_x": 50}}
+assert client.post("/f", json=body, headers=headers).json() == {{"result": [10, 20, 30, 40, 50]}}
+assert client.post("/f", headers=headers).json() == {{"result": [1, 2, 3, 4, 5]}}
+assert client.get("/openapi.json").status_code == 200
+
+print("FIELD_COLLISION_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "FIELD_COLLISION_OK" in proc.stdout
