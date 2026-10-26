@@ -2110,6 +2110,15 @@ def torch_weight_prefetches(code_cells):
 # ffmpeg, pytesseract to tesseract. Jupyter's environment already had them.
 IMPORT_APT_PACKAGES = {
     "cv2": ("libgl1", "libglib2.0-0"),
+    # Packages that depend on the GUI build of OpenCV (opencv-python /
+    # opencv-contrib-python, not -headless) and import cv2 themselves, so a
+    # notebook that never writes `import cv2` still fails on libGL.so.1.
+    "ultralytics": ("libgl1", "libglib2.0-0"),
+    "mediapipe": ("libgl1", "libglib2.0-0"),
+    "deepface": ("libgl1", "libglib2.0-0"),
+    "supervision": ("libgl1", "libglib2.0-0"),
+    "paddleocr": ("libgl1", "libglib2.0-0"),
+    "imgaug": ("libgl1", "libglib2.0-0"),
     "lightgbm": ("libgomp1",),
     "soundfile": ("libsndfile1",),
     "librosa": ("libsndfile1", "ffmpeg"),

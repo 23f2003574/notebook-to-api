@@ -18096,3 +18096,31 @@ print("ANY_PARAM_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "ANY_PARAM_OK" in proc.stdout
+
+
+@pytest.mark.parametrize(
+    "module", ["ultralytics", "mediapipe", "deepface", "supervision", "paddleocr", "imgaug"]
+)
+def test_dockerfile_installs_libgl_for_packages_that_pull_in_opencv(tmp_path, module):
+    """These packages depend on the GUI build of OpenCV and import cv2
+    themselves, so the image built fine but the first import failed on
+    libGL.so.1 -- the failure `import cv2` alone already got apt packages for."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            f"import {module}\n"
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    dockerfile = (output_dir / "Dockerfile").read_text(encoding="utf-8")
+    assert "libgl1" in dockerfile
+    assert "libglib2.0-0" in dockerfile
+    assert dockerfile.index("apt-get install") < dockerfile.index("pip install")
