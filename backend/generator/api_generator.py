@@ -5340,7 +5340,7 @@ def generate_fastapi_code(
     lines.append("                and len(item_types) == 2:")
     lines.append("            return {k: _rebuild_unmodeled(v, item_types[1]) for k, v in value.items()}")
     lines.append("        return value")
-    lines.append("    if value is None or not isinstance(tp, type) or _typing.is_typeddict(tp):")
+    lines.append("    if value is None or tp is _typing.Any or not isinstance(tp, type) or _typing.is_typeddict(tp):")
     lines.append("        return value")
     lines.append("    if isinstance(value, tp):")
     lines.append("        return value")

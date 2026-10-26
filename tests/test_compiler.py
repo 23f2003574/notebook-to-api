@@ -18032,3 +18032,67 @@ print("MODEL_NAME_COLLISION_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "MODEL_NAME_COLLISION_OK" in proc.stdout
+
+
+def test_any_annotated_parameter_accepts_a_non_null_value(tmp_path):
+    """`typing.Any` is a class on Python 3.11+, so the generated
+    `isinstance(value, tp)` check raised "typing.Any cannot be used with
+    isinstance()" and every call that actually sent a value for an
+    `Any`-annotated parameter answered 500."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "import typing\n"
+            "from typing import Any\n"
+            "\n"
+            "def qualified(a: typing.Any = None):\n"
+            "    return a\n"
+            "\n"
+            "def bare(a: Any = None):\n"
+            "    return a\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+for route in ("/qualified", "/bare"):
+    for value in ([1, 2], {{"k": "v"}}, 5, "s"):
+        response = client.post(route, json={{"a": value}}, headers=headers)
+        assert response.status_code == 200, (route, value, response.text)
+        assert response.json() == {{"result": value}}
+    assert client.post(route, headers=headers).json() == {{"result": None}}
+
+print("ANY_PARAM_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ANY_PARAM_OK" in proc.stdout
