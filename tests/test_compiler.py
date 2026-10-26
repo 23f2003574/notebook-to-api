@@ -17917,3 +17917,61 @@ def test_kubernetes_manifest_and_deploy_use_the_same_valid_default_image(tmp_pat
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "Would build Docker image 'cafe2:latest'" in proc.stdout
+
+
+def test_parameter_named_config_does_not_break_the_generated_app(tmp_path):
+    """A field called `Config` made Pydantic raise '"Config" and
+    "model_config" cannot be used together' when the generated app was
+    imported, so one `def run(Config=None)` took down every endpoint."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def f(a=1, Config=7):\n"
+            "    return [a, Config]\n"
+            "\n"
+            "def g():\n"
+            "    return 'ok'\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+assert client.post("/f", json={{"Config": 9}}, headers=headers).json() == {{"result": [1, 9]}}
+assert client.post("/f", headers=headers).json() == {{"result": [1, 7]}}
+assert client.post("/g", headers=headers).json() == {{"result": "ok"}}
+assert client.get("/openapi.json").status_code == 200
+
+print("CONFIG_PARAM_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "CONFIG_PARAM_OK" in proc.stdout

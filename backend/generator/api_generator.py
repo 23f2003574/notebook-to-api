@@ -328,8 +328,11 @@ class ReservedFunctionNameError(ValueError):
 #     integration might still reach for out of habit) silently resolves
 #     to the field's own value instead, raising a confusing "'str'
 #     object is not callable" nowhere close to this file's own code.
+#   - "Config": Pydantic v2 still treats a `Config` class attribute as the
+#     v1-style config and raises "\"Config\" and \"model_config\" cannot be
+#     used together" at import, again taking down the whole generated app.
 RESERVED_PYDANTIC_FIELD_NAMES = frozenset({
-    "construct", "copy", "dict", "from_orm", "json",
+    "Config", "construct", "copy", "dict", "from_orm", "json",
     "model_computed_fields", "model_config", "model_construct",
     "model_copy", "model_dump", "model_dump_json", "model_extra",
     "model_fields", "model_fields_set", "model_json_schema",
