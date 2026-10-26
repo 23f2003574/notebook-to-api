@@ -17612,3 +17612,63 @@ print("TYPING_ANNOTATION_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "TYPING_ANNOTATION_OK" in proc.stdout
+
+
+def test_function_with_no_required_parameter_accepts_a_post_without_a_body(tmp_path):
+    """`curl -X POST /status` answered 422 "Field required" for the request
+    body itself, even for `def status():` or `def run(n: int = 1)` that have
+    nothing required to send. A function with a required parameter must keep
+    answering 422 for a missing body."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def status():\n    return 'ok'\n\n"
+            "def run(n: int = 1, *rest: int):\n    return n\n\n"
+            "def need(n: int):\n    return n\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+assert client.post("/status", headers=headers).json() == {{"result": "ok"}}
+assert client.post("/status", json={{}}, headers=headers).json() == {{"result": "ok"}}
+assert client.post("/run", headers=headers).json() == {{"result": 1}}
+assert client.post("/run", json={{"n": 4}}, headers=headers).json() == {{"result": 4}}
+assert client.post("/need", headers=headers).status_code == 422
+assert client.post("/need", json={{"n": 2}}, headers=headers).json() == {{"result": 2}}
+assert client.get("/openapi.json").status_code == 200
+
+print("OPTIONAL_BODY_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "OPTIONAL_BODY_OK" in proc.stdout

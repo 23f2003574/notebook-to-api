@@ -270,7 +270,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # confirmed harmless today. "json" is no longer among them -- see
     # its own bullet above.
     "hmac", "uuid", "time", "json", "jsonable_encoder", "Depends", "BackgroundTasks",
-    "HTTPException", "Optional", "get_openapi", "urlparse",
+    "HTTPException", "Optional", "get_openapi", "urlparse", "_Body", "_Annotated",
     "BaseModel", "Response", "JSONResponse", "functools", "inspect", "anyio",
 })
 
@@ -1122,6 +1122,20 @@ def _needs_safe_annotation(annotation_source):
     return False
 
 
+def _request_param(func, model_name):
+    """The `req` parameter declaration. A function with no required parameter
+    (`def status(): ...`, `def run(n: int = 1)`) accepts a POST with no body
+    at all -- plain `curl -X POST /status` -- instead of answering 422
+    "Field required" for the body itself."""
+    if any(
+        not arg.get("has_default")
+        and arg.get("kind") not in ("var_positional", "var_keyword")
+        for arg in func.get("args", [])
+    ):
+        return f"req: {model_name}"
+    return f"req: _Annotated[{model_name}, _Body(default_factory={model_name})]"
+
+
 def _endpoint_python_name(func_name):
     """The Python identifier an endpoint handler is defined under in the
     generated app.py. Normally the notebook function's own name -- but a
@@ -1613,6 +1627,8 @@ def generate_fastapi_code(
         "from fastapi import FastAPI, BackgroundTasks, Header, HTTPException, "
         "Depends, Query, Response"
     )
+    lines.append("from fastapi import Body as _Body")
+    lines.append("from typing import Annotated as _Annotated")
     lines.append("from fastapi.middleware.cors import CORSMiddleware")
     lines.append("from fastapi.middleware.gzip import GZipMiddleware")
     lines.append("from fastapi.responses import JSONResponse")
@@ -5730,7 +5746,7 @@ def generate_fastapi_code(
                 f'responses={repr(task_responses)})'
             )
             lines.append(
-                f"def {_endpoint_python_name(func_name)}(req: {model_name}, background_tasks: "
+                f"def {_endpoint_python_name(func_name)}({_request_param(func, model_name)}, background_tasks: "
                 "BackgroundTasks, callback_url: Optional[str] = None, "
                 "idempotency_key: Optional[str] = "
                 'Header(None, alias="Idempotency-Key"), '
@@ -6114,7 +6130,7 @@ def generate_fastapi_code(
                 # rate limit already added it.
                 ("" if endpoint_rate_limit else "_rl_response: Response = None, ")
             )
-            lines.append(f"async def {_endpoint_python_name(func_name)}(req: {model_name}, {rate_limit_param}{cache_param}_: None = Depends(verify_api_key)):")
+            lines.append(f"async def {_endpoint_python_name(func_name)}({_request_param(func, model_name)}, {rate_limit_param}{cache_param}_: None = Depends(verify_api_key)):")
             lines.extend(rate_limit_lines)
             if endpoint_cache_ttl:
                 # Checked after auth and the rate limit, so a cache hit is
