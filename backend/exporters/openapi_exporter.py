@@ -220,6 +220,13 @@ def export_openapi_schema(output_path="generated/openapi.json", package_name="ge
         outside the current working directory -- ../build, /srv/apps/nb --
         imports instead of failing with "No module named '<package>'".
     """
+    if app_dir and not (Path(app_dir) / "app.py").is_file():
+        raise FileNotFoundError(
+            f"No compiled app found in '{app_dir}' (no app.py there). Compile "
+            f"a notebook into it first (`compile <notebook.ipynb> --output "
+            f"{app_dir}`) or point --app-dir at the directory you compiled into."
+        )
+
     parent_dir = str(Path(app_dir).resolve().parent) if app_dir else None
     path_added = parent_dir is not None and parent_dir not in sys.path
 

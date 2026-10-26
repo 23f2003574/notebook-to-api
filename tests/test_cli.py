@@ -2006,7 +2006,7 @@ def test_export_openapi_command_reports_a_clean_error_when_nothing_compiled(tmp_
 
     proc = _run_cli(["export-openapi", "--app-dir", "nope"], cwd=workdir)
 
-    _assert_clean_cli_error(proc, "No module named 'nope'")
+    _assert_clean_cli_error(proc, "No compiled app found in 'nope'")
 
 
 def test_export_sdk_command_reports_a_clean_error_for_a_missing_openapi_file(tmp_path):
@@ -32049,3 +32049,19 @@ def test_cli_names_the_missing_core_package_instead_of_a_traceback(package):
     assert package in proc.stderr
     assert "pip install -r requirements.txt" in proc.stderr
     assert "Traceback" not in proc.stderr
+
+
+def test_export_openapi_names_the_missing_compiled_app_instead_of_a_module_error(tmp_path):
+    """`export-openapi --app-dir <typo>` failed with "No module named 'typo'"
+    (or "'typo.app'" for an empty directory) -- nothing says the app was never
+    compiled there. It must name the directory and the compile command."""
+    (tmp_path / "empty").mkdir()
+
+    for name in ("typo", "empty"):
+        proc = _run_cli(["export-openapi", "--app-dir", name], cwd=tmp_path)
+
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert f"No compiled app found in '{name}'" in proc.stderr
+        assert f"compile <notebook.ipynb> --output {name}" in proc.stderr
+        assert "No module named" not in proc.stderr
+        assert "Traceback" not in proc.stderr
