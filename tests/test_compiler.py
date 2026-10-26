@@ -18124,3 +18124,72 @@ def test_dockerfile_installs_libgl_for_packages_that_pull_in_opencv(tmp_path, mo
     assert "libgl1" in dockerfile
     assert "libglib2.0-0" in dockerfile
     assert dockerfile.index("apt-get install") < dockerfile.index("pip install")
+
+
+def test_unserializable_return_value_error_names_the_offending_value(tmp_path):
+    """A returned value JSON cannot carry got a 500 whose detail was the
+    encoder's internal attempts -- `[TypeError("'builtin_function_or_method'
+    object is not iterable"), TypeError('vars() argument must have __dict__
+    attribute')]` -- never saying which value or type was at fault."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "import threading\n"
+            "def top():\n"
+            "    return len\n"
+            "\n"
+            "def nested():\n"
+            "    return {'ok': 1, 'items': [1, threading.Lock()]}\n"
+            "\n"
+            "def fine():\n"
+            "    return {'ok': [1, 2]}\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+top = client.post("/top", headers=headers)
+assert top.status_code == 500, top.text
+assert "result is a 'builtin_function_or_method' object" in top.json()["detail"], top.text
+assert "TypeError" not in top.json()["detail"], top.text
+
+nested = client.post("/nested", headers=headers)
+assert nested.status_code == 500, nested.text
+assert "result['items'][1] is a 'lock' object" in nested.json()["detail"], nested.text
+
+assert client.post("/fine", headers=headers).json() == {{"result": {{"ok": [1, 2]}}}}
+
+print("UNSERIALIZABLE_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "UNSERIALIZABLE_OK" in proc.stdout

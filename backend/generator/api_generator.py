@@ -2574,6 +2574,44 @@ def generate_fastapi_code(
     lines.append("    return text")
     lines.append("")
     lines.append("")
+    # jsonable_encoder's failure on an unserializable return value is a
+    # ValueError wrapping its internal attempts, e.g. "[TypeError(\"'builtin_
+    # function_or_method' object is not iterable\"), TypeError('vars() argument
+    # must have __dict__ attribute')]" -- which never says which returned
+    # value is the problem. Walk the result to name the first offending
+    # leaf and its type instead.
+    lines.append("def _find_unserializable(value, path, _depth=0):")
+    lines.append("    if _depth > 20:")
+    lines.append("        return None")
+    lines.append("    if isinstance(value, dict):")
+    lines.append("        items = [(f'{path}[{k!r}]', v) for k, v in value.items()]")
+    lines.append("    elif isinstance(value, (list, tuple, set, frozenset)):")
+    lines.append("        items = [(f'{path}[{i}]', v) for i, v in enumerate(value)]")
+    lines.append("    else:")
+    lines.append("        try:")
+    lines.append("            jsonable_encoder(_json_safe(value))")
+    lines.append("        except Exception:")
+    lines.append("            return path, type(value).__name__")
+    lines.append("        return None")
+    lines.append("    for item_path, item in items:")
+    lines.append("        found = _find_unserializable(item, item_path, _depth + 1)")
+    lines.append("        if found:")
+    lines.append("            return found")
+    lines.append("    return None")
+    lines.append("")
+    lines.append("")
+    lines.append("def _unserializable_reason(value, exc):")
+    lines.append("    if isinstance(exc, RecursionError):")
+    lines.append("        return 'it contains a circular reference or is nested too deeply'")
+    lines.append("    try:")
+    lines.append("        found = _find_unserializable(value, 'result')")
+    lines.append("    except Exception:")
+    lines.append("        found = None")
+    lines.append("    if found:")
+    lines.append("        return f'{found[0]} is a {found[1]!r} object, which cannot be converted to JSON'")
+    lines.append("    return _error_text(exc)")
+    lines.append("")
+    lines.append("")
     lines.append("def _log_notebook_error(func_name, exc):")
     lines.append("    import logging as _logging")
     lines.append("    _logging.getLogger('uvicorn.error').error(")
@@ -6282,8 +6320,7 @@ def generate_fastapi_code(
             lines.append(
                 f"            detail=f\"'{func_name}' returned a value that "
                 "is not JSON-serializable: "
-                "{'it contains a circular reference or is nested too deeply' "
-                "if isinstance(e, RecursionError) else e}\","
+                "{_unserializable_reason(result, e)}\","
             )
             lines.append("        )")
             if endpoint_cache_ttl:
