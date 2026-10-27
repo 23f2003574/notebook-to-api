@@ -14,6 +14,13 @@ jobs:
 
     runs-on: ubuntu-latest
 
+    # The generated Dockerfile uses the Python that compiled the notebook, so a
+    # 3.13 compile ships a 3.13 image; test both ends of what is supported.
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+
     steps:
 
       - name: Checkout repository
@@ -22,7 +29,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
         run: |
