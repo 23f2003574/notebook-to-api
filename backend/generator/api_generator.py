@@ -3147,6 +3147,24 @@ def generate_fastapi_code(
     lines.append("        return value")
     lines.append("    if isinstance(value, str):")
     lines.append("        return _utf8_safe(value)")
+    # datetime64 finer than microseconds (ns is numpy's default for a pandas
+    # `.values`) converts through tolist() into bare integer nanoseconds,
+    # while coarser units came back as ISO dates: a time column silently turned
+    # into 1577836800000000000. Convert to microseconds when that is exact, else
+    # spell the full-precision ISO string.
+    lines.append("    if getattr(getattr(value, 'dtype', None), 'kind', None) == 'M' and hasattr(value, 'tolist'):")
+    lines.append("        import numpy as _np")
+    lines.append("        if _np.datetime_data(value.dtype)[0] in ('ns', 'ps', 'fs', 'as'):")
+    lines.append("            _us = value.astype('datetime64[us]')")
+    lines.append("            if bool((_np.isnat(value) | (_us.astype(value.dtype) == value)).all()):")
+    lines.append("                value = _us")
+    lines.append("            else:")
+    lines.append("                def _iso(item):")
+    lines.append("                    if isinstance(item, list):")
+    lines.append("                        return [_iso(sub) for sub in item]")
+    lines.append("                    return None if item == 'NaT' else str(item)")
+    lines.append("                _text = _np.datetime_as_string(value)")
+    lines.append("                return _iso(_text.tolist() if hasattr(_text, 'tolist') else _text)")
     # A numpy structured array (or one of its records) converts through
     # tolist() into bare tuples, silently dropping every field name; keep them.
     lines.append("    _field_names = getattr(getattr(value, 'dtype', None), 'names', None)")

@@ -18811,3 +18811,74 @@ print("STRUCTURED_ARRAY_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "STRUCTURED_ARRAY_OK" in proc.stdout
+
+
+def test_numpy_datetime64_nanoseconds_serialize_as_iso_strings_not_integers(tmp_path):
+    """datetime64[ns] -- numpy's default unit, and what a pandas column's
+    `.values` returns -- converted through tolist() into bare integer
+    nanoseconds (1577836800000000000), while coarser units already came back as
+    ISO dates: a time column silently turned into huge integers."""
+
+    pytest.importorskip("numpy")
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "import numpy as np\n"
+            "def ns():\n"
+            "    return np.array(['2020-01-01T10:00:00', 'NaT'], dtype='datetime64[ns]')\n"
+            "def scalar():\n"
+            "    return np.datetime64('2020-01-01T10:00:00', 'ns')\n"
+            "def fine():\n"
+            "    return np.array(['2020-01-01T00:00:00.000000001'], dtype='datetime64[ns]')\n"
+            "def days():\n"
+            "    return np.array(['2020-01-01'], dtype='datetime64[D]')\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def result(path):
+    response = client.post(path, headers=headers)
+    assert response.status_code == 200, response.text
+    return response.json()["result"]
+
+assert result("/ns") == ["2020-01-01T10:00:00", None]
+assert result("/scalar") == "2020-01-01T10:00:00"
+# sub-microsecond precision is kept, not truncated
+assert result("/fine") == ["2020-01-01T00:00:00.000000001"]
+assert result("/days") == ["2020-01-01"]
+
+print("DATETIME64_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "DATETIME64_OK" in proc.stdout
