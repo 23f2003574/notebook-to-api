@@ -18662,3 +18662,82 @@ print("SINGLE_FLIGHT_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "SINGLE_FLIGHT_OK" in proc.stdout
+
+
+def test_openapi_request_examples_for_required_model_parameters_are_valid_requests(tmp_path):
+    """A required parameter typed as a model, dataclass, TypedDict or
+    NamedTuple has no literal default, so its request example held `null` --
+    invalid, so the body Swagger pre-fills for "Try it out" answered 422. The
+    example is now built from the parameter's own JSON schema, and every
+    published example must actually succeed when posted."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "import dataclasses\n"
+            "from typing import TypedDict, NamedTuple, Optional\n"
+            "from pydantic import BaseModel\n"
+            "class M(BaseModel):\n"
+            "    a: int = 1\n"
+            "class TD(TypedDict):\n"
+            "    k: int\n"
+            "class NT(NamedTuple):\n"
+            "    a: int\n"
+            "    b: str = 'x'\n"
+            "@dataclasses.dataclass\n"
+            "class DC:\n"
+            "    x: int\n"
+            "def model(m: M): return m.a\n"
+            "def typed(t: TD): return t['k']\n"
+            "def named(n: NT): return n.b\n"
+            "def data(d: DC): return d.x\n"
+            "def plain(a: int = 1, o: Optional[int] = None): return a\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+spec = client.get("/openapi.json").json()
+schemas = spec["components"]["schemas"]
+checked = []
+for path in ("/model", "/typed", "/named", "/data", "/plain"):
+    ref = spec["paths"][path]["post"]["requestBody"]["content"]["application/json"]["schema"]["$ref"]
+    example = schemas[ref.split("/")[-1]]["example"]
+    response = client.post(path, json=example, headers=headers)
+    assert response.status_code == 200, (path, example, response.text)
+    checked.append(path)
+assert len(checked) == 5
+
+print("OPENAPI_EXAMPLES_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "OPENAPI_EXAMPLES_OK" in proc.stdout
