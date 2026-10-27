@@ -241,6 +241,25 @@ def export_openapi_schema(output_path="generated/openapi.json", package_name="ge
         if not hint:
             raise
         raise ModuleNotFoundError(f"{exc}{hint}", name=exc.name) from exc
+    except KeyError as exc:
+        # Importing the app runs the notebook's top-level code, so a required
+        # `os.environ["X"]` that is not set here ends as a bare traceback
+        # ending "KeyError: 'X'", saying nothing about what to do.
+        from backend.compiler import read_notebook_env_vars
+
+        name = exc.args[0] if exc.args else None
+        required = [
+            entry["name"] for entry in read_notebook_env_vars(app_dir or package_name)
+            if entry["required"]
+        ]
+        if name not in required:
+            raise
+        raise RuntimeError(
+            f"Importing the compiled app failed: the notebook requires the "
+            f"environment variable {name}, which is not set. Set it (for "
+            f"example `export {name}=...`) and run the export again. Required "
+            f"variables: {', '.join(required)}."
+        ) from exc
     finally:
         if path_added:
             sys.path.remove(parent_dir)

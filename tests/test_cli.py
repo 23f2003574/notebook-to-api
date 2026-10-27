@@ -32119,3 +32119,35 @@ def test_compile_warns_about_unpinned_dependencies_that_may_be_missing_local_mod
     _write_notebook_with_function(clean_nb, "def add(a: int, b: int) -> int:\n    return a + b\n")
     clean_proc = _run_cli(["compile", str(clean_nb), "--output", "built"], cwd=clean)
     assert "Not installed here" not in clean_proc.stdout
+
+
+def test_export_openapi_names_the_missing_required_environment_variable(tmp_path):
+    """Exporting imports the compiled app, which runs the notebook's top-level
+    code, so a required os.environ["TOKEN"] that was not set ended in a raw
+    traceback ending "KeyError: 'TOKEN'" with no hint about what to do."""
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "import os\nTOKEN = os.environ['NB_TEST_REQUIRED_TOKEN']\n\n"
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    compiled = _run_cli(["compile", str(notebook_path), "--output", "built"], cwd=workdir)
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+
+    failed = _run_cli(["export-openapi", "--app-dir", "built"], cwd=workdir)
+    assert failed.returncode == 1, failed.stdout + failed.stderr
+    assert "NB_TEST_REQUIRED_TOKEN" in failed.stderr + failed.stdout
+    assert "which is not set" in failed.stderr + failed.stdout
+    assert "Traceback" not in failed.stderr
+
+    env = dict(os.environ, PYTHONPATH=str(PROJECT_ROOT), NB_TEST_REQUIRED_TOKEN="x")
+    ok = subprocess.run(
+        [sys.executable, "-m", "backend.cli", "export-openapi", "--app-dir", "built"],
+        cwd=str(workdir), env=env, capture_output=True, text=True, timeout=60,
+    )
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    assert (workdir / "built" / "openapi.json").is_file()
