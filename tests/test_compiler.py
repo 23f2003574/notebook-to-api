@@ -18741,3 +18741,73 @@ print("OPENAPI_EXAMPLES_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "OPENAPI_EXAMPLES_OK" in proc.stdout
+
+
+def test_numpy_structured_array_keeps_its_field_names_in_the_response(tmp_path):
+    """A structured array converted through tolist() into bare tuples, so
+    [(1, 2.5)] with fields a and b came back as [[1, 2.5]] -- every field name
+    silently dropped. Rows (and a single record) now come back as objects."""
+
+    pytest.importorskip("numpy")
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "import numpy as np\n"
+            "DT = [('a', 'i4'), ('b', 'f8'), ('s', 'U3')]\n"
+            "def table():\n"
+            "    return np.array([(1, 2.5, 'x'), (2, float('nan'), 'y')], dtype=DT)\n"
+            "def record():\n"
+            "    return np.array([(1, 2.5, 'x')], dtype=DT)[0]\n"
+            "def wrapped():\n"
+            "    return {'rows': np.zeros(2, dtype=[('p', 'i4')]), 'n': 3}\n"
+            "def plain():\n"
+            "    return np.arange(3)\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def result(path):
+    response = client.post(path, headers=headers)
+    assert response.status_code == 200, response.text
+    return response.json()["result"]
+
+assert result("/table") == [{{"a": 1, "b": 2.5, "s": "x"}}, {{"a": 2, "b": None, "s": "y"}}]
+assert result("/record") == {{"a": 1, "b": 2.5, "s": "x"}}
+assert result("/wrapped") == {{"rows": [{{"p": 0}}, {{"p": 0}}], "n": 3}}
+assert result("/plain") == [0, 1, 2]
+
+print("STRUCTURED_ARRAY_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "STRUCTURED_ARRAY_OK" in proc.stdout

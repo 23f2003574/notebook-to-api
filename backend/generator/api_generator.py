@@ -3147,6 +3147,17 @@ def generate_fastapi_code(
     lines.append("        return value")
     lines.append("    if isinstance(value, str):")
     lines.append("        return _utf8_safe(value)")
+    # A numpy structured array (or one of its records) converts through
+    # tolist() into bare tuples, silently dropping every field name; keep them.
+    lines.append("    _field_names = getattr(getattr(value, 'dtype', None), 'names', None)")
+    lines.append("    if _field_names and hasattr(value, 'tolist'):")
+    lines.append("        def _named(item):")
+    lines.append("            if isinstance(item, tuple):")
+    lines.append("                return dict(zip(_field_names, item))")
+    lines.append("            if isinstance(item, list):")
+    lines.append("                return [_named(sub) for sub in item]")
+    lines.append("            return item")
+    lines.append("        return _json_safe(_named(value.tolist()), _depth + 1)")
     # pandas' missing-value singletons (pd.NA, pd.NaT): jsonable_encoder
     # turned pd.NA into a junk {"__module__": "pandas"} object and pd.NaT
     # into the string "NaT". Matched by type name, so no pandas import.
