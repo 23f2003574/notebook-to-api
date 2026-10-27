@@ -18575,3 +18575,90 @@ print("EARLY_DISPLAY_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "EARLY_DISPLAY_OK" in proc.stdout
+
+
+def test_concurrent_identical_cached_requests_run_the_notebook_function_once(tmp_path):
+    """Every request that arrived while the first was still running missed the
+    response cache and ran the (slow, cache-worthy) notebook function again:
+    20 identical concurrent requests meant 20 executions. They now share one
+    in-flight call per cache key, while different keys still run in parallel
+    and a failed call does not wedge the key."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "import time\n"
+            "CALLS = 0\n"
+            "# notebook-to-api: cache 60\n"
+            "def slow(k: int = 0):\n"
+            "    global CALLS\n"
+            "    time.sleep(0.3)\n"
+            "    CALLS += 1\n"
+            "    return {'k': k}\n"
+            "# notebook-to-api: cache 60\n"
+            "FLAKY = 0\n"
+            "def flaky(k: int = 0):\n"
+            "    global FLAKY\n"
+            "    FLAKY += 1\n"
+            "    if FLAKY % 2 == 1:\n"
+            "        raise ValueError('first call fails')\n"
+            "    return {'k': k}\n"
+            "def calls():\n"
+            "    return CALLS\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import asyncio, sys, time
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+import httpx
+from generated.app import app
+
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+async def main():
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t", headers=headers) as client:
+        same = await asyncio.gather(*[client.post("/slow", json={{"k": 1}}) for _ in range(10)])
+        assert all(r.status_code == 200 and r.json() == {{"result": {{"k": 1}}}} for r in same), [r.text for r in same]
+        assert sorted(r.headers["x-cache"] for r in same) == ["HIT"] * 9 + ["MISS"]
+        assert (await client.post("/calls")).json() == {{"result": 1}}
+
+        start = time.monotonic()
+        other = await asyncio.gather(client.post("/slow", json={{"k": 2}}), client.post("/slow", json={{"k": 3}}))
+        assert all(r.status_code == 200 for r in other)
+        assert time.monotonic() - start < 0.55, "different keys must not serialize"
+
+        # A failing leader answers its own error and leaves the key usable.
+        first = await client.post("/flaky", json={{"k": 1}})
+        assert first.status_code == 500, first.text
+        second = await client.post("/flaky", json={{"k": 1}})
+        assert second.status_code == 200 and second.json() == {{"result": {{"k": 1}}}}, second.text
+
+asyncio.run(main())
+print("SINGLE_FLIGHT_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "SINGLE_FLIGHT_OK" in proc.stdout

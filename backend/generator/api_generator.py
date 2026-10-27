@@ -3329,6 +3329,27 @@ def generate_fastapi_code(
     lines.append("            _RESPONSE_CACHE.pop(next(iter(_RESPONSE_CACHE)))")
     lines.append("        _RESPONSE_CACHE[key] = (time.time() + ttl, result)")
     lines.append("")
+    # One in-flight call per cache key: N identical requests arriving while
+    # the first is still running used to all miss and all run the (slow,
+    # cache-worthy) notebook function. Followers wait on the leader's lock and
+    # then find its result in the cache. Event-loop only, so no thread lock.
+    lines.append("_CACHE_FLIGHTS = {}")
+    lines.append("")
+    lines.append("class _CacheFlight:")
+    lines.append("    def __init__(self, key):")
+    lines.append("        self.key = key")
+    lines.append("")
+    lines.append("    async def __aenter__(self):")
+    lines.append("        self.entry = _CACHE_FLIGHTS.setdefault(self.key, [anyio.Lock(), 0])")
+    lines.append("        self.entry[1] += 1")
+    lines.append("        await self.entry[0].acquire()")
+    lines.append("")
+    lines.append("    async def __aexit__(self, *exc_info):")
+    lines.append("        self.entry[0].release()")
+    lines.append("        self.entry[1] -= 1")
+    lines.append("        if self.entry[1] == 0:")
+    lines.append("            _CACHE_FLIGHTS.pop(self.key, None)")
+    lines.append("")
     lines.append("def verify_api_key(response: Response, x_api_key: str = Header(None)):")
     lines.append("    # hmac.compare_digest instead of != : a plain string")
     lines.append("    # comparison short-circuits on the first differing byte, which")
@@ -6247,6 +6268,10 @@ def generate_fastapi_code(
                     f"str(max(0, int({int(endpoint_cache_ttl)} - (_cached[0] - time.time()))))}},"
                 )
                 lines.append("        ), _rl_response)")
+                # Everything from here on (the call, its error handling and
+                # the cache store) runs under the key's single-flight lock;
+                # it is indented after the fact below.
+                cache_flight_start = len(lines)
             # _run_background_task already wraps a background function's own
             # call the same way (reporting the task "failed" with str(e)
             # instead of leaving it stuck "processing" forever), but a
@@ -6371,6 +6396,27 @@ def generate_fastapi_code(
                 )
             else:
                 lines.append("    return {\"result\": result}")
+            if endpoint_cache_ttl:
+                body = lines[cache_flight_start:]
+                del lines[cache_flight_start:]
+                lines.append("    async with _CacheFlight(_cache_key):")
+                lines.append(
+                    "        _cached = None if 'no-cache' in (_cache_control or '').lower() "
+                    "else _cache_lookup(_cache_key)"
+                )
+                lines.append("        if _cached is not None:")
+                lines.append(
+                    f"            _RESPONSE_CACHE_HITS['/{func_name}'] = "
+                    f"_RESPONSE_CACHE_HITS.get('/{func_name}', 0) + 1"
+                )
+                lines.append("            return _with_quota_headers(JSONResponse(")
+                lines.append("                content={'result': _cached[1]},")
+                lines.append(
+                    "                headers={'X-Cache': 'HIT', 'Age': "
+                    f"str(max(0, int({int(endpoint_cache_ttl)} - (_cached[0] - time.time()))))}},"
+                )
+                lines.append("            ), _rl_response)")
+                lines.extend(("    " + line) if line.strip() else line for line in body)
         lines.append("")
     # `retired_endpoints` (optional) is {function_name: deprecation reason}
     # for deprecated functions this compile left out *because* their own
