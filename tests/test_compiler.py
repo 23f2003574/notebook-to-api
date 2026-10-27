@@ -18882,3 +18882,78 @@ print("DATETIME64_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "DATETIME64_OK" in proc.stdout
+
+
+def test_missing_required_environment_variable_fails_startup_with_an_actionable_message(tmp_path):
+    """A required os.environ["X"] that is not set raised a bare KeyError from
+    the notebook's own code, so the app died at startup with "KeyError: 'X'"
+    and nothing saying it was a missing setting. Only a KeyError that really
+    came from os.environ is rewritten; an ordinary dict KeyError is untouched."""
+
+    def write(name, source):
+        notebook = nbformat.v4.new_notebook()
+        notebook.cells.append(nbformat.v4.new_code_cell(source))
+        path = tmp_path / f"{name}.ipynb"
+        with open(path, "w", encoding="utf-8") as f:
+            nbformat.write(notebook, f)
+        return path
+
+    env_nb = write(
+        "env_nb",
+        "import os\nTOKEN = os.environ['NB_STARTUP_TEST_TOKEN']\n\ndef f():\n    return TOKEN\n",
+    )
+    dict_nb = write(
+        "dict_nb",
+        "CONFIG = {}\nVALUE = CONFIG['NB_STARTUP_TEST_TOKEN']\n\ndef f():\n    return 1\n",
+    )
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import os, sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(env_nb)!r}, "env_app")
+compile_notebook({str(dict_nb)!r}, "dict_app")
+
+os.environ.pop("NB_STARTUP_TEST_TOKEN", None)
+
+try:
+    import env_app.app
+except RuntimeError as exc:
+    message = str(exc)
+    assert "NB_STARTUP_TEST_TOKEN" in message and "which is not set" in message, message
+    assert exc.__cause__ is None
+else:
+    raise AssertionError("expected the import to fail")
+
+try:
+    import dict_app.app
+except KeyError:
+    pass
+else:
+    raise AssertionError("an ordinary dict KeyError must propagate unchanged")
+
+for name in [m for m in sys.modules if m.startswith("env_app")]:
+    del sys.modules[name]
+os.environ["NB_STARTUP_TEST_TOKEN"] = "secret-value"
+import env_app.app
+
+print("STARTUP_ENV_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "STARTUP_ENV_OK" in proc.stdout

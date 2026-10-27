@@ -1692,6 +1692,25 @@ def generate_fastapi_code(
     lines.append("_nb_atexit.register = _nb_recording_register")
     lines.append("try:")
     lines.append(f"    import {package_name}.runtime.notebook_module as notebook_module")
+    # A required `os.environ["X"]` that is not set raised a bare KeyError from
+    # inside the notebook's own code, so the app died at startup with
+    # "KeyError: 'X'" and nothing saying it is a missing setting. Only a
+    # KeyError that really came from os.environ's lookup is rewritten.
+    lines.append("except KeyError as _nb_exc:")
+    lines.append("    _nb_key = _nb_exc.args[0] if _nb_exc.args else None")
+    lines.append("    _nb_from_environ = False")
+    lines.append("    _nb_tb = _nb_exc.__traceback__")
+    lines.append("    while _nb_tb is not None:")
+    lines.append("        _nb_code = _nb_tb.tb_frame.f_code")
+    lines.append("        if _nb_code.co_name == '__getitem__' and _nb_code.co_filename in ('<frozen os>', getattr(os, '__file__', None)):")
+    lines.append("            _nb_from_environ = True")
+    lines.append("        _nb_tb = _nb_tb.tb_next")
+    lines.append("    if _nb_from_environ and isinstance(_nb_key, str) and _nb_key not in os.environ:")
+    lines.append("        raise RuntimeError(")
+    lines.append("            f'The notebook requires the environment variable {_nb_key}, which is not set. '")
+    lines.append("            'Set it before starting the app (see .env.example).'")
+    lines.append("        ) from None")
+    lines.append("    raise")
     lines.append("finally:")
     lines.append("    _nb_atexit.register = _nb_real_atexit_register")
     lines.append("")
