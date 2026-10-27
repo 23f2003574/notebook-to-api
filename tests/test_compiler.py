@@ -18413,3 +18413,68 @@ print("NUMERIC_DEFAULT_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "NUMERIC_DEFAULT_OK" in proc.stdout
+
+
+def test_exception_raised_inside_a_returned_generator_is_reported_as_the_functions_failure(tmp_path):
+    """A generator's body runs only when it is consumed, which happened inside
+    the JSON-encoding step: an exception from the notebook's own code
+    mid-iteration was answered "returned a value that is not JSON-serializable:
+    mid-stream", hiding that the function itself had failed."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def failing():\n"
+            "    yield 1\n"
+            "    raise RuntimeError('mid-stream')\n"
+            "\n"
+            "def healthy():\n"
+            "    yield 1\n"
+            "    yield 2\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+failed = client.post("/failing", headers=headers)
+assert failed.status_code == 500, failed.text
+assert failed.json()["detail"] == "'failing' raised RuntimeError: mid-stream", failed.text
+
+assert client.post("/healthy", headers=headers).json() == {{"result": [1, 2]}}
+# a failed call leaves nothing behind that breaks the next one
+assert client.post("/failing", headers=headers).status_code == 500
+assert client.post("/healthy", headers=headers).json() == {{"result": [1, 2]}}
+
+print("GENERATOR_FAILURE_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "GENERATOR_FAILURE_OK" in proc.stdout

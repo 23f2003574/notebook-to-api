@@ -6330,6 +6330,24 @@ def generate_fastapi_code(
             # streaming body) instead of the content the notebook meant.
             lines.append("    if isinstance(result, Response):")
             lines.append("        return _with_quota_headers(result, _rl_response)")
+            # A generator's body only runs when it is consumed, which used to
+            # happen inside the encoding step below: an exception the
+            # notebook's own code raised mid-iteration was reported as "returned
+            # a value that is not JSON-serializable: <message>", hiding that
+            # the function failed. Consume it here so it fails like any other
+            # notebook exception.
+            lines.append("    if inspect.isgenerator(result):")
+            lines.append("        try:")
+            lines.append("            result = list(result)")
+            lines.append("        except Exception as e:")
+            lines.append(f"            _log_notebook_error('{func_name}', e)")
+            lines.append("            raise HTTPException(")
+            lines.append("                status_code=500,")
+            lines.append(
+                f"                detail=f\"'{func_name}' raised "
+                "{type(e).__name__}: {_error_text(e)}\","
+            )
+            lines.append("            )")
             lines.append("    try:")
             lines.append("        result = _json_safe(jsonable_encoder(_json_safe(result)))")
             lines.append("    except Exception as e:")
