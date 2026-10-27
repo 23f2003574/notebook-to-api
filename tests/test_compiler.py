@@ -10150,8 +10150,10 @@ def test_arg_annotation_source_infers_unannotated_types_from_the_default():
     # An explicit annotation always wins.
     assert _arg_annotation_source(arg(type="List[int]", has_default=True, default=5))[0] == "List[int]"
     # Otherwise the default's literal type decides...
-    for default, expected in ((True, "bool"), (3, "int"), (1.5, "float"), ("s", "str"), ([1], "list"), ({"a": 1}, "dict")):
+    for default, expected in ((True, "bool"), (1.5, "float"), ("s", "str"), ([1], "list"), ({"a": 1}, "dict")):
         assert _arg_annotation_source(arg(has_default=True, default=default)) == (expected, set())
+    # ... except a whole-number default, which also takes fractions (`rate=0`).
+    assert _arg_annotation_source(arg(has_default=True, default=3)) == ("Union[int, float]", {"Union"})
     # ... and with nothing to go on, any JSON value is accepted.
     assert _arg_annotation_source(arg()) == ("Any", {"Any"})
     assert _arg_annotation_source(arg(has_default=True, default=None)) == ("Any", {"Any"})
@@ -10216,7 +10218,8 @@ assert post("/scale", {{"x": 1, "factor": "three"}}).status_code == 422
 assert post("/typed", {{"x": "ab"}}).json() == {{"result": "ababab"}}
 
 properties = client.get("/openapi.json").json()["components"]["schemas"]["ScaleRequest"]["properties"]
-assert properties["factor"]["type"] == "integer" and properties["factor"]["default"] == 2, properties
+assert [m["type"] for m in properties["factor"]["anyOf"]] == ["integer", "number"], properties
+assert properties["factor"]["default"] == 2, properties
 assert properties["verbose"]["type"] == "boolean", properties
 print("UNANNOTATED_PARAMS_E2E_OK")
 """
@@ -18349,3 +18352,64 @@ print("DUP_COLUMNS_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "DUP_COLUMNS_OK" in proc.stdout
+
+
+def test_unannotated_parameter_with_whole_number_default_accepts_fractions(tmp_path):
+    """`def rate(r=0)` was typed as a strict `int` from its default, so the
+    perfectly valid call rate(0.25) answered 422 "got a number with a
+    fractional part". A whole-number default now accepts int or float, and an
+    int still reaches the function as an int."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def rate(r=0):\n"
+            "    return [r, type(r).__name__]\n"
+            "\n"
+            "def name(n='x'):\n"
+            "    return n\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+assert client.post("/rate", json={{"r": 0.25}}, headers=headers).json() == {{"result": [0.25, "float"]}}
+assert client.post("/rate", json={{"r": 3}}, headers=headers).json() == {{"result": [3, "int"]}}
+assert client.post("/rate", headers=headers).json() == {{"result": [0, "int"]}}
+assert client.post("/rate", json={{"r": "abc"}}, headers=headers).status_code == 422
+assert client.post("/name", json={{"n": 5}}, headers=headers).status_code == 422
+assert client.get("/openapi.json").status_code == 200
+
+print("NUMERIC_DEFAULT_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "NUMERIC_DEFAULT_OK" in proc.stdout

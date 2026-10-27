@@ -1438,6 +1438,12 @@ def _arg_annotation_source(arg):
         return _resolve_annotation_source(arg["type"])
     if arg.get("has_default") and arg.get("default_is_literal", True):
         default = arg.get("default")
+        # `def f(rate=0)` / `def f(width=1)`: a whole-number default is how
+        # notebooks write a value that is just as often fractional, and a bare
+        # `int` field rejected 0.25 with a 422 although the function takes it.
+        # An int stays an int (`range(n)` still works); a fraction becomes a float.
+        if isinstance(default, int) and not isinstance(default, bool):
+            return "Union[int, float]", {"Union"}
         for python_type, name in (
             (bool, "bool"), (int, "int"), (float, "float"),
             (str, "str"), (list, "list"), (dict, "dict"),
