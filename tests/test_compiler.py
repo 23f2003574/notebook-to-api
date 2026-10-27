@@ -18517,3 +18517,61 @@ def test_readme_lists_the_environment_variables_the_notebook_reads(tmp_path):
     assert "Environment variables the notebook reads" not in (
         tmp_path / "plain_out" / "README.md"
     ).read_text(encoding="utf-8")
+
+
+def test_display_used_before_a_later_definition_of_it_still_gets_the_jupyter_stub(tmp_path):
+    """Jupyter injects `display` as a builtin, so an early `display(x)` ran
+    even though a later cell imports or defines `display` itself. The stub was
+    skipped whenever the name was bound *anywhere* in the notebook, so the
+    early call raised NameError the moment the compiled app imported its
+    runtime module and every endpoint was down."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell("def early():\n    return 'early'\n\ndisplay(early)\n")
+    )
+    notebook.cells.append(
+        nbformat.v4.new_code_cell("def display(obj):\n    return 'mine'\n")
+    )
+    notebook.cells.append(
+        nbformat.v4.new_code_cell("def late():\n    return display(1)\n")
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+assert client.post("/early", headers=headers).json() == {{"result": "early"}}
+assert client.post("/late", headers=headers).json() == {{"result": "mine"}}
+
+print("EARLY_DISPLAY_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "EARLY_DISPLAY_OK" in proc.stdout

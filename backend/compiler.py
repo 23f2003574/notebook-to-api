@@ -447,22 +447,32 @@ def _jupyter_builtin_prelude(combined_code):
     except SyntaxError:
         return ""
 
-    bound = set()
-    used = set()
+    # First line each name is bound / used. A binding only counts if it comes
+    # before the first use: `display(df)` in an early cell followed by a later
+    # `from IPython.display import display` worked in Jupyter (the builtin
+    # covered the early call) but raised NameError once compiled.
+    bound = {}
+    used = {}
+
+    def note(table, name, node):
+        line = getattr(node, "lineno", 0)
+        if name not in table or line < table[name]:
+            table[name] = line
+
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            bound.add(node.name)
+            note(bound, node.name, node)
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             for alias in node.names:
-                bound.add((alias.asname or alias.name).split(".")[0])
+                note(bound, (alias.asname or alias.name).split(".")[0], node)
         elif isinstance(node, ast.Name):
-            (used if isinstance(node.ctx, ast.Load) else bound).add(node.id)
+            note(used if isinstance(node.ctx, ast.Load) else bound, node.id, node)
         elif isinstance(node, ast.arg):
-            bound.add(node.arg)
+            note(bound, node.arg, node)
 
     stubs = [
         stub for name, stub in JUPYTER_BUILTIN_STUBS.items()
-        if name in used and name not in bound
+        if name in used and (name not in bound or used[name] < bound[name])
     ]
     if not stubs:
         return ""
