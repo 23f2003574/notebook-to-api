@@ -5548,6 +5548,7 @@ def compile_notebook_to_api(
                 rate_limit_overrides=_extract_rate_limit_overrides(code_cells),
                 cache_overrides=_extract_cache_overrides(code_cells),
                 tag_overrides=_extract_tag_overrides(code_cells),
+                notebook_env_vars=notebook_env_vars,
             )
 
             write_compile_metadata(

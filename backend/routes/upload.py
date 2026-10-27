@@ -39,6 +39,7 @@ from backend.compiler import (
     _extract_rate_limit_overrides,
     _extract_timeout_overrides,
     _extract_cache_overrides,
+    _find_notebook_env_vars,
     _extract_tag_overrides,
     COMPILE_LOCK,
     COMPILE_METADATA_FILENAME,
@@ -15277,6 +15278,7 @@ def readme_preview_endpoint(data: dict):
             rate_limit_overrides=_extract_rate_limit_overrides(code_cells),
             cache_overrides=_extract_cache_overrides(code_cells),
             tag_overrides=_extract_tag_overrides(code_cells),
+            notebook_env_vars=_find_notebook_env_vars(code_cells, full_path),
         )
 
     except ReservedFunctionNameError as e:

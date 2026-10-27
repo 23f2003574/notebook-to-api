@@ -632,7 +632,7 @@ def readme_content(
     package_name="generated", functions=None, env_vars=None,
     background_overrides=None, deprecated_overrides=None,
     timeout_overrides=None, rate_limit_overrides=None, cache_overrides=None,
-    tag_overrides=None,
+    tag_overrides=None, notebook_env_vars=None,
 ):
     """The exact README.md text generate_readme (below) writes to disk,
     as a pure string -- no filesystem access at all. See
@@ -881,6 +881,23 @@ brownout to find remaining callers before removing them for real.
             else "_This notebook doesn't expose any functions yet._"
         )
 
+    # Variables the notebook's own code reads (see _find_notebook_env_vars):
+    # a required one has no fallback, so the app fails on startup with a bare
+    # KeyError until it is set -- which nothing in this README said.
+    notebook_env_section = ""
+    if notebook_env_vars:
+        entries = "\n".join(
+            f"- `{entry['name']}`" + (" (**required**)" if entry["required"] else " (optional)")
+            for entry in notebook_env_vars
+        )
+        notebook_env_section = (
+            "## Environment variables the notebook reads\n\n"
+            "Set these where the app runs (in `.env`, your shell, or the "
+            "Kubernetes Secret). A required one has no fallback in the "
+            "notebook: the app fails on startup until it is set.\n\n"
+            f"{entries}\n\n"
+        )
+
     env_var_lines = "\n".join(
         f"- `{entry['name']}` (default: `{entry['default']}`) -- "
         f"{entry['description']}"
@@ -953,7 +970,7 @@ in `NOTEBOOK_API_KEY` (comma-separated to support zero-downtime \
 rotation). Defaults to `notebook-to-api-dev-key` for local development \
 -- set a real value before deploying anywhere reachable.
 
-## Configuration
+{notebook_env_section}## Configuration
 
 Every setting below is a real default this app already falls back to; \
 see `.env.example` for a ready-to-copy file.
@@ -967,6 +984,7 @@ def generate_readme(
     functions=None, env_vars=None, background_overrides=None,
     deprecated_overrides=None, timeout_overrides=None,
     rate_limit_overrides=None, cache_overrides=None, tag_overrides=None,
+    notebook_env_vars=None,
 ):
     """Write a README.md for the compiled app at `output_path`, alongside
     the Dockerfile/.dockerignore/docker-compose.yml/.env.example
@@ -981,6 +999,7 @@ def generate_readme(
                 package_name, functions, env_vars, background_overrides,
                 deprecated_overrides, timeout_overrides,
                 rate_limit_overrides, cache_overrides, tag_overrides,
+                notebook_env_vars,
             )
         )
 

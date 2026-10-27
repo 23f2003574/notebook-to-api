@@ -18478,3 +18478,42 @@ print("GENERATOR_FAILURE_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "GENERATOR_FAILURE_OK" in proc.stdout
+
+
+def test_readme_lists_the_environment_variables_the_notebook_reads(tmp_path):
+    """compose, .env.example and kubernetes.yaml all named the variables the
+    notebook reads, but the README did not -- so a required one (`os.environ[
+    "X"]`, no fallback) failed on startup with a bare KeyError and nothing in
+    the README said it had to be set."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "import os\n"
+            "TOKEN = os.environ['MY_API_TOKEN']\n"
+            "URL = os.getenv('DB_URL', 'sqlite://')\n"
+            "def f():\n"
+            "    return 1\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "generated"
+    compile_notebook(str(notebook_path), str(output_dir))
+    readme = (output_dir / "README.md").read_text(encoding="utf-8")
+
+    assert "## Environment variables the notebook reads" in readme
+    assert "- `MY_API_TOKEN` (**required**)" in readme
+    assert "- `DB_URL` (optional)" in readme
+
+    plain = tmp_path / "plain.ipynb"
+    plain_nb = nbformat.v4.new_notebook()
+    plain_nb.cells.append(nbformat.v4.new_code_cell("def f():\n    return 1\n"))
+    with open(plain, "w", encoding="utf-8") as f:
+        nbformat.write(plain_nb, f)
+    compile_notebook(str(plain), str(tmp_path / "plain_out"))
+    assert "Environment variables the notebook reads" not in (
+        tmp_path / "plain_out" / "README.md"
+    ).read_text(encoding="utf-8")
