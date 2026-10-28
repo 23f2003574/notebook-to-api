@@ -2628,6 +2628,22 @@ def test_serve_command_rejects_a_negative_debounce(tmp_path):
     _assert_clean_cli_error(proc, "--debounce must be zero or positive")
 
 
+@pytest.mark.parametrize("command", ["serve", "watch"])
+def test_debounce_rejects_nan(tmp_path, command):
+    # nan < 0 is False, so NaN slipped past the negative-value check.
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    proc = _run_cli([command, str(notebook_path), "--debounce", "nan"], cwd=workdir)
+
+    _assert_clean_cli_error(proc, "--debounce must be zero or positive")
+
+
 def test_watch_command_accepts_debounce_flag(tmp_path):
 
     workdir = tmp_path / "workdir"

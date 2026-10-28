@@ -2823,7 +2823,7 @@ def _dispatch_core_command(args):
                 f"({len(_postman_requests(collection['item']))} request(s))"
             )
     elif args.command == "serve":
-        if args.debounce_seconds < 0:
+        if not args.debounce_seconds >= 0:
             raise ValueError("--debounce must be zero or positive")
         only = _parse_only_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
@@ -2835,7 +2835,7 @@ def _dispatch_core_command(args):
             tags=_parse_comma_separated_names(args.tag),
         )
     elif args.command == "watch":
-        if args.debounce_seconds < 0:
+        if not args.debounce_seconds >= 0:
             raise ValueError("--debounce must be zero or positive")
         only = _parse_only_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
