@@ -5243,6 +5243,26 @@ def _refuse_to_overwrite_foreign_files(output_dir):
         )
 
 
+def _warn_if_generated_files_were_edited(output_dir, app_filename="app.py"):
+    """Print a stderr warning when the files an earlier compile wrote into
+    `output_dir` no longer match the checksum it recorded, since this compile
+    is about to overwrite them -- a hand edit to app.py or the Dockerfile was
+    otherwise replaced without a word. Never raises: it must not fail a
+    compile."""
+    try:
+        with open(os.path.join(output_dir, COMPILE_METADATA_FILENAME), encoding="utf-8") as f:
+            recorded = json.load(f).get("generated_files_sha256")
+        if recorded and recorded != _generated_files_sha256(output_dir, app_filename):
+            print(
+                f"Warning: files in {output_dir!r} were modified since the last "
+                "compile and are being overwritten; keep hand edits outside "
+                "the generated files (or in your own copy).",
+                file=sys.stderr,
+            )
+    except Exception:
+        pass
+
+
 def compile_notebook_to_api(
     notebook_path,
     output_path,
@@ -5288,6 +5308,7 @@ def compile_notebook_to_api(
         package_name = package_name_for_output_dir(output_dir)
 
         _refuse_to_overwrite_foreign_files(output_dir)
+        _warn_if_generated_files_were_edited(output_dir, os.path.basename(output_path))
 
         notebook = load_notebook(notebook_path)
 

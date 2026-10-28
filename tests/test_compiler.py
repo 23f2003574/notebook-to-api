@@ -17069,6 +17069,28 @@ def test_docker_image_file_tree_still_starts_and_serves_a_shipped_helper_module(
     assert proc.returncode == 0, proc.stderr
 
 
+def test_recompile_warns_when_generated_files_were_hand_edited(tmp_path, capsys):
+    """A hand edit to app.py was replaced by the next compile with no
+    notice; the checksum the last compile recorded now flags it on stderr."""
+    from backend.compiler import compile_notebook
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook_importing(notebook_path, "def f(n: int) -> int:\n    return n\n")
+    out = tmp_path / "out"
+
+    compile_notebook(str(notebook_path), str(out))
+    capsys.readouterr()
+    compile_notebook(str(notebook_path), str(out))
+    assert "were modified since the last compile" not in capsys.readouterr().err
+
+    with open(out / "app.py", "a") as f:
+        f.write("\n# hand edit\n")
+    compile_notebook(str(notebook_path), str(out))
+
+    assert "were modified since the last compile" in capsys.readouterr().err
+    assert "# hand edit" not in (out / "app.py").read_text()
+
+
 def test_compile_refuses_to_overwrite_a_users_own_files_but_recompiles_its_own_output(tmp_path):
     """`--output .` in a project folder silently replaced the user's own
     README.md / Dockerfile / app.py. A folder holding such files that no
