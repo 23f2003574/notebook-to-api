@@ -2781,6 +2781,14 @@ def _dispatch_core_command(args):
         except OSError:
             pass
 
+        if not commands:
+            print(
+                f"Warning: no endpoints were found in {args.notebook}, so the script "
+                "has no requests -- check that it defines functions and "
+                "has no syntax errors (see `validate`).",
+                file=sys.stderr,
+            )
+
         if args.json_output:
             print(json.dumps(
                 {"status": "success", "path": output, "commands": commands},
@@ -2811,6 +2819,14 @@ def _dispatch_core_command(args):
         with open(output, "w", encoding="utf-8") as f:
             json.dump(collection, f, indent=2)
             f.write("\n")
+
+        if not _postman_requests(collection['item']):
+            print(
+                f"Warning: no endpoints were found in {args.notebook}, so the collection "
+                "has no requests -- check that it defines functions and "
+                "has no syntax errors (see `validate`).",
+                file=sys.stderr,
+            )
 
         if args.json_output:
             print(json.dumps(

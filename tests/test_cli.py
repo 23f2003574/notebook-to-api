@@ -2644,6 +2644,22 @@ def test_debounce_rejects_nan(tmp_path, command):
     _assert_clean_cli_error(proc, "--debounce must be zero or positive")
 
 
+@pytest.mark.parametrize("command", ["export-curl", "export-postman"])
+def test_export_warns_on_stderr_when_the_notebook_has_no_endpoints(tmp_path, command):
+    # A syntax-error cell leaves no endpoints; the export used to write an
+    # empty file and report only "(0 request(s))" with no hint why.
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(notebook_path, "def broken(:\n    pass\n")
+
+    proc = _run_cli([command, str(notebook_path)], cwd=workdir)
+
+    assert proc.returncode == 0
+    assert "no endpoints were found" in proc.stderr
+    assert "(0 request(s))" in proc.stdout
+
+
 def test_watch_command_accepts_debounce_flag(tmp_path):
 
     workdir = tmp_path / "workdir"
