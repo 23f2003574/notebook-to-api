@@ -2594,6 +2594,10 @@ def generate_fastapi_code(
     lines.append("        text = str(exc)")
     lines.append("    except Exception:")
     lines.append("        return '<message unavailable>'")
+    # `raise ValueError()` / a bare assert / anyio's TimeoutError have no
+    # message, so a failed task recorded "error": "" -- name the type instead.
+    lines.append("    if not text.strip():")
+    lines.append("        return f'{type(exc).__name__} (no message)'")
     lines.append("    if len(text) > MAX_ERROR_DETAIL_CHARS:")
     lines.append("        return f'{text[:MAX_ERROR_DETAIL_CHARS]}... [truncated, {len(text)} characters]'")
     lines.append("    return text")

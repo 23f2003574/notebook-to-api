@@ -3775,6 +3775,34 @@ def test_notebook_function_named_task_execution_timeout_seconds_is_rejected():
         generate_fastapi_code(functions)
 
 
+def test_background_task_failing_with_a_message_less_exception_records_its_type(monkeypatch):
+    """`raise ValueError()` has str(e) == "", so the failed task used to
+    record "error": "" -- nothing to debug from."""
+    functions = [{"name": "train_model", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    def _raise_bare():
+        raise ValueError()
+
+    namespace["notebook_module"].train_model = _raise_bare
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    response = client.post("/train_model", json={}, headers=headers)
+
+    task = namespace["TASKS"][response.json()["task_id"]]
+    assert task["status"] == "failed"
+    assert "ValueError" in task["error"]
+
+
 def test_background_sync_task_hanging_past_the_timeout_is_marked_failed(monkeypatch):
     """Confirmed exploitable before this feature: a hung or runaway
     notebook function (an infinite loop, a network call with no timeout
