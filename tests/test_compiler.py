@@ -734,6 +734,30 @@ print("NAN_422_OK")
     assert "NAN_422_OK" in proc.stdout
 
 
+def test_import_time_hazards_flag_a_name_a_def_header_uses_but_the_notebook_never_binds():
+    """`def f(x: Undefined)`, an undefined default or decorator compiled and
+    validated cleanly, then failed with a bare NameError at startup; it is now
+    reported with its cell and line. Bound names, builtins, body-only uses,
+    star imports and lazy annotations are left alone."""
+    from backend.compiler import _find_import_time_hazards
+
+    def found(*cells):
+        return [
+            (h["cell"], h["line"], h["call"])
+            for h in _find_import_time_hazards(list(cells))
+            if h["kind"] == "undefined_name"
+        ]
+
+    assert sorted(found("x = 1\n", "def f(a: Undefined, b: int = LIMIT) -> int:\n    return 1\n")) == [
+        (2, 1, "LIMIT"), (2, 1, "Undefined"),
+    ]
+    assert found("@undefined_deco\ndef f() -> int:\n    return 1\n") == [(1, 1, "undefined_deco")]
+    assert found("class A(Base):\n    pass\n") == [(1, 1, "Base")]
+    assert found("import pandas as pd\nLIMIT = 3\ndef f(a: pd.DataFrame, b: int = LIMIT, c: list = None) -> int:\n    return helper()\n") == []
+    assert found("from m import *\ndef f(a: Undefined) -> int:\n    return 1\n") == []
+    assert found("from __future__ import annotations\ndef f(a: Undefined) -> int:\n    return 1\n") == []
+
+
 def test_import_time_hazards_flag_a_top_level_loop_that_never_ends():
     """`while True:` with no `break` at module level never finishes importing,
     so the compiled app hangs on startup -- and compile said nothing."""

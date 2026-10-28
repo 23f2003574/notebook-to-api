@@ -3598,6 +3598,86 @@ _MAGIC_BINDING_PATTERNS = (
 )
 
 
+def _undefined_name_hazards(parsed):
+    """"undefined_name" hazards for a name used in a top-level def/class
+    header -- a decorator, default value, annotation or base class -- that the
+    notebook never binds anywhere and is not a builtin: defining the function
+    raises NameError when the compiled app imports the notebook, which used to
+    surface only as a bare NameError from `--smoke-test` (or at startup).
+    Conservative: any binding anywhere counts, a star import or exec/eval
+    disables the check, and annotations are skipped under
+    `from __future__ import annotations`."""
+    import builtins
+
+    bound = set(dir(builtins)) | {"__name__", "__file__", "__doc__", "get_ipython", "display"}
+    lazy_annotations = False
+    for _, tree in parsed:
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                bound.add(node.name)
+            elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+                bound.add(node.id)
+            elif isinstance(node, ast.arg):
+                bound.add(node.arg)
+            elif isinstance(node, ast.ExceptHandler) and node.name:
+                bound.add(node.name)
+            elif isinstance(node, (ast.Global, ast.Nonlocal)):
+                bound.update(node.names)
+            elif isinstance(node, ast.ImportFrom):
+                if any(alias.name == "*" for alias in node.names):
+                    return []
+                if node.module == "__future__" and any(a.name == "annotations" for a in node.names):
+                    lazy_annotations = True
+                bound.update((a.asname or a.name) for a in node.names)
+            elif isinstance(node, ast.Import):
+                bound.update((a.asname or a.name.split(".")[0]) for a in node.names)
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in (
+                "exec", "eval", "globals", "setattr", "__import__",
+            ):
+                return []
+
+    def expressions(node):
+        found = list(node.decorator_list)
+        if isinstance(node, ast.ClassDef):
+            found += node.bases + [k.value for k in node.keywords]
+            return found
+        found += node.args.defaults + [d for d in node.args.kw_defaults if d is not None]
+        if not lazy_annotations:
+            every = node.args.posonlyargs + node.args.args + node.args.kwonlyargs
+            every += [a for a in (node.args.vararg, node.args.kwarg) if a is not None]
+            found += [a.annotation for a in every if a.annotation is not None]
+            if node.returns is not None:
+                found.append(node.returns)
+        return found
+
+    hazards = []
+
+    def visit(statements, cell_number):
+        for node in statements:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                for expression in expressions(node):
+                    reported = set()
+                    for name in ast.walk(expression):
+                        if (
+                            isinstance(name, ast.Name) and isinstance(name.ctx, ast.Load)
+                            and name.id not in bound and name.id not in reported
+                        ):
+                            reported.add(name.id)
+                            hazards.append({
+                                "kind": "undefined_name", "call": name.id, "path": None,
+                                "cell": cell_number, "line": name.lineno,
+                            })
+            elif isinstance(node, (ast.If, ast.Try, ast.With, ast.For, ast.While)):
+                for field in ("body", "orelse", "finalbody"):
+                    visit(getattr(node, field, []), cell_number)
+                for handler in getattr(node, "handlers", []):
+                    visit(handler.body, cell_number)
+
+    for cell_number, tree in parsed:
+        visit(tree.body, cell_number)
+    return hazards
+
+
 def _magic_variable_hazards(code_cells, trees):
     """"magic_variable" hazards for each name a commented-out magic line
     bound (see _MAGIC_BINDING_PATTERNS) that the notebook's Python reads
@@ -3939,6 +4019,7 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
                 })
 
     hazards.extend(_magic_variable_hazards(code_cells, [tree for _, tree in parsed]))
+    hazards.extend(_undefined_name_hazards(parsed))
 
     if notebook_path:
         shipped = find_data_files(notebook_path, hazards=hazards)

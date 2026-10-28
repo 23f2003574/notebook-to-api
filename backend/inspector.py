@@ -993,6 +993,11 @@ def hazard_message(hazard):
             f"`{hazard['path']}` is only set by `{hazard['call']}`, an IPython magic the "
             f"compiled app doesn't run, so using `{hazard['path']}` raises NameError"
         )
+    elif kind == "undefined_name":
+        what = (
+            f"`{hazard['call']}` is not defined anywhere in the notebook, so defining "
+            "this function or class raises NameError"
+        )
     elif kind == "colab_upload":
         what = (
             f"`{hazard['call']}()` opens Colab's browser upload dialog, which the compiled "
