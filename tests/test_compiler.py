@@ -9676,6 +9676,16 @@ print("JUPYTER_BUILTINS_E2E_OK")
     assert "JUPYTER_BUILTINS_E2E_OK" in proc.stdout
 
 
+def test_distribution_name_for_import_maps_pylab_to_matplotlib(monkeypatch):
+    """`from pylab import *` is matplotlib's own bundled module: before this,
+    requirements.txt got the unrelated PyPI name "pylab" instead."""
+    from backend import compiler as compiler_module
+
+    monkeypatch.setattr(compiler_module, "_installed_packages_distributions", lambda: {})
+
+    assert compiler_module.distribution_name_for_import("pylab") == "matplotlib"
+
+
 def test_distribution_name_for_import_maps_well_known_aliases_when_not_installed(monkeypatch):
     """Confirmed before this: with the package not installed on the compiling
     host, `import sklearn` became "sklearn" in requirements.txt (a deprecated

@@ -184,6 +184,7 @@ KNOWN_IMPORT_TO_DISTRIBUTION = {
     "win32com": "pywin32",
     "wx": "wxPython",
     "mpl_toolkits": "matplotlib",
+    "pylab": "matplotlib",
     "tensorflow_datasets": "tensorflow-datasets",
     "jose": "python-jose",
     "slugify": "python-slugify",
