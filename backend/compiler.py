@@ -182,6 +182,18 @@ KNOWN_IMPORT_TO_DISTRIBUTION = {
     "magic": "python-magic",
     "umap": "umap-learn",
     "win32com": "pywin32",
+    # Likewise `import pythoncom` (pywin32, like win32com above), `from past
+    # import ...` (future), `import delta` (delta-spark), `import RPi.GPIO`
+    # (RPi.GPIO), `import bluetooth` (pybluez), `import surprise`
+    # (scikit-surprise) and `import fluidsynth` (pyfluidsynth).
+    "pythoncom": "pywin32",
+    "pywintypes": "pywin32",
+    "past": "future",
+    "delta": "delta-spark",
+    "RPi": "RPi.GPIO",
+    "bluetooth": "pybluez",
+    "surprise": "scikit-surprise",
+    "fluidsynth": "pyfluidsynth",
     "wx": "wxPython",
     "mpl_toolkits": "matplotlib",
     "pylab": "matplotlib",

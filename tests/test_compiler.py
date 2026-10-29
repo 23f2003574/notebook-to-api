@@ -17403,6 +17403,37 @@ def test_requirements_name_the_pypi_projects_behind_websocket_cpuinfo_xdg_and_nm
     assert not names & {"websocket", "cpuinfo", "xdg", "nmap"}
 
 
+def test_requirements_name_the_pypi_projects_behind_pythoncom_past_delta_rpi_bluetooth_surprise_and_fluidsynth_imports(tmp_path):
+    """These import names went into requirements.txt verbatim, so `pip
+    install -r` failed or installed an unrelated project."""
+    import re
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "import pythoncom\nfrom past.builtins import basestring\n"
+            "import delta\nimport RPi.GPIO\nimport bluetooth\n"
+            "import surprise\nimport fluidsynth\n"
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    nbformat.write(notebook, str(notebook_path))
+    output_dir = tmp_path / "svc"
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    lines = (output_dir / "requirements.txt").read_text(encoding="utf-8").splitlines()
+    names = {re.split(r"[=<>~! ]", line, maxsplit=1)[0].lower() for line in lines if line}
+    assert {
+        "pywin32", "future", "delta-spark", "rpi.gpio", "pybluez",
+        "scikit-surprise", "pyfluidsynth",
+    } <= names
+    assert not names & {
+        "pythoncom", "past", "delta", "rpi", "bluetooth", "surprise", "fluidsynth",
+    }
+
+
 def test_requirements_name_the_azure_sdk_distributions_instead_of_the_bare_azure_package(tmp_path):
     """`import azure.storage.blob` / `from azure.identity import ...` went into
     requirements.txt as the obsolete "azure" meta-package, so the actual SDK
