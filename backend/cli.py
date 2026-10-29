@@ -2543,7 +2543,16 @@ def _dispatch_core_command(args):
             for name, ttl in data["cache_overrides"].items():
                 print(f"ⓘ Response cache: {name} -- {ttl}s TTL")
 
-            if status == "pass":
+            if status == "pass" and _startup_problem_count(data):
+                # The ⚠ lines above (a hazard the app won't survive, a
+                # directive typo, a cell that errored) are not "no issues";
+                # exit status stays 0 unless --fail-on-startup-warnings.
+                print(
+                    "\nStartup warnings found (see above), but this notebook would "
+                    "still compile cleanly. Pass --fail-on-startup-warnings to "
+                    "exit non-zero on them."
+                )
+            elif status == "pass":
                 print("\n✓ No issues found.")
             elif status == "warn":
                 print("\nWarnings found, but this notebook would still compile cleanly.")
@@ -6089,7 +6098,16 @@ def _dispatch_core_command(args):
                     "response cache"
                 )
 
-            if status == "pass":
+            if status == "pass" and _startup_problem_count(data):
+                # The ⚠ lines above (a hazard the app won't survive, a
+                # directive typo, a cell that errored) are not "no issues";
+                # exit status stays 0 unless --fail-on-startup-warnings.
+                print(
+                    "\nStartup warnings found (see above), but this notebook would "
+                    "still compile cleanly. Pass --fail-on-startup-warnings to "
+                    "exit non-zero on them."
+                )
+            elif status == "pass":
                 print("\n✓ No issues found.")
             elif status == "warn":
                 print("\nWarnings found, but this notebook would still compile cleanly.")

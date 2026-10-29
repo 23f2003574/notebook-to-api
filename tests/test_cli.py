@@ -13596,6 +13596,32 @@ def test_validate_command_strict_flag_fails_on_skipped_functions(tmp_path):
     assert "Validation failed." in proc.stdout
 
 
+def test_validate_command_does_not_claim_no_issues_when_it_printed_startup_warnings(tmp_path):
+    """A top-level input() is an import-time hazard the compiled app won't
+    survive: validate printed its warning and then "No issues found." (exit
+    0 stays, unless --fail-on-startup-warnings)."""
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "name = input('who? ')\n\ndef greet(a: int) -> int:\n    return a\n",
+    )
+
+    proc = _run_cli(["validate", str(notebook_path)], cwd=workdir)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Import-time hazard" in proc.stdout
+    assert "No issues found" not in proc.stdout
+    assert "--fail-on-startup-warnings" in proc.stdout
+
+    gated = _run_cli(
+        ["validate", str(notebook_path), "--fail-on-startup-warnings"], cwd=workdir
+    )
+    assert gated.returncode == 1, gated.stdout + gated.stderr
+
+
 def test_validate_command_reports_cells_that_are_not_valid_python(tmp_path):
     """compile leaves a cell with a syntax error out entirely (and every
     function in it), but validate printed "No issues found" and exited 0."""
