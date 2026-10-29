@@ -17667,6 +17667,73 @@ print("TZ_AWARE_SERIES_OK")
     assert "TZ_AWARE_SERIES_OK" in proc.stdout
 
 
+def test_compiler_pipeline_generated_app_still_imports_after_its_directory_is_renamed(tmp_path):
+    """app.py imported its runtime as `<compiled-dir-name>.runtime...`, so
+    renaming or moving the output directory (and starting it from a
+    different working directory) failed with ModuleNotFoundError."""
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": "def add(a: int, b: int) -> int:\n    return a + b\n",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+
+    script = f"""
+import os, sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, {str(workdir / "first_name")!r})
+os.rename({str(workdir / "first_name")!r}, {str(workdir / "second_name")!r})
+for name in [m for m in sys.modules if m.startswith("first_name")]:
+    del sys.modules[name]
+
+os.chdir({str(elsewhere)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from second_name.app import app
+from fastapi.testclient import TestClient
+
+r = TestClient(app).post(
+    "/add", json={{"a": 1, "b": 2}}, headers={{"X-API-Key": "notebook-to-api-dev-key"}}
+)
+assert r.status_code == 200 and r.json() == {{"result": 3}}, r.text
+
+print("RENAMED_DIR_IMPORT_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(elsewhere),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "RENAMED_DIR_IMPORT_OK" in proc.stdout
+
+
 def test_requirements_name_the_azure_sdk_distributions_instead_of_the_bare_azure_package(tmp_path):
     """`import azure.storage.blob` / `from azure.identity import ...` went into
     requirements.txt as the obsolete "azure" meta-package, so the actual SDK

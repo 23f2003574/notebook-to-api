@@ -1691,7 +1691,24 @@ def generate_fastapi_code(
     lines.append("    return _nb_real_atexit_register(func, *args, **kwargs)")
     lines.append("_nb_atexit.register = _nb_recording_register")
     lines.append("try:")
-    lines.append(f"    import {package_name}.runtime.notebook_module as notebook_module")
+    # The package name is the directory name the app was compiled into, so a
+    # renamed or moved output directory made `import <name>...` fail with
+    # ModuleNotFoundError. Only that exact failure (the package itself is
+    # missing, not one of the notebook's own dependencies) falls back to
+    # loading runtime/notebook_module.py next to this file.
+    lines.append("    try:")
+    lines.append(f"        import {package_name}.runtime.notebook_module as notebook_module")
+    lines.append("    except ModuleNotFoundError as _nb_missing:")
+    lines.append(f"        if _nb_missing.name != {package_name!r}:")
+    lines.append("            raise")
+    lines.append("        import importlib.util as _nb_ilu")
+    lines.append("        _nb_spec = _nb_ilu.spec_from_file_location(")
+    lines.append(f"            {package_name + '.runtime.notebook_module'!r},")
+    lines.append("            os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runtime', 'notebook_module.py'),")
+    lines.append("        )")
+    lines.append("        notebook_module = _nb_ilu.module_from_spec(_nb_spec)")
+    lines.append("        sys.modules[_nb_spec.name] = notebook_module")
+    lines.append("        _nb_spec.loader.exec_module(notebook_module)")
     # A required `os.environ["X"]` that is not set raised a bare KeyError from
     # inside the notebook's own code, so the app died at startup with
     # "KeyError: 'X'" and nothing saying it is a missing setting. Only a
