@@ -680,6 +680,16 @@ def _run_local_deploy_smoke_test(tag, cwd):
         )
 
 
+class _AppendCommaSeparated(argparse.Action):
+    """Repeating the flag (`--exclude a --exclude b`) extends the list, as if
+    written `--exclude a,b`; plain store kept only the last value and
+    silently dropped the rest."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        previous = getattr(namespace, self.dest, None)
+        setattr(namespace, self.dest, f"{previous},{values}" if previous else values)
+
+
 def _add_function_selection_arguments(parser):
     """Add --only/--exclude to `parser` -- shared by the `compile` and
     `deploy` subparsers below, so their help text and dest names can't
@@ -688,6 +698,7 @@ def _add_function_selection_arguments(parser):
     parser.add_argument(
         "--only",
         default=None,
+        action=_AppendCommaSeparated,
         help=(
             "Comma-separated function names to compile as endpoints, "
             "excluding every other function the notebook defines (they "
@@ -698,6 +709,7 @@ def _add_function_selection_arguments(parser):
     parser.add_argument(
         "--exclude",
         default=None,
+        action=_AppendCommaSeparated,
         help=(
             "Comma-separated function names to exclude from becoming "
             "endpoints; every other function the notebook defines is "
@@ -716,6 +728,7 @@ def _add_tag_selection_argument(parser):
     parser.add_argument(
         "--tag",
         default=None,
+        action=_AppendCommaSeparated,
         help=(
             "Comma-separated OpenAPI tags (case-insensitive) -- only include "
             "endpoints with one of these tags (the \"# "

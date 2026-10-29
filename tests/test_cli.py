@@ -13596,6 +13596,43 @@ def test_validate_command_strict_flag_fails_on_skipped_functions(tmp_path):
     assert "Validation failed." in proc.stdout
 
 
+def test_compile_command_combines_repeated_exclude_and_only_flags(tmp_path):
+    """`--exclude a --exclude b` kept only the last value, so `a` was still
+    compiled as an endpoint; repeated flags now accumulate like the
+    comma-separated form."""
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "def alpha(x: int) -> int:\n    return x\n\n"
+        "def beta(x: int) -> int:\n    return x\n\n"
+        "def gamma(x: int) -> int:\n    return x\n",
+    )
+
+    excluded = _run_cli(
+        ["compile", str(notebook_path), "--output", str(workdir / "ex"),
+         "--exclude", "alpha", "--exclude", "beta"],
+        cwd=workdir,
+    )
+    assert excluded.returncode == 0, excluded.stdout + excluded.stderr
+    excluded_app = (workdir / "ex" / "app.py").read_text(encoding="utf-8")
+    assert '@app.post("/gamma"' in excluded_app
+    assert '@app.post("/alpha"' not in excluded_app
+    assert '@app.post("/beta"' not in excluded_app
+
+    only = _run_cli(
+        ["compile", str(notebook_path), "--output", str(workdir / "on"),
+         "--only", "alpha", "--only", "beta"],
+        cwd=workdir,
+    )
+    assert only.returncode == 0, only.stdout + only.stderr
+    only_app = (workdir / "on" / "app.py").read_text(encoding="utf-8")
+    assert '@app.post("/alpha"' in only_app and '@app.post("/beta"' in only_app
+    assert '@app.post("/gamma"' not in only_app
+
+
 def test_validate_command_does_not_claim_no_issues_when_it_printed_startup_warnings(tmp_path):
     """A top-level input() is an import-time hazard the compiled app won't
     survive: validate printed its warning and then "No issues found." (exit
