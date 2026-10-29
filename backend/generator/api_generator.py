@@ -3742,8 +3742,12 @@ def generate_fastapi_code(
     lines.append("app.openapi = custom_openapi")
     lines.append("")
     lines.append("START_TIME = time.time()")
+    # Not datetime.utcnow(): deprecated since Python 3.12, so a notebook that
+    # turns warnings into errors (warnings.simplefilter('error')) made the
+    # generated app fail to import.
     lines.append(
-        "GENERATED_AT = datetime.utcnow().isoformat() + 'Z'"
+        "GENERATED_AT = time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(START_TIME)) "
+        "+ '.%06dZ' % int((START_TIME % 1) * 1000000)"
     )
     lines.append(
         "PYTHON_VERSION = sys.version.split()[0]"

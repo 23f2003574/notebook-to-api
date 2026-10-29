@@ -17521,6 +17521,73 @@ def test_compile_rejects_an_output_dir_named_after_a_package_the_notebook_import
     assert not (tmp_path / "not_installed_demo_pkg" / "app.py").exists()
 
 
+def test_compiler_pipeline_generated_app_imports_when_the_notebook_turns_warnings_into_errors(tmp_path):
+    """The generated app.py computed GENERATED_AT with datetime.utcnow(),
+    deprecated since Python 3.12: a notebook doing
+    warnings.simplefilter('error') made the DeprecationWarning an exception
+    and the compiled app failed to import."""
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "import warnings\n"
+                            "warnings.simplefilter('error')\n"
+                            "def add(a: int, b: int) -> int:\n    return a + b\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app, GENERATED_AT
+from fastapi.testclient import TestClient
+
+assert GENERATED_AT.endswith("Z") and "T" in GENERATED_AT, GENERATED_AT
+client = TestClient(app)
+r = client.post(
+    "/add", json={{"a": 1, "b": 2}}, headers={{"X-API-Key": "notebook-to-api-dev-key"}}
+)
+assert r.status_code == 200 and r.json() == {{"result": 3}}, r.text
+
+print("WARNINGS_AS_ERRORS_IMPORT_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "WARNINGS_AS_ERRORS_IMPORT_OK" in proc.stdout
+
+
 def test_requirements_name_the_azure_sdk_distributions_instead_of_the_bare_azure_package(tmp_path):
     """`import azure.storage.blob` / `from azure.identity import ...` went into
     requirements.txt as the obsolete "azure" meta-package, so the actual SDK
