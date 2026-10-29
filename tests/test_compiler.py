@@ -17434,6 +17434,69 @@ def test_requirements_name_the_pypi_projects_behind_pythoncom_past_delta_rpi_blu
     }
 
 
+def test_compiler_pipeline_generated_app_health_and_ready_answer_head_requests(tmp_path):
+    """HEAD /health and HEAD /ready got 405, so monitors probing with HEAD
+    read a healthy service as down. They answer 200 now, without adding
+    operations to the OpenAPI schema."""
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": "def add(a: int, b: int) -> int:\n    return a + b\n",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+for path in ("/health", "/ready"):
+    assert client.get(path).status_code == 200, path
+    head = client.head(path)
+    assert head.status_code == 200, (path, head.status_code)
+    assert head.content == b"", head.content
+    assert "head" not in app.openapi()["paths"][path], path
+
+print("HEAD_HEALTH_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "HEAD_HEALTH_E2E_OK" in proc.stdout
+
+
 def test_requirements_name_the_azure_sdk_distributions_instead_of_the_bare_azure_package(tmp_path):
     """`import azure.storage.blob` / `from azure.identity import ...` went into
     requirements.txt as the obsolete "azure" meta-package, so the actual SDK

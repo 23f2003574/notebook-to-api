@@ -3866,10 +3866,15 @@ def generate_fastapi_code(
     )
     lines.append("    }")
     lines.append("")
+    # Uptime monitors and load balancers commonly probe with HEAD, which
+    # otherwise got a 405 and read as the service being down. Kept out of
+    # the OpenAPI schema so exported specs and SDKs are unchanged.
+    lines.append("@app.head('/health', include_in_schema=False)")
     lines.append("@app.get('/health')")
     lines.append("def health_check():")
     lines.append("    return {'status': 'healthy'}")
     lines.append("")
+    lines.append("@app.head('/ready', include_in_schema=False)")
     lines.append("@app.get('/ready')")
     lines.append("def readiness_check():")
 
