@@ -3210,7 +3210,12 @@ def generate_fastapi_code(
     # spell the full-precision ISO string.
     lines.append("    if getattr(getattr(value, 'dtype', None), 'kind', None) == 'M' and hasattr(value, 'tolist'):")
     lines.append("        import numpy as _np")
-    lines.append("        if _np.datetime_data(value.dtype)[0] in ('ns', 'ps', 'fs', 'as'):")
+    # A tz-aware pandas Series/Index has a DatetimeTZDtype (kind 'M' too),
+    # which datetime_data() rejects: it falls through to to_dict()/tolist().
+    lines.append(
+        "        if isinstance(value.dtype, _np.dtype) "
+        "and _np.datetime_data(value.dtype)[0] in ('ns', 'ps', 'fs', 'as'):"
+    )
     lines.append("            _us = value.astype('datetime64[us]')")
     lines.append("            if bool((_np.isnat(value) | (_us.astype(value.dtype) == value)).all()):")
     lines.append("                value = _us")

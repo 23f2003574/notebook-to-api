@@ -17588,6 +17588,85 @@ print("WARNINGS_AS_ERRORS_IMPORT_OK")
     assert "WARNINGS_AS_ERRORS_IMPORT_OK" in proc.stdout
 
 
+def test_compiler_pipeline_generated_app_serializes_timezone_aware_pandas_series_and_index(tmp_path):
+    """A tz-aware datetime Series/Index (DatetimeTZDtype, kind 'M') hit
+    numpy.datetime_data(), which rejects that dtype: the endpoint answered
+    500 "not JSON-serializable" for a perfectly ordinary pandas result."""
+    pytest.importorskip("pandas")
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "import pandas as pd\n"
+                            "def as_series():\n"
+                            "    return pd.Series(pd.to_datetime(['2020-01-01 10:00']).tz_localize('UTC'))\n"
+                            "def as_index():\n"
+                            "    return pd.to_datetime(['2020-01-01 10:00']).tz_localize('UTC')\n"
+                            "def naive():\n"
+                            "    return pd.Series(pd.to_datetime(['2020-01-01 10:00']))\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+r = client.post("/as_series", json={{}}, headers=headers)
+assert r.status_code == 200, r.text
+assert r.json() == {{"result": {{"0": "2020-01-01T10:00:00+00:00"}}}}, r.json()
+
+r = client.post("/as_index", json={{}}, headers=headers)
+assert r.status_code == 200, r.text
+assert r.json() == {{"result": ["2020-01-01T10:00:00+00:00"]}}, r.json()
+
+r = client.post("/naive", json={{}}, headers=headers)
+assert r.status_code == 200, r.text
+assert r.json() == {{"result": {{"0": "2020-01-01T10:00:00"}}}}, r.json()
+
+print("TZ_AWARE_SERIES_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "TZ_AWARE_SERIES_OK" in proc.stdout
+
+
 def test_requirements_name_the_azure_sdk_distributions_instead_of_the_bare_azure_package(tmp_path):
     """`import azure.storage.blob` / `from azure.identity import ...` went into
     requirements.txt as the obsolete "azure" meta-package, so the actual SDK
