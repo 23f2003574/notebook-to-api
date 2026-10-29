@@ -1045,6 +1045,16 @@ _EXAMPLE_TYPE_DEFAULTS = {
     "timedelta": "PT0S",
     "frozenset": [],
     "Path": ".",
+    # Pydantic validates these from strings; the generic "string" fallback
+    # was rejected by the endpoint's own validation.
+    "complex": "0+0j",
+    "Fraction": "0",
+    "IPv4Address": "127.0.0.1",
+    "IPv6Address": "::1",
+    "IPv4Network": "127.0.0.0/8",
+    "IPv6Network": "::1/128",
+    "IPv4Interface": "127.0.0.1/8",
+    "IPv6Interface": "::1/128",
 }
 
 

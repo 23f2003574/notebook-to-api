@@ -17734,6 +17734,86 @@ print("RENAMED_DIR_IMPORT_OK")
     assert "RENAMED_DIR_IMPORT_OK" in proc.stdout
 
 
+def test_compiler_pipeline_openapi_examples_are_accepted_by_their_own_endpoints(tmp_path):
+    """The OpenAPI example for a complex / Fraction / IPv4 / IPv6 parameter
+    was the generic "string", which the endpoint's own validation rejected
+    with a 422 -- Swagger's pre-filled "Try it out" body, and the curl and
+    Postman exports, failed on first use."""
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {},
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": (
+                            "import ipaddress\n"
+                            "from fractions import Fraction\n"
+                            "def f_complex(v: complex): return 1\n"
+                            "def f_fraction(v: Fraction): return 1\n"
+                            "def f_ip(v: ipaddress.IPv4Address): return 1\n"
+                            "def f_ip6(v: ipaddress.IPv6Address): return 1\n"
+                            "def f_net(v: ipaddress.IPv4Network): return 1\n"
+                            "def f_net6(v: ipaddress.IPv6Network): return 1\n"
+                            "def f_int(v: int): return 1\n"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script = f"""
+import sys
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+schema = app.openapi()
+checked = 0
+for path, item in schema["paths"].items():
+    if not path.startswith("/f_"):
+        continue
+    ref = item["post"]["requestBody"]["content"]["application/json"]["schema"]["$ref"]
+    example = schema["components"]["schemas"][ref.split("/")[-1]]["example"]
+    r = client.post(path, json=example, headers=headers)
+    assert r.status_code == 200, (path, example, r.text)
+    checked += 1
+assert checked == 7, checked
+
+print("OPENAPI_EXAMPLES_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "OPENAPI_EXAMPLES_OK" in proc.stdout
+
+
 def test_requirements_name_the_azure_sdk_distributions_instead_of_the_bare_azure_package(tmp_path):
     """`import azure.storage.blob` / `from azure.identity import ...` went into
     requirements.txt as the obsolete "azure" meta-package, so the actual SDK
