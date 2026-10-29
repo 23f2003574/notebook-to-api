@@ -13633,6 +13633,29 @@ def test_compile_command_combines_repeated_exclude_and_only_flags(tmp_path):
     assert '@app.post("/gamma"' not in only_app
 
 
+def test_compile_and_export_openapi_accept_dot_as_the_project_directory(tmp_path):
+    """Run from inside the project directory, `--output .` and `--app-dir .`
+    were rejected because the directory's basename was taken as "." (not a
+    Python package name) instead of the real directory name."""
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path, "def add(a: int, b: int) -> int:\n    return a + b\n"
+    )
+    project = tmp_path / "svc"
+    project.mkdir()
+
+    compiled = _run_cli(["compile", str(notebook_path), "--output", "."], cwd=project)
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    assert (project / "app.py").is_file()
+    assert "svc.runtime.notebook_module" in (project / "app.py").read_text(encoding="utf-8")
+
+    exported = _run_cli(["export-openapi", "--app-dir", "."], cwd=project)
+    assert exported.returncode == 0, exported.stdout + exported.stderr
+    schema = json.loads((project / "openapi.json").read_text(encoding="utf-8"))
+    assert "/add" in schema["paths"]
+
+
 def test_validate_command_does_not_claim_no_issues_when_it_printed_startup_warnings(tmp_path):
     """A top-level input() is an import-time hazard the compiled app won't
     survive: validate printed its warning and then "No issues found." (exit

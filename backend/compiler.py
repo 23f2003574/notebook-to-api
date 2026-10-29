@@ -321,7 +321,10 @@ def package_name_for_output_dir(output_dir):
     it by the fixed name "generated", regardless of where it actually
     landed on disk.
     """
-    name = os.path.basename(os.path.normpath(output_dir))
+    # abspath, not just normpath: `--output .` / `--app-dir .` (run from inside
+    # the project directory) has the basename "."; the directory's real name
+    # is what the generated import uses.
+    name = os.path.basename(os.path.abspath(output_dir))
 
     if not name.isidentifier() or keyword.iskeyword(name):
         raise ValueError(
