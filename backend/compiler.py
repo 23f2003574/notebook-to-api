@@ -427,6 +427,22 @@ def package_name_for_output_dir(output_dir):
     return name
 
 
+def _imported_top_level_modules(code_cells):
+    """The top-level module name of every absolute import in `code_cells`."""
+    names = set()
+    for cell in code_cells:
+        try:
+            tree = ast.parse(cell)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names.update(alias.name.partition(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                names.add(node.module.partition(".")[0])
+    return names
+
+
 JUPYTER_BUILTIN_STUBS = {
     "display": (
         "def display(*objs, **kwargs):\n"
@@ -5409,6 +5425,22 @@ def compile_notebook_to_api(
             cell for cell in extract_code_cells(notebook)
             if is_parseable_python(cell)
         ]
+
+        # The installed-package check in package_name_for_output_dir can't
+        # see a package the notebook imports but this machine lacks (it goes
+        # into requirements.txt): in the container the real package is
+        # installed, and `<name>.runtime.notebook_module` then resolves into
+        # it, so the app fails to start.
+        imported_top_levels = _imported_top_level_modules(code_cells)
+        if package_name in imported_top_levels:
+            raise ValueError(
+                f"Output directory {output_dir!r} (basename {package_name!r}) "
+                f"collides with {package_name!r}, which this notebook imports "
+                "-- once its requirements are installed, the generated app's "
+                f"`import {package_name}.runtime.notebook_module` statement "
+                "would resolve to that package instead of the locally "
+                "compiled one. Choose a different --output directory."
+            )
 
         # Computed here -- and let it raise (a ValueError, for two
         # conflicting "# notebook-to-api: requires" directives naming the

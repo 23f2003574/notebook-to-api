@@ -17497,6 +17497,30 @@ print("HEAD_HEALTH_E2E_OK")
     assert "HEAD_HEALTH_E2E_OK" in proc.stdout
 
 
+def test_compile_rejects_an_output_dir_named_after_a_package_the_notebook_imports(tmp_path):
+    """`--output tensorflow` for a notebook importing tensorflow (not
+    installed on the compiling machine) compiled fine, but in the container
+    the real package is installed and `import tensorflow.runtime.
+    notebook_module` resolves into it, so the app could not start."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "import not_installed_demo_pkg.sub\n"
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    nbformat.write(notebook, str(notebook_path))
+
+    with pytest.raises(ValueError, match="not_installed_demo_pkg"):
+        compile_notebook(str(notebook_path), str(tmp_path / "not_installed_demo_pkg"))
+
+    compile_notebook(str(notebook_path), str(tmp_path / "svc"))
+    assert (tmp_path / "svc" / "app.py").exists()
+    assert not (tmp_path / "not_installed_demo_pkg" / "app.py").exists()
+
+
 def test_requirements_name_the_azure_sdk_distributions_instead_of_the_bare_azure_package(tmp_path):
     """`import azure.storage.blob` / `from azure.identity import ...` went into
     requirements.txt as the obsolete "azure" meta-package, so the actual SDK
