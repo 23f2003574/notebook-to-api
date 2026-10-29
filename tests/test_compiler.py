@@ -17814,6 +17814,48 @@ print("OPENAPI_EXAMPLES_OK")
     assert "OPENAPI_EXAMPLES_OK" in proc.stdout
 
 
+def test_recompile_does_not_write_through_a_symlinked_output_file(tmp_path):
+    """Recompiling into a directory where app.py (or runtime/) was a symlink
+    wrote through the link and replaced the file it pointed at -- here a
+    user's own notes file kept outside the project."""
+    import shutil
+
+    if not hasattr(os, "symlink"):
+        pytest.skip("symlinks unavailable")
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell("def add(a: int, b: int) -> int:\n    return a + b\n")
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    nbformat.write(notebook, str(notebook_path))
+    output_dir = tmp_path / "svc"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    precious = tmp_path / "precious.txt"
+    precious.write_text("PRECIOUS", encoding="utf-8")
+    (output_dir / "app.py").unlink()
+    try:
+        os.symlink(precious, output_dir / "app.py")
+    except OSError:
+        pytest.skip("cannot create symlinks here")
+
+    external_runtime = tmp_path / "external_runtime"
+    shutil.move(str(output_dir / "runtime"), str(external_runtime))
+    os.symlink(external_runtime, output_dir / "runtime")
+    marker = external_runtime / "notebook_module.py"
+    marker.write_text("# user-owned\n", encoding="utf-8")
+
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    assert precious.read_text(encoding="utf-8") == "PRECIOUS"
+    assert marker.read_text(encoding="utf-8") == "# user-owned\n"
+    assert not (output_dir / "app.py").is_symlink()
+    assert not (output_dir / "runtime").is_symlink()
+    assert "FastAPI" in (output_dir / "app.py").read_text(encoding="utf-8")
+    assert (output_dir / "runtime" / "notebook_module.py").is_file()
+
+
 def test_requirements_name_the_azure_sdk_distributions_instead_of_the_bare_azure_package(tmp_path):
     """`import azure.storage.blob` / `from azure.identity import ...` went into
     requirements.txt as the obsolete "azure" meta-package, so the actual SDK

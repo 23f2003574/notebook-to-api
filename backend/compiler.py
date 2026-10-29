@@ -5355,6 +5355,24 @@ def _refuse_to_overwrite_foreign_files(output_dir):
         )
 
 
+def _detach_symlinked_outputs(output_dir, app_filename="app.py"):
+    """Remove (only the link itself, never its target) any symlink at a path
+    this compile writes. Writing through one overwrote whatever it pointed at
+    -- e.g. an `app.py -> ../my_notes.txt` link replaced the user's file, and
+    a symlinked `runtime/` wrote into the directory it linked to."""
+    names = {app_filename, COMPILE_METADATA_FILENAME, *_COMPILE_OUTPUT_NAMES}
+    names.add(os.path.join("runtime", "notebook_module.py"))
+    for name in sorted(names):
+        path = os.path.join(output_dir, name)
+        if os.path.islink(path):
+            os.unlink(path)
+            print(
+                f"Warning: {path!r} was a symbolic link; replaced it with a regular "
+                "file or directory instead of writing through to its target.",
+                file=sys.stderr,
+            )
+
+
 def _warn_if_generated_files_were_edited(output_dir, app_filename="app.py"):
     """Print a stderr warning when the files an earlier compile wrote into
     `output_dir` no longer match the checksum it recorded, since this compile
@@ -5421,6 +5439,7 @@ def compile_notebook_to_api(
 
         _refuse_to_overwrite_foreign_files(output_dir)
         _warn_if_generated_files_were_edited(output_dir, os.path.basename(output_path))
+        _detach_symlinked_outputs(output_dir, os.path.basename(output_path))
 
         notebook = load_notebook(notebook_path)
 
