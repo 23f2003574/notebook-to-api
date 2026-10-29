@@ -4992,7 +4992,9 @@ COMPILE_METADATA_FILENAME = ".compile_metadata.json"
 # process with nothing else to contend with, so one process-wide lock is
 # exactly the right granularity without adding a locking scheme keyed by
 # path.
-COMPILE_LOCK = threading.Lock()
+# Reentrant so compile_notebook_to_api's failure cleanup can hold it around
+# the locked compile body itself.
+COMPILE_LOCK = threading.RLock()
 
 
 def hash_notebook_file(notebook_path):
@@ -5327,6 +5329,10 @@ def _filter_functions_by_name(functions, only, exclude):
     return [func for func in functions if func["name"] not in requested_names]
 
 
+# Left behind when a recompile of a finished project fails (the compile drops
+# .compile_metadata.json then): says the directory is still this tool's output.
+INCOMPLETE_COMPILE_MARKER = ".compile_incomplete"
+
 # Files a compile writes at the top of its output directory.
 _COMPILE_OUTPUT_NAMES = (
     "app.py", "Dockerfile", ".dockerignore", "docker-compose.yml",
@@ -5341,6 +5347,8 @@ def _refuse_to_overwrite_foreign_files(output_dir):
     Dockerfile, app.py or requirements.txt without a word. A directory a
     previous compile wrote is recompiled in place, as before."""
     if os.path.exists(os.path.join(output_dir, COMPILE_METADATA_FILENAME)):
+        return
+    if os.path.exists(os.path.join(output_dir, INCOMPLETE_COMPILE_MARKER)):
         return
     existing = [
         name for name in _COMPILE_OUTPUT_NAMES
@@ -5394,6 +5402,65 @@ def _warn_if_generated_files_were_edited(output_dir, app_filename="app.py"):
 
 
 def compile_notebook_to_api(
+    notebook_path,
+    output_path,
+    only=None,
+    exclude=None,
+    source_notebook_path=None,
+    version_id=None,
+):
+    """Compile the notebook; if that fails partway, remove the output files
+    this very call created, so the directory is not left holding what looks
+    like a finished project (but has no .compile_metadata.json, which also
+    made the retry fail the foreign-files check). Anything that existed
+    before the call -- the user's own files, an earlier compile's output --
+    is never removed."""
+    output_dir = os.path.dirname(output_path)
+    tracked = {os.path.basename(output_path), COMPILE_METADATA_FILENAME, *_COMPILE_OUTPUT_NAMES}
+    with COMPILE_LOCK:
+        preexisting = {
+            name for name in tracked
+            if os.path.lexists(os.path.join(output_dir, name))
+        }
+        output_dir_existed = os.path.isdir(output_dir)
+        try:
+            result = _compile_notebook_to_api(
+                notebook_path, output_path, only, exclude,
+                source_notebook_path, version_id,
+            )
+            marker = os.path.join(output_dir, INCOMPLETE_COMPILE_MARKER)
+            if os.path.isfile(marker):
+                os.unlink(marker)
+            return result
+        except BaseException:
+            if os.path.isdir(output_dir):
+                for name in sorted(tracked - preexisting):
+                    path = os.path.join(output_dir, name)
+                    try:
+                        if os.path.islink(path) or os.path.isfile(path):
+                            os.unlink(path)
+                        elif os.path.isdir(path):
+                            shutil.rmtree(path)
+                    except OSError:
+                        pass
+                if not output_dir_existed:
+                    try:
+                        os.rmdir(output_dir)
+                    except OSError:
+                        pass
+                elif (
+                    COMPILE_METADATA_FILENAME in preexisting
+                    and not os.path.exists(os.path.join(output_dir, COMPILE_METADATA_FILENAME))
+                ):
+                    try:
+                        with open(os.path.join(output_dir, INCOMPLETE_COMPILE_MARKER), "w", encoding="utf-8") as f:
+                            f.write("The last compile into this directory failed partway.\n")
+                    except OSError:
+                        pass
+            raise
+
+
+def _compile_notebook_to_api(
     notebook_path,
     output_path,
     only=None,

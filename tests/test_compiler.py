@@ -17856,6 +17856,56 @@ def test_recompile_does_not_write_through_a_symlinked_output_file(tmp_path):
     assert (output_dir / "runtime" / "notebook_module.py").is_file()
 
 
+def test_failed_compile_removes_only_the_files_it_created_and_the_retry_succeeds(
+    tmp_path, monkeypatch
+):
+    """A compile that failed after writing app.py & co. left a project that
+    looked finished but had no .compile_metadata.json, and the next compile
+    of the same directory was refused as overwriting foreign files."""
+    import backend.compiler as compiler_module
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell("def add(a: int, b: int) -> int:\n    return a + b\n")
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    nbformat.write(notebook, str(notebook_path))
+    output_dir = tmp_path / "svc"
+    output_dir.mkdir()
+    (output_dir / "notes.txt").write_text("mine", encoding="utf-8")
+
+    real_readme = compiler_module.generate_readme
+
+    def failing_readme(*args, **kwargs):
+        raise RuntimeError("readme generation failed")
+
+    monkeypatch.setattr(compiler_module, "generate_readme", failing_readme)
+    with pytest.raises(RuntimeError, match="readme generation failed"):
+        compile_notebook(str(notebook_path), str(output_dir))
+
+    assert sorted(p.name for p in output_dir.iterdir()) == ["notes.txt"]
+    assert (output_dir / "notes.txt").read_text(encoding="utf-8") == "mine"
+
+    monkeypatch.setattr(compiler_module, "generate_readme", real_readme)
+    compile_notebook(str(notebook_path), str(output_dir))
+    assert (output_dir / "app.py").is_file()
+    assert (output_dir / ".compile_metadata.json").is_file()
+    assert (output_dir / "notes.txt").read_text(encoding="utf-8") == "mine"
+
+    # A failed recompile of a finished project keeps what was already there.
+    monkeypatch.setattr(compiler_module, "generate_readme", failing_readme)
+    with pytest.raises(RuntimeError):
+        compile_notebook(str(notebook_path), str(output_dir))
+    assert (output_dir / "app.py").is_file()
+    assert not (output_dir / ".compile_metadata.json").is_file()
+
+    # ... and the directory can still be recompiled afterwards.
+    monkeypatch.setattr(compiler_module, "generate_readme", real_readme)
+    compile_notebook(str(notebook_path), str(output_dir))
+    assert (output_dir / ".compile_metadata.json").is_file()
+    assert not (output_dir / ".compile_incomplete").exists()
+
+
 def test_requirements_name_the_azure_sdk_distributions_instead_of_the_bare_azure_package(tmp_path):
     """`import azure.storage.blob` / `from azure.identity import ...` went into
     requirements.txt as the obsolete "azure" meta-package, so the actual SDK
