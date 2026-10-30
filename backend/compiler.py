@@ -266,6 +266,14 @@ KNOWN_IMPORT_TO_DISTRIBUTION = {
     "xdrlib": "standard-xdrlib",
 }
 
+# Removed from the standard library in Python 3.13 with no PyPI backport at
+# all (`pip index versions <name>` finds nothing), so a bare requirement line
+# for them made `pip install -r requirements.txt` -- and the Docker build --
+# fail outright. They are left out of requirements.txt and reported instead.
+STDLIB_REMOVED_WITHOUT_PYPI_BACKPORT = frozenset(
+    {"lib2to3", "msilib", "nis", "ossaudiodev", "spwd"}
+)
+
 
 def distribution_name_for_import(import_name):
     """The actual PyPI distribution name that provides `import_name`, if
@@ -4861,7 +4869,8 @@ def resolve_requirements(imports, explicit_requirements=None, excluded_imports=N
     ]
 
     final_deps = sorted(
-        set(list(imports) + core_dependencies)
+        (set(imports) - STDLIB_REMOVED_WITHOUT_PYPI_BACKPORT)
+        | set(core_dependencies)
     )
 
     # Resolve each notebook import to the actual PyPI distribution name
@@ -4969,6 +4978,15 @@ def write_requirements(
     # the compile runs; one that isn't installed there is written bare, so the
     # image builds with whatever pip resolves that day -- not the version the
     # notebook was developed against. Say so instead of staying silent.
+    no_backport = sorted(set(imports) & STDLIB_REMOVED_WITHOUT_PYPI_BACKPORT)
+    if no_backport:
+        print(
+            "\n⚠ Left out of requirements.txt: "
+            f"{', '.join(no_backport)}. Python 3.13 removed these from the "
+            "standard library and PyPI has no replacement, so the compiled "
+            "app cannot import them on this Python.\n"
+        )
+
     unpinned = [dep for dep in all_deps if not _REQUIREMENT_HAS_VERSION.search(dep)]
     if unpinned:
         print(

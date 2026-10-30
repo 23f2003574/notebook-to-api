@@ -19617,3 +19617,21 @@ print("STARTUP_ENV_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "STARTUP_ENV_OK" in proc.stdout
+
+
+def test_requirements_leave_out_stdlib_modules_removed_without_a_pypi_backport(tmp_path, capsys):
+    """`import spwd` etc. on Python 3.13 wrote a bare `spwd` line, a name that
+    does not exist on PyPI, so `pip install -r requirements.txt` failed. Modules
+    that do have a backport (`cgi` -> legacy-cgi) are still mapped."""
+    from backend.compiler import resolve_requirements, write_requirements
+
+    imports = ["lib2to3", "msilib", "nis", "ossaudiodev", "spwd", "cgi"]
+    deps = resolve_requirements(imports)
+    names = {d.split("==")[0] for d in deps}
+
+    assert names.isdisjoint({"lib2to3", "msilib", "nis", "ossaudiodev", "spwd"})
+    assert "legacy-cgi" in names
+
+    write_requirements(imports, str(tmp_path))
+    assert "Left out of requirements.txt: lib2to3, msilib, nis, ossaudiodev, spwd" in capsys.readouterr().out
+    assert "spwd" not in (tmp_path / "requirements.txt").read_text()
