@@ -5423,7 +5423,13 @@ def generate_fastapi_code(
     lines.append("        # and GET /tasks entirely (for every task, not just this")
     lines.append("        # one), the moment FastAPI's own response serialization")
     lines.append("        # ran into it.")
-    lines.append("        result = _json_safe(jsonable_encoder(_json_safe(result)))")
+    lines.append("        try:")
+    lines.append("            result = _json_safe(jsonable_encoder(_json_safe(result)))")
+    lines.append("        except Exception as _encode_error:")
+    lines.append("            raise ValueError(")
+    lines.append("                f\"'{getattr(func, '__name__', 'task')}' returned a value that \"")
+    lines.append("                f\"is not JSON-serializable: {_unserializable_reason(result, _encode_error)}\"")
+    lines.append("            ) from _encode_error")
     # `task_id in TASKS` rather than an unconditional TASKS[task_id][...]
     # write: _evict_expired_tasks above never removes a 'processing' task,
     # but POST /tasks/reset still unconditionally clears every entry,

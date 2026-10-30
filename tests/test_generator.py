@@ -9455,3 +9455,33 @@ def test_openapi_request_example_is_accepted_for_qualified_and_fixed_tuple_types
     assert example["rgb"] == [0, 0, 0]
     assert example["when"] == "2024-01-01T00:00:00"
     assert response.status_code == 200, response.text
+
+
+def test_background_task_with_an_unserializable_result_names_the_function_and_reason(monkeypatch):
+    """The sync endpoint says "'f' returned a value that is not
+    JSON-serializable: <reason>"; a background task used to record only
+    the raw list of encoder TypeErrors."""
+    functions = [{"name": "train_model", "args": [], "return_type": "dict"}]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    def train_model():
+        return print
+
+    namespace["notebook_module"].train_model = train_model
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    response = client.post("/train_model", json={}, headers=headers)
+
+    task = namespace["TASKS"][response.json()["task_id"]]
+    assert task["status"] == "failed"
+    assert "'train_model' returned a value that is not JSON-serializable" in task["error"]
+    assert "TypeError(" not in task["error"]
