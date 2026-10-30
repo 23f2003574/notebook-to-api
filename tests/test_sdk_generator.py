@@ -5204,6 +5204,12 @@ def test_generate_typescript_sdk_background_endpoint_gets_typed_submission_and_r
     assert '  status: "processing";' in source
     assert "export interface TrainModelTaskResult {" in source
     assert "result?: number;" in source
+    for field in (
+        "created_at?: number;", "finished_at?: number;", "endpoint?: string;",
+        "callback_url?: string | null;", "timed_out?: boolean;",
+        "webhook?: Record<string, any>;",
+    ):
+        assert field in source
     assert (
         "async train_model(payload: TrainModelRequest, callbackUrl?: string): "
         "Promise<TrainModelResponse> {" in source
@@ -5807,6 +5813,13 @@ def test_generate_python_sdk_background_endpoint_gets_typed_submission_and_resul
     assert '    status: Literal["processing"]' in source
     assert "class TrainModelTaskResult(TypedDict, total=False):" in source
     assert "    result: float" in source
+    # the record GET /tasks/{id} really returns carries these too
+    for field in (
+        "    created_at: float", "    finished_at: float", "    endpoint: str",
+        "    callback_url: Optional[str]", "    timed_out: bool",
+        "    webhook: Dict[str, Any]",
+    ):
+        assert field in source
     assert (
         "def train_model(self, payload: TrainModelRequest, "
         "callback_url: str = None) -> "

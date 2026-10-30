@@ -591,6 +591,12 @@ def _typescript_task_result_interface(interface_name, return_type):
         "  status: string;",
         f"  result?: {_python_type_to_typescript(return_type)};",
         "  error?: string;",
+        "  created_at?: number;",
+        "  finished_at?: number;",
+        "  endpoint?: string;",
+        "  callback_url?: string | null;",
+        "  timed_out?: boolean;",
+        "  webhook?: Record<string, any>;",
         "}",
     ]
 
@@ -2238,6 +2244,13 @@ def generate_python_sdk(
                             return_type
                         ),
                         "error": "str",
+                        # The rest of what GET /tasks/{id} actually returns.
+                        "created_at": "float",
+                        "finished_at": "float",
+                        "endpoint": "str",
+                        "callback_url": "Optional[str]",
+                        "timed_out": "bool",
+                        "webhook": "Dict[str, Any]",
                     },
                 )
             )
