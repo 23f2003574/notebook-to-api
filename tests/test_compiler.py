@@ -758,6 +758,20 @@ def test_import_time_hazards_flag_a_name_a_def_header_uses_but_the_notebook_neve
     assert found("from __future__ import annotations\ndef f(a: Undefined) -> int:\n    return 1\n") == []
 
 
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="PEP 695 syntax needs Python 3.12+")
+def test_import_time_hazards_treat_pep695_type_parameters_as_bound():
+    """`def f[T](x: T) -> T` is valid and runs; T was reported as an undefined
+    name that "raises NameError" at startup."""
+    from backend.compiler import _find_import_time_hazards
+
+    def found(source):
+        return [h["call"] for h in _find_import_time_hazards([source]) if h["kind"] == "undefined_name"]
+
+    assert found("def f[T](x: T) -> T:\n    return x\n") == []
+    assert found("class Box[T, *Ts, **P](Base[T]):\n    pass\n") == ["Base"]
+    assert found("def f[T](x: T, y: Other) -> T:\n    return x\n") == ["Other"]
+
+
 def test_import_time_hazards_flag_a_top_level_loop_that_never_ends():
     """`while True:` with no `break` at module level never finishes importing,
     so the compiled app hangs on startup -- and compile said nothing."""

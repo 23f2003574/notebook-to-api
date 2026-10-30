@@ -3650,6 +3650,9 @@ def _undefined_name_hazards(parsed):
                 bound.add(node.id)
             elif isinstance(node, ast.arg):
                 bound.add(node.arg)
+            elif type(node).__name__ in ("TypeVar", "ParamSpec", "TypeVarTuple"):
+                # PEP 695 `def f[T](x: T)`: T is bound by the def itself
+                bound.add(node.name)
             elif isinstance(node, ast.ExceptHandler) and node.name:
                 bound.add(node.name)
             elif isinstance(node, (ast.Global, ast.Nonlocal)):
