@@ -1669,7 +1669,7 @@ def generate_fastapi_code(
     lines.append("from urllib.parse import urlparse")
     lines.append("from datetime import datetime")
     lines.append("import time")
-    lines.append("from pydantic import BaseModel, Field, TypeAdapter")
+    lines.append("from pydantic import BaseModel, Field, TypeAdapter, model_validator")
     lines.append(
         "from pydantic.errors import PydanticInvalidForJsonSchema, "
         "PydanticSchemaGenerationError, PydanticUndefinedAnnotation, "
@@ -5848,6 +5848,22 @@ def generate_fastapi_code(
                 f"        'json_schema_extra': {{'example': {repr(_json_safe_example(example_payload))}}}"
             )
         lines.append("    }")
+        # callback_url belongs in the query string. Sent in the JSON body it was
+        # dropped as an unknown field, the task ran, and no webhook was ever
+        # delivered -- with nothing telling the caller why.
+        if resolve_is_background(func_name, background_overrides) and not any(
+            a.get("name") == "callback_url" for a in func.get("args", [])
+        ):
+            lines.append("")
+            lines.append("    @model_validator(mode='before')")
+            lines.append("    @classmethod")
+            lines.append("    def _nb_reject_body_callback_url(cls, data):")
+            lines.append("        if isinstance(data, dict) and 'callback_url' in data:")
+            lines.append("            raise ValueError(")
+            lines.append(f"                \"callback_url is a query parameter (POST /{func_name}?callback_url=...), \"")
+            lines.append("                \"not a JSON body field\"")
+            lines.append("            )")
+            lines.append("        return data")
         lines.append("")
     # Generate endpoints
     for func in functions:

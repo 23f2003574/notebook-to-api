@@ -9609,3 +9609,39 @@ def test_webhook_delivery_refuses_a_redirect_to_a_non_public_address(monkeypatch
     assert hits["internal"] == []
     assert followed["delivered"] is True
     assert hits["safe"] == ["/target"]
+
+
+def test_callback_url_in_a_background_request_body_is_rejected_not_silently_dropped(monkeypatch):
+    """callback_url is a query parameter. In the JSON body it was ignored as an
+    unknown field: the task ran and no webhook was ever sent. A function that
+    has its own `callback_url` parameter, and a sync endpoint, are unaffected."""
+    functions = [
+        {"name": "train_model", "args": [], "return_type": "dict"},
+        {"name": "train_hooked", "args": [{"name": "callback_url", "type": "str"}], "return_type": "dict"},
+        {"name": "plain", "args": [], "return_type": "dict"},
+    ]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    notebook_module = namespace["notebook_module"]
+    notebook_module.train_model = lambda: {}
+    notebook_module.train_hooked = lambda callback_url: {"got": callback_url}
+    notebook_module.plain = lambda: {}
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    rejected = client.post("/train_model", json={"callback_url": "https://hooks.example/x"}, headers=headers)
+    assert rejected.status_code == 422
+    assert "callback_url is a query parameter" in rejected.text
+    assert not namespace["TASKS"]
+
+    assert client.post("/train_model", json={}, headers=headers).status_code == 200
+    assert client.post("/train_hooked", json={"callback_url": "https://hooks.example/x"}, headers=headers).status_code == 200
+    assert client.post("/plain", json={"callback_url": "ignored"}, headers=headers).status_code == 200
