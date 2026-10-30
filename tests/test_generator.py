@@ -9539,3 +9539,73 @@ def test_timed_out_sync_calls_still_count_against_max_concurrent_calls(monkeypat
     assert set(statuses) == {504}
     assert state["peak"] <= 2
     assert recovered.status_code == 200
+
+
+def test_webhook_delivery_refuses_a_redirect_to_a_non_public_address(monkeypatch):
+    """urlopen followed redirects on its own, so a public callback_url that
+    answered 302 to an internal address (cloud metadata, localhost) made the
+    app request it. A redirect to a safe address is still followed."""
+    import http.server
+    import threading
+
+    functions = [{"name": "train_model", "args": [], "return_type": "dict"}]
+    code = generate_fastapi_code(functions)
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    hits = {"internal": [], "safe": []}
+
+    def server(handler_class):
+        srv = http.server.HTTPServer(("127.0.0.1", 0), handler_class)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        return srv
+
+    class Target(http.server.BaseHTTPRequestHandler):
+        log = None
+
+        def do_GET(self):
+            self.log.append(self.path)
+            self.send_response(200)
+            self.end_headers()
+
+        do_POST = do_GET
+
+        def log_message(self, *args):
+            pass
+
+    internal = server(type("Internal", (Target,), {"log": hits["internal"]}))
+    safe = server(type("Safe", (Target,), {"log": hits["safe"]}))
+
+    def redirecting_to(port):
+        class Redirect(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{port}/target")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        return server(Redirect)
+
+    try:
+        # Only the "internal" port counts as non-public (the real check resolves DNS).
+        namespace["_is_unsafe_webhook_host"] = lambda url: f":{internal.server_port}" in url
+
+        blocked = namespace["_deliver_task_webhook"](
+            f"http://127.0.0.1:{redirecting_to(internal.server_port).server_port}/hook", {"task_id": "t"}
+        )
+        followed = namespace["_deliver_task_webhook"](
+            f"http://127.0.0.1:{redirecting_to(safe.server_port).server_port}/hook", {"task_id": "t"}
+        )
+    finally:
+        import urllib.request
+
+        urllib.request.install_opener(None)
+
+    assert blocked["delivered"] is False
+    assert blocked["status_code"] == 302
+    assert hits["internal"] == []
+    assert followed["delivered"] is True
+    assert hits["safe"] == ["/target"]

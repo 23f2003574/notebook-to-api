@@ -16,7 +16,7 @@ from pathlib import Path
 # anywhere. Rejecting these outright avoids ever emitting that endpoint
 # ordering trap.
 RESERVED_INFRASTRUCTURE_NAMES = frozenset({
-    "app", "TASKS", "API_KEYS", "API_KEY_HEADER_NAME", "STRICT_REQUEST_FIELDS", "MAX_CONCURRENT_CALLS", "_CALL_LIMITER", "_THREAD_LIMITER", "_thread_slot", "_run_in_thread", "_NoLimit", "_NO_LIMIT", "_call_slot", "DEFAULT_API_KEY", "USING_DEFAULT_API_KEY", "REQUIRE_CUSTOM_API_KEY", "START_TIME",
+    "app", "TASKS", "API_KEYS", "API_KEY_HEADER_NAME", "STRICT_REQUEST_FIELDS", "MAX_CONCURRENT_CALLS", "_CALL_LIMITER", "_THREAD_LIMITER", "_thread_slot", "_run_in_thread", "_WebhookRedirectGuard", "_NoLimit", "_NO_LIMIT", "_call_slot", "DEFAULT_API_KEY", "USING_DEFAULT_API_KEY", "REQUIRE_CUSTOM_API_KEY", "START_TIME",
     "GENERATED_AT", "PYTHON_VERSION", "NOTEBOOK_TO_API_VERSION", "ALLOWED_ORIGINS",
     "PUBLIC_URL", "DISABLE_DOCS",
     "MAX_REQUEST_BODY_BYTES", "MaxRequestBodySizeMiddleware",
@@ -5215,6 +5215,26 @@ def generate_fastapi_code(
     # Stripe webhooks already use. Omitted entirely when WEBHOOK_SECRET
     # is empty (the default), so an existing receiver that predates this
     # feature keeps working unmodified.
+    # urlopen follows redirects on its own, and only the original callback_url
+    # was checked above: a public URL answering 302 to an internal address
+    # (cloud metadata, localhost) made the app request it. Webhook requests
+    # are marked, and this installed handler re-checks every redirect target
+    # for them; any other urllib use in the process behaves as before.
+    lines.append("class _WebhookRedirectGuard(urllib.request.HTTPRedirectHandler):")
+    lines.append("    def redirect_request(self, req, fp, code, msg, headers, newurl):")
+    lines.append("        if getattr(req, '_notebook_webhook', False) and (")
+    lines.append("            urlparse(newurl).scheme not in ('http', 'https')")
+    lines.append("            or _is_unsafe_webhook_host(newurl)")
+    lines.append("        ):")
+    lines.append("            raise urllib.error.HTTPError(")
+    lines.append("                req.full_url, code,")
+    lines.append("                'redirect to a non-public address refused',")
+    lines.append("                headers, fp,")
+    lines.append("            )")
+    lines.append("        return super().redirect_request(req, fp, code, msg, headers, newurl)")
+    lines.append("")
+    lines.append("urllib.request.install_opener(urllib.request.build_opener(_WebhookRedirectGuard()))")
+    lines.append("")
     lines.append("def _deliver_task_webhook(callback_url, payload):")
     lines.append("    attempt = 0")
     # Re-checked here, not just once at task-submission time (see the
@@ -5302,6 +5322,7 @@ def generate_fastapi_code(
     lines.append("                    headers=headers,")
     lines.append("                    method='POST',")
     lines.append("                )")
+    lines.append("                request._notebook_webhook = True")
     lines.append("                response = urllib.request.urlopen(")
     lines.append("                    request, timeout=WEBHOOK_TIMEOUT_SECONDS")
     lines.append("                )")
