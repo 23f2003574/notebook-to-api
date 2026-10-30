@@ -9645,3 +9645,43 @@ def test_callback_url_in_a_background_request_body_is_rejected_not_silently_drop
     assert client.post("/train_model", json={}, headers=headers).status_code == 200
     assert client.post("/train_hooked", json={"callback_url": "https://hooks.example/x"}, headers=headers).status_code == 200
     assert client.post("/plain", json={"callback_url": "ignored"}, headers=headers).status_code == 200
+
+
+def test_sync_function_can_use_asyncio_get_event_loop_in_its_worker_thread(monkeypatch):
+    """Sync functions run in pooled worker threads, which have no event loop,
+    so `asyncio.get_event_loop().run_until_complete(...)` -- fine in Jupyter --
+    raised "There is no current event loop". `asyncio.run` and plain sync
+    functions keep working, including when a thread is reused."""
+    functions = [
+        {"name": "via_loop", "args": [{"name": "x", "type": "int"}], "return_type": "int"},
+        {"name": "via_run", "args": [{"name": "x", "type": "int"}], "return_type": "int"},
+        {"name": "plain", "args": [{"name": "x", "type": "int"}], "return_type": "int"},
+    ]
+
+    code = generate_fastapi_code(functions)
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    import asyncio
+
+    async def double(x):
+        await asyncio.sleep(0)
+        return x * 2
+
+    notebook_module = namespace["notebook_module"]
+    notebook_module.via_loop = lambda x: asyncio.get_event_loop().run_until_complete(double(x))
+    notebook_module.via_run = lambda x: asyncio.run(double(x))
+    notebook_module.plain = lambda x: x + 1
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"])
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    for _ in range(3):  # worker threads are reused between calls
+        for name, expected in (("via_loop", 8), ("via_run", 8), ("plain", 5)):
+            response = client.post(f"/{name}", json={"x": 4}, headers=headers)
+            assert response.status_code == 200, (name, response.text)
+            assert response.json() == {"result": expected}

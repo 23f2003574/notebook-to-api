@@ -2646,9 +2646,21 @@ def generate_fastapi_code(
     lines.append("            except (SystemExit, KeyboardInterrupt, GeneratorExit) as e:")
     lines.append("                raise _exit_error(e) from None")
     lines.append("    else:")
+    # A sync function runs in a pooled worker thread, which has no asyncio event
+    # loop: notebook code calling asyncio.get_event_loop() (it works in Jupyter)
+    # raised "There is no current event loop". Give the thread one on demand.
+    lines.append("        def _ensure_thread_event_loop():")
+    lines.append("            import warnings as _warnings")
+    lines.append("            try:")
+    lines.append("                with _warnings.catch_warnings():")
+    lines.append("                    _warnings.simplefilter('ignore')")
+    lines.append("                    _asyncio.get_event_loop()")
+    lines.append("            except RuntimeError:")
+    lines.append("                _asyncio.set_event_loop(_asyncio.new_event_loop())")
     lines.append("        @functools.wraps(func)")
     lines.append("        def _shielded(*args, **kwargs):")
     lines.append("            try:")
+    lines.append("                _ensure_thread_event_loop()")
     lines.append("                return func(*args, **kwargs)")
     # A sync function runs in a worker thread, where a real cancellation never
     # surfaces as CancelledError -- one raised here is the notebook's own
