@@ -28362,7 +28362,7 @@ def test_export_sdk_prefers_a_json_export_over_a_yaml_one_when_both_exist(
 
     isolated_dir = tmp_path / "generated_export_sdk_prefers_json_test"
     isolated_dir.mkdir()
-    (isolated_dir / "openapi.json").write_text("{}", encoding="utf-8")
+    (isolated_dir / "openapi.json").write_text('{"openapi": "3.0.0", "paths": {}}', encoding="utf-8")
     # Deliberately not valid JSON -- if export-sdk picked this file
     # instead, _load_openapi_schema would raise and this test would see a
     # 400, not the 200 a real "both exports present" caller expects.
@@ -31486,7 +31486,7 @@ def test_list_generated_files_modified_since_compile_ignores_an_unrelated_export
 
     _compile_a_notebook("generated_files_modified_export_test.ipynb")
 
-    (Path(GENERATED_DIR) / "openapi.json").write_text("{}", encoding="utf-8")
+    (Path(GENERATED_DIR) / "openapi.json").write_text('{"openapi": "3.0.0", "paths": {}}', encoding="utf-8")
 
     resp = client.get("/api/generated")
 

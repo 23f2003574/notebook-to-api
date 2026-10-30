@@ -975,7 +975,7 @@ def _load_openapi_schema(openapi_path):
         raw = f.read()
 
     try:
-        return json.loads(raw)
+        schema = json.loads(raw)
     except json.JSONDecodeError as exc:
         hint = (
             " This looks like a YAML export (export-openapi --format "
@@ -987,6 +987,16 @@ def _load_openapi_schema(openapi_path):
         raise ValueError(
             f"'{openapi_path}' is not a valid OpenAPI JSON schema: {exc}.{hint}"
         ) from exc
+
+    # Valid JSON that is not an OpenAPI schema at all (a notebook, a package
+    # manifest) used to "succeed" with an SDK that had no endpoints.
+    if not isinstance(schema, dict) or not isinstance(schema.get("paths"), dict):
+        raise ValueError(
+            f"'{openapi_path}' is valid JSON but not an OpenAPI schema (it has "
+            "no 'paths' object); export one with `export-openapi` first."
+        )
+
+    return schema
 
 
 def _operation_description(methods):

@@ -32282,3 +32282,21 @@ def test_cli_notebook_argument_that_is_a_directory_gets_a_clear_error(tmp_path, 
     assert "is a directory, not a notebook" in result.stdout + result.stderr
     assert "Errno 21" not in result.stdout + result.stderr
     assert "Traceback" not in result.stderr
+
+
+@pytest.mark.parametrize("language", ["python", "typescript"])
+def test_cli_export_sdk_rejects_json_that_is_not_an_openapi_schema(tmp_path, language):
+    """A notebook (valid JSON, no `paths`) passed as --openapi used to exit 0
+    and write an SDK with no endpoints."""
+    notebook = tmp_path / "nb.ipynb"
+    notebook.write_text(json.dumps({"cells": [], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}), encoding="utf-8")
+    output = tmp_path / "client.out"
+
+    result = _run_cli(
+        ["export-sdk", "--openapi", str(notebook), "--language", language, "--output", str(output)],
+        tmp_path,
+    )
+
+    assert result.returncode == 1
+    assert "valid JSON but not an OpenAPI schema" in result.stderr
+    assert not output.exists()
