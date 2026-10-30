@@ -9485,3 +9485,57 @@ def test_background_task_with_an_unserializable_result_names_the_function_and_re
     assert task["status"] == "failed"
     assert "'train_model' returned a value that is not JSON-serializable" in task["error"]
     assert "TypeError(" not in task["error"]
+
+
+def test_timed_out_sync_calls_still_count_against_max_concurrent_calls(monkeypatch):
+    """A synchronous call abandoned by the request timeout kept running
+    while its slot was freed, so repeated timeouts on a hung function ran
+    far more threads than NOTEBOOK_API_MAX_CONCURRENT_CALLS allows."""
+    import asyncio
+    import threading
+    import time
+
+    import httpx
+
+    monkeypatch.setenv("NOTEBOOK_API_MAX_CONCURRENT_CALLS", "2")
+    monkeypatch.setenv("NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS", "1")
+    code = generate_fastapi_code([{"name": "slow", "args": [{"name": "x", "type": "int"}], "return_type": "int"}])
+
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    state = {"running": 0, "peak": 0, "sleep": 2.2}
+    lock = threading.Lock()
+
+    def slow(x):
+        with lock:
+            state["running"] += 1
+            state["peak"] = max(state["peak"], state["running"])
+        try:
+            time.sleep(state["sleep"])
+            return x
+        finally:
+            with lock:
+                state["running"] -= 1
+
+    namespace["notebook_module"].slow = slow
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=namespace["app"])
+        headers = {"X-API-Key": "notebook-to-api-dev-key"}
+        async with httpx.AsyncClient(transport=transport, base_url="http://t", headers=headers, timeout=30) as client:
+            statuses = []
+            for _ in range(3):
+                responses = await asyncio.gather(*[client.post("/slow", json={"x": i}) for i in range(2)])
+                statuses += [r.status_code for r in responses]
+            await asyncio.sleep(3)  # the abandoned threads finish and free their slots
+            state["sleep"] = 0
+            recovered = await client.post("/slow", json={"x": 7})
+        return statuses, recovered
+
+    statuses, recovered = asyncio.run(scenario())
+
+    assert set(statuses) == {504}
+    assert state["peak"] <= 2
+    assert recovered.status_code == 200

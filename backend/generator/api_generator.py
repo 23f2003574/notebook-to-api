@@ -16,7 +16,7 @@ from pathlib import Path
 # anywhere. Rejecting these outright avoids ever emitting that endpoint
 # ordering trap.
 RESERVED_INFRASTRUCTURE_NAMES = frozenset({
-    "app", "TASKS", "API_KEYS", "API_KEY_HEADER_NAME", "STRICT_REQUEST_FIELDS", "MAX_CONCURRENT_CALLS", "_CALL_LIMITER", "_NoLimit", "_NO_LIMIT", "_call_slot", "DEFAULT_API_KEY", "USING_DEFAULT_API_KEY", "REQUIRE_CUSTOM_API_KEY", "START_TIME",
+    "app", "TASKS", "API_KEYS", "API_KEY_HEADER_NAME", "STRICT_REQUEST_FIELDS", "MAX_CONCURRENT_CALLS", "_CALL_LIMITER", "_THREAD_LIMITER", "_thread_slot", "_run_in_thread", "_NoLimit", "_NO_LIMIT", "_call_slot", "DEFAULT_API_KEY", "USING_DEFAULT_API_KEY", "REQUIRE_CUSTOM_API_KEY", "START_TIME",
     "GENERATED_AT", "PYTHON_VERSION", "NOTEBOOK_TO_API_VERSION", "ALLOWED_ORIGINS",
     "PUBLIC_URL", "DISABLE_DOCS",
     "MAX_REQUEST_BODY_BYTES", "MaxRequestBodySizeMiddleware",
@@ -2560,6 +2560,7 @@ def generate_fastapi_code(
         ')'
     )
     lines.append("_CALL_LIMITER = None")
+    lines.append("_THREAD_LIMITER = None")
     lines.append("")
     lines.append("class _NoLimit:")
     lines.append("    async def __aenter__(self):")
@@ -2579,6 +2580,52 @@ def generate_fastapi_code(
     lines.append("    if _CALL_LIMITER is None:")
     lines.append("        _CALL_LIMITER = anyio.CapacityLimiter(MAX_CONCURRENT_CALLS)")
     lines.append("    return _CALL_LIMITER")
+    lines.append("")
+    # A second limiter whose token is held by the worker thread itself until it
+    # really finishes. _call_slot is released as soon as a timed-out call is
+    # abandoned, so without this the abandoned-but-still-running threads piled
+    # up past MAX_CONCURRENT_CALLS (anyio also frees its own limiter token on
+    # cancellation, so the token is taken and released by hand).
+    lines.append("def _thread_slot():")
+    lines.append("    global _THREAD_LIMITER")
+    lines.append("    if MAX_CONCURRENT_CALLS <= 0:")
+    lines.append("        return None")
+    lines.append("    if _THREAD_LIMITER is None:")
+    lines.append("        _THREAD_LIMITER = anyio.CapacityLimiter(MAX_CONCURRENT_CALLS)")
+    lines.append("    return _THREAD_LIMITER")
+    lines.append("")
+    lines.append("async def _run_in_thread(call):")
+    lines.append("    limiter = _thread_slot()")
+    lines.append("    if limiter is None:")
+    lines.append("        return await anyio.to_thread.run_sync(call, abandon_on_cancel=True)")
+    lines.append("    token = object()")
+    lines.append("    await limiter.acquire_on_behalf_of(token)")
+    lines.append("    gate = threading.Lock()")
+    lines.append("    state = {'released': False}")
+    lines.append("    def _release():")
+    lines.append("        with gate:")
+    lines.append("            if state['released']:")
+    lines.append("                return False")
+    lines.append("            state['released'] = True")
+    lines.append("        return True")
+    lines.append("    def _held():")
+    lines.append("        state['started'] = True")
+    lines.append("        try:")
+    lines.append("            return call()")
+    lines.append("        finally:")
+    lines.append("            if _release():")
+    lines.append("                try:")
+    lines.append("                    anyio.from_thread.run_sync(limiter.release_on_behalf_of, token)")
+    lines.append("                except Exception:")
+    lines.append("                    pass")
+    lines.append("    try:")
+    lines.append("        return await anyio.to_thread.run_sync(_held, abandon_on_cancel=True)")
+    lines.append("    except BaseException:")
+    lines.append("        # Never reached a thread (cancelled while waiting for one): nothing")
+    lines.append("        # will release the token for it.")
+    lines.append("        if not state.get('started') and _release():")
+    lines.append("            limiter.release_on_behalf_of(token)")
+    lines.append("        raise")
     lines.append("")
     lines.append("def _shield_exit(func):")
     lines.append("    import asyncio as _asyncio")
@@ -2722,7 +2769,7 @@ def generate_fastapi_code(
     lines.append("            if inspect.isasyncgen(result):")
     lines.append("                return await _drain_async_gen(result)")
     lines.append("            return await result")
-    lines.append("        return await anyio.to_thread.run_sync(call, abandon_on_cancel=True)")
+    lines.append("        return await _run_in_thread(call)")
     lines.append("")
     # Bounds _deliver_task_webhook's own single delivery attempt below --
     # a caller-supplied ?callback_url= pointing at a slow or unresponsive
@@ -5404,9 +5451,8 @@ def generate_fastapi_code(
     lines.append("            elif inspect.iscoroutinefunction(func):")
     lines.append("                result = await func(*args, **kwargs)")
     lines.append("            else:")
-    lines.append("                result = await anyio.to_thread.run_sync(")
-    lines.append("                    functools.partial(func, *args, **kwargs),")
-    lines.append("                    abandon_on_cancel=True,")
+    lines.append("                result = await _run_in_thread(")
+    lines.append("                    functools.partial(func, *args, **kwargs)")
     lines.append("                )")
     lines.append("        # jsonable_encoder both validates that `result` is")
     lines.append("        # actually something GET /tasks/{task_id} -- and GET")
