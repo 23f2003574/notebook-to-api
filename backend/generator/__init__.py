@@ -1,956 +1,500 @@
-from .pipeline_route_generator import (
-    PipelineRouteGenerator
-)
-from .pipeline_model_generator import (
-    PipelineModelGenerator
-)
-from .pipeline_schema_generator import (
-    PipelineSchemaGenerator
-)
-from .pipeline_metadata import (
-    PipelineMetadata,
-    PipelineFieldMetadata
-)
-from .openapi_schema_generator import (
-    OpenAPISchemaGenerator
-)
-from .pipeline_contract_validator import (
-    PipelineContractValidator
-)
-from .sdk_type_generator import (
-    SDKTypeGenerator
-)
-from .typescript_interface_generator import (
-    TypeScriptInterfaceGenerator
-)
-from .typescript_client_generator import (
-    TypeScriptClientGenerator
-)
-from .typescript_sdk_generator import (
-    TypeScriptSDK,
-    TypeScriptSDKGenerator
-)
-from .sdk_index_generator import (
-    SDKIndexGenerator
-)
-from .typescript_package_generator import (
-    TypeScriptPackageGenerator
-)
-from .sdk_project_generator import (
-    SDKProject,
-    SDKProjectGenerator
-)
-from .python_sdk_generator import (
-    PythonSDK,
-    PythonSDKGenerator
-)
-from .python_model_generator import (
-    PythonModelGenerator
-)
-from .python_package_generator import (
-    PythonPackage,
-    PythonPackageGenerator
-)
-from .python_exception_generator import (
-    PythonExceptionGenerator
-)
-from .python_async_sdk_generator import (
-    PythonAsyncSDKGenerator
-)
-from .python_pagination_generator import (
-    PythonPaginationGenerator
-)
-from .python_docs_generator import (
-    PythonDocsGenerator
-)
-from .python_packaging_generator import (
-    PythonPackagingGenerator
-)
-from .business_capability_mapping import (
-    BusinessCapability,
-    BusinessCapabilityMappingEngine
-)
-from .enterprise_architecture import (
-    EnterpriseArchitecture,
-    EnterpriseArchitectureEngine
-)
-from .digital_transformation import (
-    DigitalTransformation,
-    DigitalTransformationEngine
-)
-from .enterprise_integration import (
-    EnterpriseIntegration,
-    EnterpriseIntegrationIntelligenceEngine
-)
-from .enterprise_recommendation import (
-    EnterpriseRecommendation,
-    EnterpriseRecommendationEngine
-)
-from .enterprise_scorecard import (
-    EnterpriseScorecard,
-    EnterpriseScorecardEngine
-)
-from .enterprise_report import (
-    EnterpriseReport,
-    EnterpriseReportGenerator
-)
-from .enterprise_intelligence_control_center import (
-    EnterpriseIntelligenceControlCenter,
-    EnterpriseIntelligenceControlCenterGenerator
-)
-from .enterprise_automation import (
-    EnterpriseAutomation,
-    EnterpriseAutomationEngine
-)
-from .enterprise_remediation import (
-    EnterpriseRemediation,
-    EnterpriseRemediationEngine
-)
-from .enterprise_governance import (
-    EnterpriseGovernance,
-    EnterpriseGovernanceEngine
-)
-from .autonomous_enterprise import (
-    AutonomousEnterprise,
-    AutonomousEnterpriseEngine
-)
-from .platform_readiness_assessment import (
-    PlatformReadinessAssessment,
-    PlatformReadinessAssessmentEngine
-)
-from .sdk_release_generator import (
-    SDKReleaseMetadata,
-    SDKReleaseGenerator
-)
-from .multilanguage_release_generator import (
-    MultiLanguageRelease,
-    MultiLanguageReleaseGenerator
-)
-from .sdk_container_generator import (
-    SDKContainerGenerator
-)
-from .deployment_validator import (
-    ValidationResult,
-    DeploymentValidator
-)
-from .deployment_target_validators import (
-    DockerValidator,
-    KubernetesValidator,
-    TerraformValidator
-)
-from .deployment_compatibility import (
-    DeploymentCompatibility,
-    DeploymentCompatibilityAnalyzer
-)
-from .deployment_recommender import (
-    DeploymentRecommendation,
-    DeploymentRecommender
-)
-from .deployment_cost_analyzer import (
-    DeploymentCost,
-    DeploymentCostAnalyzer
-)
-from .deployment_planner import (
-    DeploymentPlan,
-    DeploymentPlanner
-)
-from .deployment_health import (
-    DeploymentHealth,
-    DeploymentHealthAnalyzer
-)
-from .deployment_readiness import (
-    DeploymentReadiness,
-    DeploymentReadinessAnalyzer
-)
-from .deployment_risk import (
-    DeploymentRisk,
-    DeploymentRiskAnalyzer
-)
-from .deployment_incident import (
-    DeploymentIncident,
-    DeploymentIncidentAnalyzer
-)
-from .deployment_alert import (
-    DeploymentAlert,
-    DeploymentAlertGenerator
-)
-from .deployment_metrics import (
-    DeploymentMetrics,
-    DeploymentMetricsAnalyzer
-)
-from .deployment_dashboard import (
-    DeploymentDashboard,
-    DeploymentDashboardGenerator
-)
-from .deployment_timeline import (
-    DeploymentEvent,
-    DeploymentTimeline,
-    DeploymentTimelineGenerator
-)
-from .deployment_audit import (
-    DeploymentAudit,
-    DeploymentAuditGenerator
-)
-from .deployment_approval import (
-    DeploymentApproval,
-    DeploymentApprovalEngine
-)
-from .deployment_execution import (
-    DeploymentStep,
-    DeploymentExecutionPlan,
-    DeploymentExecutionEngine
-)
-from .deployment_automation import (
-    DeploymentAutomation,
-    DeploymentAutomationEngine
-)
-from .deployment_control_center import (
-    DeploymentControlCenter,
-    DeploymentControlCenterGenerator
-)
-from .deployment_runbook import (
-    RunbookStep,
-    DeploymentRunbook,
-    DeploymentRunbookGenerator
-)
-from .deployment_rollback import (
-    RollbackStep,
-    DeploymentRollback,
-    DeploymentRollbackGenerator
-)
-from .deployment_recovery import (
-    RecoveryAction,
-    DeploymentRecovery,
-    DeploymentRecoveryGenerator
-)
-from .post_incident_analysis import (
-    PostIncidentAnalysis,
-    PostIncidentAnalyzer
-)
-from .reliability_recommendation import (
-    ReliabilityRecommendation,
-    ReliabilityRecommendationEngine
-)
-from .failure_pattern import (
-    FailurePattern,
-    FailurePatternDetector
-)
-from .reliability_trend import (
-    ReliabilityTrend,
-    ReliabilityTrendAnalyzer
-)
-from .reliability_forecast import (
-    ReliabilityForecast,
-    ReliabilityForecastEngine
-)
-from .reliability_scorecard import (
-    ReliabilityScorecard,
-    ReliabilityScorecardEngine,
-    ReliabilityScorecardGenerator
-)
-from .reliability_governance import (
-    ReliabilityGovernance,
-    ReliabilityGovernanceEngine
-)
-from .reliability_maturity import (
-    ReliabilityMaturity,
-    ReliabilityMaturityEngine
-)
-from .reliability_roadmap import (
-    RoadmapMilestone,
-    ReliabilityRoadmap,
-    ReliabilityRoadmapEngine
-)
-from .reliability_control_center import (
-    ReliabilityControlCenter,
-    ReliabilityControlCenterGenerator
-)
-from .api_documentation import (
-    EndpointDocumentation,
-    APIDocumentationGenerator
-)
-from .openapi_description import (
-    OpenAPIDescription,
-    OpenAPIDescriptionGenerator
-)
-from .api_examples import (
-    APIUsageExample,
-    APIUsageExampleGenerator,
-    APIExample,
-    APIExampleEngine
-)
-from .sdk_quickstart import (
-    SDKQuickStart,
-    SDKQuickStartGenerator
-)
-from .api_error_documentation import (
-    APIErrorDocumentation,
-    APIErrorDocumentationGenerator
-)
-from .api_tutorial import (
-    TutorialStep,
-    APITutorial,
-    APITutorialGenerator
-)
-from .api_cookbook import (
-    CookbookRecipe,
-    APICookbook,
-    APICookbookGenerator
-)
-from .api_faq import (
-    FAQItem,
-    APIFAQ,
-    APIFAQGenerator
-)
-from .api_troubleshooting import (
-    TroubleshootingIssue,
-    APITroubleshootingGuide,
-    APITroubleshootingGenerator
-)
-from .api_migration import (
-    MigrationStep,
-    APIMigrationGuide,
-    APIMigrationGuideGenerator
-)
-from .api_changelog import (
-    ChangelogEntry,
-    APIChangelog,
-    APIChangelogGenerator
-)
-from .developer_portal import (
-    DeveloperPortal,
-    DeveloperPortalGenerator
-)
-from .developer_experience import (
-    DeveloperExperience,
-    DeveloperExperienceIntelligenceEngine
-)
-from .internal_developer_platform import (
-    InternalDeveloperPlatform,
-    InternalDeveloperPlatformEngine
-)
-from .platform_engineering_architecture import (
-    PlatformEngineeringArchitecture,
-    PlatformEngineeringArchitectureEngine
-)
-from .platform_operations import (
-    PlatformOperations,
-    PlatformOperationsIntelligenceEngine
-)
-from .platform_recommendation import (
-    PlatformRecommendation,
-    PlatformRecommendationEngine
-)
-from .platform_scorecard import (
-    PlatformScorecard,
-    PlatformScorecardEngine
-)
-from .platform_report import (
-    PlatformReport,
-    PlatformReportGenerator
-)
-from .platform_intelligence_control_center import (
-    PlatformIntelligenceControlCenter,
-    PlatformIntelligenceControlCenterGenerator
-)
-from .platform_automation import (
-    PlatformAutomation,
-    PlatformAutomationEngine
-)
-from .platform_remediation import (
-    PlatformRemediation,
-    PlatformRemediationEngine
-)
-from .platform_governance import (
-    PlatformGovernance,
-    PlatformGovernanceEngine
-)
-from .autonomous_platform import (
-    AutonomousPlatform,
-    AutonomousPlatformEngine
-)
-from .api_lifecycle_assessment import (
-    APILifecycleAssessment,
-    APILifecycleAssessmentEngine
-)
-from .api_version_evolution import (
-    APIVersionEvolution,
-    APIVersionEvolutionEngine
-)
-from .api_deprecation_planning import (
-    APIDeprecationPlan,
-    APIDeprecationPlanningEngine
-)
-from .api_release_planning import (
-    APIReleasePlan,
-    APIReleasePlanningEngine
-)
-from .api_portfolio_intelligence import (
-    APIPortfolio,
-    APIPortfolioIntelligenceEngine
-)
-from .api_lifecycle_recommendation import (
-    APILifecycleRecommendation,
-    APILifecycleRecommendationEngine
-)
-from .api_lifecycle_scorecard import (
-    APILifecycleScorecard,
-    APILifecycleScorecardEngine
-)
-from .api_lifecycle_report import (
-    APILifecycleReport,
-    APILifecycleReportGenerator
-)
-from .developer_experience_control_center import (
-    DeveloperExperienceControlCenter,
-    DeveloperExperienceControlCenterGenerator
-)
-from .api_lifecycle_control_center import (
-    APILifecycleIntelligenceControlCenter,
-    APILifecycleIntelligenceControlCenterGenerator
-)
-from .api_lifecycle_automation import (
-    APILifecycleAutomation,
-    APILifecycleAutomationEngine
-)
-from .api_lifecycle_remediation import (
-    APILifecycleRemediation,
-    APILifecycleRemediationEngine
-)
-from .api_lifecycle_governance import (
-    APILifecycleGovernance,
-    APILifecycleGovernanceEngine
-)
-from .notebook_summary import (
-    NotebookSummary,
-    NotebookSummaryGenerator
-)
-from .notebook_report import (
-    NotebookReport,
-    NotebookReportGenerator
-)
-from .notebook_readme import (
-    NotebookREADME,
-    NotebookREADMEGenerator
-)
-from .notebook_endpoint_suggestions import (
-    EndpointSuggestion,
-    NotebookEndpointSuggestionEngine
-)
-from .notebook_understanding_control_center import (
-    NotebookUnderstandingControlCenter,
-    NotebookUnderstandingControlCenterGenerator
-)
-from .deployment_target import (
-    DeploymentTarget,
-    DeploymentTargetEngine
-)
-from .deployment_blueprint import (
-    DeploymentBlueprint,
-    DeploymentBlueprintEngine
-)
-from .infrastructure_recommendation import (
-    InfrastructureRecommendation,
-    InfrastructureRecommendationEngine
-)
-from .runtime_requirement import (
-    RuntimeRequirement,
-    RuntimeRequirementEngine
-)
-from .container_recommendation import (
-    ContainerRecommendation,
-    ContainerRecommendationEngine
-)
-from .scaling_recommendation import (
-    ScalingRecommendation,
-    ScalingRecommendationEngine
-)
-from .resource_sizing import (
-    ResourceSizing,
-    ResourceSizingEngine
-)
-from .environment_variable import (
-    EnvironmentVariable,
-    EnvironmentVariableEngine
-)
-from .deployment_validation import (
-    DeploymentValidation,
-    DeploymentValidationEngine
-)
-from .deployment_checklist import (
-    DeploymentChecklist,
-    DeploymentChecklistGenerator
-)
-from .production_readiness import (
-    ProductionReadiness,
-    ProductionReadinessEngine
-)
-from .deployment_report import (
-    DeploymentReport,
-    DeploymentReportGenerator
-)
-from .performance_report import (
-    PerformanceReport,
-    PerformanceReportGenerator
-)
-from .performance_intelligence_control_center import (
-    PerformanceIntelligenceControlCenter,
-    PerformanceIntelligenceControlCenterGenerator
-)
-from .performance_automation import (
-    PerformanceAutomation,
-    PerformanceAutomationEngine
-)
-from .performance_remediation import (
-    PerformanceRemediation,
-    PerformanceRemediationEngine
-)
-from .performance_governance import (
-    PerformanceGovernance,
-    PerformanceGovernanceEngine
-)
-from .autonomous_performance import (
-    AutonomousPerformance,
-    AutonomousPerformanceEngine
-)
-from .ai_readiness_assessment import (
-    AIReadinessAssessment,
-    AIReadinessAssessmentEngine
-)
-from .llm_integration import (
-    LLMIntegration,
-    LLMIntegrationEngine
-)
-from .rag_intelligence import (
-    RAGIntelligence,
-    RAGIntelligenceEngine
-)
-from .ai_agent_architecture import (
-    AIAgentArchitecture,
-    AIAgentArchitectureEngine
-)
-from .ai_workflow import (
-    AIWorkflow,
-    AIWorkflowEngine
-)
-from .ai_recommendation import (
-    AIRecommendation,
-    AIRecommendationEngine
-)
-from .ai_scorecard import (
-    AIScorecard,
-    AIScorecardEngine
-)
-from .ai_report import (
-    AIReport,
-    AIReportGenerator
-)
-from .ai_intelligence_control_center import (
-    AIIntelligenceControlCenter,
-    AIIntelligenceControlCenterGenerator
-)
-from .ai_automation import (
-    AIAutomation,
-    AIAutomationEngine
-)
-from .ai_remediation import (
-    AIRemediation,
-    AIRemediationEngine
-)
-from .ai_governance import (
-    AIGovernance,
-    AIGovernanceEngine
-)
-from .autonomous_ai import (
-    AutonomousAI,
-    AutonomousAIEngine
-)
-from .enterprise_readiness_assessment import (
-    EnterpriseReadinessAssessment,
-    EnterpriseReadinessAssessmentEngine
-)
-from .deployment_intelligence_control_center import (
-    DeploymentIntelligenceControlCenter,
-    DeploymentIntelligenceControlCenterGenerator
-)
-from .deployment_intelligence_automation import (
-    DeploymentIntelligenceAutomation,
-    DeploymentIntelligenceAutomationEngine
-)
-from .response_schema import (
-    ResponseField,
-    ResponseSchema,
-    ResponseSchemaEngine
-)
-from .openapi_specification import (
-    OpenAPISpecification,
-    OpenAPISpecificationEngine
-)
-from .swagger_specification import (
-    SwaggerSpecification,
-    SwaggerSpecificationEngine
-)
-from .openapi_documentation import (
-    OpenAPIDocumentation,
-    OpenAPIDocumentationEngine
-)
-from .sdk_method_generator import (
-    SDKMethod,
-    SDKMethodGenerator
-)
-from .sdk_packaging import (
-    SDKPackage,
-    SDKPackagingEngine
-)
-from .sdk_release import (
-    SDKRelease,
-    SDKReleaseEngine
-)
-from .sdk_changelog import (
-    SDKChangelog,
-    SDKChangelogEngine
-)
-from .sdk_platform_control_center import (
-    SDKPlatformControlCenter,
-    SDKPlatformControlCenterGenerator
-)
-from .health_check import (
-    HealthCheck,
-    HealthCheckEngine
-)
-from .metrics_definition import (
-    MetricDefinition,
-    MetricsDefinitionEngine
-)
-from .logging_strategy import (
-    LoggingStrategy,
-    LoggingStrategyEngine
-)
-from .alert_policy import (
-    AlertPolicy,
-    AlertPolicyEngine
-)
-from .monitoring_dashboard import (
-    MonitoringDashboard,
-    MonitoringDashboardEngine
-)
-from .distributed_tracing import (
-    DistributedTracing,
-    DistributedTracingEngine
-)
-from .service_dependency_map import (
-    ServiceDependency,
-    ServiceDependencyMap,
-    ServiceDependencyMapEngine
-)
-from .incident_analysis import (
-    IncidentAnalysis,
-    IncidentAnalysisEngine
-)
-from .slo_recommendation import (
-    SLORecommendation,
-    SLORecommendationEngine
-)
-from .observability_report import (
-    ObservabilityReport,
-    ObservabilityReportGenerator
-)
-from .observability_intelligence_control_center import (
-    ObservabilityIntelligenceControlCenter,
-    ObservabilityIntelligenceControlCenterGenerator
-)
-from .automated_remediation import (
-    RemediationAction,
-    AutomatedRemediation,
-    AutomatedRemediationEngine
-)
-from .observability_automation import (
-    ObservabilityAutomation,
-    ObservabilityAutomationEngine
-)
-from .authentication_recommendation import (
-    AuthenticationRecommendation,
-    AuthenticationRecommendationEngine
-)
-from .authorization_policy import (
-    AuthorizationPolicy,
-    AuthorizationPolicyEngine
-)
-from .api_security_policy import (
-    APISecurityPolicy,
-    APISecurityPolicyEngine
-)
-from .secret_management import (
-    SecretManagement,
-    SecretManagementEngine
-)
-from .vulnerability_assessment import (
-    VulnerabilityAssessment,
-    VulnerabilityAssessmentEngine
-)
-from .threat_modeling import (
-    ThreatScenario,
-    ThreatModel,
-    ThreatModelingEngine
-)
-from .security_compliance import (
-    ComplianceControl,
-    SecurityCompliance,
-    SecurityComplianceEngine
-)
-from .security_audit import (
-    SecurityAudit,
-    SecurityAuditEngine
-)
-from .security_report import (
-    SecurityReport,
-    SecurityReportGenerator
-)
-from .security_intelligence_control_center import (
-    SecurityIntelligenceControlCenter,
-    SecurityIntelligenceControlCenterGenerator
-)
-from .security_automation import (
-    SecurityAutomation,
-    SecurityAutomationEngine
-)
-from .security_remediation import (
-    SecurityRemediation,
-    SecurityRemediationEngine
-)
-from .security_governance import (
-    SecurityGovernance,
-    SecurityGovernanceEngine
-)
-from .test_strategy import (
-    TestStrategy,
-    TestStrategyEngine
-)
-from .test_case import (
-    TestCase,
-    TestCaseEngine
-)
-from .integration_test import (
-    IntegrationTest,
-    IntegrationTestEngine
-)
-from .load_testing import (
-    LoadTestPlan,
-    LoadTestingEngine
-)
-from .test_coverage import (
-    TestCoverage,
-    TestCoverageEngine
-)
-from .regression_testing import (
-    RegressionTestSuite,
-    RegressionTestingEngine
-)
-from .performance_benchmark import (
-    PerformanceBenchmark,
-    PerformanceBenchmarkEngine
-)
-from .test_quality_score import (
-    TestQualityScore,
-    TestQualityScoreEngine
-)
-from .testing_report import (
-    TestingReport,
-    TestingReportGenerator
-)
-from .testing_intelligence_control_center import (
-    TestingIntelligenceControlCenter,
-    TestingIntelligenceControlCenterGenerator
-)
-from .test_automation import (
-    TestAutomation,
-    TestAutomationEngine
-)
-from .release_readiness import (
-    ReleaseReadiness,
-    ReleaseReadinessEngine
-)
-from .autonomous_testing import (
-    AutonomousTesting,
-    AutonomousTestingEngine
-)
-from .reliability_assessment import (
-    ReliabilityAssessment,
-    ReliabilityAssessmentEngine
-)
-from .failure_pattern_detection import (
-    FailurePattern,
-    FailurePatternDetectionEngine
-)
-from .availability_modeling import (
-    AvailabilityModel,
-    AvailabilityModelingEngine
-)
-from .reliability_forecasting import (
-    ReliabilityForecast,
-    ReliabilityForecastingEngine
-)
-from .reliability_risk_analysis import (
-    ReliabilityRisk,
-    ReliabilityRiskAnalysisEngine
-)
-from .reliability_scorecard import (
-    ReliabilityScorecard,
-    ReliabilityScorecardEngine
-)
-from .reliability_report import (
-    ReliabilityReport,
-    ReliabilityReportGenerator
-)
-from .reliability_intelligence_control_center import (
-    ReliabilityIntelligenceControlCenter,
-    ReliabilityIntelligenceControlCenterGenerator
-)
-from .reliability_automation import (
-    ReliabilityAutomation,
-    ReliabilityAutomationEngine
-)
-from .reliability_remediation import (
-    ReliabilityRemediation,
-    ReliabilityRemediationEngine
-)
-from .reliability_governance import (
-    ReliabilityGovernance,
-    ReliabilityGovernanceEngine
-)
-from .autonomous_reliability import (
-    AutonomousReliability,
-    AutonomousReliabilityEngine
-)
-from .cost_assessment import (
-    CostAssessment,
-    CostAssessmentEngine
-)
-from .cost_forecasting import (
-    CostForecast,
-    CostForecastingEngine
-)
-from .cost_optimization import (
-    CostOptimization,
-    CostOptimizationEngine
-)
-from .resource_efficiency import (
-    ResourceEfficiency,
-    ResourceEfficiencyEngine
-)
-from .cost_allocation import (
-    CostAllocation,
-    CostAllocationEngine
-)
-from .budget_planning import (
-    BudgetPlan,
-    BudgetPlanningEngine
-)
-from .cost_risk_analysis import (
-    CostRisk,
-    CostRiskAnalysisEngine
-)
-from .cost_scorecard import (
-    CostScorecard,
-    CostScorecardEngine
-)
-from .cost_report import (
-    CostReport,
-    CostReportGenerator
-)
-from .cost_intelligence_control_center import (
-    CostIntelligenceControlCenter,
-    CostIntelligenceControlCenterGenerator
-)
-from .cost_automation import (
-    CostAutomation,
-    CostAutomationEngine
-)
-from .cost_remediation import (
-    CostRemediation,
-    CostRemediationEngine
-)
-from .cost_governance import (
-    CostGovernance,
-    CostGovernanceEngine
-)
-from .governance_assessment import (
-    GovernanceAssessment,
-    GovernanceAssessmentEngine
-)
-from .compliance_intelligence import (
-    ComplianceFramework,
-    ComplianceIntelligenceEngine
-)
-from .policy_enforcement import (
-    PolicyControl,
-    PolicyEnforcementEngine
-)
-from .governance_risk_analysis import (
-    GovernanceRisk,
-    GovernanceRiskAnalysisEngine
-)
-from .audit_readiness import (
-    AuditReadiness,
-    AuditReadinessEngine
-)
-from .governance_recommendation import (
-    GovernanceRecommendation,
-    GovernanceRecommendationEngine
-)
-from .governance_scorecard import (
-    GovernanceScorecard,
-    GovernanceScorecardEngine
-)
-from .governance_report import (
-    GovernanceReport,
-    GovernanceReportGenerator
-)
-from .governance_intelligence_control_center import (
-    GovernanceIntelligenceControlCenter,
-    GovernanceIntelligenceControlCenterGenerator,
-)
-from .governance_automation import (
-    GovernanceAutomation,
-    GovernanceAutomationEngine,
-)
-from .governance_remediation import (
-    GovernanceRemediation,
-    GovernanceRemediationEngine,
-)
-from .governance_governance import (
-    GovernanceGovernance,
-    GovernanceGovernanceEngine,
-)
-from .autonomous_governance import (
-    AutonomousGovernance,
-    AutonomousGovernanceEngine,
-)
-from .performance_assessment import (
-    PerformanceAssessment,
-    PerformanceAssessmentEngine
-)
-from .bottleneck_detection import (
-    PerformanceBottleneck,
-    BottleneckDetectionEngine
-)
-from .scalability_analysis import (
-    ScalabilityAssessment,
-    ScalabilityAnalysisEngine
-)
-from .capacity_planning import (
-    CapacityPlan,
-    CapacityPlanningEngine
-)
-from .performance_optimization import (
-    PerformanceOptimization,
-    PerformanceOptimizationEngine
-)
-from .performance_recommendation import (
-    PerformanceRecommendation,
-    PerformanceRecommendationEngine
-)
-from .performance_scorecard import (
-    PerformanceScorecard,
-    PerformanceScorecardEngine
-)
+"""Public names of the generator package.
+
+Each name is imported from its own submodule the first time it is used.
+Importing every one of these modules up front (the previous behaviour) loaded
+the whole platform -- FastAPI, the AI, observability and project engines --
+for any command that only needed the compiler, which made even
+`notebook-to-api --version` take over a second.
+"""
+
+import importlib
+
+_EXPORTS = {
+    "PipelineRouteGenerator": "pipeline_route_generator",
+    "PipelineModelGenerator": "pipeline_model_generator",
+    "PipelineSchemaGenerator": "pipeline_schema_generator",
+    "PipelineMetadata": "pipeline_metadata",
+    "PipelineFieldMetadata": "pipeline_metadata",
+    "OpenAPISchemaGenerator": "openapi_schema_generator",
+    "PipelineContractValidator": "pipeline_contract_validator",
+    "SDKTypeGenerator": "sdk_type_generator",
+    "TypeScriptInterfaceGenerator": "typescript_interface_generator",
+    "TypeScriptClientGenerator": "typescript_client_generator",
+    "TypeScriptSDK": "typescript_sdk_generator",
+    "TypeScriptSDKGenerator": "typescript_sdk_generator",
+    "SDKIndexGenerator": "sdk_index_generator",
+    "TypeScriptPackageGenerator": "typescript_package_generator",
+    "SDKProject": "sdk_project_generator",
+    "SDKProjectGenerator": "sdk_project_generator",
+    "PythonSDK": "python_sdk_generator",
+    "PythonSDKGenerator": "python_sdk_generator",
+    "PythonModelGenerator": "python_model_generator",
+    "PythonPackage": "python_package_generator",
+    "PythonPackageGenerator": "python_package_generator",
+    "PythonExceptionGenerator": "python_exception_generator",
+    "PythonAsyncSDKGenerator": "python_async_sdk_generator",
+    "PythonPaginationGenerator": "python_pagination_generator",
+    "PythonDocsGenerator": "python_docs_generator",
+    "PythonPackagingGenerator": "python_packaging_generator",
+    "BusinessCapability": "business_capability_mapping",
+    "BusinessCapabilityMappingEngine": "business_capability_mapping",
+    "EnterpriseArchitecture": "enterprise_architecture",
+    "EnterpriseArchitectureEngine": "enterprise_architecture",
+    "DigitalTransformation": "digital_transformation",
+    "DigitalTransformationEngine": "digital_transformation",
+    "EnterpriseIntegration": "enterprise_integration",
+    "EnterpriseIntegrationIntelligenceEngine": "enterprise_integration",
+    "EnterpriseRecommendation": "enterprise_recommendation",
+    "EnterpriseRecommendationEngine": "enterprise_recommendation",
+    "EnterpriseScorecard": "enterprise_scorecard",
+    "EnterpriseScorecardEngine": "enterprise_scorecard",
+    "EnterpriseReport": "enterprise_report",
+    "EnterpriseReportGenerator": "enterprise_report",
+    "EnterpriseIntelligenceControlCenter": "enterprise_intelligence_control_center",
+    "EnterpriseIntelligenceControlCenterGenerator": "enterprise_intelligence_control_center",
+    "EnterpriseAutomation": "enterprise_automation",
+    "EnterpriseAutomationEngine": "enterprise_automation",
+    "EnterpriseRemediation": "enterprise_remediation",
+    "EnterpriseRemediationEngine": "enterprise_remediation",
+    "EnterpriseGovernance": "enterprise_governance",
+    "EnterpriseGovernanceEngine": "enterprise_governance",
+    "AutonomousEnterprise": "autonomous_enterprise",
+    "AutonomousEnterpriseEngine": "autonomous_enterprise",
+    "PlatformReadinessAssessment": "platform_readiness_assessment",
+    "PlatformReadinessAssessmentEngine": "platform_readiness_assessment",
+    "SDKReleaseMetadata": "sdk_release_generator",
+    "SDKReleaseGenerator": "sdk_release_generator",
+    "MultiLanguageRelease": "multilanguage_release_generator",
+    "MultiLanguageReleaseGenerator": "multilanguage_release_generator",
+    "SDKContainerGenerator": "sdk_container_generator",
+    "ValidationResult": "deployment_validator",
+    "DeploymentValidator": "deployment_validator",
+    "DockerValidator": "deployment_target_validators",
+    "KubernetesValidator": "deployment_target_validators",
+    "TerraformValidator": "deployment_target_validators",
+    "DeploymentCompatibility": "deployment_compatibility",
+    "DeploymentCompatibilityAnalyzer": "deployment_compatibility",
+    "DeploymentRecommendation": "deployment_recommender",
+    "DeploymentRecommender": "deployment_recommender",
+    "DeploymentCost": "deployment_cost_analyzer",
+    "DeploymentCostAnalyzer": "deployment_cost_analyzer",
+    "DeploymentPlan": "deployment_planner",
+    "DeploymentPlanner": "deployment_planner",
+    "DeploymentHealth": "deployment_health",
+    "DeploymentHealthAnalyzer": "deployment_health",
+    "DeploymentReadiness": "deployment_readiness",
+    "DeploymentReadinessAnalyzer": "deployment_readiness",
+    "DeploymentRisk": "deployment_risk",
+    "DeploymentRiskAnalyzer": "deployment_risk",
+    "DeploymentIncident": "deployment_incident",
+    "DeploymentIncidentAnalyzer": "deployment_incident",
+    "DeploymentAlert": "deployment_alert",
+    "DeploymentAlertGenerator": "deployment_alert",
+    "DeploymentMetrics": "deployment_metrics",
+    "DeploymentMetricsAnalyzer": "deployment_metrics",
+    "DeploymentDashboard": "deployment_dashboard",
+    "DeploymentDashboardGenerator": "deployment_dashboard",
+    "DeploymentEvent": "deployment_timeline",
+    "DeploymentTimeline": "deployment_timeline",
+    "DeploymentTimelineGenerator": "deployment_timeline",
+    "DeploymentAudit": "deployment_audit",
+    "DeploymentAuditGenerator": "deployment_audit",
+    "DeploymentApproval": "deployment_approval",
+    "DeploymentApprovalEngine": "deployment_approval",
+    "DeploymentStep": "deployment_execution",
+    "DeploymentExecutionPlan": "deployment_execution",
+    "DeploymentExecutionEngine": "deployment_execution",
+    "DeploymentAutomation": "deployment_automation",
+    "DeploymentAutomationEngine": "deployment_automation",
+    "DeploymentControlCenter": "deployment_control_center",
+    "DeploymentControlCenterGenerator": "deployment_control_center",
+    "RunbookStep": "deployment_runbook",
+    "DeploymentRunbook": "deployment_runbook",
+    "DeploymentRunbookGenerator": "deployment_runbook",
+    "RollbackStep": "deployment_rollback",
+    "DeploymentRollback": "deployment_rollback",
+    "DeploymentRollbackGenerator": "deployment_rollback",
+    "RecoveryAction": "deployment_recovery",
+    "DeploymentRecovery": "deployment_recovery",
+    "DeploymentRecoveryGenerator": "deployment_recovery",
+    "PostIncidentAnalysis": "post_incident_analysis",
+    "PostIncidentAnalyzer": "post_incident_analysis",
+    "ReliabilityRecommendation": "reliability_recommendation",
+    "ReliabilityRecommendationEngine": "reliability_recommendation",
+    "FailurePattern": "failure_pattern_detection",
+    "FailurePatternDetector": "failure_pattern",
+    "ReliabilityTrend": "reliability_trend",
+    "ReliabilityTrendAnalyzer": "reliability_trend",
+    "ReliabilityForecast": "reliability_forecasting",
+    "ReliabilityForecastEngine": "reliability_forecast",
+    "ReliabilityScorecard": "reliability_scorecard",
+    "ReliabilityScorecardEngine": "reliability_scorecard",
+    "ReliabilityScorecardGenerator": "reliability_scorecard",
+    "ReliabilityGovernance": "reliability_governance",
+    "ReliabilityGovernanceEngine": "reliability_governance",
+    "ReliabilityMaturity": "reliability_maturity",
+    "ReliabilityMaturityEngine": "reliability_maturity",
+    "RoadmapMilestone": "reliability_roadmap",
+    "ReliabilityRoadmap": "reliability_roadmap",
+    "ReliabilityRoadmapEngine": "reliability_roadmap",
+    "ReliabilityControlCenter": "reliability_control_center",
+    "ReliabilityControlCenterGenerator": "reliability_control_center",
+    "EndpointDocumentation": "api_documentation",
+    "APIDocumentationGenerator": "api_documentation",
+    "OpenAPIDescription": "openapi_description",
+    "OpenAPIDescriptionGenerator": "openapi_description",
+    "APIUsageExample": "api_examples",
+    "APIUsageExampleGenerator": "api_examples",
+    "APIExample": "api_examples",
+    "APIExampleEngine": "api_examples",
+    "SDKQuickStart": "sdk_quickstart",
+    "SDKQuickStartGenerator": "sdk_quickstart",
+    "APIErrorDocumentation": "api_error_documentation",
+    "APIErrorDocumentationGenerator": "api_error_documentation",
+    "TutorialStep": "api_tutorial",
+    "APITutorial": "api_tutorial",
+    "APITutorialGenerator": "api_tutorial",
+    "CookbookRecipe": "api_cookbook",
+    "APICookbook": "api_cookbook",
+    "APICookbookGenerator": "api_cookbook",
+    "FAQItem": "api_faq",
+    "APIFAQ": "api_faq",
+    "APIFAQGenerator": "api_faq",
+    "TroubleshootingIssue": "api_troubleshooting",
+    "APITroubleshootingGuide": "api_troubleshooting",
+    "APITroubleshootingGenerator": "api_troubleshooting",
+    "MigrationStep": "api_migration",
+    "APIMigrationGuide": "api_migration",
+    "APIMigrationGuideGenerator": "api_migration",
+    "ChangelogEntry": "api_changelog",
+    "APIChangelog": "api_changelog",
+    "APIChangelogGenerator": "api_changelog",
+    "DeveloperPortal": "developer_portal",
+    "DeveloperPortalGenerator": "developer_portal",
+    "DeveloperExperience": "developer_experience",
+    "DeveloperExperienceIntelligenceEngine": "developer_experience",
+    "InternalDeveloperPlatform": "internal_developer_platform",
+    "InternalDeveloperPlatformEngine": "internal_developer_platform",
+    "PlatformEngineeringArchitecture": "platform_engineering_architecture",
+    "PlatformEngineeringArchitectureEngine": "platform_engineering_architecture",
+    "PlatformOperations": "platform_operations",
+    "PlatformOperationsIntelligenceEngine": "platform_operations",
+    "PlatformRecommendation": "platform_recommendation",
+    "PlatformRecommendationEngine": "platform_recommendation",
+    "PlatformScorecard": "platform_scorecard",
+    "PlatformScorecardEngine": "platform_scorecard",
+    "PlatformReport": "platform_report",
+    "PlatformReportGenerator": "platform_report",
+    "PlatformIntelligenceControlCenter": "platform_intelligence_control_center",
+    "PlatformIntelligenceControlCenterGenerator": "platform_intelligence_control_center",
+    "PlatformAutomation": "platform_automation",
+    "PlatformAutomationEngine": "platform_automation",
+    "PlatformRemediation": "platform_remediation",
+    "PlatformRemediationEngine": "platform_remediation",
+    "PlatformGovernance": "platform_governance",
+    "PlatformGovernanceEngine": "platform_governance",
+    "AutonomousPlatform": "autonomous_platform",
+    "AutonomousPlatformEngine": "autonomous_platform",
+    "APILifecycleAssessment": "api_lifecycle_assessment",
+    "APILifecycleAssessmentEngine": "api_lifecycle_assessment",
+    "APIVersionEvolution": "api_version_evolution",
+    "APIVersionEvolutionEngine": "api_version_evolution",
+    "APIDeprecationPlan": "api_deprecation_planning",
+    "APIDeprecationPlanningEngine": "api_deprecation_planning",
+    "APIReleasePlan": "api_release_planning",
+    "APIReleasePlanningEngine": "api_release_planning",
+    "APIPortfolio": "api_portfolio_intelligence",
+    "APIPortfolioIntelligenceEngine": "api_portfolio_intelligence",
+    "APILifecycleRecommendation": "api_lifecycle_recommendation",
+    "APILifecycleRecommendationEngine": "api_lifecycle_recommendation",
+    "APILifecycleScorecard": "api_lifecycle_scorecard",
+    "APILifecycleScorecardEngine": "api_lifecycle_scorecard",
+    "APILifecycleReport": "api_lifecycle_report",
+    "APILifecycleReportGenerator": "api_lifecycle_report",
+    "DeveloperExperienceControlCenter": "developer_experience_control_center",
+    "DeveloperExperienceControlCenterGenerator": "developer_experience_control_center",
+    "APILifecycleIntelligenceControlCenter": "api_lifecycle_control_center",
+    "APILifecycleIntelligenceControlCenterGenerator": "api_lifecycle_control_center",
+    "APILifecycleAutomation": "api_lifecycle_automation",
+    "APILifecycleAutomationEngine": "api_lifecycle_automation",
+    "APILifecycleRemediation": "api_lifecycle_remediation",
+    "APILifecycleRemediationEngine": "api_lifecycle_remediation",
+    "APILifecycleGovernance": "api_lifecycle_governance",
+    "APILifecycleGovernanceEngine": "api_lifecycle_governance",
+    "NotebookSummary": "notebook_summary",
+    "NotebookSummaryGenerator": "notebook_summary",
+    "NotebookReport": "notebook_report",
+    "NotebookReportGenerator": "notebook_report",
+    "NotebookREADME": "notebook_readme",
+    "NotebookREADMEGenerator": "notebook_readme",
+    "EndpointSuggestion": "notebook_endpoint_suggestions",
+    "NotebookEndpointSuggestionEngine": "notebook_endpoint_suggestions",
+    "NotebookUnderstandingControlCenter": "notebook_understanding_control_center",
+    "NotebookUnderstandingControlCenterGenerator": "notebook_understanding_control_center",
+    "DeploymentTarget": "deployment_target",
+    "DeploymentTargetEngine": "deployment_target",
+    "DeploymentBlueprint": "deployment_blueprint",
+    "DeploymentBlueprintEngine": "deployment_blueprint",
+    "InfrastructureRecommendation": "infrastructure_recommendation",
+    "InfrastructureRecommendationEngine": "infrastructure_recommendation",
+    "RuntimeRequirement": "runtime_requirement",
+    "RuntimeRequirementEngine": "runtime_requirement",
+    "ContainerRecommendation": "container_recommendation",
+    "ContainerRecommendationEngine": "container_recommendation",
+    "ScalingRecommendation": "scaling_recommendation",
+    "ScalingRecommendationEngine": "scaling_recommendation",
+    "ResourceSizing": "resource_sizing",
+    "ResourceSizingEngine": "resource_sizing",
+    "EnvironmentVariable": "environment_variable",
+    "EnvironmentVariableEngine": "environment_variable",
+    "DeploymentValidation": "deployment_validation",
+    "DeploymentValidationEngine": "deployment_validation",
+    "DeploymentChecklist": "deployment_checklist",
+    "DeploymentChecklistGenerator": "deployment_checklist",
+    "ProductionReadiness": "production_readiness",
+    "ProductionReadinessEngine": "production_readiness",
+    "DeploymentReport": "deployment_report",
+    "DeploymentReportGenerator": "deployment_report",
+    "PerformanceReport": "performance_report",
+    "PerformanceReportGenerator": "performance_report",
+    "PerformanceIntelligenceControlCenter": "performance_intelligence_control_center",
+    "PerformanceIntelligenceControlCenterGenerator": "performance_intelligence_control_center",
+    "PerformanceAutomation": "performance_automation",
+    "PerformanceAutomationEngine": "performance_automation",
+    "PerformanceRemediation": "performance_remediation",
+    "PerformanceRemediationEngine": "performance_remediation",
+    "PerformanceGovernance": "performance_governance",
+    "PerformanceGovernanceEngine": "performance_governance",
+    "AutonomousPerformance": "autonomous_performance",
+    "AutonomousPerformanceEngine": "autonomous_performance",
+    "AIReadinessAssessment": "ai_readiness_assessment",
+    "AIReadinessAssessmentEngine": "ai_readiness_assessment",
+    "LLMIntegration": "llm_integration",
+    "LLMIntegrationEngine": "llm_integration",
+    "RAGIntelligence": "rag_intelligence",
+    "RAGIntelligenceEngine": "rag_intelligence",
+    "AIAgentArchitecture": "ai_agent_architecture",
+    "AIAgentArchitectureEngine": "ai_agent_architecture",
+    "AIWorkflow": "ai_workflow",
+    "AIWorkflowEngine": "ai_workflow",
+    "AIRecommendation": "ai_recommendation",
+    "AIRecommendationEngine": "ai_recommendation",
+    "AIScorecard": "ai_scorecard",
+    "AIScorecardEngine": "ai_scorecard",
+    "AIReport": "ai_report",
+    "AIReportGenerator": "ai_report",
+    "AIIntelligenceControlCenter": "ai_intelligence_control_center",
+    "AIIntelligenceControlCenterGenerator": "ai_intelligence_control_center",
+    "AIAutomation": "ai_automation",
+    "AIAutomationEngine": "ai_automation",
+    "AIRemediation": "ai_remediation",
+    "AIRemediationEngine": "ai_remediation",
+    "AIGovernance": "ai_governance",
+    "AIGovernanceEngine": "ai_governance",
+    "AutonomousAI": "autonomous_ai",
+    "AutonomousAIEngine": "autonomous_ai",
+    "EnterpriseReadinessAssessment": "enterprise_readiness_assessment",
+    "EnterpriseReadinessAssessmentEngine": "enterprise_readiness_assessment",
+    "DeploymentIntelligenceControlCenter": "deployment_intelligence_control_center",
+    "DeploymentIntelligenceControlCenterGenerator": "deployment_intelligence_control_center",
+    "DeploymentIntelligenceAutomation": "deployment_intelligence_automation",
+    "DeploymentIntelligenceAutomationEngine": "deployment_intelligence_automation",
+    "ResponseField": "response_schema",
+    "ResponseSchema": "response_schema",
+    "ResponseSchemaEngine": "response_schema",
+    "OpenAPISpecification": "openapi_specification",
+    "OpenAPISpecificationEngine": "openapi_specification",
+    "SwaggerSpecification": "swagger_specification",
+    "SwaggerSpecificationEngine": "swagger_specification",
+    "OpenAPIDocumentation": "openapi_documentation",
+    "OpenAPIDocumentationEngine": "openapi_documentation",
+    "SDKMethod": "sdk_method_generator",
+    "SDKMethodGenerator": "sdk_method_generator",
+    "SDKPackage": "sdk_packaging",
+    "SDKPackagingEngine": "sdk_packaging",
+    "SDKRelease": "sdk_release",
+    "SDKReleaseEngine": "sdk_release",
+    "SDKChangelog": "sdk_changelog",
+    "SDKChangelogEngine": "sdk_changelog",
+    "SDKPlatformControlCenter": "sdk_platform_control_center",
+    "SDKPlatformControlCenterGenerator": "sdk_platform_control_center",
+    "HealthCheck": "health_check",
+    "HealthCheckEngine": "health_check",
+    "MetricDefinition": "metrics_definition",
+    "MetricsDefinitionEngine": "metrics_definition",
+    "LoggingStrategy": "logging_strategy",
+    "LoggingStrategyEngine": "logging_strategy",
+    "AlertPolicy": "alert_policy",
+    "AlertPolicyEngine": "alert_policy",
+    "MonitoringDashboard": "monitoring_dashboard",
+    "MonitoringDashboardEngine": "monitoring_dashboard",
+    "DistributedTracing": "distributed_tracing",
+    "DistributedTracingEngine": "distributed_tracing",
+    "ServiceDependency": "service_dependency_map",
+    "ServiceDependencyMap": "service_dependency_map",
+    "ServiceDependencyMapEngine": "service_dependency_map",
+    "IncidentAnalysis": "incident_analysis",
+    "IncidentAnalysisEngine": "incident_analysis",
+    "SLORecommendation": "slo_recommendation",
+    "SLORecommendationEngine": "slo_recommendation",
+    "ObservabilityReport": "observability_report",
+    "ObservabilityReportGenerator": "observability_report",
+    "ObservabilityIntelligenceControlCenter": "observability_intelligence_control_center",
+    "ObservabilityIntelligenceControlCenterGenerator": "observability_intelligence_control_center",
+    "RemediationAction": "automated_remediation",
+    "AutomatedRemediation": "automated_remediation",
+    "AutomatedRemediationEngine": "automated_remediation",
+    "ObservabilityAutomation": "observability_automation",
+    "ObservabilityAutomationEngine": "observability_automation",
+    "AuthenticationRecommendation": "authentication_recommendation",
+    "AuthenticationRecommendationEngine": "authentication_recommendation",
+    "AuthorizationPolicy": "authorization_policy",
+    "AuthorizationPolicyEngine": "authorization_policy",
+    "APISecurityPolicy": "api_security_policy",
+    "APISecurityPolicyEngine": "api_security_policy",
+    "SecretManagement": "secret_management",
+    "SecretManagementEngine": "secret_management",
+    "VulnerabilityAssessment": "vulnerability_assessment",
+    "VulnerabilityAssessmentEngine": "vulnerability_assessment",
+    "ThreatScenario": "threat_modeling",
+    "ThreatModel": "threat_modeling",
+    "ThreatModelingEngine": "threat_modeling",
+    "ComplianceControl": "security_compliance",
+    "SecurityCompliance": "security_compliance",
+    "SecurityComplianceEngine": "security_compliance",
+    "SecurityAudit": "security_audit",
+    "SecurityAuditEngine": "security_audit",
+    "SecurityReport": "security_report",
+    "SecurityReportGenerator": "security_report",
+    "SecurityIntelligenceControlCenter": "security_intelligence_control_center",
+    "SecurityIntelligenceControlCenterGenerator": "security_intelligence_control_center",
+    "SecurityAutomation": "security_automation",
+    "SecurityAutomationEngine": "security_automation",
+    "SecurityRemediation": "security_remediation",
+    "SecurityRemediationEngine": "security_remediation",
+    "SecurityGovernance": "security_governance",
+    "SecurityGovernanceEngine": "security_governance",
+    "TestStrategy": "test_strategy",
+    "TestStrategyEngine": "test_strategy",
+    "TestCase": "test_case",
+    "TestCaseEngine": "test_case",
+    "IntegrationTest": "integration_test",
+    "IntegrationTestEngine": "integration_test",
+    "LoadTestPlan": "load_testing",
+    "LoadTestingEngine": "load_testing",
+    "TestCoverage": "test_coverage",
+    "TestCoverageEngine": "test_coverage",
+    "RegressionTestSuite": "regression_testing",
+    "RegressionTestingEngine": "regression_testing",
+    "PerformanceBenchmark": "performance_benchmark",
+    "PerformanceBenchmarkEngine": "performance_benchmark",
+    "TestQualityScore": "test_quality_score",
+    "TestQualityScoreEngine": "test_quality_score",
+    "TestingReport": "testing_report",
+    "TestingReportGenerator": "testing_report",
+    "TestingIntelligenceControlCenter": "testing_intelligence_control_center",
+    "TestingIntelligenceControlCenterGenerator": "testing_intelligence_control_center",
+    "TestAutomation": "test_automation",
+    "TestAutomationEngine": "test_automation",
+    "ReleaseReadiness": "release_readiness",
+    "ReleaseReadinessEngine": "release_readiness",
+    "AutonomousTesting": "autonomous_testing",
+    "AutonomousTestingEngine": "autonomous_testing",
+    "ReliabilityAssessment": "reliability_assessment",
+    "ReliabilityAssessmentEngine": "reliability_assessment",
+    "FailurePatternDetectionEngine": "failure_pattern_detection",
+    "AvailabilityModel": "availability_modeling",
+    "AvailabilityModelingEngine": "availability_modeling",
+    "ReliabilityForecastingEngine": "reliability_forecasting",
+    "ReliabilityRisk": "reliability_risk_analysis",
+    "ReliabilityRiskAnalysisEngine": "reliability_risk_analysis",
+    "ReliabilityReport": "reliability_report",
+    "ReliabilityReportGenerator": "reliability_report",
+    "ReliabilityIntelligenceControlCenter": "reliability_intelligence_control_center",
+    "ReliabilityIntelligenceControlCenterGenerator": "reliability_intelligence_control_center",
+    "ReliabilityAutomation": "reliability_automation",
+    "ReliabilityAutomationEngine": "reliability_automation",
+    "ReliabilityRemediation": "reliability_remediation",
+    "ReliabilityRemediationEngine": "reliability_remediation",
+    "AutonomousReliability": "autonomous_reliability",
+    "AutonomousReliabilityEngine": "autonomous_reliability",
+    "CostAssessment": "cost_assessment",
+    "CostAssessmentEngine": "cost_assessment",
+    "CostForecast": "cost_forecasting",
+    "CostForecastingEngine": "cost_forecasting",
+    "CostOptimization": "cost_optimization",
+    "CostOptimizationEngine": "cost_optimization",
+    "ResourceEfficiency": "resource_efficiency",
+    "ResourceEfficiencyEngine": "resource_efficiency",
+    "CostAllocation": "cost_allocation",
+    "CostAllocationEngine": "cost_allocation",
+    "BudgetPlan": "budget_planning",
+    "BudgetPlanningEngine": "budget_planning",
+    "CostRisk": "cost_risk_analysis",
+    "CostRiskAnalysisEngine": "cost_risk_analysis",
+    "CostScorecard": "cost_scorecard",
+    "CostScorecardEngine": "cost_scorecard",
+    "CostReport": "cost_report",
+    "CostReportGenerator": "cost_report",
+    "CostIntelligenceControlCenter": "cost_intelligence_control_center",
+    "CostIntelligenceControlCenterGenerator": "cost_intelligence_control_center",
+    "CostAutomation": "cost_automation",
+    "CostAutomationEngine": "cost_automation",
+    "CostRemediation": "cost_remediation",
+    "CostRemediationEngine": "cost_remediation",
+    "CostGovernance": "cost_governance",
+    "CostGovernanceEngine": "cost_governance",
+    "GovernanceAssessment": "governance_assessment",
+    "GovernanceAssessmentEngine": "governance_assessment",
+    "ComplianceFramework": "compliance_intelligence",
+    "ComplianceIntelligenceEngine": "compliance_intelligence",
+    "PolicyControl": "policy_enforcement",
+    "PolicyEnforcementEngine": "policy_enforcement",
+    "GovernanceRisk": "governance_risk_analysis",
+    "GovernanceRiskAnalysisEngine": "governance_risk_analysis",
+    "AuditReadiness": "audit_readiness",
+    "AuditReadinessEngine": "audit_readiness",
+    "GovernanceRecommendation": "governance_recommendation",
+    "GovernanceRecommendationEngine": "governance_recommendation",
+    "GovernanceScorecard": "governance_scorecard",
+    "GovernanceScorecardEngine": "governance_scorecard",
+    "GovernanceReport": "governance_report",
+    "GovernanceReportGenerator": "governance_report",
+    "GovernanceIntelligenceControlCenter": "governance_intelligence_control_center",
+    "GovernanceIntelligenceControlCenterGenerator": "governance_intelligence_control_center",
+    "GovernanceAutomation": "governance_automation",
+    "GovernanceAutomationEngine": "governance_automation",
+    "GovernanceRemediation": "governance_remediation",
+    "GovernanceRemediationEngine": "governance_remediation",
+    "GovernanceGovernance": "governance_governance",
+    "GovernanceGovernanceEngine": "governance_governance",
+    "AutonomousGovernance": "autonomous_governance",
+    "AutonomousGovernanceEngine": "autonomous_governance",
+    "PerformanceAssessment": "performance_assessment",
+    "PerformanceAssessmentEngine": "performance_assessment",
+    "PerformanceBottleneck": "bottleneck_detection",
+    "BottleneckDetectionEngine": "bottleneck_detection",
+    "ScalabilityAssessment": "scalability_analysis",
+    "ScalabilityAnalysisEngine": "scalability_analysis",
+    "CapacityPlan": "capacity_planning",
+    "CapacityPlanningEngine": "capacity_planning",
+    "PerformanceOptimization": "performance_optimization",
+    "PerformanceOptimizationEngine": "performance_optimization",
+    "PerformanceRecommendation": "performance_recommendation",
+    "PerformanceRecommendationEngine": "performance_recommendation",
+    "PerformanceScorecard": "performance_scorecard",
+    "PerformanceScorecardEngine": "performance_scorecard",
+}
+
+
+def __getattr__(name):
+    module_name = _EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(importlib.import_module(f".{module_name}", __name__), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(_EXPORTS))
