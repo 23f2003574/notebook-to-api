@@ -435,6 +435,11 @@ def _notebook_structure_problem(notebook_path):
 
 
 def load_notebook(notebook_path):
+    if os.path.isdir(notebook_path):
+        raise ValueError(
+            f"{notebook_path} is a directory, not a notebook: pass the path "
+            "of a .ipynb file."
+        )
     # utf-8-sig: Windows editors save a notebook with a UTF-8 byte-order mark,
     # which plain utf-8 leaves in the text and nbformat then rejects as "not
     # JSON" although the file is a valid notebook. Without a BOM it is

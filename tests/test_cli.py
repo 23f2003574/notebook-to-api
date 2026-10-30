@@ -32269,3 +32269,16 @@ def test_export_openapi_names_the_missing_required_environment_variable(tmp_path
     )
     assert ok.returncode == 0, ok.stdout + ok.stderr
     assert (workdir / "built" / "openapi.json").is_file()
+
+
+@pytest.mark.parametrize("command", ["compile", "inspect", "validate"])
+def test_cli_notebook_argument_that_is_a_directory_gets_a_clear_error(tmp_path, command):
+    result = subprocess.run(
+        [sys.executable, "-m", "backend.cli", command, str(tmp_path)],
+        capture_output=True, text=True, cwd=Path(__file__).resolve().parent.parent,
+    )
+
+    assert result.returncode != 0
+    assert "is a directory, not a notebook" in result.stdout + result.stderr
+    assert "Errno 21" not in result.stdout + result.stderr
+    assert "Traceback" not in result.stderr
