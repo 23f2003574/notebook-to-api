@@ -9685,3 +9685,39 @@ def test_sync_function_can_use_asyncio_get_event_loop_in_its_worker_thread(monke
             response = client.post(f"/{name}", json={"x": 4}, headers=headers)
             assert response.status_code == 200, (name, response.text)
             assert response.json() == {"result": expected}
+
+
+def test_typing_typeddict_is_rebuilt_so_pydantic_can_model_it_on_every_python(monkeypatch):
+    """Pydantic refuses `typing.TypedDict` below Python 3.12, so such a parameter
+    fell back to Any: no schema, and a request example of `null`. The rebuilt
+    typing_extensions TypedDict keeps the keys and which of them are required."""
+    import typing
+
+    code = generate_fastapi_code([{"name": "plain", "args": [], "return_type": "dict"}])
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    class Mixed(typing.TypedDict, total=False):
+        name: str
+        count: int
+
+    class Strict(typing.TypedDict):
+        k: int
+        tags: typing.List[str]
+
+    from pydantic import TypeAdapter
+
+    rebuilt = namespace["_modelable_typeddict"](Strict)
+    schema = TypeAdapter(rebuilt).json_schema()
+    assert set(schema["properties"]) == {"k", "tags"}
+    assert set(schema["required"]) == {"k", "tags"}
+    assert TypeAdapter(rebuilt).validate_python({"k": 1, "tags": ["a"]}) == {"k": 1, "tags": ["a"]}
+
+    optional = TypeAdapter(namespace["_modelable_typeddict"](Mixed)).json_schema()
+    assert set(optional["properties"]) == {"name", "count"}
+    assert not optional.get("required")
+
+    assert namespace["_modelable_typeddict"](dict) is None
+    # whatever Pydantic can already model is passed through untouched
+    assert namespace["_safe_annotation"](typing.List[int]) == typing.List[int]

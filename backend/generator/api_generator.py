@@ -16,7 +16,7 @@ from pathlib import Path
 # anywhere. Rejecting these outright avoids ever emitting that endpoint
 # ordering trap.
 RESERVED_INFRASTRUCTURE_NAMES = frozenset({
-    "app", "TASKS", "API_KEYS", "API_KEY_HEADER_NAME", "STRICT_REQUEST_FIELDS", "MAX_CONCURRENT_CALLS", "_CALL_LIMITER", "_THREAD_LIMITER", "_thread_slot", "_run_in_thread", "_WebhookRedirectGuard", "_NoLimit", "_NO_LIMIT", "_call_slot", "DEFAULT_API_KEY", "USING_DEFAULT_API_KEY", "REQUIRE_CUSTOM_API_KEY", "START_TIME",
+    "app", "TASKS", "API_KEYS", "API_KEY_HEADER_NAME", "STRICT_REQUEST_FIELDS", "MAX_CONCURRENT_CALLS", "_CALL_LIMITER", "_THREAD_LIMITER", "_thread_slot", "_run_in_thread", "_modelable_typeddict", "_WebhookRedirectGuard", "_NoLimit", "_NO_LIMIT", "_call_slot", "DEFAULT_API_KEY", "USING_DEFAULT_API_KEY", "REQUIRE_CUSTOM_API_KEY", "START_TIME",
     "GENERATED_AT", "PYTHON_VERSION", "NOTEBOOK_TO_API_VERSION", "ALLOWED_ORIGINS",
     "PUBLIC_URL", "DISABLE_DOCS",
     "MAX_REQUEST_BODY_BYTES", "MaxRequestBodySizeMiddleware",
@@ -5616,12 +5616,38 @@ def generate_fastapi_code(
     # value then arrives as plain JSON. Only those two schema errors are
     # swallowed; anything else (e.g. an undefined forward reference)
     # propagates exactly as before.
+    # Pydantic cannot model a `typing.TypedDict` on Python < 3.12 (it demands
+    # typing_extensions.TypedDict), so such a parameter fell back to Any: no
+    # schema properties, and a request example of `null`. Rebuild it as the
+    # typing_extensions equivalent, keeping which keys are required.
+    lines.append("def _modelable_typeddict(tp):")
+    lines.append("    import typing as _typing")
+    lines.append("    import typing_extensions as _te")
+    lines.append("    if not _typing.is_typeddict(tp):")
+    lines.append("        return None")
+    lines.append("    try:")
+    lines.append("        hints = _typing.get_type_hints(tp)")
+    lines.append("        required = getattr(tp, '__required_keys__', frozenset(hints))")
+    lines.append("        fields = {k: (v if k in required else _te.NotRequired[v]) for k, v in hints.items()}")
+    lines.append("        return _te.TypedDict(tp.__name__, fields)")
+    lines.append("    except Exception:")
+    lines.append("        return None")
+    lines.append("")
     lines.append("def _safe_annotation(tp):")
     lines.append("    try:")
     lines.append("        TypeAdapter(tp).json_schema()")
+    lines.append("    except PydanticUserError:")
+    lines.append("        rebuilt = _modelable_typeddict(tp)")
+    lines.append("        if rebuilt is not None:")
+    lines.append("            try:")
+    lines.append("                TypeAdapter(rebuilt).json_schema()")
+    lines.append("                return rebuilt")
+    lines.append("            except Exception:")
+    lines.append("                pass")
+    lines.append("        return _AnyType")
     lines.append(
         "    except (PydanticSchemaGenerationError, PydanticInvalidForJsonSchema, "
-        "PydanticUndefinedAnnotation, PydanticUserError):"
+        "PydanticUndefinedAnnotation):"
     )
     lines.append("        return _AnyType")
     lines.append("    return tp")

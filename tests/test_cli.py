@@ -13929,7 +13929,10 @@ def test_local_smoke_test_names_the_exception_type_when_notebook_code_fails_at_s
     )
 
     assert result["passed"] is False
-    assert "failed to import: KeyError: 'SMOKE_TEST_MISSING_KEY_XYZ'" in result["detail"]
+    # An unset required environment variable now fails startup with its own
+    # actionable RuntimeError (naming the variable) instead of a bare KeyError;
+    # either way the exception type is named.
+    assert "failed to import: RuntimeError: The notebook requires the environment variable SMOKE_TEST_MISSING_KEY_XYZ" in result["detail"]
 
 
 def test_validate_docker_image_tag_accepts_real_references_and_rejects_malformed_ones():
