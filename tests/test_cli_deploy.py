@@ -1463,3 +1463,28 @@ def test_deploy_fail_on_startup_warnings_is_opt_in_and_allows_clean_notebooks(tm
     assert ungated.returncode == 0, ungated.stdout + ungated.stderr
     assert gated_clean.returncode == 0, gated_clean.stdout + gated_clean.stderr
     assert "Would build Docker image 'b:latest'" in gated_clean.stdout
+
+
+def test_deploy_json_reports_dockers_own_error_when_the_build_fails(tmp_path):
+    """`deploy --json` captures docker's output, so a failed build used to
+    print only "returned non-zero exit status 1" and lose docker's stderr."""
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    bin_dir = tmp_path / "fakebin"
+    _install_fake_docker_that_fails_build(bin_dir)
+
+    proc = _run_cli(
+        ["deploy", str(notebook_path), "--output", "generated", "--json"],
+        cwd=workdir,
+        path_dirs=[str(bin_dir)],
+    )
+
+    assert proc.returncode == 1
+    assert "returned non-zero exit status 1" in proc.stderr
+    assert "docker: build failed: no space left on device" in proc.stderr
+    assert "Traceback (most recent call last)" not in proc.stderr
+    assert proc.stdout.strip() == ""

@@ -531,6 +531,19 @@ def _run_deploy_docker_command(args, cwd, capture_output=False):
             "Docker CLI not found. Install Docker and ensure `docker` is on PATH to use `deploy`."
         ) from exc
 
+    except subprocess.CalledProcessError as exc:
+
+        # With capture_output (`deploy --json`) docker's own error text sits
+        # on the exception and is otherwise thrown away, leaving only
+        # "returned non-zero exit status 1" with nothing to act on.
+        detail = (exc.stderr or exc.stdout or "")
+        if isinstance(detail, bytes):
+            detail = detail.decode("utf-8", errors="replace")
+        detail = "\n".join(detail.strip().splitlines()[-20:])
+        if not detail:
+            raise
+        raise RuntimeError(f"{exc}\n{detail}") from exc
+
 
 def _run_local_deploy_smoke_test(tag, cwd):
     """`deploy --smoke-test`'s own local counterpart to
