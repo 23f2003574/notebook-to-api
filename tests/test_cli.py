@@ -32300,3 +32300,22 @@ def test_cli_export_sdk_rejects_json_that_is_not_an_openapi_schema(tmp_path, lan
     assert result.returncode == 1
     assert "valid JSON but not an OpenAPI schema" in result.stderr
     assert not output.exists()
+
+
+@pytest.mark.parametrize("language, filename", [("python", "python_client.py"), ("typescript", "typescript_client.ts")])
+def test_cli_export_sdk_output_naming_a_directory_writes_the_default_file_inside_it(tmp_path, language, filename):
+    """`--output some/dir` used to fail with a raw "[Errno 21] Is a directory"."""
+    schema = tmp_path / "openapi.json"
+    schema.write_text(json.dumps({"openapi": "3.0.0", "info": {"title": "t", "version": "1"}, "paths": {}}), encoding="utf-8")
+    out_dir = tmp_path / "clients"
+    out_dir.mkdir()
+
+    result = _run_cli(
+        ["export-sdk", "--openapi", str(schema), "--language", language, "--output", str(out_dir)],
+        tmp_path,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Errno 21" not in result.stderr
+    assert (out_dir / filename).read_text(encoding="utf-8").strip()
+    assert str(out_dir / filename) in result.stdout

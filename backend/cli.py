@@ -2708,10 +2708,15 @@ def _dispatch_core_command(args):
 
         if args.language == "typescript":
             from backend.exporters.sdk_generator import generate_typescript_sdk as generate_sdk
-            output = args.output or os.path.join(openapi_dir, "sdk", "typescript_client.ts")
+            default_name = "typescript_client.ts"
         else:
             from backend.exporters.sdk_generator import generate_python_sdk as generate_sdk
-            output = args.output or os.path.join(openapi_dir, "sdk", "python_client.py")
+            default_name = "python_client.py"
+        output = args.output or os.path.join(openapi_dir, "sdk", default_name)
+        # --output naming an existing directory used to fail with a raw
+        # "[Errno 21] Is a directory"; write the default file name inside it.
+        if os.path.isdir(output):
+            output = os.path.join(output, default_name)
 
         if args.json_output:
             # Same reasoning as export-openapi --json above: generate_sdk
