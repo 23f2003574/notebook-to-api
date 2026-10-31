@@ -7936,3 +7936,44 @@ def test_python_sdk_is_importable_when_a_function_is_named_like_a_keyword(tmp_pa
 
     for method in ("class_", "import_", "pass_", "train"):
         assert callable(getattr(client_cls, method)), method
+
+
+def test_generate_python_sdk_client_error_includes_the_servers_detail(
+    tmp_path, monkeypatch
+):
+    """requests' HTTPError reports only the status line, hiding the response
+    body where the server says which field failed validation or why the
+    notebook function raised; the client must surface that detail.
+    """
+
+    schema_path = _write_schema(
+        tmp_path, {"/train_model": {"post": {"operationId": "train_model"}}},
+    )
+    output_path = tmp_path / "client.py"
+    generate_python_sdk(str(schema_path), str(output_path))
+    client_cls = _exec_generated_client(output_path, monkeypatch)
+
+    class FakeHTTPError(Exception):
+        pass
+
+    class FakeResponse:
+        status_code = 422
+        headers = {}
+        url = "http://x/train_model"
+
+        def json(self):
+            return {"detail": [{"loc": ["body", "epochs"], "msg": "Field required"}]}
+
+        def raise_for_status(self):
+            error = FakeHTTPError("422 Client Error: Unprocessable Content")
+            error.response = self
+            raise error
+
+    client = client_cls("http://x", max_retries=0)
+
+    with pytest.raises(FakeHTTPError) as caught:
+        client._request(lambda: FakeResponse())
+
+    assert "422 Client Error" in str(caught.value)
+    assert "Field required" in str(caught.value)
+    assert "epochs" in str(caught.value)

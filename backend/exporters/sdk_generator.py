@@ -1242,6 +1242,7 @@ def generate_python_sdk(
     # Prepare client code lines
     lines = []
     lines.append("import hmac")
+    lines.append("import json")
     lines.append("import os")
     lines.append("import time")
     lines.append("import uuid")
@@ -1515,6 +1516,20 @@ def generate_python_sdk(
     lines.append("                    pass")
     lines.append("        return self.backoff_factor * (2 ** attempt)")
     lines.append("")
+    # requests' HTTPError says only "422 Client Error: ... for url: ...",
+    # discarding the response body where the server explains what was wrong
+    # (which field failed validation, why a call raised). Append it.
+    lines.append("    @staticmethod")
+    lines.append("    def _add_error_detail(exc, response):")
+    lines.append("        try:")
+    lines.append("            detail = response.json().get('detail')")
+    lines.append("            if not isinstance(detail, str):")
+    lines.append("                detail = json.dumps(detail)")
+    lines.append("            if detail and exc.args:")
+    lines.append("                exc.args = (f\"{exc.args[0]} -- {detail[:500]}\",) + exc.args[1:]")
+    lines.append("        except Exception:")
+    lines.append("            pass")
+    lines.append("")
     lines.append("    def _request(self, request_fn, parse_json: bool = True):")
     lines.append(
         '        """Run `request_fn` (a zero-argument callable making one '
@@ -1588,6 +1603,7 @@ def generate_python_sdk(
         "'X-Notebook-API-Timeout') or '').lower() == 'true')"
     )
     lines.append("                ):")
+    lines.append("                    self._add_error_detail(exc, response)")
     lines.append("                    raise")
     lines.append("                time.sleep(self._retry_delay(response, attempt))")
     lines.append("                attempt += 1")
