@@ -1031,6 +1031,7 @@ kubernetes.yaml
 .env
 .env.local
 .env.*.local
+.env.*
 README.md
 openapi.json
 openapi.yaml
@@ -1100,7 +1101,9 @@ def generate_dockerignore(output_path="generated/.dockerignore"):
     file here. `.env.local`/`.env.*.local` (the Vite/Next.js convention
     for a per-machine override on top of `.env` itself) are excluded for
     the identical reason, on the chance an operator reaches for that
-    naming instead.
+    naming instead. `.env.*` additionally covers the per-environment
+    files (`.env.production`, `.env.staging`, ...) that neither of the
+    two more specific patterns above matches.
     """
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(dockerignore_content())

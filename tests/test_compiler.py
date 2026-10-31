@@ -19736,3 +19736,28 @@ def test_compiled_app_keeps_a_function_whose_cell_ends_in_a_call_introspection_q
 
     assert client.post("/triple", json={"n": 2}, headers=headers).json() == {"result": 6}
     assert client.post("/quad", json={"n": 2}, headers=headers).json() == {"result": 8}
+
+
+def test_compiled_dockerignore_excludes_per_environment_env_files(tmp_path):
+    """`.env.production` / `.env.staging` hold the same real secrets as `.env`
+    but match neither `.env` nor `.env.local` / `.env.*.local`, so a
+    `docker build .` from the compiled directory baked them into an image
+    layer. Checked against the .dockerignore a real compile writes.
+    """
+    from fnmatch import fnmatch
+
+    notebook = nbformat.v4.new_notebook(cells=[
+        nbformat.v4.new_code_cell("def add(a: int, b: int) -> int:\n    \"add\"\n    return a + b\n"),
+    ])
+    nb_path = tmp_path / "nb.ipynb"
+    nbformat.write(notebook, nb_path)
+    compile_notebook_to_api(str(nb_path), str(tmp_path / "built" / "app.py"))
+
+    patterns = [
+        line for line in (tmp_path / "built" / ".dockerignore").read_text().splitlines()
+        if line.strip()
+    ]
+
+    for name in (".env.production", ".env.staging", ".env.prod.local"):
+        assert any(fnmatch(name, pattern) for pattern in patterns), name
+    assert not any(fnmatch("app.py", pattern) for pattern in patterns)
