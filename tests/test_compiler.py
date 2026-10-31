@@ -19650,3 +19650,25 @@ def test_kubernetes_manifest_content_runs_the_container_as_the_dockerfiles_non_r
     assert "allowPrivilegeEscalation: false" in content
     assert 'drop: ["ALL"]' in content
     assert "--uid 1000" in dockerfile_content()
+
+
+def test_kubernetes_manifest_content_points_public_url_at_its_own_service():
+    """The app's localhost:8000 default made /docs' "Try it out" target the
+    viewer's own machine; in a cluster the reachable address is the Service
+    this manifest defines, and an explicitly chosen URL must be left alone.
+    """
+
+    env_vars = [{
+        "name": "NOTEBOOK_API_PUBLIC_URL",
+        "default": "http://localhost:8000",
+        "description": "...",
+    }]
+    content = kubernetes_manifest_content("My_App", env_vars)
+
+    assert 'name: NOTEBOOK_API_PUBLIC_URL\n              value: http://my-app\n' in content
+    assert "localhost:8000" not in content
+
+    env_vars[0]["default"] = "https://api.example.com"
+    content = kubernetes_manifest_content("My_App", env_vars)
+
+    assert "value: https://api.example.com" in content

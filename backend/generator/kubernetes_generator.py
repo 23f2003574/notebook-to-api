@@ -227,6 +227,11 @@ def kubernetes_manifest_content(
                 f"                  optional: true"
             )
         value = "true" if entry["name"] == "NOTEBOOK_API_REQUIRE_CUSTOM_KEY" else entry["default"]
+        # The app's http://localhost:8000 default is only right on a dev
+        # machine; in a cluster, /docs' "Try it out" should hit the Service
+        # this same manifest defines (port 80 -> the container's 8000).
+        if entry["name"] == "NOTEBOOK_API_PUBLIC_URL" and value == "http://localhost:8000":
+            value = f"http://{resource_name}"
         return (
             f"            - name: {name}\n"
             f"              value: {_yaml_scalar(value)}"
