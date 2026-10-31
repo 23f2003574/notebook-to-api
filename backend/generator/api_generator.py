@@ -23,7 +23,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "MAX_PENDING_TASKS", "WEBHOOK_TIMEOUT_SECONDS", "WEBHOOK_SECRET",
     "WEBHOOK_MAX_RETRIES", "WEBHOOK_RETRY_BACKOFF_SECONDS",
     "TASK_EXECUTION_TIMEOUT_SECONDS",
-    "REQUEST_TIMEOUT_SECONDS", "_call_notebook_function", "_log_notebook_error",
+    "REQUEST_TIMEOUT_SECONDS", "_call_notebook_function", "_log_notebook_error", "_request_id_var",
     "_NotebookTimeoutError", "_REQUEST_TIMEOUTS",
     "_ENDPOINT_TIMEOUTS", "_TASK_TIMEOUTS", "_TASK_TIMEOUT_FAILURES",
     "_ENDPOINT_RATE_LIMIT_WINDOWS", "_enforce_endpoint_rate_limit",
@@ -2259,6 +2259,10 @@ def generate_fastapi_code(
         "    request_id = request.headers.get('X-Request-ID') or "
         "str(uuid.uuid4())"
     )
+    # Visible to the endpoint (and _log_notebook_error) running under
+    # call_next, so a traceback in the server log carries the same id the
+    # client received in X-Request-ID and can quote when reporting a failure.
+    lines.append("    _request_id_var.set(request_id)")
     lines.append("    response = await call_next(request)")
     lines.append("    response.headers['X-Request-ID'] = request_id")
     lines.append("    return response")
@@ -2760,10 +2764,16 @@ def generate_fastapi_code(
     lines.append("    return _error_text(exc)")
     lines.append("")
     lines.append("")
+    lines.append("import contextvars as _contextvars")
+    lines.append("_request_id_var = _contextvars.ContextVar('request_id', default='-')")
+    lines.append("")
+    lines.append("")
     lines.append("def _log_notebook_error(func_name, exc):")
     lines.append("    import logging as _logging")
+    # %r: the id can be client-supplied, so a newline in it must not forge log lines.
     lines.append("    _logging.getLogger('uvicorn.error').error(")
-    lines.append("        \"'%s' raised %s: %s\", func_name, type(exc).__name__, exc,")
+    lines.append("        \"'%s' raised %s: %s (request_id=%r)\", func_name, type(exc).__name__, exc,")
+    lines.append("        _request_id_var.get()[:128],")
     lines.append("        exc_info=exc,")
     lines.append("    )")
     lines.append("")

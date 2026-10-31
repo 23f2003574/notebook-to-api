@@ -9752,3 +9752,47 @@ def test_endpoint_calling_input_fails_fast_instead_of_waiting_on_stdin(monkeypat
 
     assert response.status_code == 500
     assert "pass the value as a request parameter" in response.json()["detail"]
+
+
+def test_notebook_error_log_carries_the_request_id_the_client_received(
+    monkeypatch, caplog,
+):
+    """A failed call's traceback goes only to the server log, so the
+    X-Request-ID a client quotes when reporting it must appear in that log
+    entry -- while the response itself exposes neither traceback nor path.
+    """
+    import logging
+
+    functions = [{
+        "name": "boom", "args": [], "return_type": None, "example_payload": {},
+    }]
+    code = generate_fastapi_code(functions)
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    def boom():
+        raise ValueError("model file missing")
+
+    namespace["notebook_module"].boom = boom
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"], raise_server_exceptions=False)
+    with caplog.at_level(logging.ERROR, logger="uvicorn.error"):
+        response = client.post(
+            "/boom", json={},
+            headers={
+                "X-API-Key": "notebook-to-api-dev-key",
+                "X-Request-ID": "req-abc-123",
+            },
+        )
+
+    assert response.status_code == 500
+    assert response.headers["X-Request-ID"] == "req-abc-123"
+    assert "Traceback" not in response.text
+    assert "<generated>" not in response.text
+
+    records = [r for r in caplog.records if "model file missing" in r.getMessage()]
+    assert records and "request_id='req-abc-123'" in records[0].getMessage()
+    assert records[0].exc_info is not None
