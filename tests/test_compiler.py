@@ -19635,3 +19635,18 @@ def test_requirements_leave_out_stdlib_modules_removed_without_a_pypi_backport(t
     write_requirements(imports, str(tmp_path))
     assert "Left out of requirements.txt: lib2to3, msilib, nis, ossaudiodev, spwd" in capsys.readouterr().out
     assert "spwd" not in (tmp_path / "requirements.txt").read_text()
+
+
+def test_kubernetes_manifest_content_runs_the_container_as_the_dockerfiles_non_root_uid():
+    """The Dockerfile drops to `appuser` (uid 1000); `USER appuser` is a name
+    the kubelet cannot verify, so the manifest must pin the numeric uid and
+    forbid privilege escalation rather than leave the pod's defaults.
+    """
+
+    content = kubernetes_manifest_content("generated", [])
+
+    assert "runAsNonRoot: true" in content
+    assert "runAsUser: 1000" in content
+    assert "allowPrivilegeEscalation: false" in content
+    assert 'drop: ["ALL"]' in content
+    assert "--uid 1000" in dockerfile_content()

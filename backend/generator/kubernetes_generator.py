@@ -287,6 +287,15 @@ spec:
           image: {image_scalar}
           ports:
             - containerPort: 8000
+          # The Dockerfile's `USER appuser` is a name, which the kubelet
+          # cannot verify as non-root, so runAsNonRoot would refuse to start
+          # the pod without the explicit numeric uid the Dockerfile creates.
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           env:
 {env_lines}
           livenessProbe:
