@@ -943,6 +943,23 @@ def _validate_docker_image_tag(tag):
         )
 
 
+_DOCKER_PLATFORM_RE = re.compile(r"[a-z0-9]+(?:/[a-z0-9_]+(?:/[a-z0-9_.]+)?)?")
+
+
+def _validate_docker_platform(platform):
+    """Raise ValueError unless `platform` is `os[/arch[/variant]]` (e.g.
+    linux/amd64, linux/arm64/v8), or a comma-separated list of them. A typo
+    like `--platform linux-amd64` was accepted (even by --dry-run) and only
+    failed after the compile, inside `docker build`."""
+    entries = [entry.strip() for entry in platform.split(",")]
+
+    if not all(_DOCKER_PLATFORM_RE.fullmatch(entry) for entry in entries):
+        raise ValueError(
+            f"Invalid --platform '{platform}': expected os[/arch[/variant]], "
+            "e.g. linux/amd64 or linux/arm64/v8."
+        )
+
+
 def _parse_comma_separated_names(value):
     """Parse a `--only`/`--exclude` argparse value ("add,subtract", or
     None) into a list of names, or None if nothing was given.
@@ -2904,6 +2921,8 @@ def _dispatch_core_command(args):
     elif args.command == "deploy":
         if args.tag:
             _validate_docker_image_tag(args.tag)
+        if args.platform:
+            _validate_docker_platform(args.platform)
         if args.fail_on_startup_warnings:
             # Checked before anything is compiled, built or pushed: an
             # image whose app can't start is what this gate keeps out of

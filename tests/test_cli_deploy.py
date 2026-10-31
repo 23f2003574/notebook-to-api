@@ -1528,3 +1528,35 @@ def test_deploy_rewriting_the_manifest_is_not_reported_as_a_hand_edit_on_recompi
         ["compile", str(notebook_path), "--output", "generated"], cwd=workdir,
     )
     assert "were modified since the last compile" in edited.stderr
+
+
+def test_deploy_rejects_a_malformed_platform_before_compiling_or_building(tmp_path):
+    """`--platform linux-amd64` (a typo for linux/amd64) was accepted -- even
+    by --dry-run -- and failed only after the compile, deep inside `docker
+    build`. It must exit nonzero with an actionable message before anything
+    is written or run, while valid values (incl. a list) are unaffected.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    bad = _run_cli(
+        ["deploy", str(notebook_path), "--output", "generated",
+         "--platform", "linux-amd64", "--dry-run"],
+        cwd=workdir,
+    )
+
+    assert bad.returncode == 1, bad.stdout + bad.stderr
+    assert "Invalid --platform 'linux-amd64'" in bad.stderr
+    assert "linux/amd64" in bad.stderr
+    assert not (workdir / "generated").exists()
+
+    for platform in ("linux/amd64", "linux/arm64/v8", "linux/amd64,linux/arm64"):
+        good = _run_cli(
+            ["deploy", str(notebook_path), "--output", "generated",
+             "--platform", platform, "--dry-run"],
+            cwd=workdir,
+        )
+        assert good.returncode == 0, platform + good.stdout + good.stderr
