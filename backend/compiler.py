@@ -5257,6 +5257,31 @@ def update_compile_metadata_source_notebook(output_dir, new_source_notebook_path
     return True
 
 
+def refresh_generated_files_sha256(output_dir, app_filename="app.py"):
+    """Re-record "generated_files_sha256" in `output_dir`'s
+    .compile_metadata.json after a legitimate, tool-made rewrite of a
+    generated file -- `deploy` / POST /api/deploy regenerate kubernetes.yaml
+    to name the image they just built. Without this the next compile (and
+    GET /api/generated) read that rewrite as a hand edit and warned that
+    files "were modified since the last compile". A no-op (returns False)
+    when the metadata is missing or unreadable.
+    """
+    metadata_path = os.path.join(output_dir, COMPILE_METADATA_FILENAME)
+
+    try:
+        with open(metadata_path, "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+    except (OSError, ValueError):
+        return False
+
+    metadata["generated_files_sha256"] = _generated_files_sha256(output_dir, app_filename)
+
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2)
+
+    return True
+
+
 def clear_stale_export_artifacts(output_dir):
     """Remove a previous compile's exported openapi.json/openapi.yaml and
     sdk/ directory from `output_dir`, if present.

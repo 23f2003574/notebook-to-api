@@ -1488,3 +1488,43 @@ def test_deploy_json_reports_dockers_own_error_when_the_build_fails(tmp_path):
     assert "docker: build failed: no space left on device" in proc.stderr
     assert "Traceback (most recent call last)" not in proc.stderr
     assert proc.stdout.strip() == ""
+
+
+def test_deploy_rewriting_the_manifest_is_not_reported_as_a_hand_edit_on_recompile(
+    tmp_path,
+):
+    """`deploy` legitimately rewrites kubernetes.yaml to name the built image,
+    but the checksum recorded at compile time still described the original
+    file, so the next compile warned that files "were modified since the
+    last compile" -- a false hand-edit alarm after every deploy.
+    """
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    notebook_path = workdir / "nb.ipynb"
+    _write_notebook(notebook_path)
+
+    bin_dir = tmp_path / "fakebin"
+    log_path = tmp_path / "docker_invocation.log"
+    _install_fake_docker(bin_dir, log_path)
+
+    deploy = _run_cli(
+        ["deploy", str(notebook_path), "--output", "generated", "--tag", "reg.example.com/app:v2"],
+        cwd=workdir,
+        path_dirs=[str(bin_dir)],
+    )
+    assert deploy.returncode == 0, deploy.stdout + deploy.stderr
+
+    recompile = _run_cli(
+        ["compile", str(notebook_path), "--output", "generated"], cwd=workdir,
+    )
+    assert recompile.returncode == 0, recompile.stdout + recompile.stderr
+    assert "were modified since the last compile" not in recompile.stderr
+
+    # A genuine hand edit must still be caught.
+    deploy_manifest = workdir / "generated" / "Dockerfile"
+    deploy_manifest.write_text(deploy_manifest.read_text() + "# hand edit\n")
+    edited = _run_cli(
+        ["compile", str(notebook_path), "--output", "generated"], cwd=workdir,
+    )
+    assert "were modified since the last compile" in edited.stderr

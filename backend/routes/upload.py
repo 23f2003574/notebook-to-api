@@ -17610,7 +17610,7 @@ def deploy_generated_app(data: dict = None):
         # deploy just built -- independent of whether "push" below even
         # succeeds, since the local image itself already exists under
         # this tag regardless.
-        from backend.compiler import read_notebook_env_vars
+        from backend.compiler import read_notebook_env_vars, refresh_generated_files_sha256
 
         generate_kubernetes_manifest(
             str(generated_path / "kubernetes.yaml"),
@@ -17619,6 +17619,7 @@ def deploy_generated_app(data: dict = None):
             image=tag,
             notebook_env_vars=read_notebook_env_vars(generated_path),
         )
+        refresh_generated_files_sha256(str(generated_path))
 
         compiled_path, compiled_sha256, _, _ = _currently_compiled_notebook_metadata()
 

@@ -3006,7 +3006,7 @@ def _dispatch_core_command(args):
                     from backend.generator.kubernetes_generator import (
                         generate_kubernetes_manifest,
                     )
-                    from backend.compiler import read_notebook_env_vars
+                    from backend.compiler import read_notebook_env_vars, refresh_generated_files_sha256
                     generate_kubernetes_manifest(
                         str(output_dir / "kubernetes.yaml"),
                         package_name_for_output_dir(str(output_dir)),
@@ -3014,6 +3014,7 @@ def _dispatch_core_command(args):
                         image=tag,
                         notebook_env_vars=read_notebook_env_vars(output_dir),
                     )
+                    refresh_generated_files_sha256(str(output_dir))
                     if args.smoke_test:
                         smoke_test_result = _run_local_deploy_smoke_test(tag, output_dir)
                     pushed = False
@@ -3067,7 +3068,7 @@ def _dispatch_core_command(args):
                 from backend.generator.kubernetes_generator import (
                     generate_kubernetes_manifest,
                 )
-                from backend.compiler import read_notebook_env_vars
+                from backend.compiler import read_notebook_env_vars, refresh_generated_files_sha256
                 generate_kubernetes_manifest(
                     str(output_dir / "kubernetes.yaml"),
                     package_name_for_output_dir(str(output_dir)),
@@ -3075,6 +3076,7 @@ def _dispatch_core_command(args):
                     image=tag,
                     notebook_env_vars=read_notebook_env_vars(output_dir),
                 )
+                refresh_generated_files_sha256(str(output_dir))
                 print(f"kubernetes.yaml updated to reference '{tag}'.")
 
                 smoke_test_result = None
