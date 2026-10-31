@@ -1749,7 +1749,10 @@ def generate_fastapi_code(
     lines.append("        _nb_atexit.unregister(func)")
     lines.append("        try:")
     lines.append("            func(*args, **kwargs)")
-    lines.append("        except Exception as e:")
+    # SystemExit too (a handler calling sys.exit() is ordinary under atexit,
+    # which ignores it): it is not an Exception, so it escaped here, aborted
+    # the lifespan and skipped every handler registered before it.
+    lines.append("        except (Exception, SystemExit) as e:")
     lines.append("            print(f'notebook shutdown handler {func!r} failed: {e!r}', file=sys.stderr)")
     lines.append("")
     # Read before app = FastAPI(...) below (the servers= kwarg needs it

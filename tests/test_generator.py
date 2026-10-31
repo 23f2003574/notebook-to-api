@@ -9796,3 +9796,49 @@ def test_notebook_error_log_carries_the_request_id_the_client_received(
     records = [r for r in caplog.records if "model file missing" in r.getMessage()]
     assert records and "request_id='req-abc-123'" in records[0].getMessage()
     assert records[0].exc_info is not None
+
+
+def test_shutdown_runs_every_notebook_atexit_handler_even_if_one_calls_sys_exit(
+    tmp_path, monkeypatch, capsys,
+):
+    """A notebook cleanup handler calling sys.exit() (ordinary under atexit,
+    which ignores it) raised SystemExit out of the generated lifespan,
+    aborting shutdown and skipping every handler registered before it.
+    """
+    package = tmp_path / "lifecyclepkg"
+    (package / "runtime").mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+    (package / "runtime" / "__init__.py").write_text("")
+    (package / "runtime" / "notebook_module.py").write_text(
+        "import atexit\n"
+        "ran = []\n"
+        "atexit.register(lambda: ran.append('first'))\n"
+        "def _bad():\n"
+        "    raise SystemExit(1)\n"
+        "atexit.register(_bad)\n"
+        "atexit.register(lambda: ran.append('last'))\n"
+        "def ping():\n"
+        "    return 'pong'\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    for name in ("lifecyclepkg", "lifecyclepkg.runtime",
+                 "lifecyclepkg.runtime.notebook_module"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+
+    code = generate_fastapi_code(
+        [{"name": "ping", "args": [], "return_type": None, "example_payload": {}}],
+        package_name="lifecyclepkg",
+    )
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+
+    from fastapi.testclient import TestClient
+
+    with TestClient(namespace["app"]) as client:
+        response = client.post(
+            "/ping", json={}, headers={"X-API-Key": "notebook-to-api-dev-key"},
+        )
+        assert response.json() == {"result": "pong"}
+
+    assert namespace["notebook_module"].ran == ["last", "first"]
+    assert "_bad" in capsys.readouterr().err
