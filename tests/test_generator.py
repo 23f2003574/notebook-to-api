@@ -9721,3 +9721,34 @@ def test_typing_typeddict_is_rebuilt_so_pydantic_can_model_it_on_every_python(mo
     assert namespace["_modelable_typeddict"](dict) is None
     # whatever Pydantic can already model is passed through untouched
     assert namespace["_safe_annotation"](typing.List[int]) == typing.List[int]
+
+
+def test_endpoint_calling_input_fails_fast_instead_of_waiting_on_stdin(monkeypatch):
+    """A notebook function calling input() blocked the request forever when
+    the server had a terminal for stdin; it must fail immediately with a
+    message naming the fix, without ever reading stdin.
+    """
+    import builtins
+
+    monkeypatch.setattr(builtins, "input", builtins.input)
+    monkeypatch.setattr(
+        sys, "stdin", types.SimpleNamespace(readline=lambda *a: pytest.fail("read stdin")),
+    )
+    functions = [{
+        "name": "ask", "args": [], "return_type": None, "example_payload": {},
+    }]
+    code = generate_fastapi_code(functions)
+    _register_fake_notebook_module(monkeypatch)
+    namespace = {}
+    exec(compile(code, "<generated>", "exec"), namespace)
+    namespace["notebook_module"].ask = lambda: input("name? ")
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(namespace["app"], raise_server_exceptions=False)
+    response = client.post(
+        "/ask", json={}, headers={"X-API-Key": "notebook-to-api-dev-key"},
+    )
+
+    assert response.status_code == 500
+    assert "pass the value as a request parameter" in response.json()["detail"]

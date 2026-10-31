@@ -1690,6 +1690,16 @@ def generate_fastapi_code(
     lines.append("    _nb_atexit_handlers.append((func, args, kwargs))")
     lines.append("    return _nb_real_atexit_register(func, *args, **kwargs)")
     lines.append("_nb_atexit.register = _nb_recording_register")
+    # input() in a notebook cell waits on the server's stdin: with a terminal
+    # attached (`serve`, a local uvicorn) it blocked the request forever, and
+    # with none it failed with an opaque "EOF when reading a line".
+    lines.append("import builtins as _nb_builtins")
+    lines.append("def _nb_no_input(prompt=''):")
+    lines.append(
+        "    raise EOFError('input() is not available in an API endpoint; "
+        "pass the value as a request parameter instead')"
+    )
+    lines.append("_nb_builtins.input = _nb_no_input")
     lines.append("try:")
     # The package name is the directory name the app was compiled into, so a
     # renamed or moved output directory made `import <name>...` fail with
