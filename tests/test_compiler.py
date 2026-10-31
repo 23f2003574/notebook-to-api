@@ -19761,3 +19761,45 @@ def test_compiled_dockerignore_excludes_per_environment_env_files(tmp_path):
     for name in (".env.production", ".env.staging", ".env.prod.local"):
         assert any(fnmatch(name, pattern) for pattern in patterns), name
     assert not any(fnmatch("app.py", pattern) for pattern in patterns)
+
+
+def test_readme_workflow_sample_notebook_serves_correct_results_over_http(
+    tmp_path, monkeypatch
+):
+    """The README's headline workflow end to end: compile notebooks/
+    sample.ipynb, start the generated app with its documented default
+    X-API-Key, and call every endpoint it advertises -- not just check that
+    the files exist. Covers arithmetic, a multi-type payload (int, float,
+    str) returning a dict, the auth requirement, validation and /health.
+    """
+    import importlib
+
+    from fastapi.testclient import TestClient
+
+    compile_notebook(
+        str(PROJECT_ROOT / "notebooks" / "sample.ipynb"),
+        str(tmp_path / "readme_app"),
+    )
+
+    monkeypatch.delenv("NOTEBOOK_API_KEY", raising=False)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    client = TestClient(importlib.import_module("readme_app.app").app)
+    headers = {"X-API-Key": "notebook-to-api-dev-key"}
+
+    assert client.get("/health").json() == {"status": "healthy"}
+    assert client.post("/add", json={"a": 2, "b": 3}, headers=headers).json() == {"result": 5}
+    assert client.post("/multiply", json={"a": 4, "b": 5}, headers=headers).json() == {"result": 20}
+
+    predict = client.post(
+        "/predict",
+        json={"age": 30, "salary": 50000.0, "city": "Paris"},
+        headers=headers,
+    )
+    assert predict.status_code == 200, predict.text
+    assert isinstance(predict.json()["result"], dict)
+    assert "score" in predict.json()["result"]
+
+    assert client.post("/add", json={"a": 2, "b": 3}).status_code == 401
+    assert client.post("/add", json={"a": "x", "b": 3}, headers=headers).status_code == 422
+    paths = client.get("/openapi.json").json()["paths"]
+    assert {"/add", "/multiply", "/predict"} <= set(paths)
