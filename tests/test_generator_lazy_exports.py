@@ -83,3 +83,20 @@ def test_from_import_and_unknown_names_behave_like_a_normal_module():
         generator.DefinitelyNotThere
     with pytest.raises(ImportError):
         from backend.generator import DefinitelyNotThere  # noqa: F401
+
+
+def test_star_import_still_provides_every_public_generator_name():
+    """`from backend.generator import *` imported every name when the package
+    loaded its submodules eagerly; lazy loading made it import nothing, and
+    plain `from backend.generator import X` must keep working alongside it."""
+    result = _run_python(
+        "from backend.generator import PipelineRouteGenerator\n"
+        "ns = {}\n"
+        "exec('from backend.generator import *', ns)\n"
+        "import backend.generator as g\n"
+        "missing = [n for n in g._EXPORTS if n not in ns]\n"
+        "print(len(g._EXPORTS), missing[:3], ns['PipelineRouteGenerator'] is PipelineRouteGenerator)"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().endswith("[] True"), result.stdout

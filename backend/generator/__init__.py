@@ -487,6 +487,12 @@ _EXPORTS = {
 }
 
 
+# Without this, `from backend.generator import *` (which worked when every
+# name was imported eagerly) silently imports nothing, because the lazy names
+# are not in the module's namespace until first use.
+__all__ = sorted(_EXPORTS)
+
+
 def __getattr__(name):
     module_name = _EXPORTS.get(name)
     if module_name is None:
