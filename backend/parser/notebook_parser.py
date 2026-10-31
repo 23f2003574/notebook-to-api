@@ -44,12 +44,13 @@ _ASSIGNED_MAGIC_RE = re.compile(
 # attribute-chain expression (optionally called) plus a leading/trailing
 # "?"/"??" is unambiguously an introspection query, not code -- as opposed
 # to matching any line merely containing a "?" (which would wrongly also
-# match, and corrupt, plain code like `msg = "wait?"`).
+# match, and corrupt, plain code like `msg = "wait?"`). A trailing call may
+# carry arguments (`df.head(3)?`).
 _INTROSPECTION_PREFIX_RE = re.compile(
-    r"^(\s*)\?{1,2}\s*[A-Za-z_][A-Za-z0-9_.]*(\(\))?\s*$"
+    r"^(\s*)\?{1,2}\s*[A-Za-z_][A-Za-z0-9_.]*(\([^\n]*\))?\s*$"
 )
 _INTROSPECTION_SUFFIX_RE = re.compile(
-    r"^(\s*)[A-Za-z_][A-Za-z0-9_.]*(\(\))?\s*\?{1,2}\s*$"
+    r"^(\s*)[A-Za-z_][A-Za-z0-9_.]*(\([^\n]*\))?\s*\?{1,2}\s*$"
 )
 
 # Cell magics whose own *body* -- everything after the "%%name ..." line

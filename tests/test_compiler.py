@@ -19695,3 +19695,44 @@ def test_compiled_kubernetes_manifest_declares_resource_requests_and_a_memory_li
     assert container["resources"]["limits"] == {"memory": "1Gi"}
     assert "cpu" not in container["resources"]["limits"]
     assert container["livenessProbe"]["httpGet"]["path"] == "/health"
+
+
+def test_compiled_app_keeps_a_function_whose_cell_ends_in_a_call_introspection_query(
+    tmp_path, monkeypatch
+):
+    """`df.head(3)?` / `?summarize(rows)` -- an introspection query on a call
+    carrying arguments -- left `ast.parse` failing on the whole cell, so the
+    function defined in that same cell silently never became an endpoint.
+    """
+    from fastapi.testclient import TestClient
+
+    notebook = nbformat.v4.new_notebook(cells=[
+        nbformat.v4.new_code_cell(
+            "def triple(n: int) -> int:\n"
+            "    \"Triple n.\"\n"
+            "    return n * 3\n\n"
+            "print(len('x'))\n"
+            "triple(2)?\n"
+        ),
+        nbformat.v4.new_code_cell(
+            "def quad(n: int) -> int:\n"
+            "    \"Quadruple n.\"\n"
+            "    return n * 4\n\n"
+            "??quad(2)\n"
+        ),
+    ])
+    nb_path = tmp_path / "nb.ipynb"
+    nbformat.write(notebook, nb_path)
+    out = tmp_path / "callq" / "app.py"
+    compile_notebook_to_api(str(nb_path), str(out))
+
+    monkeypatch.setenv("NOTEBOOK_API_KEY", "k")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    import importlib
+
+    module = importlib.import_module("callq.app")
+    client = TestClient(module.app)
+    headers = {"X-API-Key": "k"}
+
+    assert client.post("/triple", json={"n": 2}, headers=headers).json() == {"result": 6}
+    assert client.post("/quad", json={"n": 2}, headers=headers).json() == {"result": 8}
