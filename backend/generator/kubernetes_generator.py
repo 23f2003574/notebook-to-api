@@ -303,6 +303,15 @@ spec:
               drop: ["ALL"]
           env:
 {env_lines}
+          # Without requests the scheduler packs pods blindly; without a
+          # memory limit one leaking notebook can exhaust its node. No CPU
+          # limit on purpose: it would throttle request bursts. Tune per model.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
           livenessProbe:
             httpGet:
               path: /health

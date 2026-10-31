@@ -19672,3 +19672,26 @@ def test_kubernetes_manifest_content_points_public_url_at_its_own_service():
     content = kubernetes_manifest_content("My_App", env_vars)
 
     assert "value: https://api.example.com" in content
+
+
+def test_compiled_kubernetes_manifest_declares_resource_requests_and_a_memory_limit(tmp_path):
+    """The Deployment in the compiled kubernetes.yaml must give the scheduler
+    requests and cap memory, and stay valid YAML with the probes after it.
+    """
+    import yaml
+
+    notebook = nbformat.v4.new_notebook(cells=[
+        nbformat.v4.new_code_cell("def add(a: int, b: int) -> int:\n    \"add\"\n    return a + b\n"),
+    ])
+    nb_path = tmp_path / "nb.ipynb"
+    nbformat.write(notebook, nb_path)
+    out = tmp_path / "out" / "app.py"
+    compile_notebook_to_api(str(nb_path), str(out))
+
+    docs = list(yaml.safe_load_all((tmp_path / "out" / "kubernetes.yaml").read_text()))
+    container = docs[0]["spec"]["template"]["spec"]["containers"][0]
+
+    assert container["resources"]["requests"] == {"cpu": "100m", "memory": "256Mi"}
+    assert container["resources"]["limits"] == {"memory": "1Gi"}
+    assert "cpu" not in container["resources"]["limits"]
+    assert container["livenessProbe"]["httpGet"]["path"] == "/health"
