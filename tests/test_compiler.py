@@ -20232,3 +20232,63 @@ print("GENERATOR_TIMEOUT_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "GENERATOR_TIMEOUT_E2E_OK" in proc.stdout
+
+
+def test_compiled_app_health_answers_while_the_worker_thread_pool_is_saturated(tmp_path):
+    """GET /health was a plain `def` route sharing the thread pool with sync
+    notebook calls, so 45 slow requests (pool of 40) made it hang, failing
+    the Kubernetes liveness probe of a healthy-but-busy pod."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(nbformat.v4.new_code_cell(
+        "import time\n\ndef hold(s: float) -> float:\n    time.sleep(s)\n    return s\n"
+    ))
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import asyncio, sys, time
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+import httpx
+from generated.app import app
+
+async def main():
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+        jobs = [
+            asyncio.create_task(client.post("/hold", json={{"s": 2}}, headers=headers))
+            for _ in range(45)
+        ]
+        await asyncio.sleep(0.5)
+        start = time.perf_counter()
+        response = await asyncio.wait_for(client.get("/health"), timeout=1)
+        head = await asyncio.wait_for(client.head("/health"), timeout=1)
+        elapsed = time.perf_counter() - start
+        assert response.status_code == 200 and response.json() == {{"status": "healthy"}}
+        assert head.status_code == 200
+        assert elapsed < 1, elapsed
+        await asyncio.gather(*jobs)
+
+asyncio.run(main())
+print("HEALTH_UNDER_LOAD_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir), capture_output=True, text=True, timeout=120,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "HEALTH_UNDER_LOAD_E2E_OK" in proc.stdout

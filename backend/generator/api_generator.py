@@ -4071,7 +4071,11 @@ def generate_fastapi_code(
     # the OpenAPI schema so exported specs and SDKs are unchanged.
     lines.append("@app.head('/health', include_in_schema=False)")
     lines.append("@app.get('/health')")
-    lines.append("def health_check():")
+    # async, so it runs on the event loop: a plain `def` route runs in the
+    # same limited thread pool as every sync notebook call, and with the pool
+    # busy (long-running requests) GET /health queued behind them, failed the
+    # liveness probe, and got a healthy-but-busy pod restarted.
+    lines.append("async def health_check():")
     lines.append("    return {'status': 'healthy'}")
     lines.append("")
     lines.append("@app.head('/ready', include_in_schema=False)")
