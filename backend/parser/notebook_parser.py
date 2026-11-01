@@ -585,12 +585,32 @@ def relocate_sandbox_paths(source):
     return "".join(lines)
 
 
+def _in_execution_order(cells):
+    """Return `cells` sorted by Jupyter's execution_count when the notebook was
+    demonstrably run out of file order.
+
+    A notebook only works as a script if its cells run top to bottom, but
+    people routinely define a helper in a later cell, run it first, and then
+    run the cell above that uses it. The saved file order then raises
+    NameError at import time even though the notebook itself ran fine. The
+    execution_count each cell was saved with records the order that actually
+    worked. It is only trusted when every non-blank cell has a distinct
+    integer count; a partly-run or never-run notebook keeps file order.
+    """
+    counted = [c for c in cells if c.source.strip()]
+    counts = [c.get("execution_count") for c in counted]
+    if not counts or any(type(n) is not int for n in counts) or len(set(counts)) != len(counts):
+        return cells
+    ranked = {id(c): c.execution_count for c in counted}
+    blank = [c for c in cells if id(c) not in ranked]
+    return sorted(counted, key=lambda c: ranked[id(c)]) + blank
+
+
 def extract_code_cells(notebook):
     code_cells = []
 
-    for cell in notebook.cells:
-        if cell.cell_type == "code":
-            code_cells.append(relocate_sandbox_paths(strip_magic_commands(cell.source)))
+    for cell in _in_execution_order([c for c in notebook.cells if c.cell_type == "code"]):
+        code_cells.append(relocate_sandbox_paths(strip_magic_commands(cell.source)))
 
     return code_cells
 

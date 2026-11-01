@@ -19840,3 +19840,66 @@ def test_readme_workflow_sample_notebook_serves_correct_results_over_http(
     assert client.post("/add", json={"a": "x", "b": 3}, headers=headers).status_code == 422
     paths = client.get("/openapi.json").json()["paths"]
     assert {"/add", "/multiply", "/predict"} <= set(paths)
+
+
+def test_compiled_app_runs_cells_in_the_order_the_notebook_was_executed(tmp_path):
+    """A notebook run out of file order (helper defined in a later cell, run
+    first) raised NameError on import of the generated module."""
+
+    notebook = nbformat.v4.new_notebook()
+    uses_helper = nbformat.v4.new_code_cell("OFFSET = helper(10)\n")
+    defines_helper = nbformat.v4.new_code_cell(
+        "def helper(x):\n    return x * 2\n\n"
+        "def shifted(n: int) -> int:\n    return n + OFFSET\n"
+    )
+    uses_helper.execution_count = 2
+    defines_helper.execution_count = 1
+    notebook.cells.extend([uses_helper, defines_helper])
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+response = TestClient(app).post(
+    "/shifted", json={{"n": 1}},
+    headers={{"X-API-Key": "notebook-to-api-dev-key"}},
+)
+assert response.status_code == 200, response.text
+assert response.json()["result"] == 21, response.json()
+print("EXECUTION_ORDER_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir), capture_output=True, text=True, timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "EXECUTION_ORDER_E2E_OK" in proc.stdout
+
+
+def test_extract_code_cells_keeps_file_order_when_execution_counts_are_incomplete():
+    from backend.parser.notebook_parser import extract_code_cells
+
+    notebook = nbformat.v4.new_notebook()
+    first = nbformat.v4.new_code_cell("a = 1")
+    second = nbformat.v4.new_code_cell("b = 2")
+    first.execution_count = 2
+    notebook.cells.extend([first, second])  # second was never run
+
+    assert extract_code_cells(notebook) == ["a = 1", "b = 2"]
