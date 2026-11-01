@@ -3454,6 +3454,19 @@ def generate_fastapi_code(
         "and (value.is_nan() or value.is_infinite()):"
     )
     lines.append("        return None")
+    # A Decimal that a float cannot hold exactly (money with many digits, a
+    # 30-digit scientific value) was silently rounded by jsonable_encoder's
+    # float(): Decimal('12345678901234567890.123456789') came back as
+    # 1.2345678901234567e+19. Such values are sent as strings, the same
+    # lossless form pydantic uses; Decimals that round-trip through a float
+    # (19.99, 3, 0.1) keep their numeric form, so existing clients are
+    # unaffected.
+    lines.append("    if type(value).__name__ == 'Decimal' and hasattr(value, 'as_tuple'):")
+    lines.append("        try:")
+    lines.append("            if type(value)(repr(float(value))) != value:")
+    lines.append("                return str(value)")
+    lines.append("        except Exception:")
+    lines.append("            return str(value)")
     lines.append("    if isinstance(value, dict):")
     # JSON object keys must be strings: a tuple/other key (a groupby on two
     # columns, a Counter of pairs) made json.dumps fail -- or, before that,
