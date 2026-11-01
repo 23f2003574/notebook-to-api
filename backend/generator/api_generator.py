@@ -2590,13 +2590,64 @@ def generate_fastapi_code(
     # Created lazily, inside the running event loop. A synchronous call that is
     # cancelled by its timeout frees its slot even though the abandoned thread
     # may still be running -- the same unavoidable limit as the timeout itself.
+    # A notebook function that mutates an ALL_CAPS module constant (a
+    # DEFAULTS dict it updates in place, a list it appends to) leaked that
+    # change into every later request: Jupyter restarts a kernel, a server
+    # never does. By convention an ALL_CAPS name is a constant, not state, so
+    # once no call is in flight each such dict/list/set that a call changed is
+    # replaced by a fresh copy of its import-time value. The replaced object is
+    # left untouched, so a response still holding it serializes unchanged.
+    # Lower-case module globals (counters, caches, loaded models) are
+    # deliberately never touched.
+    lines.append("import copy as _copy")
+    lines.append("_CONST_LOCK = threading.Lock()")
+    lines.append("_CONST_IN_FLIGHT = 0")
+    lines.append("_CONST_SNAPSHOT = None")
+    lines.append("")
+    lines.append("def _constants_enter():")
+    lines.append("    global _CONST_IN_FLIGHT, _CONST_SNAPSHOT")
+    lines.append("    with _CONST_LOCK:")
+    lines.append("        if _CONST_SNAPSHOT is None:")
+    lines.append("            _CONST_SNAPSHOT = {}")
+    lines.append("            for _name, _value in list(vars(notebook_module).items()):")
+    lines.append("                if _name.isupper() and type(_value) in (dict, list, set):")
+    lines.append("                    try:")
+    lines.append("                        _CONST_SNAPSHOT[_name] = _copy.deepcopy(_value)")
+    lines.append("                    except Exception:")
+    lines.append("                        pass")
+    lines.append("        _CONST_IN_FLIGHT += 1")
+    lines.append("")
+    lines.append("def _constants_exit():")
+    lines.append("    global _CONST_IN_FLIGHT")
+    lines.append("    with _CONST_LOCK:")
+    lines.append("        _CONST_IN_FLIGHT -= 1")
+    lines.append("        if _CONST_IN_FLIGHT:")
+    lines.append("            return")
+    lines.append("        for _name, _saved in _CONST_SNAPSHOT.items():")
+    lines.append("            try:")
+    lines.append("                _now = getattr(notebook_module, _name, None)")
+    lines.append("                if type(_now) is type(_saved) and _now != _saved:")
+    lines.append("                    setattr(notebook_module, _name, _copy.deepcopy(_saved))")
+    lines.append("            except Exception:")
+    lines.append("                pass")
+    lines.append("")
+    lines.append("class _IsolatedSlot:")
+    lines.append("    def __init__(self, inner):")
+    lines.append("        self._inner = inner")
+    lines.append("    async def __aenter__(self):")
+    lines.append("        await self._inner.__aenter__()")
+    lines.append("        _constants_enter()")
+    lines.append("    async def __aexit__(self, *exc_info):")
+    lines.append("        _constants_exit()")
+    lines.append("        return await self._inner.__aexit__(*exc_info)")
+    lines.append("")
     lines.append("def _call_slot():")
     lines.append("    global _CALL_LIMITER")
     lines.append("    if MAX_CONCURRENT_CALLS <= 0:")
-    lines.append("        return _NO_LIMIT")
+    lines.append("        return _IsolatedSlot(_NO_LIMIT)")
     lines.append("    if _CALL_LIMITER is None:")
     lines.append("        _CALL_LIMITER = anyio.CapacityLimiter(MAX_CONCURRENT_CALLS)")
-    lines.append("    return _CALL_LIMITER")
+    lines.append("    return _IsolatedSlot(_CALL_LIMITER)")
     lines.append("")
     # A second limiter whose token is held by the worker thread itself until it
     # really finishes. _call_slot is released as soon as a timed-out call is

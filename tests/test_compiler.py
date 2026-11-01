@@ -19903,3 +19903,54 @@ def test_extract_code_cells_keeps_file_order_when_execution_counts_are_incomplet
     notebook.cells.extend([first, second])  # second was never run
 
     assert extract_code_cells(notebook) == ["a = 1", "b = 2"]
+
+
+def test_compiled_app_does_not_leak_all_caps_constant_mutations_between_requests(tmp_path):
+    """A function updating an ALL_CAPS dict in place leaked that change into
+    every later request; lower-case module state still persists on purpose."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(nbformat.v4.new_code_cell(
+        "DEFAULTS = {'base': 0}\n"
+        "calls = []\n\n"
+        "def tag(key: str) -> dict:\n"
+        "    DEFAULTS[key] = 1\n"
+        "    calls.append(key)\n"
+        "    return {'seen': sorted(DEFAULTS), 'calls': len(calls)}\n"
+    ))
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+first = client.post("/tag", json={{"key": "a"}}, headers=headers).json()["result"]
+second = client.post("/tag", json={{"key": "b"}}, headers=headers).json()["result"]
+assert first == {{"seen": ["a", "base"], "calls": 1}}, first
+assert second == {{"seen": ["b", "base"], "calls": 2}}, second
+print("CONSTANT_ISOLATION_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir), capture_output=True, text=True, timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "CONSTANT_ISOLATION_E2E_OK" in proc.stdout
