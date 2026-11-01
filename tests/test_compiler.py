@@ -1726,6 +1726,20 @@ def test_kubernetes_manifest_content_wires_up_health_and_readiness_probes():
     assert content.count("path: /ready") == 1
 
 
+def test_kubernetes_manifest_content_drains_gracefully_on_rollout():
+    """A preStop pause lets Service endpoint removal propagate before SIGTERM
+    reaches uvicorn, and the grace period must outlast that pause."""
+
+    content = kubernetes_manifest_content("generated", [])
+
+    assert "preStop:" in content
+    assert 'command: ["sleep", "5"]' in content
+    grace = int(content.split("terminationGracePeriodSeconds:")[1].split()[0])
+    assert grace > 5
+    # pod-level setting sits under spec:, before the containers list
+    assert content.index("terminationGracePeriodSeconds:") < content.index("containers:")
+
+
 def test_kubernetes_manifest_content_maps_container_port_to_the_port_env_var():
 
     content = kubernetes_manifest_content("generated", [])

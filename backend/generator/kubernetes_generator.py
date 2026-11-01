@@ -287,9 +287,19 @@ spec:
       labels:
         app: {package_name_scalar}
     spec:
+      # SIGTERM reaches the pod at the same moment its endpoint is removed
+      # from the Service, and removal takes a few seconds to propagate -- so
+      # without the preStop pause below, a rollout sends new requests to a
+      # server that is already shutting down (connection resets). The grace
+      # period must cover that pause plus the time to drain in-flight calls.
+      terminationGracePeriodSeconds: 45
       containers:
         - name: {package_name_scalar}
           image: {image_scalar}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]
           ports:
             - containerPort: 8000
           # The Dockerfile's `USER appuser` is a name, which the kubelet
