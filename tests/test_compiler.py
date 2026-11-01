@@ -20292,3 +20292,55 @@ print("HEALTH_UNDER_LOAD_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "HEALTH_UNDER_LOAD_E2E_OK" in proc.stdout
+
+
+def test_compiled_app_normalizes_a_blank_or_slash_terminated_public_url(tmp_path):
+    """A blank NOTEBOOK_API_PUBLIC_URL (compose `${VAR:-}`) became the OpenAPI
+    server URL "", and a trailing slash produced "https://host//add"."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell("def add(a: int, b: int) -> int:\n    return a + b\n")
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import os, sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+def server_url(value):
+    if value is None:
+        os.environ.pop("NOTEBOOK_API_PUBLIC_URL", None)
+    else:
+        os.environ["NOTEBOOK_API_PUBLIC_URL"] = value
+    for name in [n for n in sys.modules if n == "generated" or n.startswith("generated.")]:
+        del sys.modules[name]
+    from generated.app import app
+    return app.openapi()["servers"][0]["url"]
+
+assert server_url(None) == "http://localhost:8000"
+assert server_url("") == "http://localhost:8000"
+assert server_url("   ") == "http://localhost:8000"
+assert server_url("https://api.example.com/") == "https://api.example.com"
+assert server_url(" https://api.example.com/v1/ ") == "https://api.example.com/v1"
+print("PUBLIC_URL_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir), capture_output=True, text=True, timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "PUBLIC_URL_E2E_OK" in proc.stdout

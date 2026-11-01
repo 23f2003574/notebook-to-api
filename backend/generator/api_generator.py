@@ -1795,11 +1795,17 @@ def generate_fastapi_code(
     lines.append("        return False")
     lines.append("    raise RuntimeError(f'{name} must be true or false, got {raw!r}')")
     lines.append("")
+    # A blank value ("${NOTEBOOK_API_PUBLIC_URL:-}" in a compose file, an empty
+    # Helm value) used to become the OpenAPI server URL "", which breaks
+    # Swagger's "Try it out"; a trailing slash produced "https://host//add".
+    # Blank now falls back to the default and the slash is dropped.
+    _public_url_default = _generated_app_env_var_default("NOTEBOOK_API_PUBLIC_URL")
     lines.append(
         'PUBLIC_URL = os.getenv('
         '"NOTEBOOK_API_PUBLIC_URL", '
-        f'"{_generated_app_env_var_default("NOTEBOOK_API_PUBLIC_URL")}"'
-        ')'
+        f'"{_public_url_default}"'
+        ').strip().rstrip("/") or '
+        f'"{_public_url_default}"'
     )
     # Also read before app = FastAPI(...) below -- docs_url/redoc_url/
     # openapi_url are only ever honored at construction time; FastAPI has
