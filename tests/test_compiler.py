@@ -20112,3 +20112,59 @@ print("OPEN_FILE_RESULT_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "OPEN_FILE_RESULT_E2E_OK" in proc.stdout
+
+
+def test_compiled_app_serializes_a_large_int_list_without_the_per_element_slow_path(tmp_path):
+    """Every int in a big result walked the whole conversion chain: a
+    1,000,000-int list spent ~3s in _json_safe. Plain None/bool/int now
+    return immediately; compared against floats (which still take the full
+    path) so the check does not depend on machine speed."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(nbformat.v4.new_code_cell(
+        "def count(n: int) -> list:\n    return list(range(n))\n"
+    ))
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys, time
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+import generated.app as g
+from fastapi.testclient import TestClient
+
+mixed = [None, True, False, 0, -1, 2**70]
+assert g._json_safe(mixed) == mixed
+assert g._json_safe(mixed)[1] is True
+
+ints = list(range(200000))
+floats = [float(i) for i in ints]
+start = time.perf_counter(); g._json_safe(ints); int_time = time.perf_counter() - start
+start = time.perf_counter(); g._json_safe(floats); float_time = time.perf_counter() - start
+assert int_time < float_time / 2, (int_time, float_time)
+
+response = TestClient(g.app).post(
+    "/count", json={{"n": 5}}, headers={{"X-API-Key": "notebook-to-api-dev-key"}}
+)
+assert response.json() == {{"result": [0, 1, 2, 3, 4]}}, response.text
+print("INT_FAST_PATH_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir), capture_output=True, text=True, timeout=120,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "INT_FAST_PATH_E2E_OK" in proc.stdout

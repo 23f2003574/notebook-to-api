@@ -3353,6 +3353,11 @@ def generate_fastapi_code(
     lines.append("        return value")
     lines.append("    if isinstance(value, str):")
     lines.append("        return _utf8_safe(value)")
+    # Plain None/bool/int need no conversion. Without this early return each
+    # element of a large list walked every isinstance/dtype check below: a
+    # 1,000,000-int result spent ~3s in this function alone.
+    lines.append("    if value is None or type(value) in (bool, int):")
+    lines.append("        return value")
     # datetime64 finer than microseconds (ns is numpy's default for a pandas
     # `.values`) converts through tolist() into bare integer nanoseconds,
     # while coarser units came back as ISO dates: a time column silently turned
