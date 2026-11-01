@@ -2013,6 +2013,23 @@ def generate_fastapi_code(
     lines.append("                )")
     lines.append("    return JSONResponse(status_code=422, content={'detail': detail})")
     lines.append("")
+    # A body that is not UTF-8 text, or holds an integer past Python's digit
+    # limit, made FastAPI answer 400 "There was an error parsing the body":
+    # no field, no cause, and a different status and shape from every other
+    # malformed-JSON case here (422 with a "detail" list). Same shape now;
+    # every other HTTPException goes to FastAPI's own handler untouched.
+    lines.append("from fastapi.exception_handlers import http_exception_handler as _default_http_exception_handler")
+    lines.append("from starlette.exceptions import HTTPException as _StarletteHTTPException")
+    lines.append("")
+    lines.append("@app.exception_handler(_StarletteHTTPException)")
+    lines.append("async def _http_exception_handler(request, exc):")
+    lines.append("    if exc.status_code == 400 and exc.detail == 'There was an error parsing the body':")
+    lines.append("        return JSONResponse(status_code=422, content={'detail': [{")
+    lines.append("            'type': 'body_unreadable', 'loc': ['body'],")
+    lines.append("            'msg': 'Request body could not be read as JSON: it must be valid UTF-8 text, with integers under 4300 digits',")
+    lines.append("        }]})")
+    lines.append("    return await _default_http_exception_handler(request, exc)")
+    lines.append("")
     lines.append("")
     # Registered last (see MaxRequestBodySizeMiddleware/CORSMiddleware
     # above -- the same "middleware added last ends up outermost, since

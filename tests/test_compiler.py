@@ -20400,3 +20400,60 @@ print("CONTENT_TYPE_HINT_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "CONTENT_TYPE_HINT_E2E_OK" in proc.stdout
+
+
+def test_compiled_app_answers_an_unreadable_json_body_with_the_standard_422_shape(tmp_path):
+    """A non-UTF-8 body or a 5000-digit integer answered a bare 400 "There was
+    an error parsing the body"; it is now the same 422 detail list as every
+    other malformed body, and other HTTP errors are untouched."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell("def add(a: int, b: int) -> int:\n    return a + b\n")
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+headers = {{"X-API-Key": "notebook-to-api-dev-key", "Content-Type": "application/json"}}
+
+for body in (b'{{"a": 1, "b": "\\xff"}}', b'{{"a": ' + b"9" * 5000 + b', "b": 1}}'):
+    response = client.post("/add", content=body, headers=headers)
+    assert response.status_code == 422, (response.status_code, response.text)
+    [error] = response.json()["detail"]
+    assert error["type"] == "body_unreadable" and error["loc"] == ["body"], error
+    assert "UTF-8" in error["msg"], error
+
+# other HTTP errors keep their own status and body
+assert client.post("/add", json={{"a": 1, "b": 2}}).status_code == 401
+assert client.get("/add", headers=headers).status_code == 405
+assert client.post("/nope", json={{}}, headers=headers).json() == {{"detail": "Not Found"}}
+ok = client.post("/add", json={{"a": 1, "b": 2}}, headers=headers)
+assert ok.status_code == 200 and ok.json() == {{"result": 3}}, ok.text
+print("UNREADABLE_BODY_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir), capture_output=True, text=True, timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "UNREADABLE_BODY_E2E_OK" in proc.stdout
