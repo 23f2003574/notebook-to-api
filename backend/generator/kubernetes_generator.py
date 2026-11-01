@@ -334,6 +334,16 @@ spec:
               port: 8000
             initialDelaySeconds: 5
             periodSeconds: 10
+          # Notebooks often load a model or dataset at import time. Until this
+          # probe succeeds the kubelet runs neither the liveness nor the
+          # readiness probe, so a slow start (up to 30 x 10s = 5 minutes) is
+          # not mistaken for a hang and restarted in a loop.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 10
+            failureThreshold: 30
 ---
 apiVersion: v1
 kind: Service

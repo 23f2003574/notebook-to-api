@@ -1722,7 +1722,8 @@ def test_kubernetes_manifest_content_wires_up_health_and_readiness_probes():
 
     assert "livenessProbe:" in content
     assert "readinessProbe:" in content
-    assert content.count("path: /health") == 1
+    # /health backs both the liveness and the startup probe
+    assert content.count("path: /health") == 2
     assert content.count("path: /ready") == 1
 
 
@@ -1738,6 +1739,20 @@ def test_kubernetes_manifest_content_drains_gracefully_on_rollout():
     assert grace > 5
     # pod-level setting sits under spec:, before the containers list
     assert content.index("terminationGracePeriodSeconds:") < content.index("containers:")
+
+
+def test_kubernetes_manifest_content_adds_a_startup_probe_before_liveness():
+    """A startupProbe holds off the liveness probe so a slow-loading notebook
+    is not restarted while it boots."""
+
+    content = kubernetes_manifest_content("generated", [])
+
+    assert content.count("startupProbe:") == 1
+    block = content.split("startupProbe:")[1].split("---")[0]
+    assert "path: /health" in block
+    failures = int(block.split("failureThreshold:")[1].split()[0])
+    period = int(block.split("periodSeconds:")[1].split()[0])
+    assert failures * period >= 120
 
 
 def test_kubernetes_manifest_content_maps_container_port_to_the_port_env_var():
