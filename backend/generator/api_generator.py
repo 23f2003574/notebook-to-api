@@ -1999,6 +1999,18 @@ def generate_fastapi_code(
     lines.append("        detail = _json_safe(jsonable_encoder(exc.errors()))")
     lines.append("    except RecursionError:")
     lines.append("        detail = [{'type': 'value_error', 'loc': ['body'], 'msg': 'Request body is nested too deeply'}]")
+    # A JSON body sent without "Content-Type: application/json" (curl -d, a
+    # hand-written fetch) is never parsed: FastAPI reports "Input should be a
+    # valid dictionary or object" for a body that is, in fact, a valid object,
+    # which sends the caller hunting through their payload. Say what is wrong.
+    lines.append("    _ctype = request.headers.get('content-type', '') if request is not None else 'json'")
+    lines.append("    if 'json' not in _ctype.lower() and isinstance(detail, list):")
+    lines.append("        for _err in detail:")
+    lines.append("            if isinstance(_err, dict) and _err.get('type') == 'model_attributes_type' and _err.get('loc') == ['body']:")
+    lines.append("                _err['msg'] = (")
+    lines.append("                    \"Request body was not read as JSON: send it with the header \"")
+    lines.append("                    f\"'Content-Type: application/json' (received {_ctype or 'no Content-Type'!r})\"")
+    lines.append("                )")
     lines.append("    return JSONResponse(status_code=422, content={'detail': detail})")
     lines.append("")
     lines.append("")

@@ -20344,3 +20344,59 @@ print("PUBLIC_URL_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "PUBLIC_URL_E2E_OK" in proc.stdout
+
+
+def test_compiled_app_explains_a_json_body_sent_without_a_json_content_type(tmp_path):
+    """curl -d '{"a":1,"b":2}' (no Content-Type) answered "Input should be a
+    valid dictionary or object" for a body that is a valid object."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell("def add(a: int, b: int) -> int:\n    return a + b\n")
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+key = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+for headers in (key, {{**key, "Content-Type": "text/plain"}}):
+    response = client.post("/add", content=b'{{"a": 1, "b": 2}}', headers=headers)
+    assert response.status_code == 422, response.text
+    [error] = response.json()["detail"]
+    assert error["loc"] == ["body"], error
+    assert "Content-Type: application/json" in error["msg"], error
+
+# a real JSON content type keeps FastAPI's own message, and valid calls work
+wrong_shape = client.post("/add", content=b"[1]", headers={{**key, "Content-Type": "application/json"}})
+assert wrong_shape.status_code == 422
+assert "Content-Type" not in wrong_shape.json()["detail"][0]["msg"], wrong_shape.text
+ok = client.post("/add", json={{"a": 1, "b": 2}}, headers=key)
+assert ok.status_code == 200 and ok.json() == {{"result": 3}}, ok.text
+print("CONTENT_TYPE_HINT_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir), capture_output=True, text=True, timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "CONTENT_TYPE_HINT_E2E_OK" in proc.stdout
