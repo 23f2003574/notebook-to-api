@@ -20056,3 +20056,59 @@ print("INFO_DISABLE_DOCS_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "INFO_DISABLE_DOCS_E2E_OK" in proc.stdout
+
+
+def test_compiled_app_returns_the_content_of_an_open_file_instead_of_an_empty_object(tmp_path):
+    """A function returning an open file object came back as a silent `{}`."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(nbformat.v4.new_code_cell(
+        "import tempfile\n\n"
+        "def text_file(t: str):\n"
+        "    f = tempfile.TemporaryFile('w+')\n"
+        "    f.write(t)\n"
+        "    return f\n\n"
+        "def binary_file(b: bytes):\n"
+        "    f = tempfile.TemporaryFile()\n"
+        "    f.write(b)\n"
+        "    return f\n"
+    ))
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import base64
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+text = client.post("/text_file", json={{"t": "a,b\\n1,2\\n"}}, headers=headers)
+assert text.status_code == 200 and text.json()["result"] == "a,b\\n1,2\\n", text.text
+raw = bytes([0, 255, 1, 2])
+uri = "data:application/octet-stream;base64," + base64.b64encode(raw).decode()
+binary = client.post("/binary_file", json={{"b": uri}}, headers=headers)
+assert binary.status_code == 200 and binary.json()["result"] == uri, binary.text
+print("OPEN_FILE_RESULT_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir), capture_output=True, text=True, timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "OPEN_FILE_RESULT_E2E_OK" in proc.stdout

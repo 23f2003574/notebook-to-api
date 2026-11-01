@@ -3429,6 +3429,22 @@ def generate_fastapi_code(
     lines.append("            return _bytes_json(value.getvalue()) if isinstance(value.getvalue(), (bytes, bytearray)) else value.getvalue()")
     lines.append("        except Exception:")
     lines.append("            return value")
+    # An open file (open('out.csv'), a TemporaryFile) is not JSON-serializable
+    # and fell through to a silent `{}` -- the caller got neither the content
+    # nor an error, while the server-side path stayed unusable to it. Its
+    # content is returned instead (text as a string, binary as a data URI),
+    # read from the start and closed; a file that is closed or not readable
+    # is left to the generic handling below.
+    lines.append("    import io as _io")
+    lines.append("    if isinstance(value, _io.IOBase) and not value.closed and value.readable():")
+    lines.append("        try:")
+    lines.append("            if value.seekable():")
+    lines.append("                value.seek(0)")
+    lines.append("            content = value.read()")
+    lines.append("            value.close()")
+    lines.append("            return _bytes_json(content) if isinstance(content, (bytes, bytearray)) else content")
+    lines.append("        except Exception:")
+    lines.append("            return value")
     lines.append("    if isinstance(value, range):")
     lines.append("        return [_json_safe(v, _depth + 1) for v in value]")
     # complex (an FFT bin, a polynomial root; numpy's complex128 subclasses
