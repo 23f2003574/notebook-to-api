@@ -4093,13 +4093,19 @@ def generate_fastapi_code(
     lines.append("")
     lines.append("@app.get('/info')")
     lines.append("def service_info():")
+    # NOTEBOOK_API_DISABLE_DOCS exists so an unauthenticated caller cannot
+    # learn this deployment's endpoint names; /info is unauthenticated too and
+    # used to list every one of them regardless, defeating it. With docs
+    # disabled the names are withheld here (the counts stay).
+    lines.append(f"    _all_endpoints = {repr(endpoint_list)}")
+    lines.append(f"    _by_tag = {repr(endpoints_by_tag)}")
     lines.append("    return {")
     lines.append('        "service": "Notebook-to-API Generated Service",')
     lines.append('        "version": NOTEBOOK_TO_API_VERSION,')
     lines.append('        "status": "running",')
-    lines.append(f'        "endpoints": {repr(endpoint_list)},')
+    lines.append('        "endpoints": [] if DISABLE_DOCS else _all_endpoints,')
     lines.append(f'        "endpoint_count": {len(endpoint_list)},')
-    lines.append(f'        "endpoints_by_tag": {repr(endpoints_by_tag)},')
+    lines.append('        "endpoints_by_tag": {} if DISABLE_DOCS else _by_tag,')
     lines.append(f'        "background_endpoint_count": {background_endpoint_count},')
     lines.append('        "source_notebook_sha256": SOURCE_NOTEBOOK_SHA256,')
     lines.append('        "authentication": {')

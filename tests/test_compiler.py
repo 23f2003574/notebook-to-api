@@ -20004,3 +20004,55 @@ print("DECIMAL_EXACT_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "DECIMAL_EXACT_E2E_OK" in proc.stdout
+
+
+def test_compiled_app_info_hides_endpoint_names_when_docs_are_disabled(tmp_path):
+    """NOTEBOOK_API_DISABLE_DOCS hid /openapi.json but the unauthenticated
+    GET /info still listed every endpoint name."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell("def secret_report(a: int) -> int:\n    return a\n")
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+import os
+from fastapi.testclient import TestClient
+
+def info(disable):
+    os.environ["NOTEBOOK_API_DISABLE_DOCS"] = disable
+    for name in [n for n in sys.modules if n == "generated" or n.startswith("generated.")]:
+        del sys.modules[name]
+    from generated.app import app
+    return TestClient(app).get("/info").json()
+
+shown = info("false")
+assert shown["endpoints"] == ["/secret_report"], shown
+hidden = info("true")
+assert "secret_report" not in str(hidden), hidden
+assert hidden["endpoint_count"] == 1, hidden
+print("INFO_DISABLE_DOCS_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir), capture_output=True, text=True, timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "INFO_DISABLE_DOCS_E2E_OK" in proc.stdout
