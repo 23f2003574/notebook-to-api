@@ -20168,3 +20168,67 @@ print("INT_FAST_PATH_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "INT_FAST_PATH_E2E_OK" in proc.stdout
+
+
+def test_compiled_app_applies_the_request_timeout_to_a_slow_generator_function(tmp_path):
+    """A generator function's body ran after the worker thread had returned,
+    on the event loop and outside the timeout: this 3s generator answered 200
+    after 3s despite a 1s NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS. Failures
+    inside the generator must still be reported as the function's own."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(nbformat.v4.new_code_cell(
+        "import time\n\n"
+        "def slow_rows(delay: float):\n"
+        "    for i in range(3):\n"
+        "        time.sleep(delay)\n"
+        "        yield i\n\n"
+        "def broken_rows():\n"
+        "    yield 1\n"
+        "    raise ValueError('bad row')\n"
+    ))
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import os, sys, time
+
+os.environ["NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS"] = "1"
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+start = time.perf_counter()
+slow = client.post("/slow_rows", json={{"delay": 1.5}}, headers=headers)
+elapsed = time.perf_counter() - start
+assert slow.status_code == 504, (slow.status_code, slow.text)
+assert elapsed < 3, elapsed
+
+fast = client.post("/slow_rows", json={{"delay": 0.01}}, headers=headers)
+assert fast.status_code == 200 and fast.json() == {{"result": [0, 1, 2]}}, fast.text
+
+broken = client.post("/broken_rows", json={{}}, headers=headers)
+assert broken.status_code == 500 and "ValueError" in broken.json()["detail"], broken.text
+print("GENERATOR_TIMEOUT_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir), capture_output=True, text=True, timeout=120,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "GENERATOR_TIMEOUT_E2E_OK" in proc.stdout

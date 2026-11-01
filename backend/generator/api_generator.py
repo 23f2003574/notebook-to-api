@@ -2729,7 +2729,14 @@ def generate_fastapi_code(
     lines.append("        def _shielded(*args, **kwargs):")
     lines.append("            try:")
     lines.append("                _ensure_thread_event_loop()")
-    lines.append("                return func(*args, **kwargs)")
+    lines.append("                result = func(*args, **kwargs)")
+    # A generator's body only runs when it is consumed. That used to happen
+    # back on the event loop, after the worker thread had already returned
+    # and outside the request timeout: a slow generator ignored
+    # NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS and an endless one froze the whole
+    # server. Draining it here keeps the work in the worker thread, under the
+    # timeout, with its exceptions reported like any other notebook failure.
+    lines.append("                return list(result) if inspect.isgenerator(result) else result")
     # A sync function runs in a worker thread, where a real cancellation never
     # surfaces as CancelledError -- one raised here is the notebook's own
     # (e.g. task.result() on a cancelled asyncio task) and would otherwise
