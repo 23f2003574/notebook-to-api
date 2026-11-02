@@ -7977,3 +7977,31 @@ def test_generate_python_sdk_client_error_includes_the_servers_detail(
     assert "422 Client Error" in str(caught.value)
     assert "Field required" in str(caught.value)
     assert "epochs" in str(caught.value)
+
+
+def test_generated_python_client_explains_how_to_install_missing_requests(tmp_path):
+    """On a clean machine the single-file client died with a bare
+    ModuleNotFoundError; it now says which package to install."""
+
+    schema_path = _write_schema(
+        tmp_path, {"/add": {"post": {"operationId": "add"}}}
+    )
+    output_path = tmp_path / "client.py"
+    generate_python_sdk(str(schema_path), str(output_path))
+
+    script = (
+        "import sys, importlib.util\n"
+        "sys.modules['requests'] = None  # simulate a machine without requests\n"
+        f"spec = importlib.util.spec_from_file_location('client', {str(output_path)!r})\n"
+        "module = importlib.util.module_from_spec(spec)\n"
+        "try:\n"
+        "    spec.loader.exec_module(module)\n"
+        "except ImportError as exc:\n"
+        "    assert 'pip install requests' in str(exc), exc\n"
+        "    print('HINT_OK')\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-I", "-c", script],
+        cwd=str(tmp_path), capture_output=True, text=True, timeout=60,
+    )
+    assert "HINT_OK" in proc.stdout, proc.stdout + proc.stderr

@@ -1251,7 +1251,16 @@ def generate_python_sdk(
     # client was generated.
     lines.append("import urllib.parse")
     lines.append("import warnings")
-    lines.append("import requests")
+    # The client is a single file shipped with no requirements.txt, so on a
+    # clean machine a bare `import requests` died with an unexplained
+    # ModuleNotFoundError; say what to install instead.
+    lines.append("try:")
+    lines.append("    import requests")
+    lines.append("except ImportError as _import_error:")
+    lines.append(
+        "    raise ImportError(\"This generated client needs the 'requests' package: "
+        "pip install requests\") from _import_error"
+    )
     # Confirmed missing before this feature: every generated method's
     # own payload parameter was typed as a bare dict, with no return
     # annotation at all -- throwing away everything mypy/pyright/an IDE
