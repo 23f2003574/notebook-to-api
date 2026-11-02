@@ -20560,3 +20560,51 @@ print("ENUM_KEY_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "ENUM_KEY_E2E_OK" in proc.stdout
+
+
+def test_compiled_app_reports_a_top_level_notebook_exit_instead_of_silently_ending(tmp_path):
+    """A top-level sys.exit() in the notebook raised SystemExit during import,
+    ending the server process silently; it is now a startup RuntimeError that
+    names the cause, while a guarded exit() stays harmless."""
+
+    def compile_and_import(name, source):
+        notebook = nbformat.v4.new_notebook()
+        notebook.cells.append(nbformat.v4.new_code_cell(source))
+        notebook_path = tmp_path / f"{name}.ipynb"
+        with open(notebook_path, "w", encoding="utf-8") as f:
+            nbformat.write(notebook, f)
+        workdir = tmp_path / name
+        workdir.mkdir()
+        script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+try:
+    from generated.app import app
+    from fastapi.testclient import TestClient
+    r = TestClient(app).post("/f", json={{"x": 2}}, headers={{"X-API-Key": "notebook-to-api-dev-key"}})
+    print("LOADED", r.json())
+except BaseException as exc:
+    print("FAILED", type(exc).__name__, exc)
+"""
+        return subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=str(workdir), capture_output=True, text=True, timeout=60,
+        )
+
+    bad = compile_and_import(
+        "bad", "import sys\ndef f(x: int):\n    return x\nsys.exit(0)\n"
+    )
+    assert "FAILED RuntimeError" in bad.stdout and "sys.exit()" in bad.stdout, bad.stdout + bad.stderr
+
+    good = compile_and_import(
+        "good",
+        "import sys\ndef f(x: int):\n    return x\nif __name__ == '__main__':\n    sys.exit(0)\n",
+    )
+    assert "LOADED {'result': 2}" in good.stdout, good.stdout + good.stderr

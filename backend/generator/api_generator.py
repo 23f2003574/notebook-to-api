@@ -1723,6 +1723,19 @@ def generate_fastapi_code(
     # inside the notebook's own code, so the app died at startup with
     # "KeyError: 'X'" and nothing saying it is a missing setting. Only a
     # KeyError that really came from os.environ's lookup is rewritten.
+    # A top-level sys.exit()/exit()/quit() (routine in code written as a
+    # script) raised SystemExit while the app was being imported, so the
+    # server process simply ended with exit status 0 and no message. Report
+    # it as a startup error that says what to change.
+    lines.append("except SystemExit as _nb_exit:")
+    lines.append("    raise RuntimeError(")
+    lines.append(
+        "        f'The notebook called exit()/sys.exit() ({_nb_exit.code!r}) at the top level while loading, '"
+    )
+    lines.append(
+        "        'which would end the server. Remove it or wrap it in if __name__ == \"__main__\":.'"
+    )
+    lines.append("    ) from None")
     lines.append("except KeyError as _nb_exc:")
     lines.append("    _nb_key = _nb_exc.args[0] if _nb_exc.args else None")
     lines.append("    _nb_from_environ = False")
