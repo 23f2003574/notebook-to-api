@@ -4398,10 +4398,40 @@ def _find_notebook_env_vars(code_cells, notebook_path=None):
     """
     found = {}
 
+    # `import os as o` and `ENV_KEY = "API_TOKEN"; os.environ[ENV_KEY]` read
+    # the same variables as the literal spellings; before, the alias and the
+    # constant-named key were both invisible, so such a variable was missing
+    # from .env.example / the README and its absence only showed at runtime.
+    os_names = {"os"}
+    str_consts = {}
+    parsed_cells = []
+    for cell in code_cells:
+        try:
+            tree = ast.parse(cell)
+        except SyntaxError:
+            continue
+        parsed_cells.append(tree)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                os_names.update(a.asname for a in node.names if a.name == "os" and a.asname)
+            elif (
+                isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
+            ):
+                str_consts[node.targets[0].id] = node.value.value
+
+    def key_of(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.Name):
+            return str_consts.get(node.id)
+        return None
+
     def is_environ(node):
         return (
             (isinstance(node, ast.Attribute) and node.attr == "environ"
-             and isinstance(node.value, ast.Name) and node.value.id == "os")
+             and isinstance(node.value, ast.Name) and node.value.id in os_names)
             or (isinstance(node, ast.Name) and node.id == "environ")
         )
 
@@ -4410,18 +4440,14 @@ def _find_notebook_env_vars(code_cells, notebook_path=None):
             return
         found[name] = found.get(name, False) or required
 
-    for cell in code_cells:
-        try:
-            tree = ast.parse(cell)
-        except SyntaxError:
-            continue
+    for tree in parsed_cells:
         for node in ast.walk(tree):
             if (
                 isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load)
                 and is_environ(node.value)
-                and isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str)
+                and key_of(node.slice) is not None
             ):
-                record(node.slice.value, True)
+                record(key_of(node.slice), True)
             elif isinstance(node, ast.Call) and node.args:
                 func = node.func
                 is_get = (
@@ -4429,7 +4455,7 @@ def _find_notebook_env_vars(code_cells, notebook_path=None):
                 )
                 is_getenv = (
                     (isinstance(func, ast.Attribute) and func.attr == "getenv"
-                     and isinstance(func.value, ast.Name) and func.value.id == "os")
+                     and isinstance(func.value, ast.Name) and func.value.id in os_names)
                     or (isinstance(func, ast.Name) and func.id == "getenv")
                 )
                 first = node.args[0]
@@ -4444,14 +4470,14 @@ def _find_notebook_env_vars(code_cells, notebook_path=None):
                     and isinstance(first, ast.Constant) and isinstance(first.value, str)
                 ):
                     record(first.value, True)
-                if (is_get or is_getenv) and isinstance(first, ast.Constant) and isinstance(first.value, str):
+                if (is_get or is_getenv) and key_of(first) is not None:
                     default = node.args[1] if len(node.args) > 1 else next(
                         (kw.value for kw in node.keywords if kw.arg == "default"), None
                     )
                     has_default = default is not None and not (
                         isinstance(default, ast.Constant) and default.value is None
                     )
-                    record(first.value, not has_default)
+                    record(key_of(first), not has_default)
 
     # Names a loaded .env file supplies (required unless the code already
     # reads them with a default).

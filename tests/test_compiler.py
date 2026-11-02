@@ -20749,3 +20749,41 @@ print("README_CURL_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "README_CURL_E2E_OK" in proc.stdout
+
+
+def test_compile_lists_env_vars_read_through_an_os_alias_or_a_constant_key(tmp_path):
+    """`import os as o` and `os.environ[KEY_CONST]` read real variables but
+    were missing from .env.example and the README; both spellings are now
+    found, with required/optional decided exactly as for literal keys."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "import os as o\n"
+            "TOKEN_KEY = 'SERVICE_TOKEN'\n"
+            "REGION_KEY = 'SERVICE_REGION'\n"
+            "TOKEN = o.environ[TOKEN_KEY]\n"
+            "REGION = o.getenv(REGION_KEY, 'eu')\n"
+            "def f(x: int):\n    return x\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    from backend.compiler import _find_notebook_env_vars
+
+    found = {
+        entry["name"]: entry["required"]
+        for entry in _find_notebook_env_vars(
+            ["import os as o\nK='SERVICE_TOKEN'\nR='SERVICE_REGION'\n"
+             "a = o.environ[K]\nb = o.getenv(R, 'eu')\n"]
+        )
+    }
+    assert found == {"SERVICE_TOKEN": True, "SERVICE_REGION": False}, found
+
+    output_dir = tmp_path / "out"
+    compile_notebook(str(notebook_path), str(output_dir))
+    for name in ("SERVICE_TOKEN", "SERVICE_REGION"):
+        assert name in (output_dir / ".env.example").read_text()
+        assert name in (output_dir / "README.md").read_text()
