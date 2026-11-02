@@ -3543,9 +3543,14 @@ def generate_fastapi_code(
     # A datetime/Timestamp key (a time-indexed Series' to_dict()) is written
     # in ISO format, matching how the same value is encoded as a *value*,
     # instead of str()'s '2024-01-01 00:00:00'; a Period key as its string.
+    # An Enum key is written as its value ({Color.RED: 1} -> {"red": 1}),
+    # matching how the same member is encoded as a *value*, instead of the
+    # 'Color.RED' that str() gives.
+    lines.append("        import enum as _enum")
     lines.append(
         "        return {(_utf8_safe(k) if isinstance(k, str) else k if k is None or isinstance(k, (int, float, bool)) "
         "else k.isoformat() if hasattr(k, 'isoformat') and not hasattr(k, 'freqstr') "
+        "else str(k.value) if isinstance(k, _enum.Enum) and isinstance(k.value, (str, int, float)) "
         "else str(k)): _json_safe(v, _depth + 1) for k, v in value.items()}"
     )
     # A namedtuple / typing.NamedTuple (a notebook's `Stats(mean, std)`,
