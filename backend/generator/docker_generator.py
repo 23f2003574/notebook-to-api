@@ -1,3 +1,4 @@
+import json
 import re
 import shlex
 import textwrap
@@ -898,6 +899,30 @@ brownout to find remaining callers before removing them for real.
             f"{entries}\n\n"
         )
 
+    # A ready-to-run request for the first synchronous endpoint: the endpoint
+    # list above only names routes, so nothing said what to send (the JSON body
+    # shape, the X-API-Key header) or which response shape comes back.
+    try_it_section = ""
+    for func in sorted(functions, key=lambda f: f["name"]):
+        if resolve_is_background(func["name"], background_overrides):
+            continue
+        payload = json.dumps(func.get("example_payload", {}))
+        try_it_section = (
+            "## Calling an endpoint\n\n"
+            "With the app running (default port 8000), send the function's "
+            "arguments as a JSON body; the return value comes back under "
+            '`"result"`:\n\n'
+            "```bash\n"
+            f"curl -X POST http://localhost:8000/{func['name']} \\\n"
+            "  -H 'X-API-Key: notebook-to-api-dev-key' \\\n"
+            "  -H 'Content-Type: application/json' \\\n"
+            f"  -d {shlex.quote(payload)}\n"
+            "```\n\n"
+            "`notebook-to-api export-curl` prints one such command per "
+            "endpoint.\n\n"
+        )
+        break
+
     env_var_lines = "\n".join(
         f"- `{entry['name']}` (default: `{entry['default']}`) -- "
         f"{entry['description']}"
@@ -933,7 +958,7 @@ them with no credential of its own: `/`, `/health`, `/ready`, `/info`, \
 Interactive docs are served at `/docs` (Swagger UI) and `/redoc`, unless \
 `NOTEBOOK_API_DISABLE_DOCS=true`.
 
-## Running locally
+{try_it_section}## Running locally
 
 Run these from the directory that *contains* `{package_name}/` -- the app is \
 imported as the `{package_name}` package, so `uvicorn` can't find it from \

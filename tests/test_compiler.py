@@ -20699,3 +20699,53 @@ def test_compile_maps_mismatched_import_names_to_their_pypi_packages(tmp_path):
     assert not requirements & {"skbio", "cattr", "win32api", "win32con", "gitlab", "newspaper", "factory"}, requirements
     app_source = (output_dir / "app.py").read_text()
     assert "def f(" in app_source or "/f" in app_source
+
+
+def test_generated_readme_shows_a_runnable_curl_for_the_first_endpoint(tmp_path):
+    """The README listed routes only; it now includes a copy-pasteable curl
+    (route, X-API-Key header, JSON body built from the function's arguments)
+    that really works against the compiled app."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell("def add(a: int, b: int) -> int:\n    return a + b\n")
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    script = f"""
+import re, shlex, sys, json
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+readme = open("generated/README.md", encoding="utf-8").read()
+assert "## Calling an endpoint" in readme, readme[:500]
+block = re.search(r"```bash\\n(curl .*?)```", readme, re.S).group(1)
+parts = shlex.split(block.replace("\\\\\\n", " "))
+assert parts[:3] == ["curl", "-X", "POST"] and parts[3].endswith("/add"), parts
+headers = {{parts[i + 1].split(": ")[0]: parts[i + 1].split(": ")[1] for i, p in enumerate(parts) if p == "-H"}}
+body = json.loads(parts[parts.index("-d") + 1])
+assert set(body) == {{"a", "b"}}, body
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+response = TestClient(app).post("/add", json=body, headers=headers)
+assert response.status_code == 200 and response.json() == {{"result": body["a"] + body["b"]}}, response.text
+print("README_CURL_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir), capture_output=True, text=True, timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "README_CURL_E2E_OK" in proc.stdout
