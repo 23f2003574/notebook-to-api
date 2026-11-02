@@ -20838,3 +20838,26 @@ print("TYPE_CHECKING_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "TYPE_CHECKING_E2E_OK" in proc.stdout
+
+
+def test_compile_still_writes_the_readme_curl_when_an_example_value_is_not_json(tmp_path):
+    """The README's curl example json-encodes the function's example payload;
+    a bytes (or set) default made that raise TypeError and failed the whole
+    compile. The payload now falls back to text and the README is written."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def blob(b: bytes = b'\\xff\\x00', s: set = {1}):\n    return len(b)\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "out"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    readme = (output_dir / "README.md").read_text(encoding="utf-8")
+    assert "## Calling an endpoint" in readme
+    assert "curl -X POST http://localhost:8000/blob" in readme

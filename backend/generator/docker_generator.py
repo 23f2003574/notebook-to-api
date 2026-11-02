@@ -906,7 +906,9 @@ brownout to find remaining callers before removing them for real.
     for func in sorted(functions, key=lambda f: f["name"]):
         if resolve_is_background(func["name"], background_overrides):
             continue
-        payload = json.dumps(func.get("example_payload", {}))
+        # An example value json can't encode (a bytes default, a set) must
+        # never fail the whole compile: fall back to its text form.
+        payload = json.dumps(func.get("example_payload", {}), default=str)
         try_it_section = (
             "## Calling an endpoint\n\n"
             "With the app running (default port 8000), send the function's "
