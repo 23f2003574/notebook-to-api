@@ -66,7 +66,8 @@ from backend.parser.ast_parser import (
     extract_functions_from_code,
     extract_imports_from_code,
     is_parseable_python,
-    deduplicate_functions_by_name
+    deduplicate_functions_by_name,
+    names_rebound_to_literals,
 )
 
 from backend.generator.api_generator import (
@@ -5646,6 +5647,11 @@ def _compile_notebook_to_api(
             functions.extend(funcs)
 
         functions = deduplicate_functions_by_name(functions)
+
+        # A function the notebook later overwrote with a plain value is not
+        # callable any more; exposing it only gave a route that always 500s.
+        _rebound = names_rebound_to_literals(code_cells)
+        functions = [f for f in functions if f["name"] not in _rebound]
 
         # Dropped before _filter_functions_by_name's own only/exclude
         # handling, so a function the notebook itself marks

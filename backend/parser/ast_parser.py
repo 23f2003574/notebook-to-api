@@ -419,6 +419,48 @@ def _treat_ellipsis_default_as_required(arg_info):
     arg_info["default"] = None
 
 
+def names_rebound_to_literals(codes):
+    """Names whose last module-level binding across `codes` (in order) is a
+    plain literal assignment (`name = 5`, `name: int = "x"`) -- a function
+    of that name was defined earlier but is no longer callable, so exposing
+    it only produced a route that answers 500 "'int' object is not
+    callable". A later `def` of the same name makes it a function again, and
+    a non-literal value (`f = wrap(f)`) may well still be callable, so
+    neither counts.
+    """
+    state = {}
+
+    for code in codes:
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            continue
+
+        for node in _iter_module_level_statements(tree.body):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                state[node.name] = False
+                continue
+
+            if isinstance(node, ast.Assign):
+                targets, value = node.targets, node.value
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                targets, value = [node.target], node.value
+            else:
+                continue
+
+            try:
+                ast.literal_eval(value)
+                is_literal = True
+            except Exception:
+                is_literal = False
+
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    state[target.id] = is_literal
+
+    return {name for name, rebound in state.items() if rebound}
+
+
 def extract_functions_from_code(code):
     try:
         tree = ast.parse(code)

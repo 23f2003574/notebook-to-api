@@ -20608,3 +20608,60 @@ except BaseException as exc:
         "import sys\ndef f(x: int):\n    return x\nif __name__ == '__main__':\n    sys.exit(0)\n",
     )
     assert "LOADED {'result': 2}" in good.stdout, good.stdout + good.stderr
+
+
+def test_compiled_app_does_not_expose_a_function_the_notebook_overwrote_with_a_value(tmp_path):
+    """`mode = 5` after `def mode()` left a /mode route that always answered
+    500 "'int' object is not callable". Only a function whose final binding is
+    a plain literal is dropped; a wrapped or redefined one stays."""
+
+    notebook = nbformat.v4.new_notebook()
+    for source in (
+        "import functools\n"
+        "def mode(x: int):\n    return x\n",
+        "mode = 5\n",
+        "def wrapped(x: int):\n    return x + 1\n"
+        "wrapped = functools.lru_cache(wrapped)\n",
+        "def again(x: int):\n    return 1\nagain = 3\n"
+        "def again(x: int):\n    return x * 2\n",
+        "def keep(x: int):\n    return x\n",
+    ):
+        notebook.cells.append(nbformat.v4.new_code_cell(source))
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+paths = {{r.path for r in app.routes}}
+assert "/mode" not in paths, paths
+assert {{"/wrapped", "/again", "/keep"}} <= paths, paths
+assert client.post("/wrapped", json={{"x": 1}}, headers=headers).json() == {{"result": 2}}
+assert client.post("/again", json={{"x": 4}}, headers=headers).json() == {{"result": 8}}
+assert client.post("/keep", json={{"x": 7}}, headers=headers).json() == {{"result": 7}}
+print("REBOUND_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir), capture_output=True, text=True, timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "REBOUND_E2E_OK" in proc.stdout
