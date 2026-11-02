@@ -210,6 +210,25 @@ KNOWN_IMPORT_TO_DISTRIBUTION = {
     "ruamel": "ruamel.yaml",
     "imblearn": "imbalanced-learn",
     "sksurv": "scikit-survival",
+    # The import name is not the PyPI name: `import skbio` is scikit-bio,
+    # `import cattr` is cattrs, the win32* modules all ship in pywin32, and
+    # gitlab / newspaper / factory are python-gitlab / newspaper3k /
+    # factory-boy. Left unmapped each became a requirements.txt line that
+    # pip cannot resolve (or resolves to an unrelated project).
+    "skbio": "scikit-bio",
+    "cattr": "cattrs",
+    "win32api": "pywin32",
+    "win32con": "pywin32",
+    "win32gui": "pywin32",
+    "win32file": "pywin32",
+    "win32process": "pywin32",
+    "win32clipboard": "pywin32",
+    "win32event": "pywin32",
+    "win32service": "pywin32",
+    "win32pipe": "pywin32",
+    "gitlab": "python-gitlab",
+    "newspaper": "newspaper3k",
+    "factory": "factory-boy",
     "skvideo": "scikit-video",
     "cairo": "pycairo",
     "pkg_resources": "setuptools",

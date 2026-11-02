@@ -20665,3 +20665,37 @@ print("REBOUND_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "REBOUND_E2E_OK" in proc.stdout
+
+
+def test_compile_maps_mismatched_import_names_to_their_pypi_packages(tmp_path):
+    """`import skbio`, `cattr`, `win32api`, `gitlab`, `newspaper` and `factory`
+    were written to requirements.txt under the import name, which is not the
+    installable package (or is a different project); they now map to
+    scikit-bio, cattrs, pywin32, python-gitlab, newspaper3k and factory-boy."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "import skbio\nimport cattr\nimport win32api\nimport win32con\n"
+            "import gitlab\nimport newspaper\nimport factory\n"
+            "def f(x: int):\n    return x\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "out"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    requirements = {
+        line.split("==")[0].strip().lower()
+        for line in (output_dir / "requirements.txt").read_text().splitlines()
+        if line.strip()
+    }
+    assert {
+        "scikit-bio", "cattrs", "pywin32", "python-gitlab", "newspaper3k", "factory-boy",
+    } <= requirements, requirements
+    assert not requirements & {"skbio", "cattr", "win32api", "win32con", "gitlab", "newspaper", "factory"}, requirements
+    app_source = (output_dir / "app.py").read_text()
+    assert "def f(" in app_source or "/f" in app_source
