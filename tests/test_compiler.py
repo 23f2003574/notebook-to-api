@@ -20861,3 +20861,45 @@ def test_compile_still_writes_the_readme_curl_when_an_example_value_is_not_json(
     readme = (output_dir / "README.md").read_text(encoding="utf-8")
     assert "## Calling an endpoint" in readme
     assert "curl -X POST http://localhost:8000/blob" in readme
+
+
+def test_compiled_app_supports_a_notebook_reading_the_last_output_underscore(tmp_path):
+    """`_` (the previous cell's result) raised NameError when the app was
+    imported; it now holds the last non-None bare-expression result, and a
+    notebook that assigns `_` itself is left untouched."""
+
+    def build(name, cells):
+        notebook = nbformat.v4.new_notebook()
+        for source in cells:
+            notebook.cells.append(nbformat.v4.new_code_cell(source))
+        notebook_path = tmp_path / f"{name}.ipynb"
+        with open(notebook_path, "w", encoding="utf-8") as f:
+            nbformat.write(notebook, f)
+        workdir = tmp_path / name
+        workdir.mkdir()
+        script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+r = TestClient(app).post("/f", json={{}}, headers={{"X-API-Key": "notebook-to-api-dev-key"}})
+print("RESULT", r.status_code, r.json())
+"""
+        return subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=str(workdir), capture_output=True, text=True, timeout=60,
+        )
+
+    reads = build("reads", ["20 + 1", "TOTAL = _ * 2", "def f():\n    return TOTAL\n"])
+    assert "RESULT 200 {'result': 42}" in reads.stdout, reads.stdout + reads.stderr
+
+    own = build("own", ["_ = 7", "def f():\n    return _ + 1\n"])
+    assert "RESULT 200 {'result': 8}" in own.stdout, own.stdout + own.stderr

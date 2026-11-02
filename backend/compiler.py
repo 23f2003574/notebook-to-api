@@ -893,6 +893,63 @@ _DATA_FILES_CHDIR_PRELUDE = (
 _DATA_FILES_CHDIR_EPILOGUE = "_nb_os2.chdir(_nb_previous_cwd)\n"
 
 
+_LAST_OUTPUT_HELPER = (
+    "# IPython's `_` (the last cell result) for notebook code that reads it\n"
+    "def _nb_set_last(_value):\n"
+    "    global _\n"
+    "    if _value is not None:\n"
+    "        _ = _value\n"
+    "    return _value\n\n"
+)
+
+
+def _rewrite_last_output_references(code_cells):
+    """Notebook code that reads IPython's `_` (the previous cell's result)
+    died at import with NameError, because a plain Python module has no `_`.
+    Only when `_` is read and never assigned anywhere, each cell whose final
+    statement is a bare expression stores its non-None value in `_` the way
+    Jupyter does. Returns (cells, changed)."""
+    parsed = []
+    reads_underscore = False
+    for cell in code_cells:
+        try:
+            tree = ast.parse(cell)
+        except SyntaxError:
+            parsed.append(None)
+            continue
+        parsed.append(tree)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and node.id == "_":
+                if not isinstance(node.ctx, ast.Load):
+                    return list(code_cells), False
+                reads_underscore = True
+    if not reads_underscore:
+        return list(code_cells), False
+
+    rewritten = []
+    changed = False
+    for cell, tree in zip(code_cells, parsed):
+        if tree is None or not tree.body or not isinstance(tree.body[-1], ast.Expr):
+            rewritten.append(cell)
+            continue
+        expr = tree.body[-1].value
+        segment = ast.get_source_segment(cell, expr)
+        lines = cell.split("\n")
+        # Only a single-line trailing expression is rewritten textually.
+        if segment is None or expr.lineno != expr.end_lineno or "\n" in segment:
+            rewritten.append(cell)
+            continue
+        line = lines[expr.lineno - 1]
+        lines[expr.lineno - 1] = (
+            line[:expr.col_offset]
+            + f"_nb_set_last({segment})"
+            + line[expr.end_col_offset:]
+        )
+        rewritten.append("\n".join(lines))
+        changed = True
+    return rewritten, changed
+
+
 def write_runtime_module(code_cells, output_dir, local_modules=None, data_files=None):
 
     runtime_path = Path(output_dir) / "runtime" / "notebook_module.py"
@@ -904,6 +961,7 @@ def write_runtime_module(code_cells, output_dir, local_modules=None, data_files=
 
     rewritten_cells = _rewrite_request_time_reads(code_cells, data_files or {})
     reads_at_request_time = rewritten_cells != list(code_cells)
+    rewritten_cells, uses_last_output = _rewrite_last_output_references(rewritten_cells)
     combined_code = _hoist_future_imports("\n\n".join(rewritten_cells))
     shipped_scripts = [p for p in _run_magic_scripts(code_cells) if p in (data_files or {})]
     if shipped_scripts:
@@ -915,6 +973,8 @@ def write_runtime_module(code_cells, output_dir, local_modules=None, data_files=
             combined_code,
         )
     extra_prelude = _env_magic_prelude(_env_magic_values(code_cells))
+    if uses_last_output:
+        extra_prelude += _LAST_OUTPUT_HELPER
     if shipped_scripts:
         extra_prelude += _RUN_SCRIPT_HELPER
     if _uses_colab_userdata(code_cells):
