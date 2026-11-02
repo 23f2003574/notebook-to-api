@@ -20457,3 +20457,55 @@ print("UNREADABLE_BODY_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "UNREADABLE_BODY_E2E_OK" in proc.stdout
+
+
+def test_compiled_app_returns_timezone_objects_as_their_names(tmp_path):
+    """A function returning datetime.timezone.utc or a ZoneInfo was a 500
+    "not JSON-serializable"; it now answers the zone's name."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "import datetime, zoneinfo\n"
+            "def utc():\n    return datetime.timezone.utc\n"
+            "def paris():\n    return zoneinfo.ZoneInfo('Europe/Paris')\n"
+            "def stamp():\n    return datetime.datetime(2024, 1, 2, tzinfo=datetime.timezone.utc)\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+for name, expected in (("utc", "UTC"), ("paris", "Europe/Paris")):
+    response = client.post("/" + name, json={{}}, headers=headers)
+    assert response.status_code == 200 and response.json() == {{"result": expected}}, (name, response.text)
+stamp = client.post("/stamp", json={{}}, headers=headers)
+assert stamp.status_code == 200 and stamp.json()["result"].startswith("2024-01-02T00:00:00"), stamp.text
+print("TZINFO_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir), capture_output=True, text=True, timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "TZINFO_E2E_OK" in proc.stdout

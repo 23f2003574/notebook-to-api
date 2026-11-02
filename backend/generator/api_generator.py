@@ -3469,6 +3469,11 @@ def generate_fastapi_code(
         "        return {'left': _json_safe(value.left, _depth + 1), "
         "'right': _json_safe(value.right, _depth + 1), 'closed': value.closed}"
     )
+    # A timezone object (datetime.timezone.utc, zoneinfo.ZoneInfo("Europe/Paris"))
+    # was a 500 "not JSON-serializable"; it becomes its name ("UTC", "Europe/Paris").
+    lines.append("    import datetime as _dt")
+    lines.append("    if isinstance(value, _dt.tzinfo):")
+    lines.append("        return str(value)")
     lines.append("    if isinstance(value, (bytes, bytearray, memoryview)):")
     lines.append("        return _bytes_json(value)")
     lines.append("    if hasattr(value, 'getvalue') and hasattr(value, 'seek') and hasattr(value, 'read'):")
