@@ -20787,3 +20787,54 @@ def test_compile_lists_env_vars_read_through_an_os_alias_or_a_constant_key(tmp_p
     for name in ("SERVICE_TOKEN", "SERVICE_REGION"):
         assert name in (output_dir / ".env.example").read_text()
         assert name in (output_dir / "README.md").read_text()
+
+
+def test_compiled_app_loads_when_an_annotation_uses_a_type_checking_only_import(tmp_path):
+    """`import pandas as pd` under `if TYPE_CHECKING:` plus a quoted
+    `"pd.DataFrame"` annotation crashed the app at import with "type object
+    'object' has no attribute 'DataFrame'"; the app now starts, the dotted
+    parameter accepts any value, and a bare missing name still works."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "from typing import TYPE_CHECKING\n"
+            "if TYPE_CHECKING:\n    import pandas as pd\n"
+            "def size(x: 'pd.DataFrame'):\n    return len(x)\n"
+            "def bare(y: 'Undefined'):\n    return y\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+assert client.post("/size", json={{"x": [1, 2, 3]}}, headers=headers).json() == {{"result": 3}}
+assert client.post("/bare", json={{"y": 5}}, headers=headers).json() == {{"result": 5}}
+assert client.get("/openapi.json", headers=headers).status_code == 200
+print("TYPE_CHECKING_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir), capture_output=True, text=True, timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "TYPE_CHECKING_E2E_OK" in proc.stdout

@@ -960,6 +960,7 @@ _BUILTIN_NAMES = frozenset(dir(builtins))
 # Names the annotation rewriter pointed at notebook_module during the current
 # generate_fastapi_code call (see the fallback emitted after the notebook import).
 _ANNOTATION_NOTEBOOK_NAMES = set()
+_ANNOTATION_DOTTED_ROOTS = set()
 
 
 class _AnnotationNameQualifier(ast.NodeTransformer):
@@ -1045,6 +1046,11 @@ class _AnnotationNameQualifier(ast.NodeTransformer):
                 return node
             return self.visit(inner)
         return node
+
+    def visit_Attribute(self, node):
+        if isinstance(node.value, ast.Name):
+            _ANNOTATION_DOTTED_ROOTS.add(node.value.id)
+        return self.generic_visit(node)
 
     def visit_Name(self, node):
         if any(node.id in names for names in self._bound):
@@ -1603,6 +1609,7 @@ def generate_fastapi_code(
     it rather than silently changing behavior no caller asked for.
     """
     _ANNOTATION_NOTEBOOK_NAMES.clear()
+    _ANNOTATION_DOTTED_ROOTS.clear()
     colliding_names = sorted(
         {func["name"] for func in functions} & RESERVED_INFRASTRUCTURE_NAMES
     )
@@ -6924,10 +6931,21 @@ def generate_fastapi_code(
     if _ANNOTATION_NOTEBOOK_NAMES:
         anchor = "    _nb_atexit.register = _nb_real_atexit_register"
         names = ", ".join(repr(n) for n in sorted(_ANNOTATION_NOTEBOOK_NAMES))
+        dotted = tuple(sorted(_ANNOTATION_DOTTED_ROOTS & _ANNOTATION_NOTEBOOK_NAMES))
+        # A dotted annotation (`"pd.DataFrame"` where pandas is only imported
+        # under `if TYPE_CHECKING:`) reads an attribute of the missing name, so
+        # the stand-in answers every attribute with `object` as well.
         fallback = [
+            "class _NbMissingMeta(type):",
+            "    def __getattr__(cls, _attr):",
+            "        if _attr.startswith('__'):",
+            "            raise AttributeError(_attr)",
+            "        return object",
+            "class _NbMissing(object, metaclass=_NbMissingMeta):",
+            "    pass",
             f"for _nb_type_name in ({names},):",
             "    if not hasattr(notebook_module, _nb_type_name):",
-            "        setattr(notebook_module, _nb_type_name, object)",
+            f"        setattr(notebook_module, _nb_type_name, _NbMissing if _nb_type_name in {dotted!r} else object)",
         ]
         lines[lines.index(anchor) + 1:lines.index(anchor) + 1] = fallback
     return "\n".join(lines)
