@@ -3633,6 +3633,18 @@ def generate_fastapi_code(
         "        return {f.name: _json_safe(getattr(value, f.name), _depth + 1) "
         "for f in _dataclasses.fields(value)}"
     )
+    # A notebook class that defines __iter__ (a custom collection, a paginator)
+    # came back as the `{}` of its empty __dict__, silently dropping every
+    # item it holds; it is now listed like any other iterable. Pydantic
+    # models, Enums, file-like objects and callables keep their own handling.
+    lines.append(
+        "    if '__iter__' in dir(type(value)) and not isinstance(value, type) "
+        "and type(value).__module__ != 'builtins' and not callable(value) "
+        "and not hasattr(value, 'read') and not hasattr(value, 'model_dump') "
+        "and not hasattr(value, '__fields__') and not hasattr(type(value), '__members__') "
+        "and not isinstance(value, _ENCODER_HANDLED_TYPES):"
+    )
+    lines.append("        return [_json_safe(v, _depth + 1) for v in value]")
     # A plain class declaring __slots__ has no __dict__, so it matched neither
     # branch and was a 500 "not JSON-serializable". Its slot attributes (all
     # base classes' too; unset ones skipped) become the same {name: value}

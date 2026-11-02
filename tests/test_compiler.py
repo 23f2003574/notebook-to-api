@@ -20957,3 +20957,64 @@ print("SLOTS_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "SLOTS_E2E_OK" in proc.stdout
+
+
+def test_compiled_app_lists_the_items_of_a_notebook_class_that_defines_iter(tmp_path):
+    """An instance of a class with __iter__ came back as `{}` (its empty
+    __dict__), silently dropping every item; it is now listed. Generators,
+    plain objects and Enums keep their existing output."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "import enum\n"
+            "class Bag:\n"
+            "    def __init__(self, label):\n        self.label = label\n"
+            "    def __iter__(self):\n        yield 1\n        yield {'k': {2}}\n"
+            "class Plain:\n    def __init__(self):\n        self.a = 1\n"
+            "class Color(enum.Enum):\n    RED = 'red'\n"
+            "def bag():\n    return Bag('x')\n"
+            "def nested():\n    return {'bag': Bag('y'), 'plain': Plain(), 'color': Color.RED}\n"
+            "def gen():\n    yield 5\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+
+def call(name):
+    response = client.post("/" + name, json={{}}, headers=headers)
+    assert response.status_code == 200, (name, response.text)
+    return response.json()["result"]
+
+assert call("bag") == [1, {{"k": [2]}}], call("bag")
+assert call("nested") == {{"bag": [1, {{"k": [2]}}], "plain": {{"a": 1}}, "color": "red"}}, call("nested")
+assert call("gen") == [5]
+print("ITER_OBJECT_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir), capture_output=True, text=True, timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ITER_OBJECT_E2E_OK" in proc.stdout
