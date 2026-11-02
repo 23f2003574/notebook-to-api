@@ -20903,3 +20903,57 @@ print("RESULT", r.status_code, r.json())
 
     own = build("own", ["_ = 7", "def f():\n    return _ + 1\n"])
     assert "RESULT 200 {'result': 8}" in own.stdout, own.stdout + own.stderr
+
+
+def test_compiled_app_serializes_instances_of_classes_that_declare_slots(tmp_path):
+    """An instance of a plain class using __slots__ (no __dict__) was a 500
+    "not JSON-serializable"; its slot attributes, inherited ones included
+    and unset ones skipped, are now returned like any other object's fields."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "class Base:\n    __slots__ = ('a',)\n"
+            "    def __init__(self):\n        self.a = 1\n"
+            "class Point(Base):\n    __slots__ = ('x', 'y', 'unset')\n"
+            "    def __init__(self):\n        super().__init__()\n        self.x = 2\n        self.y = [Base()]\n"
+            "def point():\n    return Point()\n"
+            "def plain():\n    class Q:\n        def __init__(self):\n            self.v = 3\n    return Q()\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+point = client.post("/point", json={{}}, headers=headers)
+assert point.status_code == 200, point.text
+assert point.json() == {{"result": {{"a": 1, "x": 2, "y": [{{"a": 1}}]}}}}, point.text
+plain = client.post("/plain", json={{}}, headers=headers)
+assert plain.json() == {{"result": {{"v": 3}}}}, plain.text
+print("SLOTS_E2E_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir), capture_output=True, text=True, timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "SLOTS_E2E_OK" in proc.stdout

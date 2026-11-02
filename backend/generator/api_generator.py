@@ -3633,6 +3633,30 @@ def generate_fastapi_code(
         "        return {f.name: _json_safe(getattr(value, f.name), _depth + 1) "
         "for f in _dataclasses.fields(value)}"
     )
+    # A plain class declaring __slots__ has no __dict__, so it matched neither
+    # branch and was a 500 "not JSON-serializable". Its slot attributes (all
+    # base classes' too; unset ones skipped) become the same {name: value}
+    # object a __dict__ instance gives.
+    lines.append(
+        "    if not hasattr(value, '__dict__') and not isinstance(value, type) "
+        "and type(value).__module__ != 'builtins' and not callable(value) "
+        "and not isinstance(value, _ENCODER_HANDLED_TYPES):"
+    )
+    lines.append("        _slot_names = []")
+    lines.append("        for _cls in type(value).__mro__:")
+    lines.append("            _declared = _cls.__dict__.get('__slots__', ())")
+    lines.append("            for _slot in ((_declared,) if isinstance(_declared, str) else _declared):")
+    lines.append("                if _slot not in ('__dict__', '__weakref__') and _slot not in _slot_names:")
+    lines.append("                    _slot_names.append(_slot)")
+    lines.append("        if _slot_names:")
+    lines.append("            _slot_values = {}")
+    lines.append("            for _slot in _slot_names:")
+    lines.append("                _attr = ('_' + type(value).__name__.lstrip('_') + _slot) if _slot.startswith('__') and not _slot.endswith('__') else _slot")
+    lines.append("                try:")
+    lines.append("                    _slot_values[_slot] = _json_safe(getattr(value, _attr), _depth + 1)")
+    lines.append("                except AttributeError:")
+    lines.append("                    pass")
+    lines.append("            return _slot_values")
     lines.append(
         "    if hasattr(value, '__dict__') and not isinstance(value, type) "
         "and type(value).__module__ != 'builtins' "
