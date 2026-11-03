@@ -32374,6 +32374,16 @@ def test_readme_run_locally_commands_serve_the_sample_notebook_and_answer_a_requ
     readme = (Path(__file__).resolve().parent.parent / "README.md").read_text(encoding="utf-8")
     section = readme.split("## Run Locally (no Docker)", 1)[1].split("\n## ", 1)[0]
 
+    # The sample imports pandas and numpy, so the app can only start where they
+    # are installed -- which is why the README tells the reader to install the
+    # generated requirements before serving.
+    assert ".venv/bin/pip install -r generated/requirements.txt" in section
+    assert section.index("pip install -r generated/requirements.txt") < section.index(
+        "backend.cli serve"
+    )
+    pytest.importorskip("pandas")
+    pytest.importorskip("numpy")
+
     serve_line = next(
         line for line in section.splitlines()
         if line.startswith(".venv/bin/python -m backend.cli serve ")

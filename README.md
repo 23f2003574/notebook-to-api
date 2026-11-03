@@ -31,6 +31,9 @@ Every generated endpoint needs an `X-API-Key` header. It defaults to `notebook-t
 
 ## Run Locally (no Docker)
 ```bash
+# the sample imports pandas and numpy: install the notebook's own libraries first
+.venv/bin/python -m backend.cli compile notebooks/sample.ipynb --output generated
+.venv/bin/pip install -r generated/requirements.txt
 # compiles the notebook and serves it, recompiling when the notebook changes
 .venv/bin/python -m backend.cli serve notebooks/sample.ipynb --port 8000
 # in another terminal:
