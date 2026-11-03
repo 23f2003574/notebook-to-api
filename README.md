@@ -29,6 +29,15 @@ This will generate:
 
 Every generated endpoint needs an `X-API-Key` header. It defaults to `notebook-to-api-dev-key` for local development; set `NOTEBOOK_API_KEY` before exposing the service.
 
+## Run Locally (no Docker)
+```bash
+# compiles the notebook and serves it, recompiling when the notebook changes
+.venv/bin/python -m backend.cli serve notebooks/sample.ipynb --port 8000
+# in another terminal:
+curl -X POST http://localhost:8000/add -H "X-API-Key: notebook-to-api-dev-key" -H "Content-Type: application/json" -d '{"a": 2, "b": 3}'
+# {"result":5}
+```
+
 ## Building the Docker Image
 Make sure Docker is installed on your system.
 ```bash

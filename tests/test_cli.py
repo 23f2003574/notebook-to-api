@@ -32360,3 +32360,67 @@ def test_compile_smoke_test_names_the_notebook_line_that_failed_on_import(tmp_pa
     assert proc.returncode == 1, output
     assert "ZeroDivisionError: division by zero" in output
     assert "(runtime/notebook_module.py line 1: `ratio = 1 / 0`)" in output
+
+
+def test_readme_run_locally_commands_serve_the_sample_notebook_and_answer_a_request(tmp_path):
+    """The README's first-run journey stopped after `compile` and a Docker
+    build; the commands for running the app without Docker are now documented,
+    so run them exactly as written (only the port is swapped for a free one)
+    and check the documented response."""
+    import re
+    import socket
+    import urllib.request
+
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text(encoding="utf-8")
+    section = readme.split("## Run Locally (no Docker)", 1)[1].split("\n## ", 1)[0]
+
+    serve_line = next(
+        line for line in section.splitlines()
+        if line.startswith(".venv/bin/python -m backend.cli serve ")
+    )
+    curl_line = next(line for line in section.splitlines() if line.startswith("curl "))
+    body = re.search(r"-d '([^']*)'", curl_line).group(1)
+    api_key = re.search(r"X-API-Key: ([^\"]+)\"", curl_line).group(1)
+    expected = next(
+        line[2:].strip() for line in section.splitlines() if line.startswith("# {")
+    )
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+
+    args = serve_line.split()[1:]
+    args[args.index("--port") + 1] = str(port)
+    notebook_arg = args.index("notebooks/sample.ipynb")
+    args[notebook_arg] = str(Path(__file__).resolve().parent.parent / "notebooks" / "sample.ipynb")
+    args += ["--output", str(tmp_path / "generated")]
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent)
+    server = subprocess.Popen(
+        [sys.executable, *args], cwd=str(tmp_path), env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/add", data=body.encode(),
+            headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+            method="POST",
+        )
+        answer = None
+        deadline = time.time() + 40
+        while time.time() < deadline and answer is None:
+            if server.poll() is not None:
+                break
+            try:
+                with urllib.request.urlopen(request, timeout=3) as response:
+                    answer = response.read().decode()
+            except OSError:
+                time.sleep(0.3)
+        assert answer == expected, (answer, server.poll())
+    finally:
+        server.terminate()
+        try:
+            server.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            server.kill()
