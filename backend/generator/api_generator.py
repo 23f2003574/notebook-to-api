@@ -1707,6 +1707,12 @@ def generate_fastapi_code(
         "pass the value as a request parameter instead')"
     )
     lines.append("_nb_builtins.input = _nb_no_input")
+    # A notebook written as a script often calls argparse's parse_args() at the
+    # top level. Under `uvicorn app:app --port 8000` sys.argv holds the server's
+    # own flags, so the parser exited with "unrecognized arguments" and the app
+    # never started. Show the notebook a bare program name while it imports.
+    lines.append("_nb_real_argv = sys.argv")
+    lines.append("sys.argv = sys.argv[:1]")
     lines.append("try:")
     # The package name is the directory name the app was compiled into, so a
     # renamed or moved output directory made `import <name>...` fail with
@@ -1760,6 +1766,7 @@ def generate_fastapi_code(
     lines.append("    raise")
     lines.append("finally:")
     lines.append("    _nb_atexit.register = _nb_real_atexit_register")
+    lines.append("    sys.argv = _nb_real_argv")
     lines.append("")
     lines.append("@_nb_contextlib.asynccontextmanager")
     lines.append("async def _nb_lifespan(_app):")

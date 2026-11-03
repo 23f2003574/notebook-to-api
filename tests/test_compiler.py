@@ -21018,3 +21018,65 @@ print("ITER_OBJECT_E2E_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "ITER_OBJECT_E2E_OK" in proc.stdout
+
+
+def test_compiled_app_starts_when_notebook_parses_command_line_at_import(tmp_path):
+    """A notebook calling argparse's parse_args() at the top level exited with
+    "unrecognized arguments" under `uvicorn app:app --port 8000`, because it
+    saw the server's own flags in sys.argv."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "import argparse\n"
+            "parser = argparse.ArgumentParser()\n"
+            "parser.add_argument('--scale', type=int, default=3)\n"
+            "args = parser.parse_args()\n"
+            "def scaled(a: int) -> int:\n"
+            "    return a * args.scale\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+server_argv = ["uvicorn", "generated.app:app", "--port", "8000"]
+sys.argv = list(server_argv)
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+assert sys.argv == server_argv, sys.argv
+client = TestClient(app, raise_server_exceptions=False)
+ok = client.post(
+    "/scaled", json={{"a": 2}},
+    headers={{"X-API-Key": "notebook-to-api-dev-key"}},
+)
+assert ok.status_code == 200 and ok.json()["result"] == 6, ok.text
+
+print("ARGV_IMPORT_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ARGV_IMPORT_OK" in proc.stdout
