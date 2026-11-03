@@ -2,7 +2,9 @@ import ast
 import builtins
 import datetime
 import email.utils
+import functools
 import re
+import threading
 import typing
 from pathlib import Path
 
@@ -1532,6 +1534,24 @@ def _annotation_has_own_field_description(type_str):
 
 
 # Template for generating the FastAPI application source code
+# generate_fastapi_code collects the names its annotations reference in the
+# module-level _ANNOTATION_* sets above, clearing them on entry. Two
+# generations running at once (the dashboard's preview routes and compile
+# endpoints run in a thread pool) cleared and filled each other's sets, so
+# one app's missing-name fallbacks leaked into another's generated code.
+_GENERATE_LOCK = threading.RLock()
+
+
+def _serialized(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        with _GENERATE_LOCK:
+            return func(*args, **kwargs)
+
+    return wrapper
+
+
+@_serialized
 def generate_fastapi_code(
     functions, package_name="generated", source_notebook_sha256=None,
     notebook_to_api_version="1.0.0", background_overrides=None,

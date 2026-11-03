@@ -9842,3 +9842,48 @@ def test_shutdown_runs_every_notebook_atexit_handler_even_if_one_calls_sys_exit(
 
     assert namespace["notebook_module"].ran == ["last", "first"]
     assert "_bad" in capsys.readouterr().err
+
+
+def test_concurrent_generations_never_mix_annotation_fallbacks_between_apps():
+    """generate_fastapi_code kept the names its annotations reference in
+    module-level sets, so two generations running in threads (the dashboard's
+    preview and compile routes) leaked one app's missing-name fallbacks into
+    the other's generated code."""
+    import sys
+    import threading
+
+    from backend.generator.api_generator import generate_fastapi_code
+    from backend.parser.ast_parser import extract_functions_from_code
+
+    def functions_for(prefix):
+        source = "".join(
+            f"def f{i}(x: '{prefix}{i}') -> int:\n    return 1\n" for i in range(3)
+        )
+        return extract_functions_from_code(source)
+
+    problems = []
+
+    def work(mine, others):
+        for _ in range(15):
+            code = generate_fastapi_code(functions_for(mine), "pkg")
+            missing = [i for i in range(3) if f"'{mine}{i}'" not in code]
+            leaked = [o for o in others if f"'{o}0'" in code]
+            if missing or leaked:
+                problems.append((mine, missing, leaked))
+
+    previous_interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        threads = [
+            threading.Thread(target=work, args=("AlphaT", ("BetaT", "GammaT"))),
+            threading.Thread(target=work, args=("BetaT", ("AlphaT", "GammaT"))),
+            threading.Thread(target=work, args=("GammaT", ("AlphaT", "BetaT"))),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+    finally:
+        sys.setswitchinterval(previous_interval)
+
+    assert problems == [], problems[:3]
