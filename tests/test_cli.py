@@ -31953,7 +31953,7 @@ def test_compile_smoke_test_fails_instead_of_exiting_silently_on_top_level_sys_e
 
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "Smoke test: FAILED" in proc.stdout
-    assert "sys.exit(3)" in proc.stdout
+    assert "sys.exit() (3)" in proc.stdout
 
 
 def test_serve_points_the_openapi_servers_entry_at_the_port_it_serves(tmp_path):
