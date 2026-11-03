@@ -14,6 +14,11 @@ jobs:
 
     runs-on: ubuntu-latest
 
+    # The suite takes minutes; without a limit a single hung test (a server
+    # waiting on a socket, a subprocess that never exits) holds the runner for
+    # GitHub's 6-hour default before the run is reported as failed.
+    timeout-minutes: 60
+
     # The generated Dockerfile uses the Python that compiled the notebook, so a
     # 3.13 compile ships a 3.13 image; test both ends of what is supported.
     strategy:
