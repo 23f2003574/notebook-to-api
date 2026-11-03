@@ -5129,6 +5129,35 @@ COMPILE_METADATA_FILENAME = ".compile_metadata.json"
 COMPILE_LOCK = threading.RLock()
 
 
+def notebook_failure_location(exc):
+    """" (runtime/notebook_module.py line N: `source`)" for the innermost
+    frame of `exc`'s traceback that runs the notebook's own code, or "".
+
+    A notebook that raises while the compiled app imports (a top-level
+    `1/0`, a missing file, a bad call) was reported as just
+    "ZeroDivisionError: division by zero" -- nothing said where in the
+    notebook it happened. The runtime module is the notebook's cells joined
+    together, so the line number and its text are what lead back to the cell.
+    """
+    import linecache
+
+    location = None
+    traceback = getattr(exc, "__traceback__", None)
+    while traceback is not None:
+        filename = traceback.tb_frame.f_code.co_filename
+        if filename.replace("\\", "/").endswith("/runtime/notebook_module.py"):
+            location = (filename, traceback.tb_lineno)
+        traceback = traceback.tb_next
+
+    if location is None:
+        return ""
+
+    filename, line_number = location
+    source = linecache.getline(filename, line_number).strip()
+    suffix = f": `{source}`" if source else ""
+    return f" (runtime/notebook_module.py line {line_number}{suffix})"
+
+
 def hash_notebook_file(notebook_path):
     """SHA-256 of `notebook_path`'s raw bytes, as a hex digest.
 

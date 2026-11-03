@@ -32338,3 +32338,25 @@ def test_compile_command_rejects_an_empty_output_instead_of_writing_into_the_cwd
     assert proc.returncode == 1
     assert "--output is empty" in proc.stdout + proc.stderr
     assert list(workdir.iterdir()) == []
+
+
+def test_compile_smoke_test_names_the_notebook_line_that_failed_on_import(tmp_path):
+    """A notebook raising while the compiled app imports was reported as just
+    "ZeroDivisionError: division by zero", with nothing saying where in the
+    notebook it happened."""
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook_with_function(
+        notebook_path,
+        "ratio = 1 / 0\n\ndef add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+
+    proc = _run_cli(
+        ["compile", str(notebook_path), "--output", str(tmp_path / "out"), "--smoke-test"],
+        cwd=tmp_path,
+    )
+
+    output = proc.stdout + proc.stderr
+    assert proc.returncode == 1, output
+    assert "ZeroDivisionError: division by zero" in output
+    assert "(runtime/notebook_module.py line 1: `ratio = 1 / 0`)" in output

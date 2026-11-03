@@ -41,6 +41,7 @@ from nbformat import ValidationError as NotebookValidationError
 # Import the compiler function
 from backend.generator.docker_generator import default_image_tag
 from backend.compiler import (
+    notebook_failure_location,
     NOTEBOOK_TO_API_VERSION,
     compile_notebook,
     compiling_python_version,
@@ -1194,6 +1195,7 @@ def _run_local_compile_smoke_test(package_name, output_dir):
             "status_code": None,
             "detail": (
                 f"Compiled app failed to import: {type(e).__name__}: {e}"
+                f"{notebook_failure_location(e)}"
                 f"{missing_dependency_hint(e, package_name, output_dir)}"
             ),
         }

@@ -36,6 +36,7 @@ import httpx
 from nbformat import ValidationError as NotebookValidationError
 
 from backend.compiler import (
+    notebook_failure_location,
     _extract_rate_limit_overrides,
     _extract_timeout_overrides,
     _extract_cache_overrides,
@@ -16771,7 +16772,10 @@ def _run_compile_smoke_test(package_name):
         return {
             "passed": False,
             "status_code": None,
-            "detail": f"Compiled app failed to import: {type(e).__name__}: {e}",
+            "detail": (
+                f"Compiled app failed to import: {type(e).__name__}: {e}"
+                f"{notebook_failure_location(e)}"
+            ),
         }
 
     try:
