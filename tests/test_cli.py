@@ -32322,3 +32322,19 @@ def test_cli_export_sdk_output_naming_a_directory_writes_the_default_file_inside
     assert "Errno 21" not in result.stderr
     assert (out_dir / filename).read_text(encoding="utf-8").strip()
     assert str(out_dir / filename) in result.stdout
+
+
+def test_compile_command_rejects_an_empty_output_instead_of_writing_into_the_cwd(tmp_path):
+    """`--output ""` (e.g. an unset shell variable) is Path("") == ".", so the
+    whole project used to be written into the current directory."""
+
+    notebook_path = tmp_path / "nb.ipynb"
+    _write_notebook(notebook_path)
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+
+    proc = _run_cli(["compile", str(notebook_path), "--output", ""], cwd=workdir)
+
+    assert proc.returncode == 1
+    assert "--output is empty" in proc.stdout + proc.stderr
+    assert list(workdir.iterdir()) == []

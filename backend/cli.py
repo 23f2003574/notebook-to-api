@@ -2059,6 +2059,18 @@ _OPTIONAL_RUNTIME_PACKAGES = [
 ]
 
 
+def _output_directory_from_arg(value):
+    """Path for --output, refusing a blank value: Path("") is the current
+    directory, so `--output ""` (often an unset shell variable) silently
+    dumped app.py, Dockerfile and runtime/ into wherever the user stood."""
+    if not str(value).strip():
+        raise ValueError(
+            "--output is empty. Pass a directory name, or omit --output to "
+            "use 'generated'."
+        )
+    return Path(value)
+
+
 def _ensure_output_directory(output_dir):
     """mkdir for --output, saying so when the path is an existing file
     instead of surfacing a bare "[Errno 17] File exists"."""
@@ -2243,7 +2255,7 @@ def _dispatch_core_command(args):
 
         only = _parse_only_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
-        output_dir = Path(args.output)
+        output_dir = _output_directory_from_arg(args.output)
         _ensure_output_directory(output_dir)
         # --tag: compile only the endpoints with these OpenAPI tags
         # (apply_tag_selection) -- e.g. a deployment serving just the
@@ -2936,7 +2948,7 @@ def _dispatch_core_command(args):
                 )
         only = _parse_only_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
-        output_dir = Path(args.output)
+        output_dir = _output_directory_from_arg(args.output)
         _ensure_output_directory(output_dir)
         # --drop-past-sunset: see _apply_drop_past_sunset -- the image
         # this builds is what actually ships, so it's where a missed
