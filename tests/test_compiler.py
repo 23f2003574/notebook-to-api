@@ -21222,3 +21222,59 @@ print("SURROGATE_ERROR_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "SURROGATE_ERROR_OK" in proc.stdout
+
+
+def test_background_task_reports_a_timeout_raised_by_the_notebook_as_its_own_failure(tmp_path):
+    """A background function raising TimeoutError itself (a socket or client
+    timing out) was recorded as "Task exceeded its 0s execution timeout" with
+    timed_out=True, hiding the real error and naming a limit never set."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def train_model(a: int) -> int:\n"
+            "    raise TimeoutError('database connect timed out')\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+started = client.post("/train_model", json={{"a": 1}}, headers=headers)
+assert started.status_code == 200, started.text
+task = client.get("/tasks/" + started.json()["task_id"], headers=headers).json()
+assert task["status"] == "failed", task
+assert task["error"] == "database connect timed out", task
+assert "timed_out" not in task, task
+
+print("TASK_OWN_TIMEOUT_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "TASK_OWN_TIMEOUT_OK" in proc.stdout

@@ -5717,14 +5717,23 @@ def generate_fastapi_code(
     # behind other calls doesn't count against the task's own limit.
     lines.append("        async with _call_slot():")
     lines.append("          with anyio.fail_after(task_limit or None):")
-    lines.append("            if inspect.isasyncgenfunction(func):")
-    lines.append("                result = await _drain_async_gen(func(*args, **kwargs))")
-    lines.append("            elif inspect.iscoroutinefunction(func):")
-    lines.append("                result = await func(*args, **kwargs)")
-    lines.append("            else:")
-    lines.append("                result = await _run_in_thread(")
-    lines.append("                    functools.partial(func, *args, **kwargs)")
-    lines.append("                )")
+    # The scope's own timeout only surfaces as TimeoutError once this block
+    # has exited, so a TimeoutError caught inside it was raised by the
+    # notebook function itself (a socket or client library timing out). It
+    # used to be recorded as "Task exceeded its Ns execution timeout" with
+    # timed_out=True, hiding the real error and, with no limit set, naming a
+    # limit that does not exist.
+    lines.append("            try:")
+    lines.append("                if inspect.isasyncgenfunction(func):")
+    lines.append("                    result = await _drain_async_gen(func(*args, **kwargs))")
+    lines.append("                elif inspect.iscoroutinefunction(func):")
+    lines.append("                    result = await func(*args, **kwargs)")
+    lines.append("                else:")
+    lines.append("                    result = await _run_in_thread(")
+    lines.append("                        functools.partial(func, *args, **kwargs)")
+    lines.append("                    )")
+    lines.append("            except TimeoutError as _own_timeout:")
+    lines.append("                raise RuntimeError(_error_text(_own_timeout) or 'TimeoutError') from _own_timeout")
     lines.append("        # jsonable_encoder both validates that `result` is")
     lines.append("        # actually something GET /tasks/{task_id} -- and GET")
     lines.append("        # /tasks, which returns *every* task in one response --")
