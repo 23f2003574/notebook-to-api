@@ -2840,6 +2840,11 @@ def generate_fastapi_code(
     lines.append("        text = str(exc)")
     lines.append("    except Exception:")
     lines.append("        return '<message unavailable>'")
+    # A lone surrogate (what decoding a non-UTF-8 filename with
+    # surrogateescape produces) cannot be encoded as UTF-8, so the JSON error
+    # body failed to render and the client got a plain-text "Internal Server
+    # Error" instead of the structured detail.
+    lines.append("    text = text.encode('utf-8', 'replace').decode('utf-8')")
     # `raise ValueError()` / a bare assert / anyio's TimeoutError have no
     # message, so a failed task recorded "error": "" -- name the type instead.
     lines.append("    if not text.strip():")

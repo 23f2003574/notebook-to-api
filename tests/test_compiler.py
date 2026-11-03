@@ -21165,3 +21165,60 @@ print("DELETED_FUNCTION_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "DELETED_FUNCTION_OK" in proc.stdout
+
+
+def test_compiled_app_answers_500_json_when_the_exception_message_has_a_lone_surrogate(tmp_path):
+    """An exception message containing a lone surrogate (e.g. from a
+    non-UTF-8 filename decoded with surrogateescape) could not be encoded, so
+    the 500 came back as plain-text "Internal Server Error" instead of the
+    usual {"detail": ...} body."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def bad_name(a: int) -> int:\n"
+            "    raise ValueError('cannot open ' + b'caf\\xe9.txt'.decode('utf-8', 'surrogateescape'))\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+response = client.post(
+    "/bad_name", json={{"a": 1}}, headers={{"X-API-Key": "notebook-to-api-dev-key"}},
+)
+assert response.status_code == 500, response.status_code
+assert response.headers["content-type"].startswith("application/json"), response.text
+detail = response.json()["detail"]
+assert detail.startswith("'bad_name' raised ValueError: cannot open caf"), detail
+
+print("SURROGATE_ERROR_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "SURROGATE_ERROR_OK" in proc.stdout
