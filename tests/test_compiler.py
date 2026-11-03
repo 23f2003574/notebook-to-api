@@ -21278,3 +21278,44 @@ print("TASK_OWN_TIMEOUT_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "TASK_OWN_TIMEOUT_OK" in proc.stdout
+
+
+def test_bare_requires_directive_does_not_write_the_next_code_line_into_requirements(tmp_path):
+    """A `# notebook-to-api: requires` comment with no spec matched across the
+    newline, so the following line of code (here the `def`) was written into
+    requirements.txt and `pip install -r` failed on it."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "# notebook-to-api: requires\n"
+            "def add(a: int, b: int) -> int:\n"
+            "    return a + b\n"
+            "# notebook-to-api: requires python-dateutil==2.9.0\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "app"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    lines = [
+        line.strip()
+        for line in (output_dir / "requirements.txt").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert not any("def " in line or "return" in line for line in lines), lines
+    assert "python-dateutil==2.9.0" in lines, lines
+
+
+def test_bare_requires_directive_is_reported_as_an_ignored_directive():
+    from backend.compiler import _find_unrecognized_directives
+
+    found = _find_unrecognized_directives([
+        "# notebook-to-api: requires\ndef f():\n    pass\n",
+        "# notebook-to-api: requires numpy==1.26.0\n",
+    ])
+
+    assert [item["line"] for item in found] == ["# notebook-to-api: requires"]

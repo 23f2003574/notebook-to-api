@@ -1144,8 +1144,11 @@ def _lines_inside_multiline_strings(cell):
 # documenting this exact directive syntax, say) is discarded by
 # _extract_explicit_requirements below via _lines_inside_multiline_strings
 # -- see that function's own docstring for why.
+# `[ \t]+`, not `\s+`, before the spec: a bare "requires" line otherwise
+# matched across the newline and wrote the next line of code (e.g.
+# "def f(a: int) -> int:") into requirements.txt, which made pip fail.
 REQUIREMENT_DIRECTIVE_PATTERN = re.compile(
-    r"^\s*#\s*notebook-to-api:\s*requires\s+(?P<spec>\S.*)$",
+    r"^\s*#\s*notebook-to-api:\s*requires[ \t]+(?P<spec>\S.*)$",
     re.MULTILINE,
 )
 
@@ -4617,6 +4620,7 @@ DIRECTIVE_ARGUMENT_SHAPES = {
     "private": re.compile(r"\s*"),
     "background": re.compile(r"\s*"),
     "sync": re.compile(r"\s*"),
+    "requires": re.compile(r"[ \t]+\S.*"),
 }
 
 
