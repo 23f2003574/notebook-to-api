@@ -21109,3 +21109,59 @@ def test_requirements_name_pycryptodomex_for_a_cryptodome_import(tmp_path):
     names = [line.split("==")[0].lower() for line in lines]
     assert "pycryptodomex" in names, lines
     assert "cryptodome" not in names, lines
+
+
+def test_compiled_app_has_no_route_for_a_function_the_notebook_deleted(tmp_path):
+    """`del helper` (in the same cell or a later one) removes the function,
+    yet it still got a route that answered 500 "has no attribute" on every
+    call."""
+
+    notebook = nbformat.v4.new_notebook()
+    for source in (
+        "def keep(a: int) -> int:\n    return a\n",
+        "def gone(a: int) -> int:\n    return a\n",
+        "def gone_same_cell(a: int) -> int:\n    return a\ndel gone_same_cell\n",
+        "del gone\n",
+    ):
+        notebook.cells.append(nbformat.v4.new_code_cell(source))
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = f"""
+import sys
+
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+sys.path.insert(0, {str(workdir)!r})
+
+from backend.compiler import compile_notebook
+
+compile_notebook({str(notebook_path)!r}, "generated")
+
+from generated.app import app
+from fastapi.testclient import TestClient
+
+client = TestClient(app, raise_server_exceptions=False)
+headers = {{"X-API-Key": "notebook-to-api-dev-key"}}
+assert client.post("/keep", json={{"a": 1}}, headers=headers).status_code == 200
+for name in ("gone", "gone_same_cell"):
+    assert client.post("/" + name, json={{"a": 1}}, headers=headers).status_code == 404, name
+    assert "/" + name not in app.openapi()["paths"], name
+assert "/keep" in app.openapi()["paths"]
+
+print("DELETED_FUNCTION_OK")
+"""
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "DELETED_FUNCTION_OK" in proc.stdout

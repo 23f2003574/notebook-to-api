@@ -421,7 +421,8 @@ def _treat_ellipsis_default_as_required(arg_info):
 
 def names_rebound_to_literals(codes):
     """Names whose last module-level binding across `codes` (in order) is a
-    plain literal assignment (`name = 5`, `name: int = "x"`) -- a function
+    plain literal assignment (`name = 5`, `name: int = "x"`) or a `del name`
+    -- a function
     of that name was defined earlier but is no longer callable, so exposing
     it only produced a route that answers 500 "'int' object is not
     callable". A later `def` of the same name makes it a function again, and
@@ -439,6 +440,14 @@ def names_rebound_to_literals(codes):
         for node in _iter_module_level_statements(tree.body):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 state[node.name] = False
+                continue
+
+            if isinstance(node, ast.Delete):
+                # `del name` removes the function entirely: its route would
+                # answer 500 "has no attribute" on every call.
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        state[target.id] = True
                 continue
 
             if isinstance(node, ast.Assign):
