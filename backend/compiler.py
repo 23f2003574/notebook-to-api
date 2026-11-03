@@ -176,6 +176,7 @@ KNOWN_IMPORT_TO_DISTRIBUTION = {
     "xdg": "pyxdg",
     "nmap": "python-nmap",
     "Crypto": "pycryptodome",
+    "Cryptodome": "pycryptodomex",
     "nacl": "PyNaCl",
     "OpenSSL": "pyOpenSSL",
     "MySQLdb": "mysqlclient",

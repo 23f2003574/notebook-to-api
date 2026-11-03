@@ -21080,3 +21080,32 @@ print("ARGV_IMPORT_OK")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "ARGV_IMPORT_OK" in proc.stdout
+
+
+def test_requirements_name_pycryptodomex_for_a_cryptodome_import(tmp_path):
+    """`from Cryptodome.Cipher import AES` used to write the import name
+    `Cryptodome` into requirements.txt, which is not a PyPI distribution, so
+    `pip install -r requirements.txt` failed for the whole generated project."""
+
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "from Cryptodome.Cipher import AES\n"
+            "def key_size(n: int) -> int:\n"
+            "    return n\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+
+    output_dir = tmp_path / "app"
+    compile_notebook(str(notebook_path), str(output_dir))
+
+    lines = [
+        line.strip()
+        for line in (output_dir / "requirements.txt").read_text(encoding="utf-8").splitlines()
+    ]
+    names = [line.split("==")[0].lower() for line in lines]
+    assert "pycryptodomex" in names, lines
+    assert "cryptodome" not in names, lines
