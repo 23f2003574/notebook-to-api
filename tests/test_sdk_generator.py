@@ -1414,8 +1414,8 @@ def test_generate_python_sdk_includes_task_management_helpers(tmp_path):
         "    ) -> dict:"
     ) in source
     assert "def delete_task(self, task_id: str) -> dict:" in source
-    assert "def delete_completed_tasks(self) -> dict:" in source
-    assert "def delete_failed_tasks(self, timed_out: bool = None) -> dict:" in source
+    assert "def delete_completed_tasks(self, endpoint: str = None) -> dict:" in source
+    assert "def delete_failed_tasks(self, timed_out: bool = None, endpoint: str = None) -> dict:" in source
 
 
 def test_generate_python_sdk_list_tasks_sends_correct_request(tmp_path, monkeypatch):
@@ -8005,3 +8005,97 @@ def test_generated_python_client_explains_how_to_install_missing_requests(tmp_pa
         cwd=str(tmp_path), capture_output=True, text=True, timeout=60,
     )
     assert "HINT_OK" in proc.stdout, proc.stdout + proc.stderr
+
+
+def test_generated_python_sdk_scopes_task_cleanup_to_one_endpoint_like_the_app(tmp_path):
+    """The app's DELETE /tasks/completed and /tasks/failed take ?endpoint= to
+    purge one background endpoint's tasks, but the SDK's delete_completed_tasks
+    and delete_failed_tasks could not send it, so a caller could only purge
+    every endpoint's tasks. Runs the SDK generated from a real compiled app's
+    OpenAPI against that app."""
+    import subprocess
+    import textwrap
+
+    import nbformat
+
+    project_root = Path(__file__).resolve().parent.parent
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells.append(
+        nbformat.v4.new_code_cell(
+            "def train_a(n: int) -> int:\n    return n\n"
+            "def train_b(n: int) -> int:\n    return n\n"
+            "def train_bad_a(n: int) -> int:\n    raise ValueError('x')\n"
+            "def train_bad_b(n: int) -> int:\n    raise ValueError('x')\n"
+            "def _unused():\n    pass\n"
+        )
+    )
+    notebook_path = tmp_path / "nb.ipynb"
+    with open(notebook_path, "w", encoding="utf-8") as f:
+        nbformat.write(notebook, f)
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+
+    script = textwrap.dedent(f"""
+        import json, sys, types
+        sys.path.insert(0, {str(project_root)!r})
+        sys.path.insert(0, {str(workdir)!r})
+        from backend.compiler import compile_notebook
+        compile_notebook({str(notebook_path)!r}, "generated")
+        from generated.app import app
+        from fastapi.testclient import TestClient
+        from backend.exporters.sdk_generator import generate_python_sdk
+
+        with open("openapi.json", "w") as f:
+            json.dump(app.openapi(), f)
+        generate_python_sdk("openapi.json", "client.py")
+
+        http = TestClient(app, raise_server_exceptions=False)
+
+        class Reply:
+            def __init__(self, r):
+                self._r = r
+                self.status_code = r.status_code
+                self.headers = r.headers
+                self.text = r.text
+            def raise_for_status(self):
+                assert self._r.status_code < 400, self._r.text
+            def json(self):
+                return self._r.json()
+
+        def route(method):
+            def call(url, params=None, headers=None, timeout=None, json=None, **kw):
+                path = url.split("http://app", 1)[1]
+                return Reply(http.request(method, path, params=params, headers=headers, json=json))
+            return call
+
+        fake = types.ModuleType("requests")
+        fake.get, fake.post, fake.delete = route("GET"), route("POST"), route("DELETE")
+        sys.modules["requests"] = fake
+        namespace = {{}}
+        exec(compile(open("client.py").read(), "client.py", "exec"), namespace)
+        client = namespace["NotebookAPIClient"]("http://app", api_key="notebook-to-api-dev-key")
+
+        def endpoints():
+            tasks = client.list_tasks()["tasks"]
+            return sorted(t["endpoint"] for t in tasks.values())
+
+        for name in ("train_a", "train_b", "train_bad_a", "train_bad_b"):
+            http.post("/" + name, json={{"n": 1}}, headers={{"X-API-Key": "notebook-to-api-dev-key"}})
+        assert endpoints() == ["/train_a", "/train_b", "/train_bad_a", "/train_bad_b"], endpoints()
+
+        assert client.delete_completed_tasks(endpoint="train_a")["deleted"] == 1
+        assert endpoints() == ["/train_b", "/train_bad_a", "/train_bad_b"], endpoints()
+        assert client.delete_failed_tasks(endpoint="/train_bad_b")["deleted"] == 1
+        assert endpoints() == ["/train_b", "/train_bad_a"], endpoints()
+        client.delete_completed_tasks()
+        client.delete_failed_tasks()
+        assert endpoints() == [], endpoints()
+        print("SDK_CLEANUP_SCOPE_OK")
+    """)
+
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(workdir), capture_output=True, text=True, timeout=120,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "SDK_CLEANUP_SCOPE_OK" in proc.stdout

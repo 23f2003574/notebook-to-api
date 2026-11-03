@@ -1841,15 +1841,27 @@ def generate_python_sdk(
     lines.append("            timeout=self.timeout,")
     lines.append("        ))")
     lines.append("")
-    lines.append("    def delete_completed_tasks(self) -> dict:")
-    lines.append('        """Delete every task with status \'completed\'."""')
+    lines.append("    def delete_completed_tasks(self, endpoint: str = None) -> dict:")
+    lines.append(
+        '        """Delete every task with status \'completed\' -- or, with '
+        'endpoint="train_model" (or "/train_model"),'
+    )
+    lines.append('        only that background endpoint\'s."""')
     lines.append("        return self._request(lambda: requests.delete(")
     lines.append('            f"{self.base_url}/tasks/completed",')
+    # The app's own ?endpoint= (it adds a missing leading "/" itself); only
+    # sent when given, so a plain call is the request it always was.
+    lines.append(
+        '            **({"params": {"endpoint": endpoint}} if endpoint is not None else {}),'
+    )
     lines.append('            headers={"X-API-Key": self.api_key},')
     lines.append("            timeout=self.timeout,")
     lines.append("        ))")
     lines.append("")
-    lines.append("    def delete_failed_tasks(self, timed_out: bool = None) -> dict:")
+    lines.append(
+        "    def delete_failed_tasks(self, timed_out: bool = None, "
+        "endpoint: str = None) -> dict:"
+    )
     lines.append(
         '        """Delete every task with status \'failed\' -- or, with '
         'timed_out=True/False,'
@@ -1858,14 +1870,16 @@ def generate_python_sdk(
         "        only those that did / didn't fail by exceeding their "
         'execution timeout."""'
     )
+    lines.append("        _failed_params = {}")
+    lines.append("        if timed_out is not None:")
+    lines.append('            _failed_params["timed_out"] = "true" if timed_out else "false"')
+    lines.append("        if endpoint is not None:")
+    lines.append('            _failed_params["endpoint"] = endpoint')
     lines.append("        return self._request(lambda: requests.delete(")
     lines.append('            f"{self.base_url}/tasks/failed",')
     # The app's own ?timed_out= -- only sent when given, so a plain call
     # is byte-for-byte the request it always was.
-    lines.append(
-        '            **({"params": {"timed_out": "true" if timed_out else "false"}}'
-        ' if timed_out is not None else {}),'
-    )
+    lines.append("            **({\"params\": _failed_params} if _failed_params else {}),")
     lines.append('            headers={"X-API-Key": self.api_key},')
     lines.append("            timeout=self.timeout,")
     lines.append("        ))")
