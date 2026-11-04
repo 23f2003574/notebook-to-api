@@ -500,7 +500,12 @@ def docker_compose_content(package_name="generated", env_vars=None, notebook_env
         "    build: .\n"
         "    restart: unless-stopped\n"
         "    ports:\n"
-        '      - "${PORT:-8000}:${PORT:-8000}"\n'
+        # Published on loopback only by default: a quick-start `docker compose
+        # up` runs with the public default API key and `*` CORS, so binding
+        # every host interface exposed it to the whole network. Set
+        # NOTEBOOK_API_BIND_ADDRESS=0.0.0.0 (with your own NOTEBOOK_API_KEY)
+        # to serve other machines.
+        '      - "${NOTEBOOK_API_BIND_ADDRESS:-127.0.0.1}:${PORT:-8000}:${PORT:-8000}"\n'
         "    environment:\n"
         "      - PORT=${PORT:-8000}\n"
         f"{environment_lines}\n"

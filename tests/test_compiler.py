@@ -1347,7 +1347,7 @@ def test_docker_compose_content_maps_port_on_both_sides_via_the_port_env_var():
 
     content = docker_compose_content("generated", [])
 
-    assert '"${PORT:-8000}:${PORT:-8000}"' in content
+    assert ":${PORT:-8000}:${PORT:-8000}\"" in content
     assert "PORT=${PORT:-8000}" in content
 
 
