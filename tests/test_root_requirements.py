@@ -25,3 +25,14 @@ def test_httpx_still_required_for_testclient():
 def test_no_duplicate_requirements():
     names = _names()
     assert len(names) == len(set(names))
+
+
+def test_pytest_is_a_dev_only_requirement():
+    assert "pytest" not in _names()
+    dev = REQUIREMENTS.with_name("requirements-dev.txt").read_text().split()
+    assert "-r" in dev and "requirements.txt" in dev and "pytest" in dev
+
+
+def test_ci_installs_the_dev_requirements():
+    workflow = REQUIREMENTS.parent / ".github" / "workflows" / "tests.yml"
+    assert "pip install -r requirements-dev.txt" in workflow.read_text()

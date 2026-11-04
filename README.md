@@ -9,7 +9,7 @@ A tool that compiles a Jupyter notebook into a FastAPI microservice, automatical
 ## Setup
 ```bash
 python -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -r requirements.txt   # use requirements-dev.txt to also run the tests
 .venv/bin/python -m backend.cli doctor   # checks Python, Docker and required packages
 ```
 The compiled app imports the notebook's own libraries (pandas, scikit-learn, ...). To run it locally -- `serve`, `compile --smoke-test`, `export-openapi`, `export-sdk` -- install them into the same environment first: `.venv/bin/pip install -r generated/requirements.txt`. Docker builds install them for you.
