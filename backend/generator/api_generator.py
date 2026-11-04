@@ -5988,6 +5988,7 @@ def generate_fastapi_code(
             "example_payload",
             {}
         )
+        _numeric_input_keys = []
         lines.append(f"class {model_name}(BaseModel):")
         if not func.get("args"):
             # A zero-parameter notebook function (e.g. `def health(): ...`)
@@ -6015,6 +6016,13 @@ def generate_fastapi_code(
                 and not re.search(r"\bNone\b|\bOptional\b|^Any$", arg_type)
             ):
                 arg_type = f"Optional[{arg_type}]"
+            # Pydantic's lax mode turns a JSON true/false into 1/0 for an
+            # int/float parameter, so {"n": true} ran the function with n=1.
+            if re.fullmatch(
+                r"Optional\[(?:int|float)\]|(?:int|float)(?: \| None)?",
+                arg_type.strip(),
+            ):
+                _numeric_input_keys.append(arg_name)
             # A type from the notebook's own namespace (a numpy/pandas
             # scalar, a notebook-defined class, ...) may be one Pydantic has
             # no schema for, which would otherwise crash the *whole* app at
@@ -6153,6 +6161,20 @@ def generate_fastapi_code(
                 f"        'json_schema_extra': {{'example': {repr(_json_safe_example(example_payload))}}}"
             )
         lines.append("    }")
+        if _numeric_input_keys:
+            lines.append("")
+            lines.append("    @model_validator(mode='before')")
+            lines.append("    @classmethod")
+            lines.append("    def _nb_reject_bool_for_numbers(cls, data):")
+            lines.append("        if isinstance(data, dict):")
+            lines.append(f"            for _key in {tuple(_numeric_input_keys)!r}:")
+            lines.append("                if isinstance(data.get(_key), bool):")
+            lines.append("                    raise ValueError(")
+            lines.append("                        f\"'{_key}' must be a number, not a boolean\"")
+            lines.append("                    )")
+            lines.append("        return data")
+        lines.append("")
+        lines.append("    # callback_url belongs in the query string.") if False else None
         # callback_url belongs in the query string. Sent in the JSON body it was
         # dropped as an unknown field, the task ran, and no webhook was ever
         # delivered -- with nothing telling the caller why.
