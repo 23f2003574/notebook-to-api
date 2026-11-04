@@ -5,4 +5,3 @@ watchdog
 pytest
 httpx
 python-multipart
-httpx2
