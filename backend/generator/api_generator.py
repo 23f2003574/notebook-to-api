@@ -1739,15 +1739,23 @@ def generate_fastapi_code(
     # ModuleNotFoundError. Only that exact failure (the package itself is
     # missing, not one of the notebook's own dependencies) falls back to
     # loading runtime/notebook_module.py next to this file.
+    # Another app compiled into a same-named directory (every default
+    # `generated/`) and already imported in this process owns that
+    # sys.modules entry: `import` then silently handed back *its* functions.
+    # A module that isn't this app's own runtime file takes the same
+    # load-from-file fallback as a missing package.
+    lines.append("    _nb_runtime_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runtime', 'notebook_module.py') if '__file__' in globals() else None")
     lines.append("    try:")
     lines.append(f"        import {package_name}.runtime.notebook_module as notebook_module")
+    lines.append("        if _nb_runtime_file and os.path.realpath(getattr(notebook_module, '__file__', None) or '') != os.path.realpath(_nb_runtime_file):")
+    lines.append(f"            raise ModuleNotFoundError('another app owns the {package_name} package', name={package_name!r})")
     lines.append("    except ModuleNotFoundError as _nb_missing:")
     lines.append(f"        if _nb_missing.name != {package_name!r}:")
     lines.append("            raise")
     lines.append("        import importlib.util as _nb_ilu")
     lines.append("        _nb_spec = _nb_ilu.spec_from_file_location(")
     lines.append(f"            {package_name + '.runtime.notebook_module'!r},")
-    lines.append("            os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runtime', 'notebook_module.py'),")
+    lines.append("            _nb_runtime_file,")
     lines.append("        )")
     lines.append("        notebook_module = _nb_ilu.module_from_spec(_nb_spec)")
     lines.append("        sys.modules[_nb_spec.name] = notebook_module")
