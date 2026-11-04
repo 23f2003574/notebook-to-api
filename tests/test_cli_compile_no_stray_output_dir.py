@@ -48,3 +48,13 @@ def test_valid_compile_still_creates_output_dir(tmp_path):
     r = _cli(tmp_path, "compile", "ok.ipynb", "--output", "out")
     assert r.returncode == 0, r.stdout + r.stderr
     assert (tmp_path / "out" / "app.py").is_file()
+
+
+def test_output_inside_a_file_reports_a_clear_error(tmp_path):
+    (tmp_path / "notes.txt").write_text("x")
+    (tmp_path / "ok.ipynb").write_text("{}")
+    r = _cli(tmp_path, "compile", "ok.ipynb", "--output", "notes.txt/app")
+    out = r.stdout + r.stderr
+    assert r.returncode == 1
+    assert "is a file, not a directory" in out
+    assert "Errno" not in out

@@ -2085,6 +2085,16 @@ def _ensure_output_directory(output_dir, create=True):
             f"Output path '{output_dir}' exists but is a file, not a "
             "directory. Choose a directory for --output."
         )
+    # `--output notes.txt/app` where notes.txt is a file: mkdir (or the
+    # compiler's makedirs) would raise a bare "[Errno 20] Not a directory".
+    for ancestor in output_dir.parents:
+        if ancestor.exists():
+            if not ancestor.is_dir():
+                raise ValueError(
+                    f"Output path '{output_dir}' is inside '{ancestor}', which "
+                    "is a file, not a directory. Choose a directory for --output."
+                )
+            break
     if create:
         output_dir.mkdir(parents=True, exist_ok=True)
 
