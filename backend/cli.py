@@ -2073,15 +2073,20 @@ def _output_directory_from_arg(value):
     return Path(value)
 
 
-def _ensure_output_directory(output_dir):
+def _ensure_output_directory(output_dir, create=True):
     """mkdir for --output, saying so when the path is an existing file
-    instead of surfacing a bare "[Errno 17] File exists"."""
+    instead of surfacing a bare "[Errno 17] File exists".
+
+    create=False only validates: `compile` leaves creating the directory to
+    the compiler, after the notebook has loaded, so a failed compile doesn't
+    leave an empty directory behind."""
     if output_dir.exists() and not output_dir.is_dir():
         raise ValueError(
             f"Output path '{output_dir}' exists but is a file, not a "
             "directory. Choose a directory for --output."
         )
-    output_dir.mkdir(parents=True, exist_ok=True)
+    if create:
+        output_dir.mkdir(parents=True, exist_ok=True)
 
 
 def _dispatch_core_command(args):
@@ -2258,7 +2263,7 @@ def _dispatch_core_command(args):
         only = _parse_only_names(args.only)
         exclude = _parse_comma_separated_names(args.exclude)
         output_dir = _output_directory_from_arg(args.output)
-        _ensure_output_directory(output_dir)
+        _ensure_output_directory(output_dir, create=False)
         # --tag: compile only the endpoints with these OpenAPI tags
         # (apply_tag_selection) -- e.g. a deployment serving just the
         # "Inference" endpoints of a notebook that also trains.

@@ -5686,15 +5686,17 @@ def _compile_notebook_to_api(
                 "directory. Choose a directory for --output."
             )
 
-        os.makedirs(output_dir, exist_ok=True)
-
+        # Validate the output name and read the notebook before creating the
+        # directory: a mistyped notebook path (or a non-notebook file) used
+        # to leave an empty --output directory behind after the error.
         package_name = package_name_for_output_dir(output_dir)
+        notebook = load_notebook(notebook_path)
+
+        os.makedirs(output_dir, exist_ok=True)
 
         _refuse_to_overwrite_foreign_files(output_dir)
         _warn_if_generated_files_were_edited(output_dir, os.path.basename(output_path))
         _detach_symlinked_outputs(output_dir, os.path.basename(output_path))
-
-        notebook = load_notebook(notebook_path)
 
         code_cells = [
             cell for cell in extract_code_cells(notebook)
