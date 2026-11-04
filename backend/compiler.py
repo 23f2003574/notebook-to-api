@@ -2791,6 +2791,7 @@ _FILE_READ_CALLS = frozenset({
     "read_fwf", "read_orc", "read_xml", "read_html", "read_stata", "read_sas",
     "read_spss", "load_model", "fromfile", "read_text", "read_bytes",
 })
+_PATH_CHECK_CALLS = frozenset({"exists", "isfile", "isdir", "getsize"})
 _FILE_LOAD_BASES = frozenset({"np", "numpy", "torch", "joblib", "librosa"})
 # Path-taking openers/loaders matched on the (alias-resolved) `base.name`
 # label, since their bare names (`connect`, `File`, `read`) are too generic.
@@ -3410,6 +3411,10 @@ def _file_read_path(name, base, call, constants=None, probe=False):
         or (name == "load" and base in _FILE_LOAD_BASES)
         or label in _FILE_READ_LABELS
         or (name == "loadmat" and base is None)  # scipy.io.loadmat(...)
+        # os.path.exists("data.csv") and friends: without the redirect they
+        # answered False for a shipped file whenever the app wasn't launched
+        # from the runtime directory, though open() on the same path worked.
+        or (name in _PATH_CHECK_CALLS and base in (None, "path"))
         or name in _MODEL_FILE_CALLS
         or (name == "load" and base in _GENSIM_LOAD_BASES)
         or (
