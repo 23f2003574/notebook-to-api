@@ -944,6 +944,10 @@ def _validate_docker_image_tag(tag):
         )
 
 
+_DOCKER_PLATFORM_OSES = frozenset({
+    "linux", "windows", "darwin", "freebsd", "netbsd", "openbsd", "solaris",
+    "illumos", "aix", "android", "dragonfly", "ios", "js", "plan9", "wasip1",
+})
 _DOCKER_PLATFORM_RE = re.compile(r"[a-z0-9]+(?:/[a-z0-9_]+(?:/[a-z0-9_.]+)?)?")
 
 
@@ -954,7 +958,13 @@ def _validate_docker_platform(platform):
     failed after the compile, inside `docker build`."""
     entries = [entry.strip() for entry in platform.split(",")]
 
-    if not all(_DOCKER_PLATFORM_RE.fullmatch(entry) for entry in entries):
+    # `--platform arm64` / `amd64` (an architecture with no OS) matched the
+    # pattern as an "os" and went on to fail inside `docker build`.
+    if not all(
+        _DOCKER_PLATFORM_RE.fullmatch(entry)
+        and entry.split("/")[0] in _DOCKER_PLATFORM_OSES
+        for entry in entries
+    ):
         raise ValueError(
             f"Invalid --platform '{platform}': expected os[/arch[/variant]], "
             "e.g. linux/amd64 or linux/arm64/v8."
