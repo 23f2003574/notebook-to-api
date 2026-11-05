@@ -483,6 +483,11 @@ def extract_functions_from_code(code):
 
     for node in _iter_module_level_statements(tree.body):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # `__init__`, `__repr__`, `__getattr__` ... are Python protocol
+            # hooks, never an API: they used to be published as
+            # `POST /__init__` and the like.
+            if node.name.startswith("__") and node.name.endswith("__"):
+                continue
             args = []
             type_param_names = {
                 param.name for param in getattr(node, "type_params", ())
