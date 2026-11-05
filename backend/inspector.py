@@ -1241,6 +1241,19 @@ def print_compile_summary(notebook_path, output_dir="generated", only=None, excl
         for name in data["duplicate_functions"]:
             print(f"  {name}")
 
+    underscore_functions = [
+        func["name"] for func in data["functions"]
+        if func["name"].startswith("_")
+    ]
+    if underscore_functions:
+        print(
+            f"\n⚠ {len(underscore_functions)} function(s) with a leading "
+            "underscore are still published as public endpoints (put "
+            "`# notebook-to-api: private` above the def to keep one internal):"
+        )
+        for name in underscore_functions:
+            print(f"  {name}")
+
     if data["functions_without_docstrings"]:
         print(
             f"\n{len(data['functions_without_docstrings'])} function(s) "
