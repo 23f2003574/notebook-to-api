@@ -117,6 +117,26 @@ def _pascal_case(name):
     return "".join(part[:1].upper() + part[1:] for part in name.split("_") if part)
 
 
+def _unique_pascal_names(method_names):
+    """Map each path to a PascalCase type-name stem, unique across the SDK.
+    Methods that differ only by letter case (`Predict` / `predict`) share one
+    _pascal_case stem, so their {Stem}Request/{Stem}Response types used to be
+    declared twice: the Python TypedDict redefinition and the TypeScript
+    interface merge gave one endpoint the other's fields. Later duplicates
+    get a numeric suffix (PredictRequest, Predict2Request)."""
+    used = set()
+    stems = {}
+    for path, method_name in method_names.items():
+        base = _pascal_case(method_name)
+        stem, n = base, 2
+        while stem.lower() in used:
+            stem = f"{base}{n}"
+            n += 1
+        used.add(stem.lower())
+        stems[path] = stem
+    return stems
+
+
 # Bare TypeScript equivalents for a Python annotation this tool has no
 # other way to learn the real shape of -- see
 # _python_type_to_typescript below for what these back.
@@ -1239,6 +1259,7 @@ def generate_python_sdk(
     paths = schema.get("paths", {})
     method_names = _build_method_names(paths, PYTHON_RESERVED_CLIENT_METHOD_NAMES)
     wait_method_names = _build_wait_method_names(method_names, paths)
+    _pascal_names = _unique_pascal_names(method_names)
     # Prepare client code lines
     lines = []
     lines.append("import hmac")
@@ -2123,7 +2144,7 @@ def generate_python_sdk(
         is_background = _is_background_path(paths[path])
         description = _operation_description(paths[path])
         is_deprecated = bool((paths[path].get("post") or {}).get("deprecated"))
-        pascal_name = _pascal_case(method_name)
+        pascal_name = _pascal_names[path]
         request_class = f"{pascal_name}Request"
         response_class = f"{pascal_name}Response"
         return_type = (paths[path].get("post") or {}).get(
@@ -2381,6 +2402,7 @@ def generate_typescript_sdk(
         paths, TYPESCRIPT_RESERVED_CLIENT_METHOD_NAMES
     )
     wait_method_names = _build_wait_method_names(method_names, paths)
+    _pascal_names = _unique_pascal_names(method_names)
     # Prepare client code lines
     lines = []
     lines.append('import { createHmac, timingSafeEqual } from "node:crypto";')
@@ -3168,7 +3190,7 @@ def generate_typescript_sdk(
         # "x-notebook-to-api-return-type" instead, an out-of-band
         # extension field generate_fastapi_code stamps onto the OpenAPI
         # operation for exactly this (see its own docstring).
-        pascal_name = _pascal_case(method_name)
+        pascal_name = _pascal_names[path]
         request_interface = f"{pascal_name}Request"
         response_interface = f"{pascal_name}Response"
         return_type = (paths[path].get("post") or {}).get(
