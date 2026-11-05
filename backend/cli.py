@@ -2950,6 +2950,16 @@ def _dispatch_core_command(args):
     elif args.command == "deploy":
         if args.tag:
             _validate_docker_image_tag(args.tag)
+            # `docker push plain:1` targets docker.io/library/plain, which no
+            # user may push to: it failed with "requested access to the
+            # resource is denied" only after the compile and the whole build.
+            if args.push and "/" not in args.tag:
+                raise ValueError(
+                    f"Invalid --tag '{args.tag}' for --push: it names no "
+                    "registry or namespace, so docker would push to "
+                    "docker.io/library and be denied. Use "
+                    "registry.example.com/name:tag (or user/name:tag)."
+                )
         if args.platform:
             _validate_docker_platform(args.platform)
         if args.fail_on_startup_warnings:
