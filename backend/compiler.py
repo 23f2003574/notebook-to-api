@@ -208,6 +208,25 @@ KNOWN_IMPORT_TO_DISTRIBUTION = {
     "grpc": "grpcio",
     "pywt": "PyWavelets",
     "faiss": "faiss-cpu",
+    # The import name is not the PyPI name: with no entry here the import
+    # name itself went into requirements.txt, which either does not exist on
+    # PyPI (absl, tabula, camelot, ...) or is an unrelated package (discord,
+    # fpdf, igraph), so the generated app's image failed to build or ran the
+    # wrong library.
+    "absl": "absl-py",
+    "discord": "discord.py",
+    "tabula": "tabula-py",
+    "camelot": "camelot-py",
+    "fpdf": "fpdf2",
+    "shapefile": "pyshp",
+    "igraph": "python-igraph",
+    "llama_cpp": "llama-cpp-python",
+    "open_clip": "open-clip-torch",
+    "spellchecker": "pyspellchecker",
+    "memcache": "python-memcached",
+    "vlc": "python-vlc",
+    "tavily": "tavily-python",
+    "sknetwork": "scikit-network",
     "socks": "PySocks",
     "ruamel": "ruamel.yaml",
     "imblearn": "imbalanced-learn",
