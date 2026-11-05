@@ -643,6 +643,11 @@ _TOP_LEVEL_AWAIT_RUNNER = (
 def _has_top_level_await(statement):
     """Whether `statement` awaits (or uses `async for` / `async with` / an
     async comprehension) outside any function, lambda or class body."""
+    # The statement itself may be the `async with` / `async for` (the loop
+    # below only looks at children, so one with no `await` in its body was
+    # missed and left a SyntaxError in the generated module).
+    if isinstance(statement, (ast.AsyncFor, ast.AsyncWith)):
+        return True
     stack = [statement]
     while stack:
         node = stack.pop()
