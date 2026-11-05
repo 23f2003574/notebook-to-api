@@ -80,6 +80,7 @@ from backend.generator.api_generator import (
 from backend.generator.docker_generator import (
     generate_dockerfile,
     generate_dockerignore,
+    generate_gitignore,
     generate_docker_compose,
     generate_env_example,
     generate_readme
@@ -5607,7 +5608,7 @@ def compile_notebook_to_api(
     before the call -- the user's own files, an earlier compile's output --
     is never removed."""
     output_dir = os.path.dirname(output_path)
-    tracked = {os.path.basename(output_path), COMPILE_METADATA_FILENAME, *_COMPILE_OUTPUT_NAMES}
+    tracked = {os.path.basename(output_path), COMPILE_METADATA_FILENAME, ".gitignore", *_COMPILE_OUTPUT_NAMES}
     with COMPILE_LOCK:
         preexisting = {
             name for name in tracked
@@ -5946,6 +5947,7 @@ def _compile_notebook_to_api(
             )
 
             generate_dockerignore(dockerignore_path)
+            generate_gitignore(os.path.join(output_dir, ".gitignore"))
 
             docker_compose_path = os.path.join(
                 output_dir,

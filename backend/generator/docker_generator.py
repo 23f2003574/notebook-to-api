@@ -1,3 +1,4 @@
+import os
 import json
 import re
 import shlex
@@ -1036,6 +1037,38 @@ def generate_readme(
         )
 
     print(f"README.md generated at: {output_path}")
+
+
+def gitignore_content():
+    """The .gitignore text generate_gitignore writes: keeps the real `.env`
+    an operator creates via the documented "cp .env.example .env" workflow
+    (holding NOTEBOOK_API_KEY / NOTEBOOK_API_WEBHOOK_SECRET) out of version
+    control when the generated project is committed.
+    """
+
+    return """\
+.env
+.env.local
+.env.*.local
+!.env.example
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+"""
+
+
+def generate_gitignore(output_path="generated/.gitignore"):
+    """Write a .gitignore next to the generated app, unless one exists
+    already: `--output .` inside a user's own repository must never replace
+    their ignore rules. Returns True when a file was written."""
+
+    if os.path.exists(output_path):
+        return False
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(gitignore_content())
+    return True
 
 
 def dockerignore_content():
