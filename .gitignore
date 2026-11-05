@@ -18,6 +18,7 @@ env/
 
 # Generated outputs
 generated/
+test_generated/
 
 # Jupyter
 .ipynb_checkpoints/
