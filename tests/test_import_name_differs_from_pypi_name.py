@@ -14,6 +14,10 @@ CASES = {
     "open_clip": "open-clip-torch", "spellchecker": "pyspellchecker",
     "memcache": "python-memcached", "vlc": "python-vlc",
     "tavily": "tavily-python", "sknetwork": "scikit-network",
+    "weaviate": "weaviate-client", "osgeo": "GDAL", "ibis": "ibis-framework",
+    "cassandra": "cassandra-driver", "corsheaders": "django-cors-headers",
+    "kerastuner": "keras-tuner", "grpc_status": "grpcio-status",
+    "grpc_tools": "grpcio-tools",
 }
 
 
