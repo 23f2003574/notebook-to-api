@@ -17606,8 +17606,12 @@ from backend.compiler import compile_notebook
 
 compile_notebook({str(notebook_path)!r}, "generated")
 
-from generated.app import app, GENERATED_AT
+# Imported first: the notebook installs warnings.simplefilter('error'), which
+# would otherwise also turn Starlette's own "install httpx2" notice (raised
+# when TestClient is imported with only httpx installed, as in CI) into a
+# failure unrelated to what this test checks.
 from fastapi.testclient import TestClient
+from generated.app import app, GENERATED_AT
 
 assert GENERATED_AT.endswith("Z") and "T" in GENERATED_AT, GENERATED_AT
 client = TestClient(app)

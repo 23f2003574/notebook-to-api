@@ -9,6 +9,12 @@ on:
     branches:
       - main
 
+# Each run takes ~30 minutes; successive pushes to main otherwise stack up
+# runs for commits that are already superseded.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
 
