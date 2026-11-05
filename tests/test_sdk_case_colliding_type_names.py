@@ -21,17 +21,17 @@ def _compile(tmp_path):
     ]
     path = tmp_path / "nb.ipynb"
     nbformat.write(nb, str(path))
-    out = tmp_path / "app"
+    out = tmp_path / "gen_sdk_case_app"
     compile_notebook(str(path), str(out))
     import sys
     sys.path.insert(0, str(tmp_path))
     try:
         import importlib
-        mod = importlib.import_module("app.app")
+        mod = importlib.import_module("gen_sdk_case_app.app")
         schema = mod.app.openapi()
     finally:
         sys.path.remove(str(tmp_path))
-        for k in [k for k in sys.modules if k == "app" or k.startswith("app.")]:
+        for k in [k for k in sys.modules if k.startswith("gen_sdk_case_app")]:
             del sys.modules[k]
     return schema
 

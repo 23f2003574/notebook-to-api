@@ -6741,28 +6741,6 @@ def generate_fastapi_code(
                     },
                 },
                 **_auth_and_rate_limit_error_responses(),
-                # Answered when the call outlives NOTEBOOK_API_REQUEST_TIMEOUT_
-                # SECONDS (or this function's own timeout directive); it was
-                # the one status a synchronous endpoint returns that its
-                # OpenAPI responses never listed.
-                504: {
-                    "description": (
-                        "The call did not finish within the request timeout "
-                        "(NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS or this "
-                        "function's own timeout directive)."
-                    ),
-                    "content": {
-                        "application/json": {
-                            "example": {
-                                "detail": (
-                                    f"'{func_name}' did not finish within "
-                                    "NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS "
-                                    "(<N>s)."
-                                )
-                            }
-                        }
-                    },
-                },
             }
             # This endpoint's own "# notebook-to-api: timeout N" directive
             # (timeout_overrides), published in openapi.json: as an
