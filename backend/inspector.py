@@ -1147,6 +1147,32 @@ def _find_hardcoded_secrets(code_cells):
     return found
 
 
+def _mutable_default_parameters(functions):
+    """(function, parameter) for each parameter whose default is an empty or
+    literal list, dict or set. Python shares that one object across calls; the
+    generated endpoint builds a fresh one per request, so a notebook relying
+    on the accumulation behaves differently once compiled."""
+    import ast
+
+    found = []
+    for func in functions:
+        for arg in func.get("args", []):
+            if not arg.get("has_default"):
+                continue
+            try:
+                node = ast.parse(str(arg.get("default")), mode="eval").body
+            except SyntaxError:
+                continue
+            is_container = isinstance(node, (ast.List, ast.Dict, ast.Set))
+            is_ctor = (
+                isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id in ("list", "dict", "set")
+            )
+            if is_container or is_ctor:
+                found.append((func["name"], arg["name"]))
+    return found
+
+
 def _malformed_string_annotations(functions):
     """(function, "parameter 'x'" | "return", text) for each quoted annotation
     that does not parse as an expression. typing.ForwardRef rejects those when
@@ -1312,6 +1338,14 @@ def print_compile_summary(notebook_path, output_dir="generated", only=None, excl
             f"\n⚠ Cell {secret['cell']}, line {secret['line']}: {secret['name']} is "
             "assigned a literal credential, which is copied into the compiled "
             "app and its Docker image -- read it from os.environ instead."
+        )
+
+    for func_name, param in _mutable_default_parameters(data["functions"]):
+        print(
+            f"\n⚠ {func_name}: parameter '{param}' has a mutable default "
+            "([] / {} / set()). In the notebook it is shared between calls; "
+            "the API gives every request a fresh copy, so state that "
+            "accumulated across calls will not carry over."
         )
 
     for func_name, where, text in _malformed_string_annotations(data["functions"]):
