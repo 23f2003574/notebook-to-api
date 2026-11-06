@@ -1210,6 +1210,33 @@ def _malformed_string_annotations(functions):
     return found
 
 
+def notebook_hygiene_lines(data):
+    """Warning lines (no leading newline) for a literal credential, a mutable
+    default, or an unparseable quoted annotation. Shared by `compile`'s summary
+    and `validate`, so a CI gate sees what a local compile prints."""
+    lines = []
+    for secret in data.get("hardcoded_secrets", []):
+        lines.append(
+            f"⚠ Cell {secret['cell']}, line {secret['line']}: {secret['name']} is "
+            "assigned a literal credential, which is copied into the compiled "
+            "app and its Docker image -- read it from os.environ instead."
+        )
+    for func_name, param in _mutable_default_parameters(data["functions"]):
+        lines.append(
+            f"⚠ {func_name}: parameter '{param}' has a mutable default "
+            "([] / {} / set()). In the notebook it is shared between calls; "
+            "the API gives every request a fresh copy, so state that "
+            "accumulated across calls will not carry over."
+        )
+    for func_name, where, text in _malformed_string_annotations(data["functions"]):
+        lines.append(
+            f"⚠ {func_name}: the {where} annotation {text!r} is a string that "
+            "is not a valid Python expression, so the compiled app will fail "
+            "at startup with a bare SyntaxError -- fix or remove the annotation."
+        )
+    return lines
+
+
 def print_compile_summary(notebook_path, output_dir="generated", only=None, exclude=None):
     """Print what compiling `notebook_path` into `output_dir` actually
     produced: its endpoints (flagging background/task_id-based ones the
@@ -1344,27 +1371,8 @@ def print_compile_summary(notebook_path, output_dir="generated", only=None, excl
         for name in data["duplicate_functions"]:
             print(f"  {name}")
 
-    for secret in data.get("hardcoded_secrets", []):
-        print(
-            f"\n⚠ Cell {secret['cell']}, line {secret['line']}: {secret['name']} is "
-            "assigned a literal credential, which is copied into the compiled "
-            "app and its Docker image -- read it from os.environ instead."
-        )
-
-    for func_name, param in _mutable_default_parameters(data["functions"]):
-        print(
-            f"\n⚠ {func_name}: parameter '{param}' has a mutable default "
-            "([] / {} / set()). In the notebook it is shared between calls; "
-            "the API gives every request a fresh copy, so state that "
-            "accumulated across calls will not carry over."
-        )
-
-    for func_name, where, text in _malformed_string_annotations(data["functions"]):
-        print(
-            f"\n⚠ {func_name}: the {where} annotation {text!r} is a string that "
-            "is not a valid Python expression, so the compiled app will fail "
-            "at startup with a bare SyntaxError -- fix or remove the annotation."
-        )
+    for line in notebook_hygiene_lines(data):
+        print("\n" + line)
 
     underscore_functions = [
         func["name"] for func in data["functions"]

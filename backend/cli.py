@@ -2599,6 +2599,10 @@ def _dispatch_core_command(args):
                 print(f"\n{marker} Cells that are not valid Python (compile leaves them out entirely):")
                 for broken in unparseable_cells:
                     print(f"  - Cell {broken['cell']}, line {broken['line']}: {broken['message']}")
+            from backend.inspector import notebook_hygiene_lines
+
+            for line in notebook_hygiene_lines(data):
+                print("\n" + line)
             for item in data["unrecognized_directives"]:
                 print(
                     f"⚠ Unrecognized directive ignored: {item['line']}"
@@ -2633,6 +2637,11 @@ def _dispatch_core_command(args):
                     "\nStartup warnings found (see above), but this notebook would "
                     "still compile cleanly. Pass --fail-on-startup-warnings to "
                     "exit non-zero on them."
+                )
+            elif status == "pass" and notebook_hygiene_lines(data):
+                print(
+                    "\nWarnings found (see above); they do not change the exit "
+                    "status, and this notebook would still compile cleanly."
                 )
             elif status == "pass":
                 print("\n✓ No issues found.")
