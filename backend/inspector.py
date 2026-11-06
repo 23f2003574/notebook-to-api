@@ -1127,23 +1127,34 @@ def _find_hardcoded_secrets(code_cells):
         except SyntaxError:
             continue
         for node in ast.walk(tree):
+            pairs = []  # (name, constant value node, line)
             if isinstance(node, ast.Assign):
-                targets, value = node.targets, node.value
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        pairs.append((target.id, node.value, node.lineno))
+                    elif isinstance(target, ast.Subscript):
+                        key = target.slice
+                        if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                            pairs.append((key.value, node.value, node.lineno))
             elif isinstance(node, ast.AnnAssign) and node.value is not None:
-                targets, value = [node.target], node.value
-            else:
-                continue
-            if not (isinstance(value, ast.Constant) and isinstance(value.value, str)):
-                continue
-            text = value.value.strip()
-            if len(text) < 8 or " " in text:
-                continue
-            for target in targets:
-                name = target.id if isinstance(target, ast.Name) else None
-                if name is None:
+                if isinstance(node.target, ast.Name):
+                    pairs.append((node.target.id, node.value, node.lineno))
+            elif isinstance(node, ast.Dict):
+                for key, value in zip(node.keys, node.values):
+                    if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                        pairs.append((key.value, value, value.lineno))
+            elif isinstance(node, ast.Call):
+                for keyword in node.keywords:
+                    if keyword.arg:
+                        pairs.append((keyword.arg, keyword.value, keyword.value.lineno))
+            for name, value, line in pairs:
+                if not (isinstance(value, ast.Constant) and isinstance(value.value, str)):
+                    continue
+                text = value.value.strip()
+                if len(text) < 8 or " " in text:
                     continue
                 if any(part in name.lower() for part in _SECRET_NAME_PARTS) or text.startswith(_SECRET_VALUE_PREFIXES):
-                    found.append({"cell": index, "line": node.lineno, "name": name})
+                    found.append({"cell": index, "line": line, "name": name})
     return found
 
 

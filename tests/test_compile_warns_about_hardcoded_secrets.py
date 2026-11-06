@@ -36,3 +36,21 @@ def test_environment_lookups_and_empty_or_short_values_are_not_flagged(tmp_path,
     )
 
     assert "literal credential" not in out
+
+
+def test_credentials_in_dict_entries_keyword_arguments_and_environ_writes_are_flagged(tmp_path, capsys):
+    out = _compile(
+        tmp_path,
+        'import os\n'
+        'HEADERS = {"api_key": "abcd1234efgh5678"}\n'
+        'client = make_client(password="s3cretvalue99")\n'
+        'os.environ["HF_TOKEN"] = "hf_abcdefghijklmnop"\n'
+        "def f(x: int) -> int:\n    return x\n",
+        capsys,
+    )
+
+    assert "Cell 1, line 2: api_key is assigned a literal credential" in out
+    assert "Cell 1, line 3: password" in out
+    assert "Cell 1, line 4: HF_TOKEN" in out
+    for value in ("abcd1234efgh5678", "s3cretvalue99", "hf_abcdefghijklmnop"):
+        assert value not in out
