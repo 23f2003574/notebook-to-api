@@ -32,3 +32,18 @@ def test_readme_usage_command_compiles_and_writes_every_file_it_lists(tmp_path):
     assert "generated/app.py" in listed and "generated/Dockerfile" in listed
     for path in listed:
         assert (tmp_path / path).is_file(), f"README lists {path} but compile did not write it"
+
+
+def test_readme_states_a_minimum_python_that_matches_the_ci_matrix():
+    """A new user had no way to know which Python versions are supported; the
+    README's stated minimum must be the lowest version CI actually tests."""
+    ci = (PROJECT_ROOT / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
+    matrix = re.search(r"python-version:\s*\[(.*?)\]", ci).group(1)
+    versions = sorted(
+        tuple(int(part) for part in v.strip(' "\'').split("."))
+        for v in matrix.split(",")
+    )
+    lowest = ".".join(str(part) for part in versions[0])
+
+    setup = README.split("## Setup", 1)[1].split("```", 1)[0]
+    assert f"Python {lowest} or newer" in setup

@@ -7,6 +7,7 @@ A tool that compiles a Jupyter notebook into a FastAPI microservice, automatical
 - Creation of a runtime module to execute notebook code
 
 ## Setup
+Requires Python 3.11 or newer (CI runs the test suite on 3.11 and 3.13) and, for `deploy`, Docker.
 ```bash
 python -m venv .venv
 .venv/bin/pip install -r requirements.txt   # use requirements-dev.txt to also run the tests
