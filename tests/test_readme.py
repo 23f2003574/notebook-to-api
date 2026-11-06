@@ -47,3 +47,16 @@ def test_readme_states_a_minimum_python_that_matches_the_ci_matrix():
 
     setup = README.split("## Setup", 1)[1].split("```", 1)[0]
     assert f"Python {lowest} or newer" in setup
+
+
+def test_readme_dashboard_section_matches_the_start_script_and_package():
+    """The dashboard had no mention in the README; keep the documented
+    commands tied to what start-dashboard.sh and the frontend really run."""
+    section = README.split("## Dashboard (optional)", 1)[1].split("##", 1)[0]
+    script = (PROJECT_ROOT / "start-dashboard.sh").read_text(encoding="utf-8")
+    package = (PROJECT_ROOT / "frontend" / "package.json").read_text(encoding="utf-8")
+
+    assert "./start-dashboard.sh" in section
+    assert "python -m backend.dashboard" in section and "python -m backend.dashboard" in script
+    assert "npm run dev" in section and "npm run dev" in script and '"dev"' in package
+    assert "if __name__" in (PROJECT_ROOT / "backend" / "dashboard.py").read_text(encoding="utf-8")

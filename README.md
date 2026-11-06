@@ -42,6 +42,9 @@ curl -X POST http://localhost:8000/add -H "X-API-Key: notebook-to-api-dev-key" -
 # {"result":5}
 ```
 
+## Dashboard (optional)
+A web dashboard for uploading, inspecting and deploying notebooks. `./start-dashboard.sh` starts the API (`python -m backend.dashboard`, default port 8000) and the frontend dev server (`npm run dev` in `frontend/`, port 5173, needs Node.js and `npm install` once).
+
 ## Building the Docker Image
 Make sure Docker is installed on your system.
 ```bash
