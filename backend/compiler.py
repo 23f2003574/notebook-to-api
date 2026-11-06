@@ -2312,6 +2312,9 @@ IMPORT_APT_PACKAGES = {
     "xgboost": ("libgomp1",),
     "usb": ("libusb-1.0-0",),
     "MySQLdb": ("build-essential", "pkg-config", "default-libmysqlclient-dev"),
+    # PyAudio publishes no Linux wheels, so `pip install` compiles it against
+    # portaudio.h and fails in python:3.x-slim without a compiler and headers.
+    "pyaudio": ("build-essential", "portaudio19-dev"),
 }
 
 
