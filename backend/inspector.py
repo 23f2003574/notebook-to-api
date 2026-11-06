@@ -1107,6 +1107,32 @@ def shipped_data_lines(data):
     return lines
 
 
+def _malformed_string_annotations(functions):
+    """(function, "parameter 'x'" | "return", text) for each quoted annotation
+    that does not parse as an expression. typing.ForwardRef rejects those when
+    the generated app builds its request models, and the traceback names
+    neither the function nor the parameter."""
+    import ast
+
+    found = []
+    for func in functions:
+        sites = [(f"parameter '{a['name']}'", a.get("type")) for a in func.get("args", [])]
+        sites.append(("return", func.get("return_type")))
+        for where, annotation in sites:
+            if not isinstance(annotation, str):
+                continue
+            try:
+                node = ast.parse(annotation, mode="eval").body
+            except SyntaxError:
+                continue
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                try:
+                    ast.parse(node.value.strip(), mode="eval")
+                except SyntaxError:
+                    found.append((func["name"], where, node.value))
+    return found
+
+
 def print_compile_summary(notebook_path, output_dir="generated", only=None, exclude=None):
     """Print what compiling `notebook_path` into `output_dir` actually
     produced: its endpoints (flagging background/task_id-based ones the
@@ -1240,6 +1266,13 @@ def print_compile_summary(notebook_path, output_dir="generated", only=None, excl
         )
         for name in data["duplicate_functions"]:
             print(f"  {name}")
+
+    for func_name, where, text in _malformed_string_annotations(data["functions"]):
+        print(
+            f"\n⚠ {func_name}: the {where} annotation {text!r} is a string that "
+            "is not a valid Python expression, so the compiled app will fail "
+            "at startup with a bare SyntaxError -- fix or remove the annotation."
+        )
 
     underscore_functions = [
         func["name"] for func in data["functions"]
