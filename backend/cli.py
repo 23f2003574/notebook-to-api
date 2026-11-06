@@ -2637,7 +2637,7 @@ def _dispatch_core_command(args):
             elif status == "pass":
                 print("\n✓ No issues found.")
             elif status == "warn":
-                print("\nWarnings found, but this notebook would still compile cleanly.")
+                print("\nWarnings found, but this notebook would still compile cleanly (exit status 1; 2 means it would not).")
             else:
                 print("\nValidation failed.")
 
@@ -6211,7 +6211,7 @@ def _dispatch_core_command(args):
             elif status == "pass":
                 print("\n✓ No issues found.")
             elif status == "warn":
-                print("\nWarnings found, but this notebook would still compile cleanly.")
+                print("\nWarnings found, but this notebook would still compile cleanly (exit status 1; 2 means it would not).")
             else:
                 print("\nValidation failed.")
 
