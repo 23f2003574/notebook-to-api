@@ -887,6 +887,7 @@ def inspect_notebook_data(
         # Cells that are not valid Python: compile drops them entirely --
         # see _find_unparseable_cells.
         "unparseable_cells": _find_unparseable_cells(code_cells),
+        "hardcoded_secrets": _find_hardcoded_secrets(code_cells),
         # Names defined more than once in the notebook's own raw
         # extraction (before deduplicate_functions_by_name, backend/
         # parser/ast_parser.py, silently collapses each down to its last
@@ -1107,6 +1108,45 @@ def shipped_data_lines(data):
     return lines
 
 
+_SECRET_NAME_PARTS = ("api_key", "apikey", "secret", "token", "password", "passwd", "access_key", "private_key")
+_SECRET_VALUE_PREFIXES = ("sk-", "ghp_", "gho_", "github_pat_", "xoxb-", "xoxp-", "AKIA", "AIza", "hf_")
+
+
+def _find_hardcoded_secrets(code_cells):
+    """[{cell, line, name}] for string literals assigned to a credential-looking
+    name (or carrying a well-known key prefix). The notebook source is copied
+    verbatim into the compiled app and its Docker image, so such a value ships
+    to everyone who can pull the image. Only the name is reported, never the
+    value, and os.environ lookups and empty/placeholder strings are ignored."""
+    import ast
+
+    found = []
+    for index, cell in enumerate(code_cells, start=1):
+        try:
+            tree = ast.parse(cell)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                targets, value = node.targets, node.value
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                targets, value = [node.target], node.value
+            else:
+                continue
+            if not (isinstance(value, ast.Constant) and isinstance(value.value, str)):
+                continue
+            text = value.value.strip()
+            if len(text) < 8 or " " in text:
+                continue
+            for target in targets:
+                name = target.id if isinstance(target, ast.Name) else None
+                if name is None:
+                    continue
+                if any(part in name.lower() for part in _SECRET_NAME_PARTS) or text.startswith(_SECRET_VALUE_PREFIXES):
+                    found.append({"cell": index, "line": node.lineno, "name": name})
+    return found
+
+
 def _malformed_string_annotations(functions):
     """(function, "parameter 'x'" | "return", text) for each quoted annotation
     that does not parse as an expression. typing.ForwardRef rejects those when
@@ -1266,6 +1306,13 @@ def print_compile_summary(notebook_path, output_dir="generated", only=None, excl
         )
         for name in data["duplicate_functions"]:
             print(f"  {name}")
+
+    for secret in data.get("hardcoded_secrets", []):
+        print(
+            f"\n⚠ Cell {secret['cell']}, line {secret['line']}: {secret['name']} is "
+            "assigned a literal credential, which is copied into the compiled "
+            "app and its Docker image -- read it from os.environ instead."
+        )
 
     for func_name, where, text in _malformed_string_annotations(data["functions"]):
         print(
