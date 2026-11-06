@@ -15,6 +15,8 @@ python -m venv .venv
 ```
 The compiled app imports the notebook's own libraries (pandas, scikit-learn, ...). To run it locally -- `serve`, `compile --smoke-test`, `export-openapi`, `export-sdk` -- install them into the same environment first: `.venv/bin/pip install -r generated/requirements.txt`. Docker builds install them for you.
 
+Optionally, `.venv/bin/pip install .` installs a `notebook-to-api` command, so `notebook-to-api compile notebook.ipynb` works from any directory.
+
 ## Usage
 ```bash
 # Compile a notebook (--output is a directory, not a file)
