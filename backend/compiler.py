@@ -2315,6 +2315,10 @@ IMPORT_APT_PACKAGES = {
     # PyAudio publishes no Linux wheels, so `pip install` compiles it against
     # portaudio.h and fails in python:3.x-slim without a compiler and headers.
     "pyaudio": ("build-essential", "portaudio19-dev"),
+    # No Linux wheels for these either: pip compiles them against system headers.
+    "ldap": ("build-essential", "libldap2-dev", "libsasl2-dev"),
+    "cairo": ("build-essential", "pkg-config", "libcairo2-dev"),
+    "dlib": ("build-essential", "cmake"),
 }
 
 
