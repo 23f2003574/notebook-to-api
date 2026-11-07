@@ -2861,8 +2861,13 @@ def generate_fastapi_code(
     lines.append("MAX_ERROR_DETAIL_CHARS = 1000")
     lines.append("")
     lines.append("")
-    lines.append("def _error_text(exc):")
+    lines.append("def _error_text(exc, name_type=False):")
     lines.append("    if HIDE_ERROR_DETAILS:")
+    # A failed task has no other place to say what failed, so keep the
+    # exception class (the sync 500 detail already names it) and drop only
+    # the message text.
+    lines.append("        if name_type:")
+    lines.append("            return f'{type(exc).__name__}: [details hidden by NOTEBOOK_API_HIDE_ERROR_DETAILS]'")
     lines.append("        return '[details hidden by NOTEBOOK_API_HIDE_ERROR_DETAILS]'")
     lines.append("    try:")
     lines.append("        text = str(exc)")
@@ -5868,12 +5873,12 @@ def generate_fastapi_code(
     lines.append("        if task_id in TASKS:")
     lines.append("            TASKS[task_id][\"status\"] = \"failed\"")
     lines.append("            TASKS[task_id][\"finished_at\"] = time.time()")
-    lines.append("            TASKS[task_id][\"error\"] = _error_text(e)")
+    lines.append("            TASKS[task_id][\"error\"] = _error_text(e, True)")
     lines.append("        if callback_url:")
     lines.append("            webhook_result = await anyio.to_thread.run_sync(")
     lines.append(
         "                _deliver_task_webhook, callback_url, "
-        "{\"task_id\": task_id, \"status\": \"failed\", \"error\": _error_text(e)}"
+        "{\"task_id\": task_id, \"status\": \"failed\", \"error\": _error_text(e, True)}"
     )
     lines.append("            )")
     lines.append(
