@@ -1170,6 +1170,10 @@ def _mutable_default_parameters(functions):
         for arg in func.get("args", []):
             if not arg.get("has_default"):
                 continue
+            # `*args` / `**kwargs` are synthesized as optional [] / {} fields;
+            # Python has no shared default object for them.
+            if arg.get("kind") in ("var_positional", "var_keyword"):
+                continue
             try:
                 node = ast.parse(str(arg.get("default")), mode="eval").body
             except SyntaxError:

@@ -42,3 +42,16 @@ def test_the_warning_describes_what_the_compiled_app_actually_does(tmp_path, mon
 
     assert client.post("/acc", json={"x": 1}).json() == {"result": [1]}
     assert client.post("/acc", json={"x": 2}).json() == {"result": [2]}
+
+
+def test_star_args_and_kwargs_are_not_reported_as_mutable_defaults(tmp_path, capsys):
+    nb = nbformat.v4.new_notebook()
+    nb.cells = [nbformat.v4.new_code_cell(
+        "def f(a: int, *args, c: int = 3, **kw) -> int:\n    return a + c\n"
+    )]
+    path = tmp_path / "nb.ipynb"
+    nbformat.write(nb, str(path))
+
+    print_compile_summary(str(path), str(tmp_path / "out"))
+
+    assert "mutable default" not in capsys.readouterr().out
