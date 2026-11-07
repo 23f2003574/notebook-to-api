@@ -2319,6 +2319,9 @@ IMPORT_APT_PACKAGES = {
     "ldap": ("build-essential", "libldap2-dev", "libsasl2-dev"),
     "cairo": ("build-essential", "pkg-config", "libcairo2-dev"),
     "dlib": ("build-essential", "cmake"),
+    # pyodbc's manylinux wheel installs fine but `import pyodbc` then fails on
+    # libodbc.so.2, which only the unixodbc driver manager provides.
+    "pyodbc": ("unixodbc",),
 }
 
 
