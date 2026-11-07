@@ -466,7 +466,12 @@ def load_notebook(notebook_path):
             if problem:
                 raise ValueError(problem) from exc
             if isinstance(exc, nbformat.ValidationError):
-                raise
+                # Keep the exception type callers already handle, but name
+                # the file: nbformat's text (e.g. "missing an expected key:
+                # worksheets" for an old v3 notebook) never says which one.
+                raise nbformat.ValidationError(
+                    f"{notebook_path}: {exc.message}"
+                ) from exc
             # Valid JSON that is not a notebook (a top-level list, a cell
             # source of the wrong type) crashed nbformat's own reader with
             # a bare AttributeError/TypeError and a full traceback.
