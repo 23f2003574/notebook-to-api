@@ -44,6 +44,13 @@ curl -X POST http://localhost:8000/add -H "X-API-Key: notebook-to-api-dev-key" -
 # {"result":5}
 ```
 
+## Running the Tests
+After installing `requirements-dev.txt`, run the same command CI runs from the repository root (`pytest.ini` already puts the repo on the import path). The suite is large; pass a file or `-k` expression to run a part of it:
+```bash
+.venv/bin/python -m pytest
+.venv/bin/python -m pytest tests/test_compiler.py -k dockerfile
+```
+
 ## Dashboard (optional)
 A web dashboard for uploading, inspecting and deploying notebooks. `./start-dashboard.sh` starts the API (`python -m backend.dashboard`, default port 8000) and the frontend dev server (`npm run dev` in `frontend/`, port 5173, needs Node.js and `npm install` once).
 
