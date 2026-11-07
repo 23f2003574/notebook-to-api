@@ -55,3 +55,20 @@ def test_star_args_and_kwargs_are_not_reported_as_mutable_defaults(tmp_path, cap
     print_compile_summary(str(path), str(tmp_path / "out"))
 
     assert "mutable default" not in capsys.readouterr().out
+
+
+def test_string_defaults_that_look_like_containers_are_not_mutable_defaults(tmp_path, capsys):
+    nb = nbformat.v4.new_notebook()
+    nb.cells = [nbformat.v4.new_code_cell(
+        'def g(cfg: str = "{}", tags: str = "[]", n: list = [1, 2], m: list = list()) -> str:\n    return cfg\n'
+    )]
+    path = tmp_path / "nb.ipynb"
+    nbformat.write(nb, str(path))
+
+    print_compile_summary(str(path), str(tmp_path / "out"))
+
+    out = capsys.readouterr().out
+    assert "parameter 'cfg' has a mutable" not in out
+    assert "parameter 'tags' has a mutable" not in out
+    assert "parameter 'n' has a mutable" in out
+    assert "parameter 'm' has a mutable" in out

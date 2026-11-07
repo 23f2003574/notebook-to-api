@@ -1174,6 +1174,12 @@ def _mutable_default_parameters(functions):
             # Python has no shared default object for them.
             if arg.get("kind") in ("var_positional", "var_keyword"):
                 continue
+            if arg.get("default_is_literal", True):
+                # "default" is the evaluated value: a str like "{}" is a
+                # string, not a container, so only real list/dict/set count.
+                if isinstance(arg.get("default"), (list, dict, set)):
+                    found.append((func["name"], arg["name"]))
+                continue
             try:
                 node = ast.parse(str(arg.get("default")), mode="eval").body
             except SyntaxError:
