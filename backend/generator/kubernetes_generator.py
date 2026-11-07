@@ -226,7 +226,11 @@ def kubernetes_manifest_content(
                 f"                  key: NOTEBOOK_API_WEBHOOK_SECRET\n"
                 f"                  optional: true"
             )
-        value = "true" if entry["name"] == "NOTEBOOK_API_REQUIRE_CUSTOM_KEY" else entry["default"]
+        # A cluster is a production target: besides refusing the dev key, keep
+        # notebook exception text (paths, tokens in messages) out of 500
+        # responses; the full message still goes to the pod log.
+        hardened = ("NOTEBOOK_API_REQUIRE_CUSTOM_KEY", "NOTEBOOK_API_HIDE_ERROR_DETAILS")
+        value = "true" if entry["name"] in hardened else entry["default"]
         # The app's http://localhost:8000 default is only right on a dev
         # machine; in a cluster, /docs' "Try it out" should hit the Service
         # this same manifest defines (port 80 -> the container's 8000).
