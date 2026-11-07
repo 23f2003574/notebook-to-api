@@ -2293,6 +2293,9 @@ IMPORT_APT_PACKAGES = {
     "whisper": ("ffmpeg",),
     "moviepy": ("ffmpeg",),
     "pytesseract": ("tesseract-ocr",),
+    # tesserocr links libtesseract: pip compiles it from source against these
+    # headers (and needs a compiler) in python:3.x-slim.
+    "tesserocr": ("build-essential", "pkg-config", "tesseract-ocr", "libtesseract-dev", "libleptonica-dev"),
     "pdf2image": ("poppler-utils",),
     "pyzbar": ("libzbar0",),
     "magic": ("libmagic1",),

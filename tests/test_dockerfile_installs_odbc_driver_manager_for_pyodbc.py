@@ -21,3 +21,11 @@ def test_pyodbc_import_gets_unixodbc_so_the_import_works_in_the_slim_image(tmp_p
 
 def test_notebooks_without_pyodbc_do_not_install_it(tmp_path):
     assert "unixodbc" not in _dockerfile(tmp_path, "def f(a: int) -> int:\n    return a\n")
+
+
+def test_tesserocr_import_gets_the_headers_pip_compiles_it_against(tmp_path):
+    text = _dockerfile(tmp_path, "import tesserocr\n\ndef f(a: int) -> int:\n    return a\n")
+
+    for package in ("build-essential", "libtesseract-dev", "libleptonica-dev"):
+        assert package in text
+    assert text.index("apt-get install") < text.index("pip install")
