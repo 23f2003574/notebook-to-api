@@ -27,7 +27,7 @@ def test_non_json_notebook_leaves_no_output_dir(tmp_path):
     (tmp_path / "bad.ipynb").write_text("{bad")
     r = _cli(tmp_path, "compile", "bad.ipynb", "--output", "out")
     assert r.returncode == 1
-    assert "does not appear to be JSON" in r.stdout + r.stderr
+    assert "not valid JSON" in r.stdout + r.stderr
     assert not (tmp_path / "out").exists()
 
 

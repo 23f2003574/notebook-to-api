@@ -453,6 +453,14 @@ def load_notebook(notebook_path):
                 f"{notebook_path} is not a UTF-8 text file, so it cannot be a "
                 f"Jupyter notebook (.ipynb files are UTF-8 JSON): {exc}"
             ) from exc
+        except nbformat.reader.NotJSONError as exc:
+            # nbformat's own message is "Notebook does not appear to be JSON:"
+            # plus the start of the file's text: no file name, and a pasted
+            # secret or a large blob echoed back. Name the file instead.
+            raise ValueError(
+                f"{notebook_path} is not a Jupyter notebook: the file is not "
+                "valid JSON (.ipynb files are JSON documents)."
+            ) from exc
         except (AttributeError, TypeError, nbformat.ValidationError) as exc:
             problem = _notebook_structure_problem(notebook_path)
             if problem:

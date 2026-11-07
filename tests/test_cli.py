@@ -1984,7 +1984,7 @@ def test_compile_command_reports_a_clean_error_for_a_non_notebook_file(tmp_path)
 
     proc = _run_cli(["compile", str(bad_notebook), "--output", "built"], cwd=workdir)
 
-    _assert_clean_cli_error(proc, "does not appear to be JSON")
+    _assert_clean_cli_error(proc, "not valid JSON")
 
 
 def test_inspect_command_reports_a_clean_error_for_a_missing_notebook(tmp_path):
