@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Start dashboard API server in background
-echo "🚀 Starting Dashboard API Server on http://localhost:8000..."
+echo "🚀 Starting Dashboard API Server on http://localhost:8001..."
 python -m backend.dashboard &
 BACKEND_PID=$!
 

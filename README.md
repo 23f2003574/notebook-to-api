@@ -52,7 +52,7 @@ After installing `requirements-dev.txt`, run the same command CI runs from the r
 ```
 
 ## Dashboard (optional)
-A web dashboard for uploading, inspecting and deploying notebooks. `./start-dashboard.sh` starts the API (`python -m backend.dashboard`, default port 8000) and the frontend dev server (`npm run dev` in `frontend/`, port 5173, needs Node.js and `npm install` once).
+A web dashboard for uploading, inspecting and deploying notebooks. `./start-dashboard.sh` starts the API (`python -m backend.dashboard`, default port 8001, override with `NOTEBOOK_API_DASHBOARD_PORT`) and the frontend dev server (`npm run dev` in `frontend/`, port 5173, needs Node.js and `npm install` once).
 
 ## Building the Docker Image
 Make sure Docker is installed on your system.

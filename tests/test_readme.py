@@ -60,3 +60,20 @@ def test_readme_dashboard_section_matches_the_start_script_and_package():
     assert "python -m backend.dashboard" in section and "python -m backend.dashboard" in script
     assert "npm run dev" in section and "npm run dev" in script and '"dev"' in package
     assert "if __name__" in (PROJECT_ROOT / "backend" / "dashboard.py").read_text(encoding="utf-8")
+
+
+def test_documented_dashboard_port_is_the_port_the_dashboard_really_binds(monkeypatch):
+    """README and start-dashboard.sh both said 8000 while the dashboard
+    (and the frontend that calls it) use 8001; 8000 is the generated app's."""
+    import re
+
+    from backend.dashboard import dashboard_port
+
+    monkeypatch.delenv("NOTEBOOK_API_DASHBOARD_PORT", raising=False)
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    script = (PROJECT_ROOT / "start-dashboard.sh").read_text(encoding="utf-8")
+    section = readme.split("## Dashboard")[1].split("\n## ")[0]
+
+    assert f"default port {dashboard_port()}" in section
+    assert f"Dashboard API Server on http://localhost:{dashboard_port()}" in script
+    assert not re.search(r"default port 8000\b", section)
