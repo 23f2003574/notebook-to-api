@@ -58,6 +58,13 @@ from .deployment_governance_logging_bootstrap import (
     GovernanceLoggingBootstrap,
 )
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .deployment_governance_diagnostics import GovernanceDiagnosticsService
+    from .deployment_governance_health import GovernanceHealthService
+    from .deployment_governance_readiness import GovernanceReadinessService
+
 
 class GovernanceIntegrityRuntimeState(
     str,

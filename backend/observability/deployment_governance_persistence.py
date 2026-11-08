@@ -79,6 +79,36 @@ from .deployment_governance_delivery_policies import (
     GovernanceIntegrityDeliveryPolicyRepository,
     InMemoryGovernanceIntegrityDeliveryPolicyRepository,
 )
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .deployment_governance_audit import GovernanceAuditService
+    from .deployment_governance_cron import GovernanceCronScheduler
+    from .deployment_governance_dependency_graph import GovernanceDependencyGraph
+    from .deployment_governance_diagnostics import GovernanceDiagnosticsService
+    from .deployment_governance_event_bus import GovernanceEventBus
+    from .deployment_governance_event_history import GovernanceEventHistory
+    from .deployment_governance_event_router import GovernanceEventRouter
+    from .deployment_governance_execution_manager import GovernanceExecutionManager
+    from .deployment_governance_health import GovernanceHealthService
+    from .deployment_governance_job_dependencies import GovernanceJobDependencyManager
+    from .deployment_governance_job_persistence import GovernanceJobPersistence
+    from .deployment_governance_job_registry import GovernanceJobRegistry
+    from .deployment_governance_lifecycle import GovernanceLifecycleManager
+    from .deployment_governance_liveness import GovernanceLivenessService
+    from .deployment_governance_policy import GovernancePolicyEngine
+    from .deployment_governance_readiness import GovernanceReadinessService
+    from .deployment_governance_recovery import GovernanceRecoveryManager
+    from .deployment_governance_retry import GovernanceRetryEngine
+    from .deployment_governance_rules import GovernanceRuleEngine
+    from .deployment_governance_scheduler import GovernanceScheduler
+    from .deployment_governance_scheduler_dashboard import GovernanceSchedulerDashboard
+    from .deployment_governance_scheduler_locks import GovernanceSchedulerLockManager
+    from .deployment_governance_scheduler_metrics import GovernanceSchedulerMetrics
+    from .deployment_governance_scheduler_policy import GovernanceSchedulerPolicyEngine
+    from .deployment_governance_trigger_engine import GovernanceTriggerEngine
+    from datetime import datetime
 from .deployment_governance_provider_configuration import (
     GovernanceIntegrityProviderConfigurationRepository,
     InMemoryGovernanceIntegrityProviderConfigurationRepository,
