@@ -280,7 +280,7 @@ endpoints, compiler-style IR analysis) that is **[planned], not implemented**.
 | Persistence | Notebook files and JSON metadata on disk (`uploads/`, `generated/`, `.compile_metadata.json`); SQLite for deployment-governance data. Everything else in-memory. |
 | Deployment | Dockerfile, docker-compose, Kubernetes manifest generation; `deploy` shells out to `docker build`. Dashboard and generated apps are single-process. |
 | ML models / APIs | None are called by the tool. Model usage in a *user's* notebook is detected only to prefetch weights and map dependencies. No LLM is used anywhere (the "LLM integration" module is a constant). |
-| CI | GitHub Actions: `pytest` on Python 3.11 and 3.13. No lint, type-check, coverage or Docker steps. |
+| CI | GitHub Actions: `pytest` on Python 3.11 and 3.13, plus a `docker-smoke` job that builds the compiled sample image and checks its container's `/health`. No lint, type-check or coverage steps. |
 | Dependencies | `requirements.txt` is unpinned: fastapi, uvicorn, nbformat, watchdog, httpx, python-multipart. Test tooling (`pytest`, `PyYAML`) lives in `requirements-dev.txt`, which includes it via `-r requirements.txt`. |
 
 ---
