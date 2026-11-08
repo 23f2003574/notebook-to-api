@@ -3,6 +3,7 @@ Dashboard API Server
 Serves the React dashboard frontend and provides API endpoints for compilation
 """
 
+import hmac
 import json
 import os
 import sys
@@ -450,6 +451,34 @@ async def _enforce_dashboard_max_request_body_bytes(request: Request, call_next)
                         )
                     },
                 )
+
+    return await call_next(request)
+
+
+def dashboard_api_key():
+    """The key every dashboard request must send, from
+    NOTEBOOK_API_DASHBOARD_KEY. Unset or empty keeps the existing
+    behavior: no authentication, for local development."""
+
+    return os.getenv("NOTEBOOK_API_DASHBOARD_KEY", "")
+
+
+@app.middleware("http")
+async def _require_dashboard_api_key(request: Request, call_next):
+    """Answer 401 unless the X-API-Key header matches
+    NOTEBOOK_API_DASHBOARD_KEY (when it is set). CORS preflights are
+    exempt: browsers send them without credentials. Registered before
+    CORSMiddleware, like the middlewares above, so a 401 still carries
+    CORS headers. The key is never logged or echoed.
+    """
+
+    expected = dashboard_api_key()
+
+    if expected and request.method != "OPTIONS":
+        supplied = request.headers.get("X-API-Key", "")
+
+        if not hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8")):
+            return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
 
     return await call_next(request)
 
