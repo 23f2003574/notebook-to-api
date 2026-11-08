@@ -66,6 +66,25 @@ describe('NotebookUpload', () => {
   })
 })
 
+describe('dashboard API key', () => {
+  it('is sent on uploads only when VITE_DASHBOARD_API_KEY is set', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { container } = render(<NotebookUpload onSuccess={() => {}} />)
+    const input = () => container.querySelector('input[type=file]')
+
+    fireEvent.change(input(), { target: { files: [new File(['{}'], 'a.ipynb')] } })
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    expect(fetchMock.mock.calls[0][1].headers).toEqual({})
+
+    vi.stubEnv('VITE_DASHBOARD_API_KEY', 'k')
+    fireEvent.change(input(), { target: { files: [new File(['{}'], 'b.ipynb')] } })
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    expect(fetchMock.mock.calls[1][1].headers).toEqual({ 'X-API-Key': 'k' })
+    vi.unstubAllEnvs()
+  })
+})
+
 describe('EndpointTester', () => {
   it('lists endpoints and rejects an invalid JSON body before sending', async () => {
     const fetchMock = vi.fn()

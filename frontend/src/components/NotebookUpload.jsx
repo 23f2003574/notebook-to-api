@@ -1,3 +1,4 @@
+import { dashboardHeaders } from '../dashboardApi'
 import { useState } from 'react'
 
 export default function NotebookUpload({ onSuccess }) {
@@ -22,6 +23,7 @@ export default function NotebookUpload({ onSuccess }) {
 
       const response = await fetch('http://localhost:8001/api/upload', {
         method: 'POST',
+        headers: dashboardHeaders(),
         body: formData
       })
 

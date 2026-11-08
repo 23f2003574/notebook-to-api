@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import NotebookUpload from './NotebookUpload'
+import { dashboardHeaders } from '../dashboardApi'
 import FunctionList from './FunctionList'
 import CompilationLogs from './CompilationLogs'
 import EndpointTester from "./EndpointTester"
@@ -19,7 +20,7 @@ export default function Dashboard() {
     try {
       const inspectResponse = await fetch('http://localhost:8001/api/inspect', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: dashboardHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ notebook_path: response.filename })
       })
 
@@ -54,7 +55,7 @@ export default function Dashboard() {
     try {
       const response = await fetch('http://localhost:8001/api/compile', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: dashboardHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ notebook_path: uploadedNotebook })
       })
 
