@@ -31,6 +31,8 @@ def test_cli_compiled_app_serves_the_notebook_function(tmp_path):
     for name in ("app.py", "requirements.txt", "Dockerfile", "runtime/notebook_module.py"):
         assert (out / name).is_file(), name
 
+    # Generated apps are standalone: no repo root on the import path, or a stale
+    # repo-level generated/ package can shadow the one just compiled.
     script = f"""
 import sys
 sys.path.insert(0, {str(out)!r})
@@ -44,7 +46,7 @@ print("E2E_OK")
 """
     called = subprocess.run(
         [sys.executable, "-c", script],
-        cwd=str(out), env=env, capture_output=True, text=True, timeout=60,
+        cwd=str(out), capture_output=True, text=True, timeout=60,
     )
     assert called.returncode == 0, called.stdout + called.stderr
     assert "E2E_OK" in called.stdout
