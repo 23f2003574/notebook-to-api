@@ -281,7 +281,7 @@ endpoints, compiler-style IR analysis) that is **[planned], not implemented**.
 | Deployment | Dockerfile, docker-compose, Kubernetes manifest generation; `deploy` shells out to `docker build`. Dashboard and generated apps are single-process. |
 | ML models / APIs | None are called by the tool. Model usage in a *user's* notebook is detected only to prefetch weights and map dependencies. No LLM is used anywhere (the "LLM integration" module is a constant). |
 | CI | GitHub Actions: `pytest` on Python 3.11 and 3.13. No lint, type-check, coverage or Docker steps. |
-| Dependencies | `requirements.txt` is unpinned: fastapi, uvicorn, nbformat, watchdog, pytest, httpx, python-multipart, `httpx2`. |
+| Dependencies | `requirements.txt` is unpinned: fastapi, uvicorn, nbformat, watchdog, httpx, python-multipart. Test tooling (`pytest`, `PyYAML`) lives in `requirements-dev.txt`, which includes it via `-r requirements.txt`. |
 
 ---
 
@@ -391,8 +391,7 @@ notebook code; multi-notebook composition ("pipeline" endpoints).
 installed packages; GPU-requiring notebooks are flagged but not given a CUDA
 image; no authentication on the *dashboard* was verified by me beyond its own
 security routers; repo hygiene issues (committed `uploads/`, `test_generated/`,
-an unpinned `requirements.txt` that lists `pytest` and an `httpx2` entry
-alongside `httpx` with no evident purpose) show it has not been prepared for external use.
+an unpinned `requirements.txt`) show it has not been prepared for external use.
 
 ---
 
