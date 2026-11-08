@@ -9,3 +9,4 @@ python-multipart==0.0.32
 PyYAML==6.0.3
 uvicorn==0.54.0
 watchdog==7.1.0
+ruff==0.16.9

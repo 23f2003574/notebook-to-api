@@ -19,3 +19,13 @@ dependencies = { file = ["requirements.txt"] }
 [tool.setuptools.packages.find]
 include = ["backend*"]
 namespaces = true
+
+[tool.ruff.lint]
+# Bug-finding rules only (syntax errors, undefined names, invalid
+# comparisons); style rules would need a repo-wide cleanup.
+select = ["E9", "F63", "F7", "F82"]
+
+[tool.ruff.lint.per-file-ignores]
+# Quoted return annotations naming classes these modules never import.
+"backend/observability/deployment_governance_delivery_runtime.py" = ["F821"]
+"backend/observability/deployment_governance_persistence.py" = ["F821"]
