@@ -80,3 +80,28 @@ jobs:
 
       - name: Build the sample notebook's image and smoke-test it
         run: python -m backend.cli deploy notebooks/sample.ipynb --output smoke_app --smoke-test
+
+  frontend:
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run frontend tests
+        working-directory: frontend
+        run: npm test
