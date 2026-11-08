@@ -1,0 +1,11 @@
+# Exact versions of the direct dependencies, known to work on Python 3.11 and
+# 3.13. CI installs with `-c constraints.txt`; pip uses them only to pick
+# versions, so extras and the notebook's own libraries are unaffected.
+fastapi==0.162.2
+httpx==0.28.1
+nbformat==5.11.1
+pytest==9.2.0
+python-multipart==0.0.32
+PyYAML==6.0.3
+uvicorn==0.54.0
+watchdog==7.1.0
