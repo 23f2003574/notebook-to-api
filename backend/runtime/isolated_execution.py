@@ -1,8 +1,28 @@
 """Process-isolated callable execution with enforceable timeouts."""
 from __future__ import annotations
 
+import json
+import logging
 import multiprocessing as mp
+import time
+import uuid
 from typing import Any, Callable, Mapping, Sequence
+
+
+_LOG = logging.getLogger("uvicorn.error")  # same logger the generated app uses
+
+
+def _emit_event(event: str, execution_id: str, started: float, **fields: Any) -> None:
+    """Log one structured event. Only fixed, non-sensitive fields are ever
+    included (ids, timings, outcome, exit code) -- never arguments, results,
+    source, or exception text. A logging failure is swallowed so it can never
+    break execution or cleanup."""
+    try:
+        record = {"event": event, "execution_id": execution_id,
+                  "elapsed_ms": round((time.monotonic() - started) * 1000, 1), **fields}
+        _LOG.info("isolated_execution %s", json.dumps(record, sort_keys=True))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 class IsolatedExecutionError(RuntimeError):
@@ -101,23 +121,34 @@ def run_isolated(
             import resource  # noqa: F401
         except ImportError:
             raise IsolatedExecutionError("memory/CPU limits are not supported on this platform") from None
+    execution_id = uuid.uuid4().hex[:12]
+    started = time.monotonic()
+    outcome = "error"
+    exitcode = None
     ctx = _context()
     parent_conn, child_conn = ctx.Pipe(duplex=False)
     proc = ctx.Process(target=_child, args=(child_conn, func, tuple(args), dict(kwargs or {}), memory_limit_mb, cpu_limit_seconds), daemon=True)
     try:
         proc.start()
         child_conn.close()
+        _emit_event("started", execution_id, started, pid=proc.pid)
         if not parent_conn.poll(timeout):
+            outcome = "timeout"
             raise IsolatedExecutionTimeout(f"execution exceeded {timeout}s timeout")
         try:
             status, payload = parent_conn.recv()
         except EOFError:
             proc.join(1)
+            exitcode = proc.exitcode
+            outcome = "terminated"
             if cpu_limit_seconds and proc.exitcode in (-24, -9):  # SIGXCPU / SIGKILL backstop
+                outcome = "cpu_limit_exceeded"
                 raise IsolatedExecutionError("CPU limit exceeded") from None
             raise IsolatedExecutionError(f"child exited without result (exitcode={proc.exitcode})") from None
         if status == "ok":
+            outcome = "completed"
             return payload
+        outcome = "memory_limit_exceeded" if payload == "memory limit exceeded" else "error"
         raise IsolatedExecutionError(payload)
     finally:
         if proc.is_alive():
@@ -130,3 +161,4 @@ def run_isolated(
             proc.close()
         child_conn.close()
         parent_conn.close()
+        _emit_event("finished", execution_id, started, outcome=outcome, exitcode=exitcode)
