@@ -71,4 +71,5 @@ def run_isolated(
         if proc.pid is not None:
             proc.join()
             proc.close()
+        child_conn.close()
         parent_conn.close()

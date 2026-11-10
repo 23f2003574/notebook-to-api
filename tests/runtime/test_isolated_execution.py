@@ -52,3 +52,50 @@ def test_no_child_processes_left_behind():
         run_isolated(_sleep_forever, timeout=0.3)
     run_isolated(_add, (1, 1), timeout=10)
     assert mp.active_children() == []
+
+
+def _ignore_sigterm_and_hang():
+    import signal
+
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    time.sleep(60)
+
+
+def _hard_exit():
+    os._exit(3)
+
+
+def _unpicklable():
+    return lambda: None
+
+
+def test_sigterm_ignoring_child_is_force_killed():
+    start = time.monotonic()
+    with pytest.raises(IsolatedExecutionTimeout):
+        run_isolated(_ignore_sigterm_and_hang, timeout=0.5)
+    assert time.monotonic() - start < 6
+    assert mp.active_children() == []
+
+
+def test_abnormal_exit_is_controlled_error_and_reaped():
+    with pytest.raises(IsolatedExecutionError, match="exitcode=3"):
+        run_isolated(_hard_exit, timeout=5)
+    assert mp.active_children() == []
+
+
+def test_unserializable_result_is_controlled_error():
+    with pytest.raises(IsolatedExecutionError):
+        run_isolated(_unpicklable, timeout=5)
+    assert mp.active_children() == []
+
+
+def test_parent_interrupt_cleans_up_child(monkeypatch):
+    from multiprocessing.connection import Connection
+
+    def interrupted(self, timeout=None):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(Connection, "poll", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        run_isolated(_sleep_forever, timeout=30)
+    assert mp.active_children() == []
