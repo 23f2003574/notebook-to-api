@@ -501,6 +501,20 @@ GENERATED_APP_ENV_VARS = [
         ),
     },
     {
+        "name": "NOTEBOOK_API_ISOLATE_EXECUTION",
+        "default": "0",
+        "description": (
+            "Set to 1 to run each synchronous endpoint's notebook function "
+            "in a child process, so a call that exceeds "
+            "NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS is answered 504 and its "
+            "process is terminated and reaped instead of left running. "
+            "Only JSON-serializable results cross the process boundary; a "
+            "crashed child is answered 500 with a short message and no "
+            "traceback. Async functions and background tasks are not "
+            "isolated. 0 (the default) keeps in-process execution."
+        ),
+    },
+    {
         "name": "NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS",
         "default": "0",
         "description": (
@@ -797,6 +811,14 @@ def _sunset_http_date(iso_date):
         datetime.datetime(day.year, day.month, day.day, tzinfo=datetime.timezone.utc),
         usegmt=True,
     )
+
+
+def _isolated_execution_source():
+    """Source of backend/runtime/isolated_execution.py minus its module
+    docstring and __future__ import, for inlining into a generated app."""
+    src = (Path(__file__).resolve().parent.parent / "runtime" / "isolated_execution.py").read_text(encoding="utf-8")
+    body = src.split("from __future__ import annotations\n", 1)[1]
+    return body.strip("\n")
 
 
 def _generated_app_env_var_default(name):
@@ -2621,6 +2643,12 @@ def generate_fastapi_code(
     # reported by GET /metrics and /metrics/prometheus -- the generic
     # 5xx status-class counter can't say *which* endpoint keeps hitting
     # the limit (the one to optimize, or to move to a background task).
+    lines.append(
+        'ISOLATE_EXECUTION = _env_number('
+        '"NOTEBOOK_API_ISOLATE_EXECUTION", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_ISOLATE_EXECUTION")}"'
+        ') > 0'
+    )
     lines.append("_REQUEST_TIMEOUTS = {}")
     # {path: seconds} for every synchronous endpoint with its own
     # "# notebook-to-api: timeout N" directive (timeout_overrides) --
@@ -2751,6 +2779,23 @@ def generate_fastapi_code(
     lines.append("    if _THREAD_LIMITER is None:")
     lines.append("        _THREAD_LIMITER = anyio.CapacityLimiter(MAX_CONCURRENT_CALLS)")
     lines.append("    return _THREAD_LIMITER")
+    lines.append("")
+    # Process-isolated execution (NOTEBOOK_API_ISOLATE_EXECUTION): the
+    # tested helper from backend/runtime/isolated_execution.py is inlined so
+    # the generated app stays a single self-contained file.
+    lines.extend(_isolated_execution_source().splitlines())
+    lines.append("")
+    lines.append("")
+    lines.append("def _isolated_call(call, limit):")
+    lines.append("    def _json_result():")
+    lines.append("        return jsonable_encoder(_json_safe(call()))")
+    lines.append("    try:")
+    # The anyio scope owns the 504; this grace only guarantees the child is
+    # reaped shortly after the scope fires.
+    lines.append("        return run_isolated(_json_result, timeout=(limit + 0.5) if limit else None)")
+    lines.append("    except IsolatedExecutionTimeout as exc:")
+    lines.append("        raise RuntimeError('execution timed out') from None")
+    lines.append("")
     lines.append("")
     lines.append("async def _run_in_thread(call):")
     lines.append("    limiter = _thread_slot()")
@@ -2944,14 +2989,14 @@ def generate_fastapi_code(
     lines.append("    limit = REQUEST_TIMEOUT_SECONDS if timeout is None else timeout")
     lines.append("    try:")
     lines.append("        with anyio.fail_after(limit or None) as scope:")
-    lines.append("            return await _invoke_notebook_function(call, is_async)")
+    lines.append("            return await _invoke_notebook_function(call, is_async, limit)")
     lines.append("    except TimeoutError as exc:")
     lines.append("        if scope.cancelled_caught:")
     lines.append("            raise")
     lines.append("        raise _NotebookTimeoutError(exc) from exc")
     lines.append("")
     lines.append("")
-    lines.append("async def _invoke_notebook_function(call, is_async):")
+    lines.append("async def _invoke_notebook_function(call, is_async, limit=0):")
     lines.append("    async with _call_slot():")
     lines.append("        if is_async:")
     # An `async def` that yields is an async *generator* function: calling
@@ -2962,6 +3007,8 @@ def generate_fastapi_code(
     lines.append("            if inspect.isasyncgen(result):")
     lines.append("                return await _drain_async_gen(result)")
     lines.append("            return await result")
+    lines.append("        if ISOLATE_EXECUTION:")
+    lines.append("            return await _run_in_thread(functools.partial(_isolated_call, call, limit))")
     lines.append("        return await _run_in_thread(call)")
     lines.append("")
     # Bounds _deliver_task_webhook's own single delivery attempt below --
