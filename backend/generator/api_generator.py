@@ -515,6 +515,19 @@ GENERATED_APP_ENV_VARS = [
         ),
     },
     {
+        "name": "NOTEBOOK_API_ISOLATE_MEMORY_LIMIT_MB",
+        "default": "0",
+        "description": (
+            "With NOTEBOOK_API_ISOLATE_EXECUTION=1, caps each child "
+            "process's address space (RLIMIT_AS) in megabytes; a call that "
+            "exceeds it is answered 500 'memory limit exceeded'. The cap "
+            "includes the interpreter and libraries the child inherits, so "
+            "set it well above the app's baseline. POSIX only (not "
+            "enforced on every platform, e.g. macOS); 0 (the default) means "
+            "unlimited."
+        ),
+    },
+    {
         "name": "NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS",
         "default": "0",
         "description": (
@@ -2644,6 +2657,12 @@ def generate_fastapi_code(
     # 5xx status-class counter can't say *which* endpoint keeps hitting
     # the limit (the one to optimize, or to move to a background task).
     lines.append(
+        'ISOLATE_MEMORY_LIMIT_MB = _env_number('
+        '"NOTEBOOK_API_ISOLATE_MEMORY_LIMIT_MB", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_ISOLATE_MEMORY_LIMIT_MB")}"'
+        ', float)'
+    )
+    lines.append(
         'ISOLATE_EXECUTION = _env_number('
         '"NOTEBOOK_API_ISOLATE_EXECUTION", '
         f'"{_generated_app_env_var_default("NOTEBOOK_API_ISOLATE_EXECUTION")}"'
@@ -2792,7 +2811,7 @@ def generate_fastapi_code(
     lines.append("    try:")
     # The anyio scope owns the 504; this grace only guarantees the child is
     # reaped shortly after the scope fires.
-    lines.append("        return run_isolated(_json_result, timeout=(limit + 0.5) if limit else None)")
+    lines.append("        return run_isolated(_json_result, timeout=(limit + 0.5) if limit else None, memory_limit_mb=ISOLATE_MEMORY_LIMIT_MB or None)")
     lines.append("    except IsolatedExecutionTimeout as exc:")
     lines.append("        raise RuntimeError('execution timed out') from None")
     lines.append("")

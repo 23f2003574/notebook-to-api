@@ -17,6 +17,7 @@ def _client(monkeypatch, timeout="1"):
     functions = [
         {"name": "add", "args": [{"name": "a", "type": "int"}, {"name": "b", "type": "int"}], "return_type": "int"},
         {"name": "hang", "args": [], "return_type": "dict"},
+        {"name": "bloat", "args": [], "return_type": "int"},
         {"name": "crash", "args": [], "return_type": "dict"},
     ]
     code = generate_fastapi_code(functions)
@@ -26,6 +27,7 @@ def _client(monkeypatch, timeout="1"):
     nb = ns["notebook_module"]
     nb.add = lambda a, b: a + b
     nb.hang = lambda: time.sleep(60)
+    nb.bloat = lambda: len(bytearray(8 * 1024**3))
     nb.crash = lambda: os._exit(7)
     return TestClient(ns["app"])
 
@@ -66,3 +68,14 @@ def test_auth_and_validation_unchanged(monkeypatch):
     client = _client(monkeypatch)
     assert client.post("/add", json={"a": 1, "b": 2}).status_code == 401
     assert client.post("/add", json={"a": "x", "b": 2}, headers=HEADERS).status_code == 422
+
+
+def test_memory_limit_returns_controlled_500_and_next_request_works(monkeypatch):
+    monkeypatch.setenv("NOTEBOOK_API_ISOLATE_MEMORY_LIMIT_MB", "4096")
+    client = _client(monkeypatch)
+    r = client.post("/bloat", json={}, headers=HEADERS)
+    assert r.status_code == 500
+    assert "memory limit exceeded" in r.text
+    assert "Traceback" not in r.text
+    assert _no_children()
+    assert client.post("/add", json={"a": 1, "b": 1}, headers=HEADERS).json() == {"result": 2}

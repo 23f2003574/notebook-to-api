@@ -99,3 +99,20 @@ def test_parent_interrupt_cleans_up_child(monkeypatch):
     with pytest.raises(KeyboardInterrupt):
         run_isolated(_sleep_forever, timeout=30)
     assert mp.active_children() == []
+
+
+def _allocate(mb):
+    return len(bytearray(mb * 1024 * 1024))
+
+
+@pytest.mark.skipif(not hasattr(__import__("os"), "fork") or __import__("sys").platform == "darwin",
+                    reason="RLIMIT_AS is POSIX-only and not enforced on macOS")
+def test_memory_limit_is_enforced_and_child_reaped():
+    assert run_isolated(_allocate, (1,), timeout=10, memory_limit_mb=2048) == 1024 * 1024
+    with pytest.raises(IsolatedExecutionError, match="memory limit exceeded"):
+        run_isolated(_allocate, (4096,), timeout=10, memory_limit_mb=2048)
+    assert mp.active_children() == []
+
+
+def test_no_memory_limit_by_default():
+    assert run_isolated(_allocate, (64,), timeout=10) == 64 * 1024 * 1024
