@@ -35,17 +35,36 @@ def _apply_memory_limit(limit_mb: float) -> None:
     resource.setrlimit(resource.RLIMIT_AS, (limit, hard))
 
 
+def _apply_cpu_limit(limit_seconds: float) -> None:
+    """Cap the child's CPU time (RLIMIT_CPU), not wall-clock time.
+
+    Exceeding the soft limit delivers SIGXCPU, which terminates the child; the
+    hard limit one second later is a SIGKILL backstop. POSIX only (idle or
+    blocked time does not count; use ``timeout`` for wall-clock limits).
+    """
+    import math
+    import resource
+
+    soft = max(1, math.ceil(limit_seconds))
+    _, hard = resource.getrlimit(resource.RLIMIT_CPU)
+    new_hard = soft + 1 if hard == resource.RLIM_INFINITY else hard
+    resource.setrlimit(resource.RLIMIT_CPU, (min(soft, new_hard), new_hard))
+
+
 def _child(
     conn: Any,
     func: Callable[..., Any],
     args: Sequence[Any],
     kwargs: Mapping[str, Any],
     memory_limit_mb: float | None = None,
+    cpu_limit_seconds: float | None = None,
 ) -> None:
     try:
         try:
             if memory_limit_mb:
                 _apply_memory_limit(memory_limit_mb)
+            if cpu_limit_seconds:
+                _apply_cpu_limit(cpu_limit_seconds)
             conn.send(("ok", func(*args, **kwargs)))
         except MemoryError:
             conn.send(("error", "memory limit exceeded"))
@@ -67,22 +86,24 @@ def run_isolated(
     *,
     timeout: float = 30.0,
     memory_limit_mb: float | None = None,
+    cpu_limit_seconds: float | None = None,
 ) -> Any:
     """Run ``func(*args, **kwargs)`` in a child process and return its result.
 
     Raises IsolatedExecutionTimeout (child terminated and reaped) on timeout and
     IsolatedExecutionError for exceptions, crashes, or unserializable results.
-    ``memory_limit_mb`` (default None = unlimited) caps the child's address space.
+    ``memory_limit_mb`` (default None = unlimited) caps the child's address space;
+    ``cpu_limit_seconds`` (default None) caps its CPU time via RLIMIT_CPU.
     The callable must be picklable when only the ``spawn`` start method exists.
     """
-    if memory_limit_mb:
+    if memory_limit_mb or cpu_limit_seconds:
         try:
             import resource  # noqa: F401
         except ImportError:
-            raise IsolatedExecutionError("memory limits are not supported on this platform") from None
+            raise IsolatedExecutionError("memory/CPU limits are not supported on this platform") from None
     ctx = _context()
     parent_conn, child_conn = ctx.Pipe(duplex=False)
-    proc = ctx.Process(target=_child, args=(child_conn, func, tuple(args), dict(kwargs or {}), memory_limit_mb), daemon=True)
+    proc = ctx.Process(target=_child, args=(child_conn, func, tuple(args), dict(kwargs or {}), memory_limit_mb, cpu_limit_seconds), daemon=True)
     try:
         proc.start()
         child_conn.close()
@@ -92,6 +113,8 @@ def run_isolated(
             status, payload = parent_conn.recv()
         except EOFError:
             proc.join(1)
+            if cpu_limit_seconds and proc.exitcode in (-24, -9):  # SIGXCPU / SIGKILL backstop
+                raise IsolatedExecutionError("CPU limit exceeded") from None
             raise IsolatedExecutionError(f"child exited without result (exitcode={proc.exitcode})") from None
         if status == "ok":
             return payload

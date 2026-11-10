@@ -85,6 +85,7 @@ def test_generated_app_env_vars_default_matches_the_actual_generated_code():
         "NOTEBOOK_API_HIDE_ERROR_DETAILS",
         "NOTEBOOK_API_ISOLATE_EXECUTION",
         "NOTEBOOK_API_ISOLATE_MEMORY_LIMIT_MB",
+        "NOTEBOOK_API_ISOLATE_CPU_LIMIT_SECONDS",
     }
 
     for entry in GENERATED_APP_ENV_VARS:
