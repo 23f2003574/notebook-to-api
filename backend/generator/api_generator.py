@@ -540,6 +540,20 @@ GENERATED_APP_ENV_VARS = [
         ),
     },
     {
+        "name": "NOTEBOOK_API_ISOLATE_MAX_PROCESSES",
+        "default": "0",
+        "description": (
+            "With NOTEBOOK_API_ISOLATE_EXECUTION=1, the maximum number of "
+            "isolated child processes running at once in THIS app process; "
+            "a further synchronous call is rejected at once with 503 "
+            "(Retry-After: 1) instead of queueing. A slot is held until the "
+            "child is terminated and reaped, so a timed-out call frees it "
+            "within moments. The limit is per worker process: with several "
+            "workers or containers the total is this value times their "
+            "number. 0 (the default) means unlimited."
+        ),
+    },
+    {
         "name": "NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS",
         "default": "0",
         "description": (
@@ -2681,6 +2695,13 @@ def generate_fastapi_code(
         ', float)'
     )
     lines.append(
+        'ISOLATE_MAX_PROCESSES = _env_number('
+        '"NOTEBOOK_API_ISOLATE_MAX_PROCESSES", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_ISOLATE_MAX_PROCESSES")}"'
+        ')'
+    )
+    lines.append("_ISOLATE_SLOTS = threading.BoundedSemaphore(ISOLATE_MAX_PROCESSES) if ISOLATE_MAX_PROCESSES > 0 else None")
+    lines.append(
         'ISOLATE_EXECUTION = _env_number('
         '"NOTEBOOK_API_ISOLATE_EXECUTION", '
         f'"{_generated_app_env_var_default("NOTEBOOK_API_ISOLATE_EXECUTION")}"'
@@ -2699,7 +2720,7 @@ def generate_fastapi_code(
     lines.append("    validate_execution_limits(")
     lines.append("        timeout_seconds=REQUEST_TIMEOUT_SECONDS, memory_limit_mb=ISOLATE_MEMORY_LIMIT_MB,")
     lines.append("        cpu_limit_seconds=ISOLATE_CPU_LIMIT_SECONDS, isolate=ISOLATE_EXECUTION,")
-    lines.append("        rlimits_supported=_RLIMITS_SUPPORTED,")
+    lines.append("        rlimits_supported=_RLIMITS_SUPPORTED, max_processes=ISOLATE_MAX_PROCESSES,")
     lines.append("    )")
     lines.append("except ValueError as _limits_error:")
     lines.append("    raise RuntimeError(str(_limits_error)) from None")
@@ -2844,12 +2865,20 @@ def generate_fastapi_code(
     lines.append("def _isolated_call(call, limit):")
     lines.append("    def _json_result():")
     lines.append("        return jsonable_encoder(_json_safe(call()))")
+    # Non-blocking: excess requests are rejected, never queued. Acquired in the
+    # worker thread so a request cancelled before it starts cannot leak a slot;
+    # released only after run_isolated has terminated and reaped the child.
+    lines.append("    if _ISOLATE_SLOTS is not None and not _ISOLATE_SLOTS.acquire(blocking=False):")
+    lines.append("        raise HTTPException(status_code=503, detail='Too many concurrent notebook executions; retry shortly', headers={'Retry-After': '1'})")
     lines.append("    try:")
     # The anyio scope owns the 504; this grace only guarantees the child is
     # reaped shortly after the scope fires.
     lines.append("        return run_isolated(_json_result, timeout=(limit + 0.5) if limit else None, memory_limit_mb=ISOLATE_MEMORY_LIMIT_MB or None, cpu_limit_seconds=ISOLATE_CPU_LIMIT_SECONDS or None)")
     lines.append("    except IsolatedExecutionTimeout as exc:")
     lines.append("        raise RuntimeError('execution timed out') from None")
+    lines.append("    finally:")
+    lines.append("        if _ISOLATE_SLOTS is not None:")
+    lines.append("            _ISOLATE_SLOTS.release()")
     lines.append("")
     lines.append("")
     lines.append("async def _run_in_thread(call):")

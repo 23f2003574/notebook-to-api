@@ -17,6 +17,7 @@ def _client(monkeypatch, timeout="1"):
     functions = [
         {"name": "add", "args": [{"name": "a", "type": "int"}, {"name": "b", "type": "int"}], "return_type": "int"},
         {"name": "hang", "args": [], "return_type": "dict"},
+        {"name": "nap", "args": [], "return_type": "int"},
         {"name": "bloat", "args": [], "return_type": "int"},
         {"name": "spin", "args": [], "return_type": "int"},
         {"name": "crash", "args": [], "return_type": "dict"},
@@ -106,3 +107,58 @@ def test_invalid_limit_configuration_refuses_to_start(monkeypatch, var, value, m
     code = generate_fastapi_code([{"name": "add", "args": [], "return_type": "int"}])
     with pytest.raises(RuntimeError, match=match):
         exec(compile(code, "<generated>", "exec"), {"__name__": "generated_app"})
+
+
+def _slow_client(monkeypatch, timeout="0"):
+    monkeypatch.setenv("NOTEBOOK_API_ISOLATE_MAX_PROCESSES", "1")
+    client = _client(monkeypatch, timeout=timeout)
+    client.app  # noqa: B018
+    return client
+
+
+def _wait_for_capacity(client):
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline:
+        r = client.post("/add", json={"a": 1, "b": 1}, headers=HEADERS)
+        if r.status_code == 200:
+            return r
+        assert r.status_code == 503
+        time.sleep(0.1)
+    raise AssertionError("slot never recovered")
+
+
+def test_excess_concurrent_request_gets_503_then_capacity_recovers(monkeypatch):
+    import threading
+
+    client = _slow_client(monkeypatch)
+    import sys
+    nb = sys.modules["generated.runtime.notebook_module"]
+    nb.nap = lambda: time.sleep(1.5) or 1
+    results = {}
+
+    def first():
+        results["first"] = client.post("/nap", json={}, headers=HEADERS)
+
+    t = threading.Thread(target=first)
+    t.start()
+    time.sleep(0.7)
+    rejected = client.post("/add", json={"a": 1, "b": 1}, headers=HEADERS)
+    t.join()
+    assert rejected.status_code == 503
+    assert rejected.headers["retry-after"] == "1"
+    assert results["first"].status_code == 200
+    assert _wait_for_capacity(client).json() == {"result": 2}
+
+
+def test_timed_out_and_crashed_children_release_their_slot(monkeypatch):
+    client = _slow_client(monkeypatch, timeout="1")
+    assert client.post("/hang", json={}, headers=HEADERS).status_code == 504
+    assert _wait_for_capacity(client).status_code == 200
+    assert client.post("/crash", json={}, headers=HEADERS).status_code == 500
+    assert _wait_for_capacity(client).status_code == 200
+    assert _no_children()
+
+
+def test_unlimited_by_default_never_returns_503(monkeypatch):
+    client = _client(monkeypatch)
+    assert all(client.post("/add", json={"a": 1, "b": 1}, headers=HEADERS).status_code == 200 for _ in range(3))

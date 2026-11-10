@@ -45,3 +45,9 @@ def test_limits_without_isolation_are_reported_not_ignored(field):
 def test_unsupported_platform_is_reported(field):
     with pytest.raises(ValueError, match="not supported on this platform"):
         _check(isolate=True, rlimits_supported=False, **{field: 64})
+
+
+def test_max_processes_without_isolation_is_reported():
+    with pytest.raises(ValueError, match="NOTEBOOK_API_ISOLATE_MAX_PROCESSES"):
+        _check(max_processes=2)
+    _check(max_processes=2, isolate=True)

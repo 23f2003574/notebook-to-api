@@ -27842,6 +27842,7 @@ def test_env_vars_preview_requires_no_notebook_and_needs_no_body():
         "NOTEBOOK_API_ISOLATE_EXECUTION",
         "NOTEBOOK_API_ISOLATE_MEMORY_LIMIT_MB",
         "NOTEBOOK_API_ISOLATE_CPU_LIMIT_SECONDS",
+        "NOTEBOOK_API_ISOLATE_MAX_PROCESSES",
     }
     assert env_vars["NOTEBOOK_API_KEY"]["default"] == "notebook-to-api-dev-key"
     assert env_vars["NOTEBOOK_API_ALLOWED_ORIGINS"]["default"] == "*"
