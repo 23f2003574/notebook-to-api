@@ -91,3 +91,18 @@ def test_cpu_limit_returns_controlled_500_and_next_request_works(monkeypatch):
     assert "CPU limit exceeded" in r.text
     assert _no_children()
     assert client.post("/add", json={"a": 1, "b": 1}, headers=HEADERS).json() == {"result": 2}
+
+
+@pytest.mark.parametrize("var,value,match", [
+    ("NOTEBOOK_API_ISOLATE_MEMORY_LIMIT_MB", "512", "NOTEBOOK_API_ISOLATE_EXECUTION=1"),
+    ("NOTEBOOK_API_ISOLATE_CPU_LIMIT_SECONDS", "5", "NOTEBOOK_API_ISOLATE_EXECUTION=1"),
+    ("NOTEBOOK_API_ISOLATE_MEMORY_LIMIT_MB", "1", "at least 16"),
+    ("NOTEBOOK_API_ISOLATE_CPU_LIMIT_SECONDS", "-1", "must not be negative"),
+    ("NOTEBOOK_API_ISOLATE_CPU_LIMIT_SECONDS", "abc", "must be a number"),
+])
+def test_invalid_limit_configuration_refuses_to_start(monkeypatch, var, value, match):
+    monkeypatch.setenv(var, value)
+    _register_fake_notebook_module(monkeypatch)
+    code = generate_fastapi_code([{"name": "add", "args": [], "return_type": "int"}])
+    with pytest.raises(RuntimeError, match=match):
+        exec(compile(code, "<generated>", "exec"), {"__name__": "generated_app"})

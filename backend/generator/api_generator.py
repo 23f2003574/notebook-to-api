@@ -838,10 +838,10 @@ def _sunset_http_date(iso_date):
     )
 
 
-def _isolated_execution_source():
-    """Source of backend/runtime/isolated_execution.py minus its module
+def _isolated_execution_source(module="isolated_execution"):
+    """Source of backend/runtime/<module>.py minus its module
     docstring and __future__ import, for inlining into a generated app."""
-    src = (Path(__file__).resolve().parent.parent / "runtime" / "isolated_execution.py").read_text(encoding="utf-8")
+    src = (Path(__file__).resolve().parent.parent / "runtime" / f"{module}.py").read_text(encoding="utf-8")
     body = src.split("from __future__ import annotations\n", 1)[1]
     return body.strip("\n")
 
@@ -2686,6 +2686,24 @@ def generate_fastapi_code(
         f'"{_generated_app_env_var_default("NOTEBOOK_API_ISOLATE_EXECUTION")}"'
         ') > 0'
     )
+    # Startup validation of the limit settings above (kept separate from
+    # enforcement); a bad combination refuses to start with an actionable error.
+    lines.extend(_isolated_execution_source("execution_limits").splitlines())
+    lines.append("")
+    lines.append("try:")
+    lines.append("    import resource as _resource_probe  # noqa: F401")
+    lines.append("    _RLIMITS_SUPPORTED = True")
+    lines.append("except ImportError:")
+    lines.append("    _RLIMITS_SUPPORTED = False")
+    lines.append("try:")
+    lines.append("    validate_execution_limits(")
+    lines.append("        timeout_seconds=REQUEST_TIMEOUT_SECONDS, memory_limit_mb=ISOLATE_MEMORY_LIMIT_MB,")
+    lines.append("        cpu_limit_seconds=ISOLATE_CPU_LIMIT_SECONDS, isolate=ISOLATE_EXECUTION,")
+    lines.append("        rlimits_supported=_RLIMITS_SUPPORTED,")
+    lines.append("    )")
+    lines.append("except ValueError as _limits_error:")
+    lines.append("    raise RuntimeError(str(_limits_error)) from None")
+    lines.append("")
     lines.append("_REQUEST_TIMEOUTS = {}")
     # {path: seconds} for every synchronous endpoint with its own
     # "# notebook-to-api: timeout N" directive (timeout_overrides) --
