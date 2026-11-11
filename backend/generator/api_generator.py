@@ -5891,6 +5891,10 @@ def generate_fastapi_code(
     # The slot is taken *outside* the execution timeout: time spent queued
     # behind other calls doesn't count against the task's own limit.
     lines.append("        async with _call_slot():")
+    # Recorded once the slot is held: a 'processing' task without started_at
+    # is still waiting for capacity, one with it is actually executing.
+    lines.append("          if task_id in TASKS:")
+    lines.append("              TASKS[task_id]['started_at'] = time.time()")
     lines.append("          with anyio.fail_after(task_limit or None):")
     # The scope's own timeout only surfaces as TimeoutError once this block
     # has exited, so a TimeoutError caught inside it was raised by the
