@@ -1866,6 +1866,8 @@ def generate_fastapi_code(
     # first request; /ready reports 503 once shutdown begins so load
     # balancers drain traffic before the notebook's own handlers run.
     lines.append("    _LIFECYCLE['state'] = 'shutting_down'")
+    # Isolated children (and their subprocesses) must not outlive the app.
+    lines.append("    terminate_active_processes()")
     lines.append("    while _nb_atexit_handlers:")
     lines.append("        func, args, kwargs = _nb_atexit_handlers.pop()")
     lines.append("        _nb_atexit.unregister(func)")

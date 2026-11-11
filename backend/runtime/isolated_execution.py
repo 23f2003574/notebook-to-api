@@ -7,6 +7,7 @@ import math
 import multiprocessing as mp
 import os
 import signal
+import threading
 import time
 import uuid
 from typing import Any, Callable, Mapping, Sequence
@@ -86,6 +87,43 @@ def _kill_process_group(pid: int | None) -> None:
         pass
 
 
+_ACTIVE: dict[int, Any] = {}
+_ACTIVE_LOCK = threading.Lock()
+
+
+def terminate_active_processes(grace_seconds: float = 2.0) -> int:
+    """Stop every isolated child still running; returns how many were signalled.
+
+    For application shutdown: SIGTERM each child's process group, wait up to
+    ``grace_seconds`` in total, SIGKILL whatever is left and reap it. Safe when
+    a child already exited or is being reaped by its own ``run_isolated`` call
+    (that call then reports a controlled failure and frees its capacity slot).
+    """
+    with _ACTIVE_LOCK:
+        procs = list(_ACTIVE.values())
+    for proc in procs:
+        try:
+            if hasattr(os, "killpg") and proc.pid is not None:
+                os.killpg(proc.pid, signal.SIGTERM)
+            else:
+                proc.terminate()
+        except (OSError, ValueError):
+            pass
+    deadline = time.monotonic() + max(0.0, grace_seconds)
+    for proc in procs:
+        try:
+            proc.join(max(0.0, deadline - time.monotonic()))
+            if proc.is_alive():
+                _kill_process_group(proc.pid)
+                proc.kill()
+                proc.join(1)
+            elif proc.pid is not None:
+                _kill_process_group(proc.pid)  # grandchildren that outlived the leader
+        except (OSError, ValueError, AssertionError):
+            pass  # already reaped and closed by run_isolated
+    return len(procs)
+
+
 def _child(
     conn: Any,
     func: Callable[..., Any],
@@ -160,6 +198,8 @@ def run_isolated(
     proc = ctx.Process(target=_child, args=(child_conn, func, tuple(args), dict(kwargs or {}), memory_limit_mb, cpu_limit_seconds), daemon=True)
     try:
         proc.start()
+        with _ACTIVE_LOCK:
+            _ACTIVE[proc.pid] = proc
         child_conn.close()
         _emit_event("started", execution_id, started, pid=proc.pid)
         if not parent_conn.poll(timeout):
@@ -181,6 +221,8 @@ def run_isolated(
         outcome = "memory_limit_exceeded" if payload == "memory limit exceeded" else "error"
         raise IsolatedExecutionError(payload)
     finally:
+        with _ACTIVE_LOCK:
+            _ACTIVE.pop(proc.pid, None)
         _kill_process_group(proc.pid)
         if proc.is_alive():
             proc.terminate()
