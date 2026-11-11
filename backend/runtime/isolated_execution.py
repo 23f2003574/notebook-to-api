@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import logging
 import multiprocessing as mp
+import os
+import signal
 import time
 import uuid
 from typing import Any, Callable, Mapping, Sequence
@@ -71,6 +73,18 @@ def _apply_cpu_limit(limit_seconds: float) -> None:
     resource.setrlimit(resource.RLIMIT_CPU, (min(soft, new_hard), new_hard))
 
 
+def _kill_process_group(pid: int | None) -> None:
+    """SIGKILL the child's process group so subprocesses started by notebook code
+    cannot outlive a timeout or crash. No-op when the child never became a group
+    leader (non-POSIX, or it died before setsid)."""
+    if pid is None or not hasattr(os, "killpg"):
+        return
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
 def _child(
     conn: Any,
     func: Callable[..., Any],
@@ -81,6 +95,11 @@ def _child(
 ) -> None:
     try:
         try:
+            if hasattr(os, "setsid"):
+                try:
+                    os.setsid()  # own process group so the parent can reap grandchildren
+                except OSError:
+                    pass
             if memory_limit_mb:
                 _apply_memory_limit(memory_limit_mb)
             if cpu_limit_seconds:
@@ -151,6 +170,7 @@ def run_isolated(
         outcome = "memory_limit_exceeded" if payload == "memory limit exceeded" else "error"
         raise IsolatedExecutionError(payload)
     finally:
+        _kill_process_group(proc.pid)
         if proc.is_alive():
             proc.terminate()
             proc.join(2)
