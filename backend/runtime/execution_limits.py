@@ -32,6 +32,8 @@ def validate_execution_limits(
     for name, value in ((_TIMEOUT, timeout_seconds), (_MEMORY, memory_limit_mb), (_CPU, cpu_limit_seconds)):
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
             raise ValueError(f"{name} must be a finite number >= 0 (0 disables it), got {value!r}")
+    if isinstance(max_processes, bool) or not isinstance(max_processes, int) or max_processes < 0:
+        raise ValueError(f"{_MAX_PROCS} must be a whole number >= 0 (0 disables it), got {max_processes!r}")
     if max_processes > 0 and not isolate:
         raise ValueError(f"{_MAX_PROCS} is set but has no effect unless {_ISOLATE}=1; enable isolation or unset it")
     if 0 < memory_limit_mb < MIN_MEMORY_LIMIT_MB:

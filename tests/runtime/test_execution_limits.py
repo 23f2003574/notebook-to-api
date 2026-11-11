@@ -51,3 +51,13 @@ def test_max_processes_without_isolation_is_reported():
     with pytest.raises(ValueError, match="NOTEBOOK_API_ISOLATE_MAX_PROCESSES"):
         _check(max_processes=2)
     _check(max_processes=2, isolate=True)
+
+
+import pytest as _pytest
+
+
+@_pytest.mark.parametrize("bad", [-1, 1.5, True, "2", None])
+def test_max_processes_must_be_a_non_negative_whole_number(bad):
+    with _pytest.raises(ValueError, match="NOTEBOOK_API_ISOLATE_MAX_PROCESSES"):
+        validate_execution_limits(timeout_seconds=0, memory_limit_mb=0, cpu_limit_seconds=0,
+                                  isolate=True, rlimits_supported=True, max_processes=bad)
