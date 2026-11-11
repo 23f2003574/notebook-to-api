@@ -81,6 +81,11 @@ jobs:
       - name: Build the sample notebook's image and smoke-test it
         run: python -m backend.cli deploy notebooks/sample.ipynb --output smoke_app --smoke-test
 
+      - name: Start the sample's generated compose project and check /health
+        run: |
+          pip install pytest
+          pytest tests/test_compose_runtime_smoke.py
+
   frontend:
 
     runs-on: ubuntu-latest
