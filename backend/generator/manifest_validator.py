@@ -112,3 +112,20 @@ def verify_deployment_artifacts(stage_dir, output_dir):
         for src in parts[:-1]:
             if src not in (".", "./") and not os.path.exists(os.path.join(output_dir, src)):
                 raise ManifestValidationError(f"Dockerfile: COPY source {src!r} does not exist in the output directory")
+    _check_compose_env_documented(stage_dir)
+
+
+def _check_compose_env_documented(stage_dir):
+    """Every variable docker-compose.yml passes through must be listed in
+    .env.example, or operators copying that file cannot discover the setting."""
+    import os
+    import re
+
+    def read(name):
+        with open(os.path.join(stage_dir, name), encoding="utf-8") as f:
+            return f.read()
+
+    compose = set(re.findall(r"^      - ([A-Za-z_]\w*)", read("docker-compose.yml"), re.M))
+    documented = set(re.findall(r"^#? ?([A-Za-z_]\w*)=", read(".env.example"), re.M))
+    missing = sorted(compose - documented)
+    _require(not missing, ".env.example: does not list variables used by docker-compose.yml: " + ", ".join(missing))

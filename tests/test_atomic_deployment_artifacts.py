@@ -103,3 +103,11 @@ def test_compile_publishes_nothing_when_an_artifact_is_empty(tmp_path, monkeypat
     with pytest.raises(ValueError, match=r"\.dockerignore: .*empty"):
         compile_notebook_to_api(_nb(tmp_path), str(out / "app.py"))
     assert _snapshot(out) == before
+
+
+def test_verify_rejects_compose_variable_missing_from_env_example(tmp_path):
+    stage, out = _staged(tmp_path)
+    text = (stage / ".env.example").read_text()
+    (stage / ".env.example").write_text(text.replace("NOTEBOOK_API_MAX_TASKS=", "# removed="))
+    with pytest.raises(ManifestValidationError, match="NOTEBOOK_API_MAX_TASKS"):
+        verify_deployment_artifacts(str(stage), str(out))
