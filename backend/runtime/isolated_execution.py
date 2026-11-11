@@ -235,3 +235,143 @@ def run_isolated(
         child_conn.close()
         parent_conn.close()
         _emit_event("finished", execution_id, started, outcome=outcome, exitcode=exitcode)
+
+
+def _worker_main(conn: Any, handler: Callable[[Any], Any], memory_limit_mb: float | None,
+                 cpu_limit_seconds: float | None) -> None:
+    global _ACTIVE_LOCK
+    # Daemonic (so the app's exit reaps us) yet allowed its own children.
+    mp.current_process()._config["daemon"] = False
+    if hasattr(os, "setsid"):
+        try:
+            os.setsid()
+        except OSError:
+            pass
+    # Forked from the app: forget its children and any lock held at fork time.
+    _ACTIVE_LOCK = threading.Lock()
+    _ACTIVE.clear()
+
+    def _stop(*_: Any) -> None:
+        terminate_active_processes(0.5)
+        os._exit(0)
+
+    signal.signal(signal.SIGTERM, _stop)
+    while True:
+        try:
+            message = conn.recv()
+        except EOFError:
+            return
+        if message is None:
+            return
+        payload, timeout = message
+        try:
+            # Every request runs in a fresh child forked from this idle worker,
+            # so nothing a request does to its state survives it.
+            reply = ("ok", run_isolated(handler, args=(payload,), timeout=timeout,
+                                        memory_limit_mb=memory_limit_mb, cpu_limit_seconds=cpu_limit_seconds))
+        except IsolatedExecutionTimeout as exc:
+            reply = ("timeout", str(exc))
+        except IsolatedExecutionError as exc:
+            reply = ("error", str(exc))
+        try:
+            conn.send(reply)
+        except Exception:  # noqa: BLE001 - unpicklable result
+            conn.send(("error", "result could not be serialized"))
+
+
+class IsolatedWorker:
+    """A warm helper process that serves many requests (opt-in; not used by default).
+
+    ``handler`` is fixed when the worker starts (it is inherited by fork, never
+    pickled); requests are picklable payloads. Each request runs through
+    ``run_isolated`` in a fresh child forked from the idle worker, so state
+    never carries over between requests and the memory/CPU/timeout semantics
+    are identical to the per-call path. The worker keeps only the startup cost
+    (a small single-threaded process instead of forking the whole app). Any
+    worker failure (crash, timeout, protocol error) kills it, and the next
+    request starts a fresh one. One request at a time per worker.
+    """
+
+    def __init__(self, handler: Callable[[Any], Any], *, memory_limit_mb: float | None = None,
+                 cpu_limit_seconds: float | None = None, startup_grace_seconds: float = 2.0) -> None:
+        self._handler = handler
+        self._memory_limit_mb = memory_limit_mb
+        self._cpu_limit_seconds = cpu_limit_seconds
+        self._grace = startup_grace_seconds
+        self._lock = threading.Lock()
+        self._proc: Any = None
+        self._conn: Any = None
+        self.starts = 0
+
+    @property
+    def running(self) -> bool:
+        return self._proc is not None and self._proc.is_alive()
+
+    def _start(self) -> None:
+        if "fork" not in mp.get_all_start_methods():
+            raise IsolatedExecutionError('isolated workers are not supported on this platform (no "fork" start method)')
+        ctx = _context()
+        parent_conn, child_conn = ctx.Pipe(duplex=True)
+        proc = ctx.Process(target=_worker_main, daemon=True,
+                           args=(child_conn, self._handler, self._memory_limit_mb, self._cpu_limit_seconds))
+        proc.start()
+        child_conn.close()
+        self._proc, self._conn = proc, parent_conn
+        self.starts += 1
+        with _ACTIVE_LOCK:
+            _ACTIVE[proc.pid] = proc
+
+    def _discard(self) -> None:
+        proc, conn, self._proc, self._conn = self._proc, self._conn, None, None
+        if proc is None:
+            return
+        with _ACTIVE_LOCK:
+            _ACTIVE.pop(proc.pid, None)
+        try:
+            if proc.is_alive():
+                proc.terminate()
+                proc.join(self._grace)
+                if proc.is_alive():
+                    proc.kill()
+            _kill_process_group(proc.pid)
+            proc.join()
+            proc.close()
+        except (OSError, ValueError):
+            pass
+        try:
+            conn.close()
+        except OSError:
+            pass
+
+    def request(self, payload: Any, timeout: float | None = None) -> Any:
+        with self._lock:
+            if not self.running:
+                self._discard()
+                self._start()
+            try:
+                self._conn.send((payload, timeout))
+                wait = None if not timeout else timeout + self._grace + 1.0
+                if not self._conn.poll(wait):
+                    raise IsolatedExecutionTimeout(f"worker did not answer within {timeout}s")
+                status, value = self._conn.recv()
+            except IsolatedExecutionError:
+                self._discard()
+                raise
+            except (EOFError, OSError):
+                self._discard()
+                raise IsolatedExecutionError("worker exited without a result") from None
+            if status == "ok":
+                return value
+            if status == "timeout":
+                raise IsolatedExecutionTimeout(value)
+            raise IsolatedExecutionError(value)
+
+    def close(self) -> None:
+        with self._lock:
+            if self._conn is not None and self.running:
+                try:
+                    self._conn.send(None)
+                    self._proc.join(self._grace)
+                except (OSError, ValueError):
+                    pass
+            self._discard()
