@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import multiprocessing as mp
 import os
 import signal
@@ -135,6 +136,12 @@ def run_isolated(
     ``cpu_limit_seconds`` (default None) caps its CPU time via RLIMIT_CPU.
     The callable must be picklable when only the ``spawn`` start method exists.
     """
+    for name, value in (("timeout", timeout), ("memory_limit_mb", memory_limit_mb),
+                        ("cpu_limit_seconds", cpu_limit_seconds)):
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+            raise ValueError(f"{name} must be a finite number >= 0 (or None), got {value!r}")
     if memory_limit_mb or cpu_limit_seconds:
         try:
             import resource  # noqa: F401
