@@ -11,6 +11,7 @@ import os
 import re
 import shlex
 import shutil
+import tempfile
 import sys
 import pathlib
 import threading
@@ -5577,6 +5578,33 @@ _COMPILE_OUTPUT_NAMES = (
 )
 
 
+_DEPLOY_STAGING_PREFIX = ".deploy-staging-"
+
+
+def _publish_staged_artifacts(stage_dir, output_dir):
+    """Validate the deployment artifacts generated into `stage_dir`, then move
+    them into `output_dir`. Nothing is published unless every artifact was
+    generated and (when PyYAML is available) is structurally valid, so a
+    failure partway never leaves a mix of old and new Dockerfile / Compose /
+    Kubernetes files. Each move is an atomic os.replace on one filesystem."""
+    from backend.generator.manifest_validator import (
+        validate_compose_manifest, validate_kubernetes_manifest,
+    )
+
+    try:
+        import yaml  # noqa: F401
+        have_yaml = True
+    except ImportError:
+        have_yaml = False
+    if have_yaml:
+        for name, check in (("docker-compose.yml", validate_compose_manifest),
+                            ("kubernetes.yaml", validate_kubernetes_manifest)):
+            with open(os.path.join(stage_dir, name), encoding="utf-8") as f:
+                check(f.read())
+    for name in sorted(os.listdir(stage_dir)):
+        os.replace(os.path.join(stage_dir, name), os.path.join(output_dir, name))
+
+
 def _refuse_to_overwrite_foreign_files(output_dir):
     """Raise ValueError when `output_dir` holds files a compile would
     overwrite but no earlier compile produced them (no .compile_metadata.json).
@@ -5971,10 +5999,12 @@ def _compile_notebook_to_api(
         # write_compile_metadata itself might have left partially written
         # (a mid-json.dump I/O failure), not just one from the two steps
         # before it.
+        stage_dir = tempfile.mkdtemp(prefix=_DEPLOY_STAGING_PREFIX, dir=output_dir)
+
         try:
 
             dockerfile_path = os.path.join(
-                output_dir,
+                stage_dir,
                 "Dockerfile"
             )
 
@@ -5987,15 +6017,15 @@ def _compile_notebook_to_api(
             )
 
             dockerignore_path = os.path.join(
-                output_dir,
+                stage_dir,
                 ".dockerignore"
             )
 
             generate_dockerignore(dockerignore_path)
-            generate_gitignore(os.path.join(output_dir, ".gitignore"))
+            generate_gitignore(os.path.join(stage_dir, ".gitignore"))
 
             docker_compose_path = os.path.join(
-                output_dir,
+                stage_dir,
                 "docker-compose.yml"
             )
 
@@ -6007,7 +6037,7 @@ def _compile_notebook_to_api(
             )
 
             env_example_path = os.path.join(
-                output_dir,
+                stage_dir,
                 ".env.example"
             )
 
@@ -6017,7 +6047,7 @@ def _compile_notebook_to_api(
             )
 
             kubernetes_manifest_path = os.path.join(
-                output_dir,
+                stage_dir,
                 "kubernetes.yaml"
             )
 
@@ -6027,7 +6057,7 @@ def _compile_notebook_to_api(
             )
 
             readme_path = os.path.join(
-                output_dir,
+                stage_dir,
                 "README.md"
             )
 
@@ -6041,6 +6071,8 @@ def _compile_notebook_to_api(
                 tag_overrides=_extract_tag_overrides(code_cells),
                 notebook_env_vars=notebook_env_vars,
             )
+
+            _publish_staged_artifacts(stage_dir, output_dir)
 
             write_compile_metadata(
                 source_notebook_path or notebook_path,
@@ -6058,6 +6090,9 @@ def _compile_notebook_to_api(
                 os.remove(metadata_path)
 
             raise
+
+        finally:
+            shutil.rmtree(stage_dir, ignore_errors=True)
 
         print(
             f"Successfully generated FastAPI app at: {output_path}"
