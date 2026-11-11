@@ -37,11 +37,11 @@ def test_start_serve_and_clean_shutdown(worker):
     assert not worker.running
     assert worker.request({"kind": "echo", "value": 5}, timeout=10) == 5
     pid = worker._proc.pid
-    assert worker.running and pid in iso._ACTIVE
+    assert worker.running and pid in iso._WORKERS
 
     worker.close()
 
-    assert not worker.running and pid not in iso._ACTIVE
+    assert not worker.running and pid not in iso._WORKERS
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)  # reaped, not a zombie
 
@@ -103,7 +103,7 @@ def test_app_shutdown_cleanup_also_stops_workers(worker):
     time.sleep(0.2)
 
     assert not worker.running
-    assert pid not in iso._ACTIVE or not worker._proc.is_alive()
+    assert pid not in iso._WORKERS
 
 
 def test_concurrent_callers_are_serialized_safely(worker):

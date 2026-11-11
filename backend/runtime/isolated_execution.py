@@ -91,37 +91,57 @@ _ACTIVE: dict[int, Any] = {}
 _ACTIVE_LOCK = threading.Lock()
 
 
+_WORKERS: dict[int, Any] = {}
+
+
 def terminate_active_processes(grace_seconds: float = 2.0) -> int:
     """Stop every isolated child still running; returns how many were signalled.
 
-    For application shutdown: SIGTERM each child's process group, wait up to
-    ``grace_seconds`` in total, SIGKILL whatever is left and reap it. Safe when
-    a child already exited or is being reaped by its own ``run_isolated`` call
-    (that call then reports a controlled failure and frees its capacity slot).
+    For application shutdown. Each ``run_isolated`` call owns reaping its own
+    child (two threads reaping one process race), so this only signals: SIGTERM
+    to each child's process group, wait up to ``grace_seconds`` for the owners
+    to finish and deregister, then SIGKILL what is left. Their calls report a
+    controlled failure and free their capacity slot. Idle workers have no
+    owner thread, so they are shut down here.
     """
     with _ACTIVE_LOCK:
-        procs = list(_ACTIVE.values())
-    for proc in procs:
-        try:
-            if hasattr(os, "killpg") and proc.pid is not None:
-                os.killpg(proc.pid, signal.SIGTERM)
-            else:
-                proc.terminate()
-        except (OSError, ValueError):
-            pass
+        procs = dict(_ACTIVE)
+        workers = list(_WORKERS.values())
+    total = len(procs)
+    for worker in workers:
+        if worker._lock.acquire(blocking=False):  # idle: nobody else will reap it
+            try:
+                worker._discard()
+            finally:
+                worker._lock.release()
+        elif worker._proc is not None:
+            procs[worker._proc.pid] = worker._proc
+            total += 1
+
+    def _signal(sig: int) -> None:
+        for pid, proc in procs.items():
+            try:
+                if hasattr(os, "killpg"):
+                    os.killpg(pid, sig)
+                else:
+                    os.kill(pid, sig)
+            except (OSError, ValueError):
+                pass
+
+    def _remaining() -> list[int]:
+        with _ACTIVE_LOCK:
+            return [pid for pid in procs if pid in _ACTIVE or pid in _WORKERS]
+
+    _signal(signal.SIGTERM)
     deadline = time.monotonic() + max(0.0, grace_seconds)
-    for proc in procs:
-        try:
-            proc.join(max(0.0, deadline - time.monotonic()))
-            if proc.is_alive():
-                _kill_process_group(proc.pid)
-                proc.kill()
-                proc.join(1)
-            elif proc.pid is not None:
-                _kill_process_group(proc.pid)  # grandchildren that outlived the leader
-        except (OSError, ValueError, AssertionError):
-            pass  # already reaped and closed by run_isolated
-    return len(procs)
+    while _remaining() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    if _remaining():
+        _signal(signal.SIGKILL)
+        deadline = time.monotonic() + 2.0
+        while _remaining() and time.monotonic() < deadline:
+            time.sleep(0.02)
+    return total
 
 
 def _child(
@@ -221,9 +241,8 @@ def run_isolated(
         outcome = "memory_limit_exceeded" if payload == "memory limit exceeded" else "error"
         raise IsolatedExecutionError(payload)
     finally:
-        with _ACTIVE_LOCK:
-            _ACTIVE.pop(proc.pid, None)
-        _kill_process_group(proc.pid)
+        pid = proc.pid
+        _kill_process_group(pid)
         if proc.is_alive():
             proc.terminate()
             proc.join(2)
@@ -232,6 +251,8 @@ def run_isolated(
         if proc.pid is not None:
             proc.join()
             proc.close()
+        with _ACTIVE_LOCK:
+            _ACTIVE.pop(pid, None)
         child_conn.close()
         parent_conn.close()
         _emit_event("finished", execution_id, started, outcome=outcome, exitcode=exitcode)
@@ -250,6 +271,7 @@ def _worker_main(conn: Any, handler: Callable[[Any], Any], memory_limit_mb: floa
     # Forked from the app: forget its children and any lock held at fork time.
     _ACTIVE_LOCK = threading.Lock()
     _ACTIVE.clear()
+    _WORKERS.clear()
 
     def _stop(*_: Any) -> None:
         terminate_active_processes(0.5)
@@ -319,14 +341,14 @@ class IsolatedWorker:
         self._proc, self._conn = proc, parent_conn
         self.starts += 1
         with _ACTIVE_LOCK:
-            _ACTIVE[proc.pid] = proc
+            _WORKERS[proc.pid] = self
 
     def _discard(self) -> None:
         proc, conn, self._proc, self._conn = self._proc, self._conn, None, None
         if proc is None:
             return
         with _ACTIVE_LOCK:
-            _ACTIVE.pop(proc.pid, None)
+            _WORKERS.pop(proc.pid, None)
         try:
             if proc.is_alive():
                 proc.terminate()

@@ -85,9 +85,6 @@ def test_child_already_exited_before_cleanup_is_tolerated():
         def terminate(self):
             raise ProcessLookupError
 
-        def join(self, timeout=None):
-            raise ValueError("process object is closed")
-
     iso._ACTIVE[Gone.pid] = Gone()
     try:
         assert iso.terminate_active_processes(grace_seconds=0.1) == 1
