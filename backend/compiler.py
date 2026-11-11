@@ -5603,8 +5603,30 @@ def _publish_staged_artifacts(stage_dir, output_dir):
                             ("kubernetes.yaml", validate_kubernetes_manifest)):
             with open(os.path.join(stage_dir, name), encoding="utf-8") as f:
                 check(f.read())
-    for name in sorted(os.listdir(stage_dir)):
-        os.replace(os.path.join(stage_dir, name), os.path.join(output_dir, name))
+    names = sorted(os.listdir(stage_dir))
+    previous = {}
+    for name in names:
+        target = os.path.join(output_dir, name)
+        previous[name] = open(target, "rb").read() if os.path.isfile(target) else None
+    done = []
+    try:
+        for name in names:
+            os.replace(os.path.join(stage_dir, name), os.path.join(output_dir, name))
+            done.append(name)
+    except BaseException:
+        # A move failed partway: put back what was replaced so the set stays
+        # consistent (all old files, never a mix of old and new).
+        for name in done:
+            target = os.path.join(output_dir, name)
+            try:
+                if previous[name] is None:
+                    os.unlink(target)
+                else:
+                    with open(target, "wb") as f:
+                        f.write(previous[name])
+            except OSError:
+                pass
+        raise
 
 
 def _refuse_to_overwrite_foreign_files(output_dir):

@@ -111,3 +111,25 @@ def test_verify_rejects_compose_variable_missing_from_env_example(tmp_path):
     (stage / ".env.example").write_text(text.replace("NOTEBOOK_API_MAX_TASKS=", "# removed="))
     with pytest.raises(ManifestValidationError, match="NOTEBOOK_API_MAX_TASKS"):
         verify_deployment_artifacts(str(stage), str(out))
+
+
+def test_failed_publish_move_restores_previously_published_files(tmp_path, monkeypatch):
+    out = tmp_path / "out"
+    nb = _nb(tmp_path)
+    compile_notebook_to_api(nb, str(out / "app.py"))
+    before = _snapshot(out)
+    real, calls = os.replace, []
+
+    def flaky(src, dst):
+        calls.append(dst)
+        if os.path.basename(dst) == "kubernetes.yaml" and ".deploy-staging-" in src:
+            raise OSError("device busy")
+        return real(src, dst)
+
+    monkeypatch.setattr(compiler.os, "replace", flaky)
+    with pytest.raises(OSError, match="device busy"):
+        compile_notebook_to_api(_nb(tmp_path, "def mul(a: int, b: int) -> int:\n    \"m\"\n    return a * b\n"),
+                                str(out / "app.py"))
+    monkeypatch.undo()
+    assert os.path.basename(calls[-1]) in DEPLOY  # the failure hit the publish step
+    assert _snapshot(out) == before
