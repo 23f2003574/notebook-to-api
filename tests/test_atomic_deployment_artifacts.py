@@ -53,3 +53,53 @@ def test_invalid_staged_manifest_is_not_published(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="apiVersion"):
         compile_notebook_to_api(_nb(tmp_path), str(out / "app.py"))
     assert _snapshot(out) == before
+
+
+from backend.generator.manifest_validator import ManifestValidationError, verify_deployment_artifacts
+
+
+def _staged(tmp_path):
+    out = tmp_path / "out"
+    compile_notebook_to_api(_nb(tmp_path), str(out / "app.py"))
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    for n in DEPLOY:
+        (stage / n).write_bytes((out / n).read_bytes())
+    return stage, out
+
+
+def test_verify_accepts_complete_artifacts(tmp_path):
+    verify_deployment_artifacts(*map(str, _staged(tmp_path)))
+
+
+@pytest.mark.parametrize("name", DEPLOY)
+def test_verify_rejects_missing_or_empty_artifact(tmp_path, name):
+    stage, out = _staged(tmp_path)
+    (stage / name).write_text("  \n")
+    with pytest.raises(ManifestValidationError, match=f"{name}: .*empty"):
+        verify_deployment_artifacts(str(stage), str(out))
+    (stage / name).unlink()
+    with pytest.raises(ManifestValidationError, match=f"{name}: .*not generated"):
+        verify_deployment_artifacts(str(stage), str(out))
+
+
+def test_verify_rejects_incomplete_dockerfile_and_dangling_copy(tmp_path):
+    stage, out = _staged(tmp_path)
+    text = (stage / "Dockerfile").read_text()
+    (stage / "Dockerfile").write_text("\n".join(l for l in text.splitlines() if not l.startswith("CMD")))
+    with pytest.raises(ManifestValidationError, match="missing CMD"):
+        verify_deployment_artifacts(str(stage), str(out))
+    (stage / "Dockerfile").write_text(text)
+    (out / "requirements.txt").unlink()
+    with pytest.raises(ManifestValidationError, match="requirements.txt"):
+        verify_deployment_artifacts(str(stage), str(out))
+
+
+def test_compile_publishes_nothing_when_an_artifact_is_empty(tmp_path, monkeypatch):
+    out = tmp_path / "out"
+    compile_notebook_to_api(_nb(tmp_path), str(out / "app.py"))
+    before = _snapshot(out)
+    monkeypatch.setattr(compiler, "generate_dockerignore", lambda path: open(path, "w").close())
+    with pytest.raises(ValueError, match=r"\.dockerignore: .*empty"):
+        compile_notebook_to_api(_nb(tmp_path), str(out / "app.py"))
+    assert _snapshot(out) == before

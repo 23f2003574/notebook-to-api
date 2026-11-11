@@ -70,3 +70,36 @@ def validate_kubernetes_manifest(text):
              "kubernetes.yaml: Service selector does not match the Deployment pod labels")
     _require((kinds["Service"].get("spec") or {}).get("ports"), "kubernetes.yaml: Service defines no ports")
     return docs
+
+
+REQUIRED_DEPLOY_ARTIFACTS = (
+    "Dockerfile", ".dockerignore", "docker-compose.yml", ".env.example", "kubernetes.yaml", "README.md",
+)
+
+
+def verify_deployment_artifacts(stage_dir, output_dir):
+    """Integrity check run on freshly generated artifacts before they replace
+    the published ones: every expected file exists and is non-empty, the
+    Dockerfile has FROM and CMD, and each file the Dockerfile COPYs by name
+    (e.g. requirements.txt) exists in `output_dir`, where it is built from."""
+    import os
+    import shlex
+
+    for name in REQUIRED_DEPLOY_ARTIFACTS:
+        path = os.path.join(stage_dir, name)
+        _require(os.path.isfile(path), f"{name}: expected deployment artifact was not generated")
+        with open(path, encoding="utf-8") as f:
+            _require(f.read().strip(), f"{name}: generated deployment artifact is empty")
+    with open(os.path.join(stage_dir, "Dockerfile"), encoding="utf-8") as f:
+        # Instructions start in column 0; indented "CMD" is a HEALTHCHECK's.
+        lines = [ln.rstrip() for ln in f if ln.strip() and not ln.lstrip().startswith("#")]
+    for instruction in ("FROM", "CMD"):
+        _require(any(ln.upper().startswith(instruction + " ") for ln in lines),
+                 f"Dockerfile: missing {instruction} instruction")
+    for ln in lines:
+        if not ln.upper().startswith("COPY "):
+            continue
+        parts = [p for p in shlex.split(ln)[1:] if not p.startswith("--")]
+        for src in parts[:-1]:
+            if src not in (".", "./") and not os.path.exists(os.path.join(output_dir, src)):
+                raise ManifestValidationError(f"Dockerfile: COPY source {src!r} does not exist in the output directory")

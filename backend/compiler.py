@@ -5589,8 +5589,10 @@ def _publish_staged_artifacts(stage_dir, output_dir):
     Kubernetes files. Each move is an atomic os.replace on one filesystem."""
     from backend.generator.manifest_validator import (
         validate_compose_manifest, validate_kubernetes_manifest,
+        verify_deployment_artifacts,
     )
 
+    verify_deployment_artifacts(stage_dir, output_dir)
     try:
         import yaml  # noqa: F401
         have_yaml = True
