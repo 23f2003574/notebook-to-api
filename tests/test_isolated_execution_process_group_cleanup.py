@@ -39,3 +39,32 @@ def test_grandchild_killed_on_timeout(tmp_path):
     while _alive(pid) and time.time() < deadline:
         time.sleep(0.05)
     assert not _alive(pid)
+
+
+def _spawn_and_return(pid_file):
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    with open(pid_file, "w") as fh:
+        fh.write(str(child.pid))
+    return "done"
+
+
+def _spawn_and_raise(pid_file):
+    _spawn_and_return(pid_file)
+    raise RuntimeError("boom")
+
+
+@pytest.mark.parametrize("func,outcome", [(_spawn_and_return, "done"), (_spawn_and_raise, None)])
+def test_grandchild_killed_after_return_or_error(tmp_path, func, outcome):
+    from backend.runtime.isolated_execution import IsolatedExecutionError
+
+    pid_file = tmp_path / "pid"
+    if outcome is None:
+        with pytest.raises(IsolatedExecutionError, match="boom"):
+            run_isolated(func, (str(pid_file),), timeout=10)
+    else:
+        assert run_isolated(func, (str(pid_file),), timeout=10) == outcome
+    pid = int(pid_file.read_text())
+    deadline = time.time() + 3
+    while _alive(pid) and time.time() < deadline:
+        time.sleep(0.05)
+    assert not _alive(pid)
