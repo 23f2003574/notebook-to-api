@@ -6023,6 +6023,13 @@ def _compile_notebook_to_api(
         # write_compile_metadata itself might have left partially written
         # (a mid-json.dump I/O failure), not just one from the two steps
         # before it.
+        # A compile killed mid-run (SIGKILL, power loss) skips the cleanup
+        # below and leaves its staging directory behind, where it would be
+        # zipped by /api/download and COPY'd into the image. We hold
+        # COMPILE_LOCK, so any such directory is dead.
+        for leftover in os.listdir(output_dir):
+            if leftover.startswith(_DEPLOY_STAGING_PREFIX):
+                shutil.rmtree(os.path.join(output_dir, leftover), ignore_errors=True)
         stage_dir = tempfile.mkdtemp(prefix=_DEPLOY_STAGING_PREFIX, dir=output_dir)
 
         try:

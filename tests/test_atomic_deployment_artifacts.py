@@ -133,3 +133,15 @@ def test_failed_publish_move_restores_previously_published_files(tmp_path, monke
     monkeypatch.undo()
     assert os.path.basename(calls[-1]) in DEPLOY  # the failure hit the publish step
     assert _snapshot(out) == before
+
+
+def test_stale_staging_directory_from_a_killed_compile_is_removed(tmp_path):
+    out = tmp_path / "out"
+    nb = _nb(tmp_path)
+    compile_notebook_to_api(nb, str(out / "app.py"))
+    stale = out / (compiler._DEPLOY_STAGING_PREFIX + "dead")
+    stale.mkdir()
+    (stale / "Dockerfile").write_text("partial")
+    compile_notebook_to_api(nb, str(out / "app.py"))
+    assert not stale.exists()
+    assert all((out / n).is_file() for n in DEPLOY)
