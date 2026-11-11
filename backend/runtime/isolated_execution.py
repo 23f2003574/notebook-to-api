@@ -147,6 +147,10 @@ def run_isolated(
             import resource  # noqa: F401
         except ImportError:
             raise IsolatedExecutionError("memory/CPU limits are not supported on this platform") from None
+    if "fork" not in mp.get_all_start_methods():
+        raise IsolatedExecutionError(
+            'isolated execution is not supported on this platform (no "fork" process start method)'
+        )
     execution_id = uuid.uuid4().hex[:12]
     started = time.monotonic()
     outcome = "error"

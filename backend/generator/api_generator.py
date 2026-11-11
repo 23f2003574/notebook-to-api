@@ -2721,6 +2721,7 @@ def generate_fastapi_code(
     lines.append("        timeout_seconds=REQUEST_TIMEOUT_SECONDS, memory_limit_mb=ISOLATE_MEMORY_LIMIT_MB,")
     lines.append("        cpu_limit_seconds=ISOLATE_CPU_LIMIT_SECONDS, isolate=ISOLATE_EXECUTION,")
     lines.append("        rlimits_supported=_RLIMITS_SUPPORTED, max_processes=ISOLATE_MAX_PROCESSES,")
+    lines.append("        isolation_problem=isolation_platform_problem(),")
     lines.append("    )")
     lines.append("except ValueError as _limits_error:")
     lines.append("    raise RuntimeError(str(_limits_error)) from None")
