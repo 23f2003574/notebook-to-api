@@ -937,6 +937,10 @@ brownout to find remaining callers before removing them for real.
         for entry in env_vars
     )
 
+    from backend.generator.kubernetes_generator import _k8s_resource_name  # avoids a circular import
+    image_tag = default_image_tag(package_name)
+    k8s_name = _k8s_resource_name(package_name)
+
     return f"""\
 # {package_name}
 
@@ -995,6 +999,23 @@ there, not in the directory above:
 cd {package_name}  # skip if you are already inside it
 docker compose up --build
 ```
+
+## Deploying to Kubernetes
+
+`kubernetes.yaml` (a Deployment and a Service) lives next to this README. Run \
+these from inside `{package_name}/`. The manifest's image is `{image_tag}`, so \
+build it and make it available to your cluster (load it into a local cluster, \
+or push it to a registry and edit `image:` in `kubernetes.yaml`):
+
+```bash
+docker build -t {image_tag} .
+kubectl create secret generic {k8s_name}-secrets \\
+  --from-literal=NOTEBOOK_API_KEY="$(openssl rand -hex 32)"
+kubectl apply -f kubernetes.yaml
+```
+
+The Secret must exist before the Deployment starts; the comment at the top of \
+`kubernetes.yaml` lists any extra keys the notebook itself reads.
 
 ## Authentication
 
