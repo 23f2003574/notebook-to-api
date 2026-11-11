@@ -65,6 +65,15 @@ def validate_kubernetes_manifest(text):
         for e in c.get("env", []):
             _require("name" in e and ("value" in e) != ("valueFrom" in e),
                      f"kubernetes.yaml: env entry {e.get('name')!r} needs exactly one of value/valueFrom")
+    match = (spec.get("selector") or {}).get("matchLabels") or {}
+    _require(match and all(labels.get(k) == v for k, v in match.items()),
+             "kubernetes.yaml: Deployment spec.selector.matchLabels does not match the pod template labels "
+             "(kubectl rejects this; make the labels identical)")
+    container_ports = {p.get("containerPort") for c in containers for p in c.get("ports", [])}
+    for port in (kinds["Service"].get("spec") or {}).get("ports") or []:
+        target = port.get("targetPort", port.get("port"))
+        _require(not isinstance(target, int) or target in container_ports,
+                 f"kubernetes.yaml: Service targetPort {target} is not a containerPort of the Deployment")
     selector = (kinds["Service"].get("spec") or {}).get("selector") or {}
     _require(selector and all(labels.get(k) == v for k, v in selector.items()),
              "kubernetes.yaml: Service selector does not match the Deployment pod labels")

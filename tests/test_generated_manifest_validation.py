@@ -50,3 +50,17 @@ def test_selector_mismatch_is_rejected():
     text = text[:idx] + text[idx:].replace("app:", "app: x-", 1)
     with pytest.raises(ManifestValidationError, match="selector"):
         validate_kubernetes_manifest(text)
+
+
+def test_deployment_selector_must_match_template_labels():
+    text = _k8s()
+    idx = text.index("matchLabels:")
+    text = text[:idx] + text[idx:].replace("app:", "app: other-", 1)
+    with pytest.raises(ManifestValidationError, match="matchLabels"):
+        validate_kubernetes_manifest(text)
+
+
+def test_service_target_port_must_be_a_container_port():
+    text = _k8s().replace("targetPort: 8000", "targetPort: 9999")
+    with pytest.raises(ManifestValidationError, match="targetPort 9999"):
+        validate_kubernetes_manifest(text)
