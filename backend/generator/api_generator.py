@@ -1857,9 +1857,15 @@ def generate_fastapi_code(
     lines.append("    _nb_atexit.register = _nb_real_atexit_register")
     lines.append("    sys.argv = _nb_real_argv")
     lines.append("")
+    lines.append("_LIFECYCLE = {'state': 'ready'}")
+    lines.append("")
     lines.append("@_nb_contextlib.asynccontextmanager")
     lines.append("async def _nb_lifespan(_app):")
     lines.append("    yield")
+    # Importing this module loaded the notebook, so the app is ready from the
+    # first request; /ready reports 503 once shutdown begins so load
+    # balancers drain traffic before the notebook's own handlers run.
+    lines.append("    _LIFECYCLE['state'] = 'shutting_down'")
     lines.append("    while _nb_atexit_handlers:")
     lines.append("        func, args, kwargs = _nb_atexit_handlers.pop()")
     lines.append("        _nb_atexit.unregister(func)")
@@ -4359,7 +4365,9 @@ def generate_fastapi_code(
     lines.append("@app.head('/ready', include_in_schema=False)")
     lines.append("@app.get('/ready')")
     lines.append("def readiness_check():")
-
+    lines.append("    if _LIFECYCLE['state'] != 'ready':")
+    lines.append("        from fastapi.responses import JSONResponse")
+    lines.append("        return JSONResponse({'status': 'not_ready', 'reason': _LIFECYCLE['state']}, status_code=503)")
     lines.append("    return {")
     lines.append("        'status': 'ready',")
     lines.append("        'tasks_registered': len(TASKS)")
