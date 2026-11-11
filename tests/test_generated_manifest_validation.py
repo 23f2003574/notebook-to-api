@@ -64,3 +64,11 @@ def test_service_target_port_must_be_a_container_port():
     text = _k8s().replace("targetPort: 8000", "targetPort: 9999")
     with pytest.raises(ManifestValidationError, match="targetPort 9999"):
         validate_kubernetes_manifest(text)
+
+
+def test_duplicate_environment_variables_are_rejected():
+    with pytest.raises(ManifestValidationError, match="duplicate environment variables: A"):
+        validate_compose_manifest("services:\n  a:\n    build: .\n    environment:\n      - A=1\n      - A=2\n")
+    text = _k8s().replace("- name: PORT", "- name: NOTEBOOK_API_KEY\n              value: x\n            - name: PORT", 1)
+    with pytest.raises(ManifestValidationError, match="duplicate env names: NOTEBOOK_API_KEY"):
+        validate_kubernetes_manifest(text)

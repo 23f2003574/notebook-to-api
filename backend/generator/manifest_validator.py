@@ -42,6 +42,9 @@ def validate_compose_manifest(text):
         if isinstance(env, list):
             bad = [e for e in env if not isinstance(e, str) or not e.split("=", 1)[0]]
             _require(not bad, f"{where}: malformed environment entries {bad!r}")
+            names = [e.split("=", 1)[0] for e in env]
+            dupes = sorted({n for n in names if names.count(n) > 1})
+            _require(not dupes, f"{where}: duplicate environment variables: {', '.join(dupes)}")
         _require(isinstance(svc.get("ports", []), list), f"{where}: 'ports' must be a list")
     return docs[0]
 
@@ -62,6 +65,9 @@ def validate_kubernetes_manifest(text):
     _require(isinstance(containers, list) and containers, "kubernetes.yaml: Deployment has no containers")
     for c in containers:
         _require(c.get("name") and c.get("image"), "kubernetes.yaml: every container needs 'name' and 'image'")
+        names = [e.get("name") for e in c.get("env", [])]
+        dupes = sorted({n for n in names if names.count(n) > 1})
+        _require(not dupes, f"kubernetes.yaml: container {c['name']!r} has duplicate env names: {', '.join(dupes)}")
         for e in c.get("env", []):
             _require("name" in e and ("value" in e) != ("valueFrom" in e),
                      f"kubernetes.yaml: env entry {e.get('name')!r} needs exactly one of value/valueFrom")
