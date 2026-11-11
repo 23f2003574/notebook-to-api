@@ -71,6 +71,7 @@ def validate_kubernetes_manifest(text):
         for e in c.get("env", []):
             _require("name" in e and ("value" in e) != ("valueFrom" in e),
                      f"kubernetes.yaml: env entry {e.get('name')!r} needs exactly one of value/valueFrom")
+        _check_resource_limits(c)
     match = (spec.get("selector") or {}).get("matchLabels") or {}
     _require(match and all(labels.get(k) == v for k, v in match.items()),
              "kubernetes.yaml: Deployment spec.selector.matchLabels does not match the pod template labels "
@@ -85,6 +86,45 @@ def validate_kubernetes_manifest(text):
              "kubernetes.yaml: Service selector does not match the Deployment pod labels")
     _require((kinds["Service"].get("spec") or {}).get("ports"), "kubernetes.yaml: Service defines no ports")
     return docs
+
+
+_QUANTITY_UNITS = {
+    "Ki": 2**10, "Mi": 2**20, "Gi": 2**30, "Ti": 2**40,
+    "k": 10**3, "K": 10**3, "M": 10**6, "G": 10**9, "T": 10**12, "m": 0.001, "": 1,
+}
+
+
+def _quantity(value, where):
+    """A Kubernetes resource quantity ("1Gi", "500m", "2") as a number."""
+    import re
+
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)(Ki|Mi|Gi|Ti|k|K|M|G|T|m|)", str(value).strip())
+    _require(m, f"{where}: {value!r} is not a valid Kubernetes resource quantity")
+    return float(m.group(1)) * _QUANTITY_UNITS[m.group(2)]
+
+
+def _check_resource_limits(container):
+    """The container's resources must agree with each other and with the
+    per-call limit the app is told to enforce: a NOTEBOOK_API_ISOLATE_MEMORY_LIMIT_MB
+    above the container's memory limit can never trigger, because the pod is
+    OOM-killed first. NOTEBOOK_API_ISOLATE_CPU_LIMIT_SECONDS is CPU *time*,
+    which has no Kubernetes counterpart to compare, so it is deliberately
+    not checked."""
+    where = f"kubernetes.yaml: container {container['name']!r}"
+    resources = container.get("resources") or {}
+    limits, requests = resources.get("limits") or {}, resources.get("requests") or {}
+    for kind in ("memory", "cpu"):
+        if kind in limits and kind in requests:
+            _require(_quantity(requests[kind], f"{where} requests.{kind}") <= _quantity(limits[kind], f"{where} limits.{kind}"),
+                     f"{where}: requests.{kind} {requests[kind]} exceeds limits.{kind} {limits[kind]}")
+    env = {e.get("name"): e.get("value") for e in container.get("env", [])}
+    raw = env.get("NOTEBOOK_API_ISOLATE_MEMORY_LIMIT_MB")
+    if "memory" not in limits or raw in (None, "", "0"):
+        return
+    _require(str(raw).isdigit(), f"{where}: NOTEBOOK_API_ISOLATE_MEMORY_LIMIT_MB {raw!r} is not a whole number of MB")
+    _require(int(raw) * 2**20 <= _quantity(limits["memory"], f"{where} limits.memory"),
+             f"{where}: NOTEBOOK_API_ISOLATE_MEMORY_LIMIT_MB={raw} exceeds the container memory limit "
+             f"{limits['memory']}; the pod would be OOM-killed before the per-call limit applies")
 
 
 REQUIRED_DEPLOY_ARTIFACTS = (
