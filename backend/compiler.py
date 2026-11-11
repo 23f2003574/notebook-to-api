@@ -6053,7 +6053,10 @@ def _compile_notebook_to_api(
             )
 
             generate_dockerignore(dockerignore_path)
-            generate_gitignore(os.path.join(stage_dir, ".gitignore"))
+            # Staged only when the output has none: publishing the staged
+            # copy would otherwise replace the user's own ignore rules.
+            if not os.path.exists(os.path.join(output_dir, ".gitignore")):
+                generate_gitignore(os.path.join(stage_dir, ".gitignore"))
 
             docker_compose_path = os.path.join(
                 stage_dir,
