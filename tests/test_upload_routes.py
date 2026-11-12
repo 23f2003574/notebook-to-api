@@ -27573,7 +27573,7 @@ def test_docker_compose_preview_requires_no_notebook_and_needs_no_body():
     body = resp.json()
     assert body["status"] == "success"
     assert "services:" in body["docker_compose"]
-    assert "NOTEBOOK_API_KEY=${NOTEBOOK_API_KEY:-notebook-to-api-dev-key}" in body["docker_compose"]
+    assert "NOTEBOOK_API_KEY=${NOTEBOOK_API_KEY:?set NOTEBOOK_API_KEY in .env or your shell, for example from openssl rand -hex 32}" in body["docker_compose"]
 
 
 def test_docker_compose_preview_matches_what_an_actual_compile_writes():
@@ -27773,7 +27773,8 @@ def test_env_example_preview_requires_no_notebook_and_needs_no_body():
     body = resp.json()
     assert body["status"] == "success"
     assert "PORT=8000" in body["env_example"]
-    assert "NOTEBOOK_API_KEY=notebook-to-api-dev-key" in body["env_example"]
+    assert "\n# NOTEBOOK_API_KEY=\n" in body["env_example"]
+    assert "dev-key" not in body["env_example"]
 
 
 def test_env_example_preview_matches_what_an_actual_compile_writes():

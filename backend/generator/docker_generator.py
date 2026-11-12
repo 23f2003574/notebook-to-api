@@ -473,10 +473,18 @@ def docker_compose_content(package_name="generated", env_vars=None, notebook_env
             return "http://localhost:${PORT:-8000}"
         return entry["default"]
 
-    environment_lines = "\n".join(
-        f"      - {entry['name']}=${{{entry['name']}:-{_compose_default(entry)}}}"
-        for entry in env_vars
-    )
+    # The API key has no fallback: a compose file that silently defaulted to
+    # the public dev key would ship a known credential. `:?` makes
+    # `docker compose up` abort, before the app starts, when it is unset/empty.
+    def _compose_entry(entry):
+        if entry["name"] == "NOTEBOOK_API_KEY":
+            return (
+                "      - NOTEBOOK_API_KEY=${NOTEBOOK_API_KEY:?"
+                "set NOTEBOOK_API_KEY in .env or your shell, for example from openssl rand -hex 32}"
+            )
+        return f"      - {entry['name']}=${{{entry['name']}:-{_compose_default(entry)}}}"
+
+    environment_lines = "\n".join(_compose_entry(entry) for entry in env_vars)
 
     notebook_lines = ""
     if notebook_env_vars:
@@ -602,6 +610,12 @@ def env_example_content(env_vars=None, notebook_env_vars=None):
             # docker-compose.yml deriving the URL from PORT.
             lines.append("# Unset, docker-compose.yml derives this from PORT above.")
             lines.append(f"# {entry['name']}={entry['default']}")
+        elif entry["name"] == "NOTEBOOK_API_KEY":
+            # Left commented out with no value: docker-compose.yml will not
+            # start without a real key, and a usable placeholder would be a
+            # public credential. (Unset also keeps `. .env` local runs working.)
+            lines.append("# REQUIRED by docker compose: uncomment and set, e.g. `openssl rand -hex 32`.")
+            lines.append(f"# {entry['name']}=")
         else:
             lines.append(f"{entry['name']}={entry['default']}")
         lines.append("")
@@ -1021,8 +1035,8 @@ The Secret must exist before the Deployment starts; the comment at the top of \
 
 Every request must carry an `X-API-Key` header matching one of the keys \
 in `NOTEBOOK_API_KEY` (comma-separated to support zero-downtime \
-rotation). Defaults to `notebook-to-api-dev-key` for local development \
--- set a real value before deploying anywhere reachable.
+rotation). `docker compose up` will not start until you set it (for \
+example in `.env`: `NOTEBOOK_API_KEY=$(openssl rand -hex 32)`).
 
 {notebook_env_section}## Configuration
 

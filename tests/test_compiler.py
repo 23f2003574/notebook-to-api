@@ -900,7 +900,7 @@ def test_generated_readme_documents_loading_dot_env_for_a_local_run(tmp_path):
     # Run the documented commands for real, with a custom key in .env.
     (output_dir / ".env.example").write_text(
         (output_dir / ".env.example").read_text(encoding="utf-8").replace(
-            "NOTEBOOK_API_KEY=notebook-to-api-dev-key", "NOTEBOOK_API_KEY=my-own-key"
+            "# NOTEBOOK_API_KEY=", "NOTEBOOK_API_KEY=my-own-key"
         ),
         encoding="utf-8",
     )
@@ -1360,7 +1360,7 @@ def test_docker_compose_content_lists_every_env_var_with_its_own_default():
 
     content = docker_compose_content("generated", env_vars)
 
-    assert "NOTEBOOK_API_KEY=${NOTEBOOK_API_KEY:-dev-key}" in content
+    assert "NOTEBOOK_API_KEY=${NOTEBOOK_API_KEY:?set NOTEBOOK_API_KEY in .env or your shell, for example from openssl rand -hex 32}" in content
     assert "NOTEBOOK_API_MAX_TASKS=${NOTEBOOK_API_MAX_TASKS:-10000}" in content
 
 
@@ -1435,7 +1435,8 @@ def test_env_example_content_lists_every_env_var_with_its_own_default_and_descri
 
     content = env_example_content(env_vars)
 
-    assert "NOTEBOOK_API_KEY=dev-key" in content
+    assert "\n# NOTEBOOK_API_KEY=\n" in content
+    assert "dev-key" not in content
     assert "# The API key clients must present." in content
     assert "NOTEBOOK_API_MAX_TASKS=10000" in content
     assert "# Maximum pending background tasks." in content
@@ -1484,9 +1485,9 @@ def test_env_example_content_produces_a_value_that_can_actually_be_parsed_as_env
 
     assert assignment_lines == [
         "PORT=8000",
-        "NOTEBOOK_API_KEY=dev-key",
         "NOTEBOOK_API_MAX_TASKS=10000",
     ]
+    assert "# NOTEBOOK_API_KEY=" in content
 
 
 def test_compiler_pipeline_writes_apt_requires_directive_into_the_dockerfile(
@@ -1572,7 +1573,7 @@ def test_compiler_pipeline_generates_a_docker_compose_file(tmp_path):
     compose = compose_path.read_text(encoding="utf-8")
     assert "services:\n  generated:\n    build: .\n" in compose
     assert "    restart: unless-stopped\n" in compose
-    assert "NOTEBOOK_API_KEY=${NOTEBOOK_API_KEY:-notebook-to-api-dev-key}" in compose
+    assert "NOTEBOOK_API_KEY=${NOTEBOOK_API_KEY:?set NOTEBOOK_API_KEY in .env or your shell, for example from openssl rand -hex 32}" in compose
     assert "NOTEBOOK_API_RATE_LIMIT_PER_MINUTE=${NOTEBOOK_API_RATE_LIMIT_PER_MINUTE:-0}" in compose
 
 
@@ -1604,7 +1605,8 @@ def test_compiler_pipeline_generates_an_env_example_file(tmp_path):
 
     env_example = env_example_path.read_text(encoding="utf-8")
     assert "PORT=8000" in env_example
-    assert "NOTEBOOK_API_KEY=notebook-to-api-dev-key" in env_example
+    assert "\n# NOTEBOOK_API_KEY=\n" in env_example
+    assert "dev-key" not in env_example
     assert "NOTEBOOK_API_RATE_LIMIT_PER_MINUTE=0" in env_example
 
 
@@ -18157,12 +18159,12 @@ def test_compose_public_url_follows_port_and_env_example_does_not_pin_it():
 
     compose = docker_compose_content("myapp", env_vars)
     assert "NOTEBOOK_API_PUBLIC_URL=${NOTEBOOK_API_PUBLIC_URL:-http://localhost:${PORT:-8000}}" in compose
-    assert "NOTEBOOK_API_KEY=${NOTEBOOK_API_KEY:-dev-key}" in compose
+    assert "NOTEBOOK_API_KEY=${NOTEBOOK_API_KEY:?set NOTEBOOK_API_KEY in .env or your shell, for example from openssl rand -hex 32}" in compose
 
     env_example = env_example_content(env_vars)
     assert "\nNOTEBOOK_API_PUBLIC_URL=" not in env_example
     assert "# NOTEBOOK_API_PUBLIC_URL=http://localhost:8000" in env_example
-    assert "\nNOTEBOOK_API_KEY=dev-key\n" in env_example
+    assert "\n# NOTEBOOK_API_KEY=\n" in env_example
 
 
 def test_function_defined_under_main_guard_is_not_exposed_as_a_broken_endpoint(tmp_path):

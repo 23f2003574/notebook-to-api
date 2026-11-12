@@ -45,7 +45,7 @@ def test_generated_compose_project_serves_health(tmp_path):
     port = _free_port()
     project = "n2a-smoke-" + uuid.uuid4().hex[:8]
     compose = ["docker", "compose", "-p", project, "-f", str(out / "docker-compose.yml")]
-    env = {**os.environ, "PORT": str(port)}
+    env = {**os.environ, "PORT": str(port), "NOTEBOOK_API_KEY": "smoke-test-only-key-" + uuid.uuid4().hex}
     try:
         subprocess.run(compose + ["up", "-d", "--build"], cwd=out, env=env, check=True, capture_output=True, timeout=900)
         deadline = time.monotonic() + HEALTH_TIMEOUT_SECONDS
