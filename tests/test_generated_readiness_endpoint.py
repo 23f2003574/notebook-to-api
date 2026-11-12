@@ -23,7 +23,7 @@ def test_health_is_liveness_and_ready_reports_ready(tmp_path, monkeypatch):
     assert client.get("/health").json() == {"status": "healthy"}
     ready = client.get("/ready")
     assert ready.status_code == 200
-    assert set(ready.json()) == {"status", "tasks_registered"} and ready.json()["status"] == "ready"
+    assert set(ready.json()) == {"status", "tasks_registered", "isolation"} and ready.json()["status"] == "ready"
     assert client.head("/ready").status_code == 200
 
 
