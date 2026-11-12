@@ -4178,6 +4178,7 @@ def test_list_tasks_supports_status_filter_and_pagination(monkeypatch):
     client = TestClient(namespace["app"])
     headers = {"X-API-Key": "notebook-to-api-dev-key"}
 
+    namespace["TASK_TTL_SECONDS"] = 10 ** 12  # these fixtures use synthetic ancient timestamps
     namespace["TASKS"]["t-old-failed"] = {
         "status": "failed", "created_at": 1.0, "error": "boom",
     }
@@ -4326,6 +4327,7 @@ def test_list_tasks_filters_by_webhook_delivery_failed(monkeypatch):
     client = TestClient(namespace["app"])
     headers = {"X-API-Key": "notebook-to-api-dev-key"}
 
+    namespace["TASK_TTL_SECONDS"] = 10 ** 12  # these fixtures use synthetic ancient timestamps
     namespace["TASKS"]["t-failed-webhook"] = {
         "status": "completed", "created_at": 1.0,
         "webhook": {"delivered": False},
@@ -4509,8 +4511,12 @@ def test_background_task_result_survives_a_run_longer_than_the_ttl(monkeypatch):
     exec(compile(code, "<generated>", "exec"), namespace)
     ttl = namespace["TASK_TTL_SECONDS"]
 
+    runs = []
+
     def slow_job():
-        clock[0] += ttl + 10  # runs longer than the whole TTL
+        if not runs:
+            clock[0] += ttl + 10  # the first run outlasts the whole TTL
+        runs.append(1)
         return {"done": True}
 
     notebook_module.process_data = slow_job

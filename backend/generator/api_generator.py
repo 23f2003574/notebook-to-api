@@ -171,6 +171,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # _evict_expired_tasks() missing 1 required positional argument:
     # 'req'", nothing to do with train_model's own logic at all.
     "_evict_expired_tasks", "_run_background_task", "_json_safe",
+    "_evict_expired_tasks_throttled", "_evict_loop", "_TASK_TERMINAL", "_LAST_EVICT",
     "_run_background_task_inner", "_TASK_CANCEL",
     "_TaskRegistry", "_persist_tasks", "_load_persisted_tasks", "TASK_STORE_PATH",
     "_coerce_array_like", "_safe_annotation", "_shield_exit",
@@ -2083,11 +2084,14 @@ def generate_fastapi_code(
     lines.append("    _nb_atexit.register = _nb_real_atexit_register")
     lines.append("    sys.argv = _nb_real_argv")
     lines.append("")
+    lines.append("import asyncio as _asyncio_for_lifespan")
     lines.append("_LIFECYCLE = {'state': 'ready'}")
     lines.append("")
     lines.append("@_nb_contextlib.asynccontextmanager")
     lines.append("async def _nb_lifespan(_app):")
+    lines.append("    _evict_task = _asyncio_for_lifespan.create_task(_evict_loop())")
     lines.append("    yield")
+    lines.append("    _evict_task.cancel()")
     # Importing this module loaded the notebook, so the app is ready from the
     # first request; /ready reports 503 once shutdown begins so load
     # balancers drain traffic before the notebook's own handlers run.
@@ -3541,6 +3545,8 @@ def generate_fastapi_code(
     lines.append("            },")
     lines.append("        )")
     lines.append("")
+    lines.append("_TASK_TERMINAL = ('completed', 'failed', 'cancelled')")
+    lines.append("_LAST_EVICT = [0.0]")
     lines.append("def _evict_expired_tasks():")
     lines.append("    # TASKS is an in-memory dict with no automatic eviction anywhere")
     lines.append("    # else in this app -- without this, a long-running deployment")
@@ -3582,7 +3588,7 @@ def generate_fastapi_code(
     lines.append("    expired_ids = [")
     lines.append("        task_id")
     lines.append("        for task_id, task in list(TASKS.items())")
-    lines.append("        if task.get('status') != 'processing'")
+    lines.append("        if task.get('status') in _TASK_TERMINAL")
     # The TTL runs from when the task finished, not from when it was
     # submitted: a task that ran longer than the TTL was otherwise evictable
     # the instant it completed, before its caller could poll the result.
@@ -3607,6 +3613,25 @@ def generate_fastapi_code(
     lines.append("    for key in stale_idempotency_keys:")
     lines.append("        IDEMPOTENCY_KEYS.pop(key, None)")
     lines.append("        IDEMPOTENCY_FINGERPRINTS.pop(key, None)")
+    lines.append("")
+    lines.append("def _evict_expired_tasks_throttled():")
+    lines.append("    # Read endpoints must never serve an expired result, but polling should not")
+    lines.append("    # rescan the registry on every call: at most once a second.")
+    lines.append("    now = time.monotonic()")
+    lines.append("    if now - _LAST_EVICT[0] >= 1.0:")
+    lines.append("        _LAST_EVICT[0] = now")
+    lines.append("        _evict_expired_tasks()")
+    lines.append("")
+    lines.append("async def _evict_loop():")
+    lines.append("    # Runs on the app's event loop for the life of the app (started and cancelled")
+    lines.append("    # by the lifespan), so expired results are dropped even with no traffic.")
+    lines.append("    interval = max(1.0, min(60.0, TASK_TTL_SECONDS / 4))")
+    lines.append("    while True:")
+    lines.append("        await anyio.sleep(interval)")
+    lines.append("        try:")
+    lines.append("            _evict_expired_tasks()")
+    lines.append("        except Exception as _evict_error:")
+    lines.append("            _LOG.error('task eviction failed: %s', _evict_error)")
     lines.append("")
     # Per-endpoint quota from a "# notebook-to-api: rate-limit N"
     # directive: N calls per 60s per API key, on top of (never instead
@@ -4743,7 +4768,7 @@ def generate_fastapi_code(
     lines.append("        'json_logs_enabled': JSON_REQUEST_LOGS,")
     lines.append("    }")
     lines.append("")
-    lines.append("@app.get('/tasks')")
+    lines.append("@app.get('/tasks', dependencies=[Depends(_evict_expired_tasks_throttled)])")
     lines.append("def list_tasks(")
     lines.append("    status: Optional[str] = None,")
     lines.append("    webhook_delivery_failed: Optional[bool] = None,")
@@ -4904,7 +4929,7 @@ def generate_fastapi_code(
     lines.append("        }")
     lines.append("    }")
     lines.append("")
-    lines.append("@app.get('/tasks/{task_id}')")
+    lines.append("@app.get('/tasks/{task_id}', dependencies=[Depends(_evict_expired_tasks_throttled)])")
     lines.append("def get_task(task_id: str, _: None = Depends(verify_api_key)):")
     lines.append("    task = TASKS.get(task_id)")
     lines.append("")
