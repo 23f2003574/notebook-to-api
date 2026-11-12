@@ -9597,6 +9597,7 @@ def test_webhook_delivery_refuses_a_redirect_to_a_non_public_address(monkeypatch
     try:
         # Only the "internal" port counts as non-public (the real check resolves DNS).
         namespace["_is_unsafe_webhook_host"] = lambda url: f":{internal.server_port}" in url
+        namespace["_webhook_ip_unsafe"] = lambda address: False  # these servers listen on loopback
 
         blocked = namespace["_deliver_task_webhook"](
             f"http://127.0.0.1:{redirecting_to(internal.server_port).server_port}/hook", {"task_id": "t"}

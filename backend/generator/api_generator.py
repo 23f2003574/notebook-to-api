@@ -976,6 +976,98 @@ _load_persisted_tasks()
 '''
 
 
+_WEBHOOK_GUARD_SOURCE = '''\
+import http.client
+
+# Ports of internal services that are never legitimate webhook receivers.
+_WEBHOOK_BLOCKED_PORTS = frozenset({
+    22, 23, 25, 110, 111, 135, 139, 143, 445, 465, 587, 993, 995, 1433, 1521,
+    2049, 2375, 2376, 3306, 3389, 5432, 5900, 6379, 9200, 11211, 27017,
+})
+# Cloud metadata endpoints that look globally routable.
+_WEBHOOK_BLOCKED_IPS = frozenset({
+    ipaddress.ip_address("168.63.129.16"),
+    ipaddress.ip_address("169.254.169.254"),
+    ipaddress.ip_address("100.100.100.200"),
+    ipaddress.ip_address("fd00:ec2::254"),
+})
+
+
+def _webhook_ip_unsafe(address):
+    ip = ipaddress.ip_address(address.split("%", 1)[0])
+    if getattr(ip, "ipv4_mapped", None) is not None:
+        ip = ip.ipv4_mapped
+    return (
+        ip in _WEBHOOK_BLOCKED_IPS or not ip.is_global
+        or ip.is_private or ip.is_loopback or ip.is_link_local
+        or ip.is_reserved or ip.is_multicast or ip.is_unspecified
+    )
+
+
+def _is_unsafe_webhook_host(url):
+    """Submission/redirect-time screen of a callback URL. The connection itself
+    re-resolves and re-validates at connect time (_webhook_connect)."""
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        if not hostname or parsed.username or parsed.password:
+            return True
+        port = parsed.port
+        if port is not None and (port < 1 or port in _WEBHOOK_BLOCKED_PORTS):
+            return True
+        for info in socket.getaddrinfo(hostname, port or 443):
+            if _webhook_ip_unsafe(info[4][0]):
+                return True
+    except (socket.gaierror, ValueError, OSError):
+        return True
+    return False
+
+
+def _webhook_connect(host, port, timeout):
+    """Resolve, validate and connect in one step: the socket goes to an address
+    that was just validated, so DNS cannot change between check and connect."""
+    infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    if not infos or any(_webhook_ip_unsafe(info[4][0]) for info in infos):
+        raise OSError("callback_url resolves to a non-public address; refusing to connect")
+    last = None
+    for family, kind, proto, _canon, sockaddr in infos:
+        sock = socket.socket(family, kind, proto)
+        sock.settimeout(timeout)
+        try:
+            sock.connect(sockaddr)
+            return sock
+        except OSError as exc:
+            sock.close()
+            last = exc
+    raise last
+
+
+class _WebhookHTTPConnection(http.client.HTTPConnection):
+    def connect(self):
+        self.sock = _webhook_connect(self.host, self.port, self.timeout)
+
+
+class _WebhookHTTPSConnection(http.client.HTTPSConnection):
+    def connect(self):
+        sock = _webhook_connect(self.host, self.port, self.timeout)
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+
+class _WebhookHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        if getattr(req, "_notebook_webhook", False):
+            return self.do_open(_WebhookHTTPConnection, req)
+        return super().http_open(req)
+
+
+class _WebhookHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        if getattr(req, "_notebook_webhook", False):
+            return self.do_open(_WebhookHTTPSConnection, req, context=self._context)
+        return super().https_open(req)
+'''
+
+
 def _isolated_execution_source(module="isolated_execution"):
     """Source of backend/runtime/<module>.py minus its module
     docstring and __future__ import, for inlining into a generated app."""
@@ -5722,22 +5814,7 @@ def generate_fastapi_code(
     # deliver": the alternative -- letting socket.gaierror propagate --
     # would need its own handling at every call site below, for no
     # benefit over just reporting it the same way a private address is.
-    lines.append("def _is_unsafe_webhook_host(url):")
-    lines.append("    try:")
-    lines.append("        hostname = urlparse(url).hostname")
-    lines.append("        if not hostname:")
-    lines.append("            return True")
-    lines.append("        for info in socket.getaddrinfo(hostname, None):")
-    lines.append("            ip = ipaddress.ip_address(info[4][0])")
-    lines.append("            if (")
-    lines.append("                ip.is_private or ip.is_loopback")
-    lines.append("                or ip.is_link_local or ip.is_reserved")
-    lines.append("                or ip.is_multicast or ip.is_unspecified")
-    lines.append("            ):")
-    lines.append("                return True")
-    lines.append("    except (socket.gaierror, ValueError):")
-    lines.append("        return True")
-    lines.append("    return False")
+    lines.extend(_WEBHOOK_GUARD_SOURCE.splitlines())
     lines.append("")
     # Delivers a single best-effort (well, WEBHOOK_MAX_RETRIES-effort) POST
     # of `payload` (the finished task's own TASKS record: status/result, or
@@ -5801,7 +5878,8 @@ def generate_fastapi_code(
     lines.append("            )")
     lines.append("        return super().redirect_request(req, fp, code, msg, headers, newurl)")
     lines.append("")
-    lines.append("urllib.request.install_opener(urllib.request.build_opener(_WebhookRedirectGuard()))")
+    lines.append("urllib.request.install_opener(urllib.request.build_opener(")
+    lines.append("    _WebhookRedirectGuard(), _WebhookHTTPHandler(), _WebhookHTTPSHandler()))")
     lines.append("")
     lines.append("def _deliver_task_webhook(callback_url, payload):")
     lines.append("    attempt = 0")
