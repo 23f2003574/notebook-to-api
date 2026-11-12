@@ -2378,6 +2378,19 @@ def _dispatch_core_command(args):
         if smoke_test is not None and not smoke_test["passed"]:
             sys.exit(1)
 
+        if args.require_pinned:
+            from backend.compiler import unpinned_requirements
+
+            unpinned = unpinned_requirements(os.path.join(str(output_dir), "requirements.txt"))
+            if unpinned:
+                if not args.json_output:
+                    print(
+                        f"\n✗ requirements.txt is not reproducible: {', '.join(unpinned)} "
+                        "are not version-pinned and --require-pinned is set. Install them "
+                        "in the Python environment running this compile and recompile."
+                    )
+                sys.exit(1)
+
         if args.fail_on_startup_warnings:
             # A compile that produced no routes is a startup problem too.
             startup_problems = _startup_problem_count(data) + (1 if data["no_endpoints"] else 0)
@@ -10608,6 +10621,18 @@ def main():
     # compile command
     compile_parser = subparsers.add_parser("compile", help="Compile a notebook to FastAPI app.")
     compile_parser.add_argument("notebook", help="Path to the notebook file.")
+    compile_parser.add_argument(
+        "--require-pinned",
+        action="store_true",
+        dest="require_pinned",
+        help=(
+            "After compiling, exit with status 1 if any dependency in the "
+            "generated requirements.txt has no version pin (a package not "
+            "installed in the compiling Python environment is listed "
+            "unpinned). The app is still written; this makes builds "
+            "reproducible in CI without any network resolution."
+        )
+    )
     compile_parser.add_argument(
         "--fail-on-startup-warnings",
         action="store_true",

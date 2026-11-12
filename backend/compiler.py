@@ -5118,6 +5118,18 @@ def resolve_requirements(imports, explicit_requirements=None, excluded_imports=N
 _REQUIREMENT_HAS_VERSION = re.compile(r"(===|==|~=|!=|>=|<=|<|>|@|://)")
 
 
+def unpinned_requirements(requirements_path):
+    """Entries of a generated requirements.txt that carry no version constraint
+    (the deliberate fallback for packages not installed where the notebook was
+    compiled), in file order. Blank lines and comments are ignored."""
+    with open(requirements_path, encoding="utf-8") as f:
+        lines = [line.strip() for line in f]
+    return [
+        line for line in lines
+        if line and not line.startswith("#") and not _REQUIREMENT_HAS_VERSION.search(line)
+    ]
+
+
 def write_requirements(
     imports, output_dir, explicit_requirements=None, excluded_imports=None
 ):
