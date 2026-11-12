@@ -171,6 +171,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # _evict_expired_tasks() missing 1 required positional argument:
     # 'req'", nothing to do with train_model's own logic at all.
     "_evict_expired_tasks", "_run_background_task", "_json_safe",
+    "_run_background_task_inner", "_TASK_CANCEL",
     "_coerce_array_like", "_safe_annotation", "_shield_exit",
     "_png_data_uri", "_bytes_json", "_openapi_json_safe", "_default_kwargs", "_function_default",
     # Every name below is one of this file's own top-level `import`s --
@@ -510,8 +511,10 @@ GENERATED_APP_ENV_VARS = [
             "process is terminated and reaped instead of left running. "
             "Only JSON-serializable results cross the process boundary; a "
             "crashed child is answered 500 with a short message and no "
-            "traceback. Async functions and background tasks are not "
-            "isolated. 0 (the default) keeps in-process execution."
+            "traceback. Async functions are not isolated. Synchronous "
+            "background tasks run in a child too, which is what lets "
+            "POST /tasks/{task_id}/cancel terminate a running one. "
+            "0 (the default) keeps in-process execution."
         ),
     },
     {
@@ -2871,7 +2874,7 @@ def generate_fastapi_code(
     lines.extend(_isolated_execution_source().splitlines())
     lines.append("")
     lines.append("")
-    lines.append("def _isolated_call(call, limit):")
+    lines.append("def _isolated_call(call, limit, cancel_event=None, on_start=None):")
     lines.append("    def _json_result():")
     lines.append("        return jsonable_encoder(_json_safe(call()))")
     # Non-blocking: excess requests are rejected, never queued. Acquired in the
@@ -2882,7 +2885,7 @@ def generate_fastapi_code(
     lines.append("    try:")
     # The anyio scope owns the 504; this grace only guarantees the child is
     # reaped shortly after the scope fires.
-    lines.append("        return run_isolated(_json_result, timeout=(limit + 0.5) if limit else None, memory_limit_mb=ISOLATE_MEMORY_LIMIT_MB or None, cpu_limit_seconds=ISOLATE_CPU_LIMIT_SECONDS or None)")
+    lines.append("        return run_isolated(_json_result, timeout=(limit + 0.5) if limit else None, memory_limit_mb=ISOLATE_MEMORY_LIMIT_MB or None, cpu_limit_seconds=ISOLATE_CPU_LIMIT_SECONDS or None, cancel_event=cancel_event, on_start=on_start)")
     lines.append("    except IsolatedExecutionTimeout as exc:")
     lines.append("        raise RuntimeError('execution timed out') from None")
     lines.append("    finally:")
@@ -5839,7 +5842,7 @@ def generate_fastapi_code(
     # _REQUEST_TIMEOUTS, reported by GET /metrics and /metrics/prometheus.
     lines.append("_TASK_TIMEOUT_FAILURES = {}")
     lines.append(
-        "async def _run_background_task(func, task_id, *args, "
+        "async def _run_background_task_inner(func, task_id, *args, "
         "callback_url=None, **kwargs):"
     )
     lines.append(
@@ -5908,9 +5911,20 @@ def generate_fastapi_code(
     lines.append("                elif inspect.iscoroutinefunction(func):")
     lines.append("                    result = await func(*args, **kwargs)")
     lines.append("                else:")
-    lines.append("                    result = await _run_in_thread(")
-    lines.append("                        functools.partial(func, *args, **kwargs)")
-    lines.append("                    )")
+    lines.append("                    _entry = _TASK_CANCEL.get(task_id)")
+    lines.append("                    if ISOLATE_EXECUTION and _entry is not None:")
+    lines.append("                        def _note_pid(pid, _entry=_entry):")
+    lines.append("                            _entry['pid'] = pid")
+    lines.append("                        def _run_isolated_task(_entry=_entry, _call=functools.partial(func, *args, **kwargs)):")
+    lines.append("                            try:")
+    lines.append("                                return _isolated_call(_call, task_limit, _entry['event'], _note_pid)")
+    lines.append("                            finally:")
+    lines.append("                                _entry['reaped'].set()")
+    lines.append("                        result = await _run_in_thread(_run_isolated_task)")
+    lines.append("                    else:")
+    lines.append("                        result = await _run_in_thread(")
+    lines.append("                            functools.partial(func, *args, **kwargs)")
+    lines.append("                        )")
     lines.append("            except TimeoutError as _own_timeout:")
     lines.append("                raise RuntimeError(_error_text(_own_timeout) or 'TimeoutError') from _own_timeout")
     lines.append("        # jsonable_encoder both validates that `result` is")
@@ -6034,6 +6048,59 @@ def generate_fastapi_code(
     )
     lines.append("            if task_id in TASKS:")
     lines.append("                TASKS[task_id][\"webhook\"] = webhook_result")
+    lines.append("")
+    # POST /tasks/{id}/cancel support: a registry entry per task that has begun
+    # running, holding the cancel Event the isolated child's owner thread
+    # watches (it then kills + reaps the child's process group), the anyio
+    # CancelScope around the whole run (frees a task still waiting for a call
+    # slot, and stops awaiting an async function), and the child's pid.
+    lines.append("_TASK_CANCEL = {}")
+    lines.append("")
+    lines.append("async def _run_background_task(func, task_id, *args, callback_url=None, **kwargs):")
+    lines.append("    task = TASKS.get(task_id)")
+    lines.append("    if task is not None and task.get('status') == 'cancelled':")
+    lines.append("        return")
+    lines.append("    entry = {")
+    lines.append("        'event': threading.Event(), 'reaped': threading.Event(), 'scope': anyio.CancelScope(), 'pid': None,")
+    lines.append("        'killable': bool(ISOLATE_EXECUTION or inspect.iscoroutinefunction(func) or inspect.isasyncgenfunction(func)),")
+    lines.append("    }")
+    lines.append("    _TASK_CANCEL[task_id] = entry")
+    lines.append("    try:")
+    lines.append("        with entry['scope']:")
+    lines.append("            await _run_background_task_inner(func, task_id, *args, callback_url=callback_url, **kwargs)")
+    lines.append("        if entry['scope'].cancelled_caught and task_id in TASKS:")
+    lines.append("            # A cancel can land just after the inner coroutine wrote a result.")
+    lines.append("            TASKS[task_id]['status'] = 'cancelled'")
+    lines.append("            TASKS[task_id].pop('result', None)")
+    lines.append("            TASKS[task_id].setdefault('finished_at', time.time())")
+    lines.append("    finally:")
+    lines.append("        entry['event'].set()")
+    lines.append("        _TASK_CANCEL.pop(task_id, None)")
+    lines.append("")
+    lines.append("@app.post('/tasks/{task_id}/cancel')")
+    lines.append("async def cancel_task(task_id: str, _: None = Depends(verify_api_key)):")
+    lines.append("    task = TASKS.get(task_id)")
+    lines.append("    if task is None:")
+    lines.append("        raise HTTPException(status_code=404, detail=f'Task {task_id} not found')")
+    lines.append("    status = task.get('status')")
+    lines.append("    if status == 'cancelled':")
+    lines.append("        return {'task_id': task_id, 'status': 'cancelled'}")
+    lines.append("    if status != 'processing':")
+    lines.append("        raise HTTPException(status_code=409, detail=f'Task {task_id} is already {status} and cannot be cancelled')")
+    lines.append("    entry = _TASK_CANCEL.get(task_id)")
+    lines.append("    if entry is not None and not entry['killable'] and task.get('started_at'):")
+    lines.append("        raise HTTPException(status_code=409, detail=(")
+    lines.append("            f'Task {task_id} is running synchronous notebook code in this process and cannot be stopped; '")
+    lines.append("            'set NOTEBOOK_API_ISOLATE_EXECUTION=1 to make running tasks cancellable'))")
+    lines.append("    task['status'] = 'cancelled'")
+    lines.append("    task['finished_at'] = time.time()")
+    lines.append("    if entry is not None:")
+    lines.append("        entry['event'].set()")
+    lines.append("        entry['scope'].cancel()")
+    lines.append("        if entry.get('pid') is not None:")
+    lines.append("            # Answer only once the child's process group is killed, it is reaped and its slot freed.")
+    lines.append("            await anyio.to_thread.run_sync(entry['reaped'].wait, 10)")
+    lines.append("    return {'task_id': task_id, 'status': 'cancelled'}")
     lines.append("")
     # _safe_annotation: a request-field type Pydantic can't build a schema
     # (or JSON schema) for -- numpy scalars, pandas Timestamps, a plain

@@ -33,6 +33,10 @@ class IsolatedExecutionError(RuntimeError):
     """Raised when the child process fails, crashes, or cannot return a result."""
 
 
+class IsolatedExecutionCancelled(IsolatedExecutionError):
+    """The caller's ``cancel_event`` was set; the child was terminated and reaped."""
+
+
 class IsolatedExecutionTimeout(IsolatedExecutionError):
     """Raised when the child process exceeds its timeout and is terminated."""
 
@@ -185,8 +189,14 @@ def run_isolated(
     timeout: float = 30.0,
     memory_limit_mb: float | None = None,
     cpu_limit_seconds: float | None = None,
+    cancel_event: Any = None,
+    on_start: Callable[[int], None] | None = None,
 ) -> Any:
     """Run ``func(*args, **kwargs)`` in a child process and return its result.
+
+    ``cancel_event`` (a ``threading.Event``) aborts the call when set: the child's
+    process group is killed and reaped here and IsolatedExecutionCancelled is
+    raised. ``on_start(pid)`` is called once the child is running.
 
     Raises IsolatedExecutionTimeout (child terminated and reaped) on timeout and
     IsolatedExecutionError for exceptions, crashes, or unserializable results.
@@ -222,9 +232,24 @@ def run_isolated(
             _ACTIVE[proc.pid] = proc
         child_conn.close()
         _emit_event("started", execution_id, started, pid=proc.pid)
-        if not parent_conn.poll(timeout):
-            outcome = "timeout"
-            raise IsolatedExecutionTimeout(f"execution exceeded {timeout}s timeout")
+        if on_start is not None:
+            on_start(proc.pid)
+        deadline = None if timeout is None else started + timeout
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                outcome = "cancelled"
+                raise IsolatedExecutionCancelled("execution cancelled")
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
+                if parent_conn.poll(0):
+                    break
+                outcome = "timeout"
+                raise IsolatedExecutionTimeout(f"execution exceeded {timeout}s timeout")
+            wait = 0.05 if cancel_event is not None else None
+            if remaining is not None:
+                wait = remaining if wait is None else min(wait, remaining)
+            if parent_conn.poll(wait):
+                break
         try:
             status, payload = parent_conn.recv()
         except EOFError:
