@@ -22,7 +22,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "GENERATED_AT", "PYTHON_VERSION", "NOTEBOOK_TO_API_VERSION", "ALLOWED_ORIGINS",
     "PUBLIC_URL", "DISABLE_DOCS",
     "MAX_REQUEST_BODY_BYTES", "MaxRequestBodySizeMiddleware",
-    "MAX_PENDING_TASKS", "WEBHOOK_TIMEOUT_SECONDS", "WEBHOOK_SECRET",
+    "MAX_PENDING_TASKS", "MAX_TASK_RESULT_BYTES", "_json_size_exceeds", "WEBHOOK_TIMEOUT_SECONDS", "WEBHOOK_SECRET",
     "WEBHOOK_MAX_RETRIES", "WEBHOOK_RETRY_BACKOFF_SECONDS",
     "TASK_EXECUTION_TIMEOUT_SECONDS",
     "REQUEST_TIMEOUT_SECONDS", "_call_notebook_function", "_log_notebook_error", "_request_id_var",
@@ -491,6 +491,16 @@ GENERATED_APP_ENV_VARS = [
         "description": (
             "How long a background task's own result stays in TASKS "
             "after completing/failing before it's evicted."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_MAX_TASK_RESULT_BYTES",
+        "default": str(10 * 1024 * 1024),
+        "description": (
+            "Maximum size, in bytes of its JSON form, of a background "
+            "task's result. A larger result is never stored: the task is "
+            "marked failed with an error naming this limit. 0 disables "
+            "the limit."
         ),
     },
     {
@@ -2857,6 +2867,21 @@ def generate_fastapi_code(
     # to withstand. retry_task below shares this identical admission-
     # control sequence (and so this identical lock) for the same reason.
     lines.append("_TASKS_ADMISSION_LOCK = threading.Lock()")
+    lines.append(
+        'MAX_TASK_RESULT_BYTES = _env_number('
+        '"NOTEBOOK_API_MAX_TASK_RESULT_BYTES", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_MAX_TASK_RESULT_BYTES")}"'
+        ')'
+    )
+    lines.append("def _json_size_exceeds(value, limit):")
+    lines.append("    # Streams the encoding (the form the API returns) and stops as soon as")
+    lines.append("    # it passes the limit, so an oversized result is never copied whole.")
+    lines.append("    size = 0")
+    lines.append("    for chunk in json.JSONEncoder(ensure_ascii=False, allow_nan=False, separators=(',', ':')).iterencode(value):")
+    lines.append("        size += len(chunk.encode('utf-8'))")
+    lines.append("        if size > limit:")
+    lines.append("            return True")
+    lines.append("    return False")
     lines.append(
         'TASK_TTL_SECONDS = _env_number('
         '"NOTEBOOK_API_TASK_TTL_SECONDS", '
@@ -6167,6 +6192,19 @@ def generate_fastapi_code(
     lines.append("                f\"'{getattr(func, '__name__', 'task')}' returned a value that \"")
     lines.append("                f\"is not JSON-serializable: {_unserializable_reason(result, _encode_error)}\"")
     lines.append("            ) from _encode_error")
+    lines.append("        if MAX_TASK_RESULT_BYTES > 0:")
+    lines.append("            try:")
+    lines.append("                _too_big = _json_size_exceeds(result, MAX_TASK_RESULT_BYTES)")
+    lines.append("            except (TypeError, ValueError) as _size_error:")
+    lines.append("                raise ValueError(")
+    lines.append("                    f\"'{getattr(func, '__name__', 'task')}' returned a value that \"")
+    lines.append("                    f\"is not JSON-serializable: {_size_error}\"")
+    lines.append("                ) from _size_error")
+    lines.append("            if _too_big:")
+    lines.append("                raise ValueError(")
+    lines.append("                    f\"'{getattr(func, '__name__', 'task')}' result is larger than \"")
+    lines.append("                    f\"NOTEBOOK_API_MAX_TASK_RESULT_BYTES={MAX_TASK_RESULT_BYTES} bytes and was not stored\"")
+    lines.append("                )")
     # `task_id in TASKS` rather than an unconditional TASKS[task_id][...]
     # write: _evict_expired_tasks above never removes a 'processing' task,
     # but POST /tasks/reset still unconditionally clears every entry,
