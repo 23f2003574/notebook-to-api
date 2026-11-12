@@ -5938,13 +5938,14 @@ class PipelineSchemaGenerator:
         )
 
     def generate_deployment_validation(
-        self
+        self,
+        artifacts=None
     ):
 
         return (
             self
             .deployment_validation_engine
-            .generate()
+            .generate(artifacts)
         )
 
     def generate_deployment_checklist(
