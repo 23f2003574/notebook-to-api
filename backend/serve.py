@@ -44,6 +44,49 @@ def _effective_selection(notebook_path, only, exclude, drop_past_sunset, tags=No
     return apply_drop_past_sunset(notebook_path, only, exclude)
 
 
+def check_execution_limit_env(environ=None):
+    """Raise ValueError, before anything is compiled or launched, when the
+    NOTEBOOK_API_* isolation/limit settings in the environment could not start
+    the compiled app.
+
+    `serve` hands this process's environment to the uvicorn child unchanged, so
+    the child sees exactly these values; but a bad combination used to surface
+    only as an import traceback inside the child, on every hot reload. This
+    applies the same check the generated app runs at import
+    (backend/runtime/execution_limits.py) so the failure is immediate and clear.
+    """
+    from backend.runtime.execution_limits import (
+        isolation_platform_problem, validate_execution_limits,
+    )
+
+    environ = os.environ if environ is None else environ
+
+    def number(name):
+        raw = str(environ.get(name, "")).strip()
+        if not raw:
+            return 0
+        try:
+            return float(raw)
+        except ValueError:
+            raise ValueError(f"{name} must be a finite number >= 0 (0 disables it), got {raw!r}") from None
+
+    try:
+        import resource  # noqa: F401
+        rlimits = True
+    except ImportError:
+        rlimits = False
+    processes = number("NOTEBOOK_API_ISOLATE_MAX_PROCESSES")
+    validate_execution_limits(
+        timeout_seconds=number("NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS"),
+        memory_limit_mb=number("NOTEBOOK_API_ISOLATE_MEMORY_LIMIT_MB"),
+        cpu_limit_seconds=number("NOTEBOOK_API_ISOLATE_CPU_LIMIT_SECONDS"),
+        isolate=number("NOTEBOOK_API_ISOLATE_EXECUTION") > 0,
+        rlimits_supported=rlimits,
+        max_processes=int(processes) if processes == int(processes) else processes,
+        isolation_problem=isolation_platform_problem(),
+    )
+
+
 def run_on_change_hook(on_change):
     """Run `on_change` (a shell command string) via a real shell, letting
     its own stdout/stderr flow straight through to this process' own --
@@ -597,6 +640,8 @@ def serve_notebook(
             every recompile exactly like `drop_past_sunset` already is
             (see _effective_selection's own docstring for why).
     """
+
+    check_execution_limit_env()
 
     # Initial compilation
     print("📝 Initial compilation...")
