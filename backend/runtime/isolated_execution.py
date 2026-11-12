@@ -94,6 +94,13 @@ def _kill_process_group(pid: int | None) -> None:
 _ACTIVE: dict[int, Any] = {}
 _ACTIVE_LOCK = threading.Lock()
 
+# fork() copies only the calling thread, so a lock another thread of the server
+# holds at that instant stays locked forever in the child. Forks are serialized
+# (no two threads fork at once), and a child must prove it came up (the "started"
+# message) within this many seconds or the call fails explicitly instead of hanging.
+_FORK_LOCK = threading.Lock()
+_START_TIMEOUT_SECONDS = 10.0
+
 
 _WORKERS: dict[int, Any] = {}
 
@@ -167,6 +174,7 @@ def _child(
                 _apply_memory_limit(memory_limit_mb)
             if cpu_limit_seconds:
                 _apply_cpu_limit(cpu_limit_seconds)
+            conn.send(("started", None))
             conn.send(("ok", func(*args, **kwargs)))
         except MemoryError:
             conn.send(("error", "memory limit exceeded"))
@@ -227,7 +235,8 @@ def run_isolated(
     parent_conn, child_conn = ctx.Pipe(duplex=False)
     proc = ctx.Process(target=_child, args=(child_conn, func, tuple(args), dict(kwargs or {}), memory_limit_mb, cpu_limit_seconds), daemon=True)
     try:
-        proc.start()
+        with _FORK_LOCK:
+            proc.start()
         with _ACTIVE_LOCK:
             _ACTIVE[proc.pid] = proc
         child_conn.close()
@@ -235,26 +244,49 @@ def run_isolated(
         if on_start is not None:
             on_start(proc.pid)
         deadline = None if timeout is None else started + timeout
+        start_deadline = time.monotonic() + _START_TIMEOUT_SECONDS
+        acked = False
+        early = None
         while True:
             if cancel_event is not None and cancel_event.is_set():
                 outcome = "cancelled"
                 raise IsolatedExecutionCancelled("execution cancelled")
             remaining = None if deadline is None else deadline - time.monotonic()
             if remaining is not None and remaining <= 0:
-                if parent_conn.poll(0):
+                if acked and parent_conn.poll(0):
                     break
                 outcome = "timeout"
                 raise IsolatedExecutionTimeout(f"execution exceeded {timeout}s timeout")
             wait = 0.05 if cancel_event is not None else None
+            if not acked:
+                until_start = start_deadline - time.monotonic()
+                if until_start <= 0:
+                    outcome = "start_failed"
+                    raise IsolatedExecutionError(
+                        f"isolated child did not start within {_START_TIMEOUT_SECONDS:g}s "
+                        "(it was killed; the server may have forked while holding a lock)"
+                    )
+                wait = until_start if wait is None else min(wait, until_start)
             if remaining is not None:
                 wait = remaining if wait is None else min(wait, remaining)
             if parent_conn.poll(wait):
-                break
+                if acked:
+                    break
+                try:
+                    early = parent_conn.recv()
+                except EOFError:
+                    break  # died before the handshake: handled as "exited without result" below
+                if early[0] == "started":
+                    acked = True
+                    early = None
+                    continue
+                break  # an error reported before the handshake (e.g. limits could not be applied)
         try:
-            status, payload = parent_conn.recv()
+            status, payload = early if early is not None else parent_conn.recv()
         except EOFError:
-            proc.join(1)
-            exitcode = proc.exitcode
+            with _FORK_LOCK:
+                proc.join(1)
+                exitcode = proc.exitcode
             outcome = "terminated"
             if cpu_limit_seconds and proc.exitcode in (-24, -9):  # SIGXCPU / SIGKILL backstop
                 outcome = "cpu_limit_exceeded"
@@ -268,16 +300,23 @@ def run_isolated(
     finally:
         pid = proc.pid
         _kill_process_group(pid)
-        if proc.is_alive():
-            proc.terminate()
-            proc.join(2)
-            if proc.is_alive():
-                proc.kill()
-        if proc.pid is not None:
-            proc.join()
-            proc.close()
-        with _ACTIVE_LOCK:
-            _ACTIVE.pop(pid, None)
+        try:
+            # multiprocessing's Process.start() reaps *every* finished child
+            # (_cleanup); doing that while another thread join()s/close()s its
+            # own child makes waitpid fail with ECHILD ("Cannot close a process
+            # while it is still running"). Reaping shares the fork lock.
+            with _FORK_LOCK:
+                if proc.is_alive():
+                    proc.terminate()
+                    proc.join(2)
+                    if proc.is_alive():
+                        proc.kill()
+                if proc.pid is not None:
+                    proc.join()
+                    proc.close()
+        finally:
+            with _ACTIVE_LOCK:
+                _ACTIVE.pop(pid, None)
         child_conn.close()
         parent_conn.close()
         _emit_event("finished", execution_id, started, outcome=outcome, exitcode=exitcode)
@@ -285,7 +324,7 @@ def run_isolated(
 
 def _worker_main(conn: Any, handler: Callable[[Any], Any], memory_limit_mb: float | None,
                  cpu_limit_seconds: float | None) -> None:
-    global _ACTIVE_LOCK
+    global _ACTIVE_LOCK, _FORK_LOCK
     # Daemonic (so the app's exit reaps us) yet allowed its own children.
     mp.current_process()._config["daemon"] = False
     if hasattr(os, "setsid"):
@@ -295,6 +334,7 @@ def _worker_main(conn: Any, handler: Callable[[Any], Any], memory_limit_mb: floa
             pass
     # Forked from the app: forget its children and any lock held at fork time.
     _ACTIVE_LOCK = threading.Lock()
+    _FORK_LOCK = threading.Lock()
     _ACTIVE.clear()
     _WORKERS.clear()
 
