@@ -508,6 +508,11 @@ def docker_compose_content(package_name="generated", env_vars=None, notebook_env
         f"  {service_name}:\n"
         "    build: .\n"
         "    restart: unless-stopped\n"
+        # Same hardening kubernetes.yaml's securityContext applies: the image
+        # already runs as a non-root user, so it needs no capabilities and
+        # must not be able to gain privileges through a setuid binary.
+        '    security_opt: ["no-new-privileges:true"]\n'
+        '    cap_drop: ["ALL"]\n'
         "    ports:\n"
         # Published on loopback only by default: a quick-start `docker compose
         # up` runs with the public default API key and `*` CORS, so binding

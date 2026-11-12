@@ -35,3 +35,22 @@ def test_compose_config_fails_without_key_and_passes_with_one(tmp_path):
     assert missing.returncode != 0 and "NOTEBOOK_API_KEY" in missing.stderr
     ok = subprocess.run(base, capture_output=True, text=True, env={**env, "NOTEBOOK_API_KEY": "x" * 8})
     assert ok.returncode == 0, ok.stderr
+
+
+def test_compose_drops_capabilities_and_blocks_privilege_escalation():
+    compose = docker_compose_content("generated", ENV)
+    assert 'security_opt: ["no-new-privileges:true"]' in compose
+    assert 'cap_drop: ["ALL"]' in compose
+    if shutil.which("docker"):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "docker-compose.yml"
+            path.write_text(compose)
+            out = subprocess.run(
+                ["docker", "compose", "-f", str(path), "config"], capture_output=True, text=True,
+                env={"PATH": "/usr/bin:/bin:/usr/local/bin", "HOME": tmp, "NOTEBOOK_API_KEY": "x" * 8},
+            )
+        assert out.returncode == 0, out.stderr
+        assert "no-new-privileges:true" in out.stdout and "- ALL" in out.stdout
