@@ -594,6 +594,8 @@ def env_example_content(env_vars=None, notebook_env_vars=None):
         "# one already matches the same default the compiled app (or, for",
         "# PORT, docker-compose.yml/the Dockerfile) itself falls back to,",
         "# so this file alone already reproduces the unconfigured behavior.",
+        "# The one exception is NOTEBOOK_API_KEY: it is left unset here because",
+        "# docker-compose.yml refuses to start without a key you chose.",
         "#",
         "# docker compose reads .env by itself. uvicorn does not: to use it when",
         "# running locally, load it into your shell first: set -a; . .env; set +a",
@@ -1046,7 +1048,9 @@ example in `.env`: `NOTEBOOK_API_KEY=$(openssl rand -hex 32)`).
 {notebook_env_section}## Configuration
 
 Every setting below is a real default this app already falls back to; \
-see `.env.example` for a ready-to-copy file.
+see `.env.example` for a ready-to-copy file. The one exception in \
+`docker-compose.yml` is `NOTEBOOK_API_KEY`, which has no default there and \
+must be set.
 
 {env_var_lines}
 """

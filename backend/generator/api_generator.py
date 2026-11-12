@@ -464,7 +464,9 @@ GENERATED_APP_ENV_VARS = [
             "verify_api_key) -- a list, not a single value, so a key can "
             "be rotated with zero downtime: add the new key alongside "
             "the old one, restart, let clients switch over, then remove "
-            "the old key and restart again."
+            "the old key and restart again. Run directly the app falls back "
+            "to the published default key (and warns); docker-compose.yml "
+            "has no fallback and will not start until this is set."
         ),
     },
     {
