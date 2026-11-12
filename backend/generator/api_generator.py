@@ -172,6 +172,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # 'req'", nothing to do with train_model's own logic at all.
     "_evict_expired_tasks", "_run_background_task", "_json_safe",
     "_run_background_task_inner", "_TASK_CANCEL",
+    "_TaskRegistry", "_persist_tasks", "_load_persisted_tasks", "TASK_STORE_PATH",
     "_coerce_array_like", "_safe_annotation", "_shield_exit",
     "_png_data_uri", "_bytes_json", "_openapi_json_safe", "_default_kwargs", "_function_default",
     # Every name below is one of this file's own top-level `import`s --
@@ -490,6 +491,20 @@ GENERATED_APP_ENV_VARS = [
         "description": (
             "How long a background task's own result stays in TASKS "
             "after completing/failing before it's evicted."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_TASK_STORE_PATH",
+        "default": "",
+        "description": (
+            "File path where background task metadata and results are "
+            "saved (JSON, replaced atomically) so they survive a restart. "
+            "On startup, tasks that were still queued/processing are marked "
+            "failed with error 'interrupted_by_restart' (execution is never "
+            "resumed). Empty (the default) keeps tasks in memory only. A "
+            "malformed file is renamed to <path>.corrupt-<time> and the app "
+            "starts empty. Retry data (a task's request arguments) is never "
+            "written, so only tasks from this process can be retried."
         ),
     },
     {
@@ -853,6 +868,112 @@ def _sunset_http_date(iso_date):
         datetime.datetime(day.year, day.month, day.day, tzinfo=datetime.timezone.utc),
         usegmt=True,
     )
+
+
+_TASK_STORE_SOURCE = '''\
+import logging as _task_logging
+
+TASK_STORE_PATH = os.getenv("NOTEBOOK_API_TASK_STORE_PATH", "").strip()
+_TASK_STORE_LOCK = threading.Lock()
+_TASK_NOT_PERSISTED = ("_replay",)
+
+
+def _persist_tasks():
+    """Atomically write the task registry (minus request arguments) to disk."""
+    if not TASK_STORE_PATH:
+        return
+    with _TASK_STORE_LOCK:
+        tmp = f"{TASK_STORE_PATH}.{os.getpid()}.tmp"
+        try:
+            snapshot = {
+                tid: {k: v for k, v in dict(task).items() if k not in _TASK_NOT_PERSISTED}
+                for tid, task in list(TASKS.items())
+            }
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump({"version": 1, "tasks": snapshot}, fh, default=str)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, TASK_STORE_PATH)
+        except (OSError, TypeError, ValueError, RuntimeError) as exc:
+            _task_logging.getLogger("uvicorn.error").error(
+                "could not save tasks to NOTEBOOK_API_TASK_STORE_PATH=%s: %s", TASK_STORE_PATH, exc
+            )
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
+class _TaskRegistry(dict):
+    """dict of task_id -> task that saves itself whenever tasks come or go."""
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        _persist_tasks()
+
+    def __delitem__(self, key):
+        super().__delitem__(key)
+        _persist_tasks()
+
+    def pop(self, key, *default):
+        present = key in self
+        result = super().pop(key, *default)
+        if present:
+            _persist_tasks()
+        return result
+
+    def clear(self):
+        super().clear()
+        _persist_tasks()
+
+
+TASKS = _TaskRegistry()
+
+
+def _load_persisted_tasks():
+    if not TASK_STORE_PATH or not os.path.exists(TASK_STORE_PATH):
+        return
+    log = _task_logging.getLogger("uvicorn.error")
+    try:
+        with open(TASK_STORE_PATH, encoding="utf-8") as fh:
+            raw = fh.read()
+    except OSError as exc:
+        raise RuntimeError(
+            f"cannot read NOTEBOOK_API_TASK_STORE_PATH={TASK_STORE_PATH}: {exc}; "
+            "fix its permissions or point the variable at a writable file"
+        ) from exc
+    try:
+        stored = json.loads(raw)["tasks"]
+        if not isinstance(stored, dict):
+            raise ValueError("'tasks' is not an object")
+    except (ValueError, KeyError, TypeError) as exc:
+        quarantine = f"{TASK_STORE_PATH}.corrupt-{int(time.time())}"
+        os.replace(TASK_STORE_PATH, quarantine)
+        log.error(
+            "NOTEBOOK_API_TASK_STORE_PATH=%s is not valid task data (%s); moved to %s and starting empty",
+            TASK_STORE_PATH, exc, quarantine,
+        )
+        return
+    now = time.time()
+    skipped = 0
+    for task_id, task in stored.items():
+        if not isinstance(task, dict) or not isinstance(task.get("status"), str):
+            skipped += 1
+            continue
+        if task["status"] in ("queued", "processing"):
+            task.update(
+                status="failed", finished_at=now, interrupted_by_restart=True,
+                error="interrupted_by_restart: the app restarted while this task was running; "
+                      "its execution was not resumed",
+            )
+        dict.__setitem__(TASKS, task_id, task)
+    if skipped:
+        log.warning("ignored %d malformed task record(s) in %s", skipped, TASK_STORE_PATH)
+    _persist_tasks()
+
+
+_load_persisted_tasks()
+'''
 
 
 def _isolated_execution_source(module="isolated_execution"):
@@ -2603,7 +2724,7 @@ def generate_fastapi_code(
     )
     lines.append("")
     # Simple in‑memory task registry used by background endpoints
-    lines.append("TASKS = {}")
+    lines.extend(_TASK_STORE_SOURCE.splitlines())
     # Maps a caller-supplied Idempotency-Key header to the task_id it
     # already created. Without this, a background endpoint retried after
     # an ambiguous connection failure (the caller's request reached this
@@ -6076,6 +6197,7 @@ def generate_fastapi_code(
     lines.append("    finally:")
     lines.append("        entry['event'].set()")
     lines.append("        _TASK_CANCEL.pop(task_id, None)")
+    lines.append("        _persist_tasks()")
     lines.append("")
     lines.append("@app.post('/tasks/{task_id}/cancel')")
     lines.append("async def cancel_task(task_id: str, _: None = Depends(verify_api_key)):")
@@ -6094,6 +6216,7 @@ def generate_fastapi_code(
     lines.append("            'set NOTEBOOK_API_ISOLATE_EXECUTION=1 to make running tasks cancellable'))")
     lines.append("    task['status'] = 'cancelled'")
     lines.append("    task['finished_at'] = time.time()")
+    lines.append("    _persist_tasks()")
     lines.append("    if entry is not None:")
     lines.append("        entry['event'].set()")
     lines.append("        entry['scope'].cancel()")

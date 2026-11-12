@@ -27823,6 +27823,7 @@ def test_env_vars_preview_requires_no_notebook_and_needs_no_body():
         "NOTEBOOK_API_ALLOWED_ORIGINS",
         "NOTEBOOK_API_MAX_REQUEST_BYTES",
         "NOTEBOOK_API_TASK_TTL_SECONDS",
+        "NOTEBOOK_API_TASK_STORE_PATH",
         "NOTEBOOK_API_MAX_TASKS",
         "NOTEBOOK_API_TASK_EXECUTION_TIMEOUT_SECONDS",
         "NOTEBOOK_API_RATE_LIMIT_PER_MINUTE",
