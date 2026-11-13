@@ -321,3 +321,71 @@ describe('actual inspection data', () => {
     expect(screen.queryByText('Dockerfile')).toBeNull()
   })
 })
+
+describe('NotebookUpload drag and drop', () => {
+  const notebook = () => new File(['{}'], 'n.ipynb')
+  const ok = { ok: true, status: 200, json: async () => ({ filename: 'n.ipynb' }) }
+  const setup = () => {
+    const fetchMock = vi.fn().mockResolvedValue(ok)
+    vi.stubGlobal('fetch', fetchMock)
+    const onSuccess = vi.fn()
+    const view = render(<NotebookUpload onSuccess={onSuccess} />)
+    return { fetchMock, onSuccess, zone: view.container.querySelector('label'), ...view }
+  }
+  const drop = (zone, files) => fireEvent.drop(zone, { dataTransfer: { files } })
+
+  it('uploads a dropped .ipynb through the normal upload flow and stops the browser opening it', async () => {
+    const { fetchMock, onSuccess, zone } = setup()
+    const notPrevented = drop(zone, [notebook()])
+    expect(notPrevented).toBe(false) // default navigation was cancelled
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledWith({ filename: 'n.ipynb' }))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toMatch(/\/api\/upload$/)
+    expect(init.body.get('file').name).toBe('n.ipynb')
+  })
+
+  it('rejects an unsupported dropped file without calling the API', async () => {
+    const { fetchMock, zone } = setup()
+    drop(zone, [new File(['x'], 'notes.txt')])
+    expect(await screen.findByText(/Please upload a \.ipynb file/)).toBeInTheDocument()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('treats an empty drop as an error and sends nothing', async () => {
+    const { fetchMock, zone } = setup()
+    drop(zone, [])
+    expect(await screen.findByText(/No file was dropped/)).toBeInTheDocument()
+    fireEvent.drop(zone, {})
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('accepts exactly one file: several dropped files upload nothing', async () => {
+    const { fetchMock, zone } = setup()
+    drop(zone, [notebook(), new File(['{}'], 'b.ipynb')])
+    expect(await screen.findByText(/Drop one notebook at a time/)).toBeInTheDocument()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('shows a drag-over state that clears on leave and on drop', () => {
+    const { zone } = setup()
+    expect(zone.dataset.dragging).toBe('false')
+    fireEvent.dragOver(zone, { dataTransfer: { files: [] } })
+    expect(zone.dataset.dragging).toBe('true')
+    fireEvent.dragLeave(zone)
+    expect(zone.dataset.dragging).toBe('false')
+    fireEvent.dragEnter(zone)
+    expect(zone.dataset.dragging).toBe('true')
+    drop(zone, [])
+    expect(zone.dataset.dragging).toBe('false')
+  })
+
+  it('still uploads a file chosen with the picker, and the input stays keyboard-focusable', async () => {
+    const { fetchMock, onSuccess, container } = setup()
+    const input = container.querySelector('input[type=file]')
+    expect(input.className).not.toMatch(/\bhidden\b/) // display:none would drop it from the tab order
+    fireEvent.change(input, { target: { files: [notebook()] } })
+    await waitFor(() => expect(onSuccess).toHaveBeenCalled())
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+})

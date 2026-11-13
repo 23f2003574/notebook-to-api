@@ -5,11 +5,10 @@ import { useState } from 'react'
 export default function NotebookUpload({ onSuccess }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [dragging, setDragging] = useState(false)
 
-  const handleFileUpload = async (event) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-
+  // The one upload path: used for a file chosen with the picker and for a dropped file.
+  const uploadFile = async (file) => {
     if (!file.name.endsWith('.ipynb')) {
       setError('❌ Please upload a .ipynb file')
       return
@@ -36,13 +35,56 @@ export default function NotebookUpload({ onSuccess }) {
       setError('❌ ' + err.message)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleFileUpload = async (event) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    try {
+      await uploadFile(file)
+    } finally {
       event.target.value = ''
+    }
+  }
+
+  const allowDrop = (event) => {
+    // Without this the browser would open the dropped file instead of handing it to us.
+    event.preventDefault()
+    if (!loading) setDragging(true)
+  }
+
+  const handleDragLeave = (event) => {
+    if (!event.currentTarget.contains(event.relatedTarget)) setDragging(false)
+  }
+
+  const handleDrop = async (event) => {
+    event.preventDefault()
+    setDragging(false)
+    if (loading) return
+
+    const files = event.dataTransfer?.files
+    if (!files || files.length === 0) {
+      setError('❌ No file was dropped')
+    } else if (files.length > 1) {
+      setError('❌ Drop one notebook at a time')
+    } else {
+      await uploadFile(files[0])
     }
   }
 
   return (
     <div>
-      <label className="flex flex-col items-center justify-center w-full p-8 border-2 border-dashed border-slate-600 rounded-lg cursor-pointer hover:bg-slate-700/50 transition">
+      <label
+        data-dragging={dragging}
+        onDragEnter={allowDrop}
+        onDragOver={allowDrop}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        className={`flex flex-col items-center justify-center w-full p-8 border-2 border-dashed rounded-lg cursor-pointer hover:bg-slate-700/50 transition focus-within:ring-2 focus-within:ring-emerald-500 ${
+          dragging ? 'border-emerald-400 bg-slate-700/50' : 'border-slate-600'
+        }`}
+      >
         <div className="flex flex-col items-center justify-center">
           <span className="text-2xl mb-2">📁</span>
           <span className="text-white font-medium">Click to upload or drag & drop</span>
@@ -53,7 +95,7 @@ export default function NotebookUpload({ onSuccess }) {
           accept=".ipynb"
           onChange={handleFileUpload}
           disabled={loading}
-          className="hidden"
+          className="sr-only"
         />
       </label>
       {loading && <p className="mt-3 text-slate-400">⏳ Uploading...</p>}
