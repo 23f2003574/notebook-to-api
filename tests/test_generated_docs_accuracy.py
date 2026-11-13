@@ -72,3 +72,39 @@ def test_isolation_docs_state_platform_limits_and_no_unimplemented_features(proj
     assert "Async functions are not isolated" in readme
     for invented in ("autoscal", "NOTEBOOK_API_REDIS", "NOTEBOOK_API_DATABASE", "NOTEBOOK_API_CELERY"):
         assert invented not in readme and invented not in text["docker-compose.yml"]
+
+
+SYNC_SOURCE = "def double(x: int) -> int:\n    return x * 2\n"
+
+
+@pytest.fixture(scope="module")
+def sync_project(tmp_path_factory):
+    tmp = tmp_path_factory.mktemp("docs_sync")
+    nb = nbformat.v4.new_notebook()
+    nb.cells = [nbformat.v4.new_code_cell(SYNC_SOURCE)]
+    nbformat.write(nb, str(tmp / "nb.ipynb"))
+    out = tmp / "sync_app"
+    compile_notebook(str(tmp / "nb.ipynb"), str(out))
+    return {n: (out / n).read_text(encoding="utf-8") for n in (".env.example", "docker-compose.yml", "README.md")}
+
+
+def test_readme_curl_example_does_not_use_the_public_dev_key(sync_project):
+    readme = sync_project["README.md"]
+    assert "-d '" in readme and "curl -X POST http://localhost:8000/double" in readme  # the example exists
+    assert "X-API-Key: notebook-to-api-dev-key" not in readme
+
+
+def test_readme_curl_example_reads_the_configured_key_safely(sync_project):
+    curl = sync_project["README.md"].split("curl -X POST http://localhost:8000/double", 1)[1].split("```", 1)[0]
+    # Double-quoted so the shell expands it; ${VAR:?} fails loudly instead of sending an empty key.
+    assert '-H "X-API-Key: ${NOTEBOOK_API_KEY:?' in curl
+    assert "-H 'Content-Type: application/json'" in curl
+
+
+def test_readme_explains_where_the_key_comes_from_and_it_matches_compose_and_env(sync_project):
+    readme, compose, env = (sync_project[n] for n in ("README.md", "docker-compose.yml", ".env.example"))
+    intro = readme.split("## Calling an endpoint", 1)[1].split("```bash", 1)[0]
+    assert "NOTEBOOK_API_KEY" in intro and ".env" in intro and ".env.example" in intro and "export" in intro.lower()
+    # The same variable, with no fallback, is what compose requires and .env.example asks for.
+    assert "NOTEBOOK_API_KEY=${NOTEBOOK_API_KEY:?" in compose
+    assert re.search(r"^# NOTEBOOK_API_KEY=$", env, re.M)

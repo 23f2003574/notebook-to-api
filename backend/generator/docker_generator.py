@@ -940,10 +940,14 @@ brownout to find remaining callers before removing them for real.
             "## Calling an endpoint\n\n"
             "With the app running (default port 8000), send the function's "
             "arguments as a JSON body; the return value comes back under "
-            '`"result"`:\n\n'
+            '`"result"`. The request authenticates with the same '
+            "`NOTEBOOK_API_KEY` you set before starting it (in `.env` for "
+            "`docker compose`, see `.env.example`; in the Secret for "
+            "Kubernetes). Export it in this shell first, for example "
+            "`set -a; . ./.env; set +a`:\n\n"
             "```bash\n"
             f"curl -X POST http://localhost:8000/{func['name']} \\\n"
-            "  -H 'X-API-Key: notebook-to-api-dev-key' \\\n"
+            '  -H "X-API-Key: ${NOTEBOOK_API_KEY:?set NOTEBOOK_API_KEY first}" \\\n'
             "  -H 'Content-Type: application/json' \\\n"
             f"  -d {shlex.quote(payload)}\n"
             "```\n\n"

@@ -20735,7 +20735,13 @@ compile_notebook({str(notebook_path)!r}, "generated")
 readme = open("generated/README.md", encoding="utf-8").read()
 assert "## Calling an endpoint" in readme, readme[:500]
 block = re.search(r"```bash\\n(curl .*?)```", readme, re.S).group(1)
-parts = shlex.split(block.replace("\\\\\\n", " "))
+# Run the block through a real shell, with curl replaced by a function that prints its
+# arguments as JSON, so ${{NOTEBOOK_API_KEY}} is expanded exactly as a user's shell would.
+import os, subprocess
+stub = "curl() {{ " + shlex.quote(sys.executable) + " -c 'import sys,json;print(json.dumps(sys.argv[1:]))' \\"$@\\"; }}\\n"
+shell = subprocess.run(["bash", "-c", stub + block], capture_output=True, text=True, check=True,
+                       env={{**os.environ, "NOTEBOOK_API_KEY": "notebook-to-api-dev-key"}})
+parts = ["curl"] + json.loads(shell.stdout)
 assert parts[:3] == ["curl", "-X", "POST"] and parts[3].endswith("/add"), parts
 headers = {{parts[i + 1].split(": ")[0]: parts[i + 1].split(": ")[1] for i, p in enumerate(parts) if p == "-H"}}
 body = json.loads(parts[parts.index("-d") + 1])
