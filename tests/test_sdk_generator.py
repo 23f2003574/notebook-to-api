@@ -333,12 +333,12 @@ def test_generate_python_sdk_constructor_accepts_a_configurable_timeout(tmp_path
     # Every requests.* call this client makes must actually use it: the 10
     # hardcoded task methods (get_task, list_tasks, delete_task,
     # delete_completed_tasks, delete_failed_tasks, redeliver_task_webhook,
-    # retry_task, cleanup_tasks, reset_tasks, plus the single
+    # cancel_task, retry_task, cleanup_tasks, reset_tasks, plus the single
     # "/train_model" path this test's own schema declares -- wait_for_task
     # makes no request of its own, it only calls self.get_task), plus the
     # 10 hardcoded health/ready/info/config/metrics/metrics_prometheus/
     # uptime/auth_status/auth_info/auth_validate methods.
-    assert source.count("timeout=self.timeout") == 23
+    assert source.count("timeout=self.timeout") == 24
 
 
 def test_generate_python_sdk_uses_the_configured_timeout_for_a_request(
@@ -410,7 +410,7 @@ def test_generate_typescript_sdk_constructor_accepts_a_configurable_timeout(
     # paths exist), plus the 10 hardcoded health/ready/info/config/
     # metrics/metricsPrometheus/uptime/authStatus/authInfo/authValidate
     # methods.
-    assert source.count("signal: AbortSignal.timeout(this.timeoutMs),") == 22
+    assert source.count("signal: AbortSignal.timeout(this.timeoutMs),") == 23
 
 
 def test_generate_python_sdk_method_name_handles_multi_segment_paths(tmp_path):
@@ -8101,3 +8101,144 @@ def test_generated_python_sdk_scopes_task_cleanup_to_one_endpoint_like_the_app(t
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "SDK_CLEANUP_SCOPE_OK" in proc.stdout
+
+
+# --- cancel_task / cancelTask: POST /tasks/{task_id}/cancel (200, 404 unknown, 409 finished) ---
+
+
+def test_generate_python_sdk_cancel_task_sends_authenticated_post_and_surfaces_errors(
+    tmp_path, monkeypatch
+):
+    schema_path = _write_schema(tmp_path, {"/train_model": {"post": {"operationId": "train_model"}}})
+    output_path = tmp_path / "client.py"
+    generate_python_sdk(str(schema_path), str(output_path))
+    ast.parse(output_path.read_text(encoding="utf-8"))
+
+    calls = []
+
+    class HTTPError(Exception):
+        def __init__(self, message, response):
+            super().__init__(message)
+            self.response = response  # like requests.HTTPError: the client reads response.status_code
+
+    class FakeResponse:
+        headers = {}
+
+        def __init__(self, status, payload):
+            self.status_code, self._payload = status, payload
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise HTTPError(f"{self.status_code} {self._payload['detail']}", self)
+
+        def json(self):
+            return self._payload
+
+    outcomes = {
+        "live": FakeResponse(200, {"task_id": "live", "status": "cancelled"}),
+        "nope": FakeResponse(404, {"detail": "Task nope not found"}),
+        "done": FakeResponse(409, {"detail": "Task done is already completed and cannot be cancelled"}),
+    }
+
+    def fake_post(url, headers=None, timeout=None):
+        calls.append({"url": url, "headers": headers, "timeout": timeout})
+        return outcomes[url.rsplit("/", 2)[1]]
+
+    namespace = _exec_python_client_with_fake_requests(output_path, monkeypatch, post=fake_post)
+    client = namespace["NotebookAPIClient"]("http://localhost:8000", api_key="secret")
+
+    assert client.cancel_task("live") == {"task_id": "live", "status": "cancelled"}
+    with pytest.raises(HTTPError, match="404 Task nope not found"):
+        client.cancel_task("nope")
+    with pytest.raises(HTTPError, match="409 .*cannot be cancelled"):
+        client.cancel_task("done")
+    assert [c["url"] for c in calls] == [
+        "http://localhost:8000/tasks/live/cancel",
+        "http://localhost:8000/tasks/nope/cancel",
+        "http://localhost:8000/tasks/done/cancel",
+    ]
+    assert all(c["headers"] == {"X-API-Key": "secret"} and c["timeout"] for c in calls)
+
+
+def test_generate_typescript_sdk_cancel_task_is_a_post_to_the_cancel_route():
+    """Source-level check that needs no Node: method, path, auth header and timeout."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        client_path = tmp_path / "client.ts"
+        generate_typescript_sdk(str(_write_schema(tmp_path, {"/train_model": {"post": {}}})), str(client_path))
+        source = client_path.read_text(encoding="utf-8")
+    body = source.split("async cancelTask(taskId: string): Promise<any> {", 1)[1].split("\n  }\n", 1)[0]
+    assert "`/tasks/${taskId}/cancel`" in body and 'method: "POST"' in body
+    assert '"X-API-Key": this.apiKey' in body and "AbortSignal.timeout(this.timeoutMs)" in body
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="requires Node.js to run the generated client")
+def test_generate_typescript_sdk_cancel_task_resolves_and_rejects_with_status(tmp_path):
+    client_path = tmp_path / "client.ts"
+    generate_typescript_sdk(
+        str(_write_schema(tmp_path, {"/train_model": {"post": {"operationId": "train_model"}}})), str(client_path)
+    )
+    runner_path = tmp_path / "run.mjs"
+    runner_path.write_text(
+        f"""
+        const calls = [];
+        const replies = {{
+          live: [200, {{ task_id: "live", status: "cancelled" }}],
+          nope: [404, {{ detail: "Task nope not found" }}],
+          done: [409, {{ detail: "already completed" }}],
+        }};
+        globalThis.fetch = async (url, opts) => {{
+          calls.push({{ url, method: opts.method, key: opts.headers["X-API-Key"] }});
+          const [status, body] = replies[url.split("/")[4]];
+          return {{ ok: status < 400, status, headers: new Headers(), json: async () => body }};
+        }};
+        const {{ NotebookAPIClient }} = await import({json.dumps(str(client_path))});
+        const client = new NotebookAPIClient("http://localhost:8000", {{ apiKey: "secret" }});
+        const result = await client.cancelTask("live");
+        const errors = [];
+        for (const id of ["nope", "done"]) {{
+          try {{ await client.cancelTask(id); }} catch (e) {{ errors.push([e.status, e.detail]); }}
+        }}
+        console.log(JSON.stringify({{ calls, result, errors }}));
+        """,
+        encoding="utf-8",
+    )
+    proc = subprocess.run(["node", str(runner_path)], capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    out = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert out["result"] == {"task_id": "live", "status": "cancelled"}
+    assert out["errors"] == [[404, "Task nope not found"], [409, "already completed"]]
+    assert [(c["url"], c["method"], c["key"]) for c in out["calls"]] == [
+        (f"http://localhost:8000/tasks/{t}/cancel", "POST", "secret") for t in ("live", "nope", "done")
+    ]
+
+
+def test_cancel_task_names_take_priority_over_colliding_notebook_paths(tmp_path):
+    schema_path = _write_schema(
+        tmp_path, {"/cancel_task": {"post": {"operationId": "cancel_task"}}}
+    )
+    py, ts = tmp_path / "client.py", tmp_path / "client.ts"
+    generate_python_sdk(str(schema_path), str(py))
+    generate_typescript_sdk(str(schema_path), str(ts))
+    py_source = py.read_text(encoding="utf-8")
+    assert "def cancel_task(self, task_id: str) -> dict:" in py_source
+    assert py_source.count("def cancel_task(") == 1 and "def cancel_task_2(self, payload" in py_source
+    ts_source = ts.read_text(encoding="utf-8")
+    assert "async cancelTask(taskId: string): Promise<any> {" in ts_source
+    assert ts_source.count("async cancelTask(") == 1
+
+
+def test_sdk_generation_with_cancel_is_deterministic(tmp_path):
+    schema_path = _write_schema(tmp_path, {"/train_model": {"post": {"operationId": "train_model"}}})
+    outputs = []
+    for run in ("a", "b"):
+        py, ts = tmp_path / f"{run}.py", tmp_path / f"{run}.ts"
+        generate_python_sdk(str(schema_path), str(py))
+        generate_typescript_sdk(str(schema_path), str(ts))
+        outputs.append((py.read_text(encoding="utf-8"), ts.read_text(encoding="utf-8")))
+    assert outputs[0] == outputs[1]
+    for name in ("def get_task(", "def retry_task(", "def redeliver_task_webhook(", "def delete_task("):
+        assert name in outputs[0][0]
+    for name in ("async getTask(", "async retryTask(", "async deleteTask("):
+        assert name in outputs[0][1]

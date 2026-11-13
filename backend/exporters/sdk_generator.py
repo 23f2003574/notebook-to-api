@@ -24,7 +24,7 @@ from backend.parser.ast_parser import _matching_bracket_content
 # self.wait_for_task(...) internally.
 PYTHON_RESERVED_CLIENT_METHOD_NAMES = frozenset({
     "get_task", "wait_for_task", "list_tasks", "delete_task",
-    "delete_completed_tasks", "delete_failed_tasks", "redeliver_task_webhook",
+    "delete_completed_tasks", "delete_failed_tasks", "redeliver_task_webhook", "cancel_task",
     "retry_task", "cleanup_tasks", "reset_tasks", "clear_cache",
     "health", "ready", "info", "config", "metrics", "metrics_prometheus",
     "deprecations", "reset_deprecation_counters",
@@ -51,7 +51,7 @@ PYTHON_RESERVED_CLIENT_METHOD_NAMES = frozenset({
 # the same way "wait_for_task" collides with the Python client's.
 TYPESCRIPT_RESERVED_CLIENT_METHOD_NAMES = frozenset({
     "getTask", "waitForTask", "listTasks", "deleteTask",
-    "deleteCompletedTasks", "deleteFailedTasks", "redeliverTaskWebhook",
+    "deleteCompletedTasks", "deleteFailedTasks", "redeliverTaskWebhook", "cancelTask",
     "retryTask", "cleanupTasks", "resetTasks", "clearCache",
     "health", "ready", "info", "config", "metrics", "metricsPrometheus",
     "deprecations", "resetDeprecationCounters",
@@ -1941,6 +1941,30 @@ def generate_python_sdk(
     lines.append("            timeout=self.timeout,")
     lines.append("        ))")
     lines.append("")
+    # POST /tasks/{task_id}/cancel (cancel_task in api_generator.py): 200 with
+    # {"task_id", "status": "cancelled"} (repeating it answers the same), 404 for an
+    # unknown task, 409 for a task already completed/failed or running un-killable
+    # synchronous code. _request raises on any non-2xx, like every method here.
+    lines.append("    def cancel_task(self, task_id: str) -> dict:")
+    lines.append(
+        '        """Cancel a queued or running background task; a running isolated '
+        "task's process is killed."
+    )
+    lines.append("")
+    lines.append(
+        "        Returns {\"task_id\": ..., \"status\": \"cancelled\"}. Raises on a 404 "
+        "(unknown task_id) or 409"
+    )
+    lines.append(
+        "        (task already completed/failed, or running code that cannot be "
+        'stopped)."""'
+    )
+    lines.append("        return self._request(lambda: requests.post(")
+    lines.append('            f"{self.base_url}/tasks/{task_id}/cancel",')
+    lines.append('            headers={"X-API-Key": self.api_key},')
+    lines.append("            timeout=self.timeout,")
+    lines.append("        ))")
+    lines.append("")
     # Confirmed missing before this the identical way redeliver_task_webhook
     # above once was: the generated server side has let a caller actually
     # re-execute a failed task's own underlying function (not merely
@@ -3007,6 +3031,21 @@ def generate_typescript_sdk(
     # server-side route already existed.
     lines.append("  async redeliverTaskWebhook(taskId: string): Promise<any> {")
     lines.append('    const path = `/tasks/${taskId}/redeliver-webhook`;')
+    lines.append(
+        "    return this.requestWithRetry(path, () => fetch(`${this.baseUrl}${path}`, {"
+    )
+    lines.append('      method: "POST",')
+    lines.append("      headers: {")
+    lines.append('        "X-API-Key": this.apiKey,')
+    lines.append("      },")
+    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
+    lines.append("    }));")
+    lines.append("  }")
+    lines.append("")
+    # Mirrors generate_python_sdk's cancel_task: POST /tasks/{taskId}/cancel resolves with
+    # {task_id, status: "cancelled"}; 404/409 reject through requestWithRetry like the rest.
+    lines.append("  async cancelTask(taskId: string): Promise<any> {")
+    lines.append('    const path = `/tasks/${taskId}/cancel`;')
     lines.append(
         "    return this.requestWithRetry(path, () => fetch(`${this.baseUrl}${path}`, {"
     )
