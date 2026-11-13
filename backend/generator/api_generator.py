@@ -154,6 +154,47 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "delete_completed_tasks", "delete_failed_tasks", "reset_tasks",
     "redeliver_task_webhook", "retry_task",
     "notebook_module",
+    # Module-level names the generated app defines or imports beyond the routes above:
+    # the embedded isolation runtime, the webhook destination guard, the task store and
+    # cancellation, and request plumbing. Each is read by name at call time, so a notebook
+    # function of the same name would silently replace it (a `cancel_task` notebook function
+    # replaced the cancel route; `ISOLATE_EXECUTION` or `_isolated_call` would switch isolation
+    # off; `_webhook_connect` would disable the SSRF guard). tests/test_reserved_names_cover_generated_app.py
+    # derives this inventory from a real generated app.py, so a new generated name fails there.
+    "HIDE_ERROR_DETAILS", "IDEMPOTENCY_FINGERPRINTS", "IDEMPOTENCY_KEYS",
+    "ISOLATE_CPU_LIMIT_SECONDS", "ISOLATE_EXECUTION", "ISOLATE_MAX_PROCESSES",
+    "ISOLATE_MEMORY_LIMIT_MB", "IsolatedExecutionCancelled", "IsolatedExecutionError",
+    "IsolatedExecutionTimeout", "IsolatedWorker", "MAX_ERROR_DETAIL_CHARS",
+    "MIN_MEMORY_LIMIT_MB", "_ACTIVE", "_ACTIVE_LOCK", "_CACHE_FLIGHTS", "_CONST_IN_FLIGHT",
+    "_CONST_LOCK", "_CONST_SNAPSHOT", "_CPU", "_CacheFlight", "_ENCODER_HANDLED_TYPES",
+    "_FORK_LOCK", "_ISOLATE", "_ISOLATE_SLOTS", "_IsolatedSlot", "_LIFECYCLE", "_LOG",
+    "_MAX_PROCS", "_MEMORY", "_START_TIMEOUT_SECONDS", "_TASK_NOT_PERSISTED",
+    "_TASK_STORE_LOCK", "_TIMEOUT", "_UNMODELED_TYPES", "_WEBHOOK_BLOCKED_IPS",
+    "_WEBHOOK_BLOCKED_PORTS", "_WORKERS", "_WebhookHTTPConnection", "_WebhookHTTPHandler",
+    "_WebhookHTTPSConnection", "_WebhookHTTPSHandler", "_add_deprecation_headers",
+    "_add_process_time_header", "_add_request_id_header", "_add_security_headers",
+    "_apply_cpu_limit", "_apply_memory_limit", "_child", "_coerce_array_like_items",
+    "_coerce_binary", "_constants_enter", "_constants_exit", "_context", "_drain_async_gen",
+    "_emit_event", "_env_flag", "_env_number", "_error_text", "_example_from_schema",
+    "_find_unserializable", "_frame_records", "_http_exception_handler",
+    "_invoke_notebook_function", "_is_unsafe_webhook_host", "_isolated_call",
+    "_kill_process_group", "_log_request_json", "_nb_atexit", "_nb_atexit_handlers",
+    "_nb_builtins", "_nb_lifespan", "_nb_no_input", "_nb_real_argv",
+    "_nb_real_atexit_register", "_nb_recording_register", "_rebuild_unmodeled",
+    "_request_validation_error_handler", "_track_http_metrics", "_unserializable_reason",
+    "_utf8_safe", "_webhook_connect", "_webhook_ip_unsafe", "_worker_main", "cancel_task",
+    "isolation_platform_problem", "run_isolated", "sys", "terminate_active_processes",
+    "validate_execution_limits",
+    # Names the generated app imports (the embedded runtime calls signal.*, socket.*, os.*
+    # at run time, so e.g. a notebook function called `signal` would break process cleanup).
+    "Any", "CORSMiddleware", "Callable", "FastAPI", "Field", "GZipMiddleware", "Header",
+    "Mapping", "PydanticInvalidForJsonSchema", "PydanticSchemaGenerationError",
+    "PydanticUndefinedAnnotation", "PydanticUserError", "Query", "RequestValidationError",
+    "Sequence", "TypeAdapter", "_AnyType", "_StarletteHTTPException",
+    "_asyncio_for_lifespan", "_contextvars", "_copy", "_default_http_exception_handler",
+    "_encoders_by_class_tuples", "_nb_contextlib", "_task_logging", "datetime", "http",
+    "ipaddress", "logging", "math", "model_validator", "mp", "os", "signal", "socket",
+    "threading", "urllib",
     # Confirmed exploitable: these two private helpers (both defined at
     # module scope, like every other name above) were missing here, so a
     # notebook function literally named "_evict_expired_tasks" or
