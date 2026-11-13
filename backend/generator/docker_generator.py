@@ -317,7 +317,8 @@ COPY . {package_name}/
 # and widens the blast radius of any RCE-class bug in this generated code
 # or a transitive dependency.
 RUN useradd --create-home --uid 1000 appuser \\
-    && chown -R appuser:appuser /app
+    && mkdir -p {TASK_STORE_DIR} \\
+    && chown -R appuser:appuser /app {TASK_STORE_DIR}
 USER appuser
 
 # 8000 is this image's default listening port for a plain `docker run`
@@ -387,6 +388,15 @@ def generate_dockerfile(
         ))
 
     print(f"Dockerfile generated at: {output_path}")
+
+
+# Where generated deployments keep the task store (NOTEBOOK_API_TASK_STORE_PATH). The
+# directory is created in the image owned by the non-root appuser, because the store
+# writes a temp file beside its target and renames it, so the whole directory must be
+# writable. Compose mounts a named volume here; Kubernetes mounts an emptyDir.
+TASK_STORE_VAR = "NOTEBOOK_API_TASK_STORE_PATH"
+TASK_STORE_DIR = "/data"
+TASK_STORE_FILE = "/data/tasks.json"
 
 
 def default_image_tag(name):
@@ -482,6 +492,9 @@ def docker_compose_content(package_name="generated", env_vars=None, notebook_env
                 "      - NOTEBOOK_API_KEY=${NOTEBOOK_API_KEY:?"
                 "set NOTEBOOK_API_KEY in .env or your shell, for example from openssl rand -hex 32}"
             )
+        if entry["name"] == TASK_STORE_VAR:
+            # Persisted by default in a compose deployment (the named volume below).
+            return f"      - {TASK_STORE_VAR}=${{{TASK_STORE_VAR}:-{TASK_STORE_FILE}}}"
         return f"      - {entry['name']}=${{{entry['name']}:-{_compose_default(entry)}}}"
 
     environment_lines = "\n".join(_compose_entry(entry) for entry in env_vars)
@@ -502,6 +515,18 @@ def docker_compose_content(package_name="generated", env_vars=None, notebook_env
     # rejected by `docker compose` outright. The service name is only a
     # label -- the image still imports the real package_name.
     service_name = re.sub(r"[^a-zA-Z0-9._-]", "-", package_name).strip("-") or "app"
+
+    volume_lines = ""
+    if any(entry["name"] == TASK_STORE_VAR for entry in env_vars):
+        # A named volume outlives `docker compose down` / container recreation (only
+        # `down -v` removes it) and, mounted over the image's appuser-owned directory,
+        # starts out writable by the non-root user.
+        volume_lines = (
+            "    volumes:\n"
+            f"      - task-data:{TASK_STORE_DIR}\n"
+            "volumes:\n"
+            "  task-data:\n"
+        )
 
     return (
         "services:\n"
@@ -524,6 +549,7 @@ def docker_compose_content(package_name="generated", env_vars=None, notebook_env
         "      - PORT=${PORT:-8000}\n"
         f"{environment_lines}\n"
         f"{notebook_lines}"
+        f"{volume_lines}"
     )
 
 

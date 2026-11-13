@@ -171,7 +171,9 @@ def _check_compose_env_documented(stage_dir):
         with open(os.path.join(stage_dir, name), encoding="utf-8") as f:
             return f.read()
 
-    compose = set(re.findall(r"^      - ([A-Za-z_]\w*)", read("docker-compose.yml"), re.M))
+    # Only the service's environment list: other list entries (a volume mount) are not variables.
+    environment = read("docker-compose.yml").split("    environment:", 1)[-1].split("\n    volumes:", 1)[0]
+    compose = set(re.findall(r"^      - ([A-Za-z_]\w*)", environment, re.M))
     documented = set(re.findall(r"^#? ?([A-Za-z_]\w*)=", read(".env.example"), re.M))
     missing = sorted(compose - documented)
     _require(not missing, ".env.example: does not list variables used by docker-compose.yml: " + ", ".join(missing))

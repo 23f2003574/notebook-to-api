@@ -1,7 +1,9 @@
 import re
 
 from backend.exporters.openapi_exporter import _yaml_scalar
-from backend.generator.docker_generator import default_image_tag
+from backend.generator.docker_generator import (
+    TASK_STORE_DIR, TASK_STORE_FILE, TASK_STORE_VAR, default_image_tag,
+)
 
 # Kubernetes' own DNS-1123 label rule for a resource's "metadata.name" (and,
 # identically, a label value): lowercase alphanumeric or '-', must start and
@@ -231,6 +233,8 @@ def kubernetes_manifest_content(
         # responses; the full message still goes to the pod log.
         hardened = ("NOTEBOOK_API_REQUIRE_CUSTOM_KEY", "NOTEBOOK_API_HIDE_ERROR_DETAILS")
         value = "true" if entry["name"] in hardened else entry["default"]
+        if entry["name"] == TASK_STORE_VAR:
+            value = TASK_STORE_FILE
         # The app's http://localhost:8000 default is only right on a dev
         # machine; in a cluster, /docs' "Try it out" should hit the Service
         # this same manifest defines (port 80 -> the container's 8000).
@@ -242,6 +246,25 @@ def kubernetes_manifest_content(
         )
 
     env_lines = "\n".join(env_block(entry) for entry in env_entries)
+
+    # Task persistence: an emptyDir keeps the task file across container restarts within
+    # the same Pod, but NOT across Pod replacement (rollout, eviction, node loss). Swap it
+    # for a PersistentVolumeClaim if tasks must survive that. It is world-writable, so the
+    # runAsUser 1000 container can write it.
+    volume_mount_lines = volumes_lines = ""
+    if any(entry["name"] == TASK_STORE_VAR for entry in env_entries):
+        volume_mount_lines = (
+            "          volumeMounts:\n"
+            "            - name: task-data\n"
+            f"              mountPath: {TASK_STORE_DIR}\n"
+        )
+        volumes_lines = (
+            "      # emptyDir: survives container restarts in this Pod, not Pod replacement\n"
+            "      # (rollout, eviction, node loss). Use a PersistentVolumeClaim for that.\n"
+            "      volumes:\n"
+            "        - name: task-data\n"
+            "          emptyDir: {}\n"
+        )
 
     # Variables the notebook itself reads (API keys, connection strings) come
     # from the same Secret. A required one (no fallback in the notebook) is
@@ -317,7 +340,7 @@ spec:
               drop: ["ALL"]
           env:
 {env_lines}
-          # Without requests the scheduler packs pods blindly; without a
+{volume_mount_lines}          # Without requests the scheduler packs pods blindly; without a
           # memory limit one leaking notebook can exhaust its node. No CPU
           # limit on purpose: it would throttle request bursts. Tune per model.
           resources:
@@ -348,7 +371,7 @@ spec:
               port: 8000
             periodSeconds: 10
             failureThreshold: 30
----
+{volumes_lines}---
 apiVersion: v1
 kind: Service
 metadata:

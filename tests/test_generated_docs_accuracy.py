@@ -46,7 +46,8 @@ def test_documented_defaults_match_runtime_defaults(project):
     compose = dict(re.findall(r"- (NOTEBOOK_API_[A-Z_]+)=\$\{[A-Z_]+:-([^}]*)\}", text["docker-compose.yml"]))
     example = dict(re.findall(r"^#? ?(NOTEBOOK_API_[A-Z_]+)=(.*)$", text[".env.example"], re.M))
     readme = dict(re.findall(r"^- `(NOTEBOOK_API_[A-Z_]+)` \(default: `([^`]*)`\)", text["README.md"], re.M))
-    special = {"NOTEBOOK_API_KEY", "NOTEBOOK_API_PUBLIC_URL"}  # deliberately different, checked below
+    # deliberately different, checked below / in test_generated_task_persistence_deployment.py
+    special = {"NOTEBOOK_API_KEY", "NOTEBOOK_API_PUBLIC_URL", "NOTEBOOK_API_TASK_STORE_PATH"}
     for name, default in runtime.items():
         if name in special:
             continue

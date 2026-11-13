@@ -17334,8 +17334,9 @@ def test_compiled_docker_compose_file_is_valid_for_a_non_ascii_package_name(tmp_
     # PyYAML is not in requirements.txt, so read the service key by hand: it is
     # the first two-space-indented line under "services:".
     compose = (output_dir / "docker-compose.yml").read_text(encoding="utf-8").splitlines()
-    services = [
-        line.strip().rstrip(":") for line in compose[1:]
+    end = next((i for i, line in enumerate(compose[1:], 1) if line and not line.startswith(" ")), len(compose))
+    services = [  # only the "services:" block; a later top-level "volumes:" block has its own entries
+        line.strip().rstrip(":") for line in compose[1:end]
         if line.startswith("  ") and not line.startswith("   ")
     ]
     assert compose[0] == "services:"
