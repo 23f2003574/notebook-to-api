@@ -1,4 +1,5 @@
 import { dashboardHeaders } from '../dashboardApi'
+import { errorFromResponse } from '../errorMessage'
 import { useState } from 'react'
 
 export default function NotebookUpload({ onSuccess }) {
@@ -27,7 +28,7 @@ export default function NotebookUpload({ onSuccess }) {
         body: formData
       })
 
-      if (!response.ok) throw new Error('Upload failed')
+      if (!response.ok) throw new Error(await errorFromResponse(response, 'Upload failed'))
 
       const data = await response.json()
       onSuccess(data)

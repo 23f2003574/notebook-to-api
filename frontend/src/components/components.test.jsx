@@ -171,3 +171,74 @@ describe('EndpointTester API key', () => {
     expect(document.cookie).not.toContain('secret-key')
   })
 })
+
+describe('dashboard backend errors', () => {
+  const ok = (body) => ({ ok: true, status: 200, json: async () => body })
+  const fail = (status, body) => ({ ok: false, status, json: async () => body })
+  const upload = (container) =>
+    fireEvent.change(container.querySelector('input[type=file]'), {
+      target: { files: [new File(['{}'], 'n.ipynb')] },
+    })
+  const compile = async () => {
+    await waitFor(() => expect(screen.getByText(/Compile Now/).closest('button').disabled).toBe(false))
+    fireEvent.click(screen.getByText(/Compile Now/))
+  }
+
+  it('upload shows the backend detail', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fail(400, { detail: 'File must be a .ipynb notebook' })))
+    const { container } = render(<Dashboard />)
+    upload(container)
+    expect(await screen.findByText(/File must be a \.ipynb notebook/)).toBeInTheDocument()
+    expect(container.textContent).not.toMatch(/Upload failed(?! \()/)
+  })
+
+  it('inspect shows the backend detail and keeps the upload', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(ok({ filename: 'n.ipynb' }))
+      .mockResolvedValueOnce(fail(404, { detail: 'Notebook file not found' })))
+    const { container } = render(<Dashboard />)
+    upload(container)
+    expect(await screen.findByText(/Inspection failed: Notebook file not found/)).toBeInTheDocument()
+    expect(container.textContent).toContain('n.ipynb')
+  })
+
+  it('compile shows the backend detail, and validation errors read clearly', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(ok({ filename: 'n.ipynb' }))
+      .mockResolvedValueOnce(ok({ functions: [] }))
+      .mockResolvedValueOnce(fail(404, { detail: 'Notebook file not found' }))
+      .mockResolvedValueOnce(fail(422, { detail: [{ loc: ['body', 'notebook_path'], msg: 'Field required' }] }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { container } = render(<Dashboard />)
+    upload(container)
+    await compile()
+    expect(await screen.findByText(/Compilation failed: Notebook file not found/)).toBeInTheDocument()
+    await compile()
+    expect(await screen.findByText(/Compilation failed: notebook_path: Field required/)).toBeInTheDocument()
+  })
+
+  it('falls back safely for an empty or non-JSON error body', async () => {
+    const broken = { ok: false, status: 500, json: async () => { throw new SyntaxError('bad json') } }
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(ok({ filename: 'n.ipynb' }))
+      .mockResolvedValueOnce(ok({ functions: [] }))
+      .mockResolvedValueOnce(broken))
+    const { container } = render(<Dashboard />)
+    upload(container)
+    await compile()
+    expect(await screen.findByText(/Compilation failed: Unknown error \(HTTP 500\)/)).toBeInTheDocument()
+  })
+
+  it('successful upload, inspect and compile are unchanged', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(ok({ filename: 'n.ipynb' }))
+      .mockResolvedValueOnce(ok({ functions: [{ name: 'add' }] }))
+      .mockResolvedValueOnce(ok({ functions: [{ name: 'add' }], dependencies: ['numpy'] })))
+    const { container } = render(<Dashboard />)
+    upload(container)
+    expect(await screen.findByText(/Found 1 functions/)).toBeInTheDocument()
+    await compile()
+    expect(await screen.findByText(/Compilation successful/)).toBeInTheDocument()
+    expect(container.textContent).toContain('Dependencies: numpy')
+  })
+})

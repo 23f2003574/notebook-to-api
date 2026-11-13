@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import NotebookUpload from './NotebookUpload'
 import { dashboardHeaders } from '../dashboardApi'
+import { errorFromResponse } from '../errorMessage'
 import FunctionList from './FunctionList'
 import CompilationLogs from './CompilationLogs'
 import EndpointTester from "./EndpointTester"
@@ -24,9 +25,8 @@ export default function Dashboard() {
         body: JSON.stringify({ notebook_path: response.filename })
       })
 
-      const inspectData = await inspectResponse.json()
-
       if (inspectResponse.ok) {
+        const inspectData = await inspectResponse.json()
         setFunctions(inspectData.functions || [])
         const generatedEndpoints = (inspectData.functions || []).map(func => '/' + func.name)
         setEndpoints(generatedEndpoints)
@@ -36,7 +36,7 @@ export default function Dashboard() {
           '🚀 Generated ' + generatedEndpoints.length + ' endpoints'
         ])
       } else {
-        setLogs(['⚠️ Upload succeeded', '❌ Inspection failed'])
+        setLogs(['⚠️ Upload succeeded', '❌ Inspection failed: ' + await errorFromResponse(inspectResponse, 'Unknown error')])
       }
     } catch (error) {
       setLogs(['⚠️ Upload succeeded', '❌ Inspection error: ' + error.message])
@@ -59,9 +59,8 @@ export default function Dashboard() {
         body: JSON.stringify({ notebook_path: uploadedNotebook })
       })
 
-      const data = await response.json()
-
       if (response.ok) {
+        const data = await response.json()
         setFunctions(data.functions || [])
         setLogs([
           '✅ Compilation successful',
@@ -70,7 +69,7 @@ export default function Dashboard() {
         ])
         setLastCompiled(new Date().toLocaleTimeString())
       } else {
-        setLogs(['❌ Compilation failed: ' + (data.error || 'Unknown error')])
+        setLogs(['❌ Compilation failed: ' + await errorFromResponse(response, 'Unknown error')])
       }
     } catch (error) {
       setLogs(['❌ Error: ' + error.message])
