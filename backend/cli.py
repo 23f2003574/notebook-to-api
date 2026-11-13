@@ -10571,7 +10571,8 @@ def _dispatch_core_command(args):
                 print(
                     f"Deleted {data.get('completed_deleted', 0)} completed "
                     f"and {data.get('failed_deleted', 0)} failed task(s) "
-                    f"({data.get('remaining_tasks', 0)} remaining)."
+                    + (f"and {data['cancelled_deleted']} cancelled " if data.get("cancelled_deleted") else "")
+                    + f"({data.get('remaining_tasks', 0)} remaining)."
                 )
 
         elif args.app_tasks_command == "reset":

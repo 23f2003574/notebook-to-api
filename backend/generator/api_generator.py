@@ -148,7 +148,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "verify_api_key", "custom_openapi",
     "root", "health_check", "readiness_check", "auth_status", "auth_info",
     "validate_auth", "service_info", "service_config", "metrics", "uptime",
-    "metrics_prometheus", "_task_status_counts", "deprecations",
+    "metrics_prometheus", "_task_status_counts", "_cancelled_task_count", "deprecations",
     "reset_deprecation_counters",
     "get_task", "list_tasks", "delete_task", "cleanup_tasks",
     "delete_completed_tasks", "delete_failed_tasks", "reset_tasks",
@@ -4824,7 +4824,7 @@ def generate_fastapi_code(
 
     lines.append("    if endpoint is not None and not endpoint.startswith('/'):")
     lines.append("        endpoint = '/' + endpoint")
-    lines.append("    valid_statuses = ('processing', 'completed', 'failed')")
+    lines.append("    valid_statuses = ('processing', 'completed', 'failed', 'cancelled')")
     lines.append("    if status is not None and status not in valid_statuses:")
     lines.append("        raise HTTPException(")
     lines.append("            status_code=400,")
@@ -4868,6 +4868,11 @@ def generate_fastapi_code(
     lines.append("        1")
     lines.append("        for _, task in tasks_snapshot")
     lines.append("        if task.get('status') == 'failed'")
+    lines.append("    )")
+    lines.append("    cancelled_tasks = sum(")
+    lines.append("        1")
+    lines.append("        for _, task in tasks_snapshot")
+    lines.append("        if task.get('status') == 'cancelled'")
     lines.append("    )")
 
     lines.append("    processing_tasks = sum(")
@@ -4945,6 +4950,7 @@ def generate_fastapi_code(
     lines.append("        'processing_tasks': processing_tasks,")
     lines.append("        'completed_tasks': completed_tasks,")
     lines.append("        'failed_tasks': failed_tasks,")
+    lines.append("        'cancelled_tasks': cancelled_tasks,")
     lines.append(
         "        'webhook_delivery_failed_tasks': webhook_delivery_failed_tasks,"
     )
@@ -5079,6 +5085,7 @@ def generate_fastapi_code(
 
     lines.append("    completed_deleted = 0")
     lines.append("    failed_deleted = 0")
+    lines.append("    cancelled_deleted = 0")
 
     lines.append("    task_ids = list(TASKS.keys())")
 
@@ -5092,10 +5099,14 @@ def generate_fastapi_code(
     lines.append("        elif status == 'failed':")
     lines.append("            TASKS.pop(task_id, None)")
     lines.append("            failed_deleted += 1")
+    lines.append("        elif status == 'cancelled':")
+    lines.append("            TASKS.pop(task_id, None)")
+    lines.append("            cancelled_deleted += 1")
 
     lines.append("    return {")
     lines.append("        'completed_deleted': completed_deleted,")
     lines.append("        'failed_deleted': failed_deleted,")
+    lines.append("        'cancelled_deleted': cancelled_deleted,")
     lines.append("        'remaining_tasks': len(TASKS)")
     lines.append("    }")
 
@@ -5133,6 +5144,10 @@ def generate_fastapi_code(
     lines.append("    )")
 
     lines.append("    return processing, completed, failed")
+    lines.append("")
+    # Kept apart from _task_status_counts' 3-tuple so its callers keep working.
+    lines.append("def _cancelled_task_count():")
+    lines.append("    return sum(1 for task in list(TASKS.values()) if task.get('status') == 'cancelled')")
 
     lines.append("")
     # A machine-readable list of what this deployment has deprecated --
@@ -5213,6 +5228,7 @@ def generate_fastapi_code(
     lines.append("        'processing': processing,")
     lines.append("        'completed': completed,")
     lines.append("        'failed': failed,")
+    lines.append("        'cancelled': _cancelled_task_count(),")
     # Purely additive alongside the four task fields above -- an existing
     # consumer reading only "total_tasks"/"processing"/"completed"/
     # "failed" (this endpoint's own shape since before this feature)
@@ -5327,6 +5343,12 @@ def generate_fastapi_code(
     )
     lines.append("        '# TYPE notebook_api_tasks_failed gauge\\n'")
     lines.append("        f'notebook_api_tasks_failed {failed}\\n'")
+    lines.append(
+        "        '# HELP notebook_api_tasks_cancelled Number of background "
+        "tasks that were cancelled.\\n'"
+    )
+    lines.append("        '# TYPE notebook_api_tasks_cancelled gauge\\n'")
+    lines.append("        f'notebook_api_tasks_cancelled {_cancelled_task_count()}\\n'")
     lines.append(
         "        '# HELP notebook_api_uptime_seconds Seconds since this "
         "process started.\\n'"

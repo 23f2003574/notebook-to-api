@@ -1094,7 +1094,7 @@ def test_generated_app_exposes_get_metrics_as_json(monkeypatch):
     assert duration_ms_sum >= 0
 
     assert body == {
-        "total_tasks": 1, "processing": 0, "completed": 1, "failed": 0,
+        "total_tasks": 1, "processing": 0, "completed": 1, "failed": 0, "cancelled": 0,
         # The one POST /train_model above -- a 200 -- and nothing else:
         # GET /metrics' own request hasn't been counted yet at the point
         # its own handler builds this response body (see

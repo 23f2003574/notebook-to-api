@@ -1824,7 +1824,11 @@ def generate_python_sdk(
         '        query params -- each omitted (the default) returns '
         "every task,"
     )
-    lines.append('        unfiltered, first page."""')
+    lines.append(
+        '        unfiltered, first page. status is one of "processing", "completed", '
+        '"failed" or "cancelled";'
+    )
+    lines.append('        the summary counts each (failed_tasks, cancelled_tasks, ...)."""')
     lines.append("        params = {}")
     lines.append("        if status is not None:")
     lines.append('            params["status"] = status')
@@ -2044,14 +2048,15 @@ def generate_python_sdk(
     lines.append("")
     lines.append("    def cleanup_tasks(self) -> dict:")
     lines.append(
-        '        """Delete every task with status \'completed\' or '
-        "'failed' in a"
+        '        """Delete every task with status \'completed\', \'failed\' or '
+        "'cancelled' in a"
     )
     lines.append(
-        "        single request -- equivalent to calling "
-        "delete_completed_tasks()"
+        "        single request -- delete_completed_tasks() then "
+        "delete_failed_tasks(), plus"
     )
-    lines.append('        followed by delete_failed_tasks()."""')
+    lines.append(
+        '        cancelled tasks (reported as "cancelled_deleted")."""')
     lines.append("        return self._request(lambda: requests.post(")
     lines.append('            f"{self.base_url}/tasks/cleanup",')
     lines.append('            headers={"X-API-Key": self.api_key},')
