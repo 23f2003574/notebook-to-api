@@ -2384,7 +2384,9 @@ def test_generate_python_sdk_retry_honors_retry_after_header(tmp_path, monkeypat
     )
 
     sleeps = []
-    namespace["time"].sleep = lambda seconds: sleeps.append(seconds)
+    # monkeypatch, not a bare assignment: namespace["time"] is the real time module, and a
+    # leaked no-op sleep made every later time.sleep(60) in the process return instantly.
+    monkeypatch.setattr(namespace["time"], "sleep", lambda seconds: sleeps.append(seconds))
 
     client = namespace["NotebookAPIClient"]("http://localhost:8000")
     result = client.train_model({})

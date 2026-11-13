@@ -125,6 +125,9 @@ def test_cancelling_one_task_leaves_a_concurrent_task_running(served):
     t1, found1, id1 = _start(module, client, tmp_path, "c1", pids)
     t2, found2, id2 = _start(module, client, tmp_path, "c2", pids)
     assert id1 != id2
+    # Independent process trees: each task's child leads its own group, holding its own grandchild.
+    assert len({os.getpgid(p) for p in (found1[0], found2[0])}) == 2
+    assert os.getpgid(found1[1]) == found1[0] and os.getpgid(found2[1]) == found2[0]
     client.post(f"/tasks/{id1}/cancel", headers=HEADERS)
     t1.join(20)
     assert not any(_alive(p) for p in found1)
