@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import NotebookUpload from './NotebookUpload'
-import { dashboardHeaders } from '../dashboardApi'
+import { appUrl, dashboardApiUrl, dashboardHeaders } from '../dashboardApi'
 import { errorFromResponse } from '../errorMessage'
 import FunctionList from './FunctionList'
 import CompilationLogs from './CompilationLogs'
@@ -35,7 +35,7 @@ export default function Dashboard() {
     setLogs(['✅ Notebook uploaded successfully', '🔍 Inspecting notebook...'])
 
     try {
-      const inspectResponse = await fetch('http://localhost:8001/api/inspect', {
+      const inspectResponse = await fetch(dashboardApiUrl('/api/inspect'), {
         method: 'POST',
         headers: dashboardHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ notebook_path: response.filename })
@@ -70,7 +70,7 @@ export default function Dashboard() {
     setLogs(['🔄 Starting compilation...'])
 
     try {
-      const response = await fetch('http://localhost:8001/api/compile', {
+      const response = await fetch(dashboardApiUrl('/api/compile'), {
         method: 'POST',
         headers: dashboardHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ notebook_path: uploadedNotebook })
@@ -116,7 +116,7 @@ export default function Dashboard() {
                   {' '}🟢 Running
                 </span>
               </p>
-              <a href="http://localhost:8001/docs" target="_blank" rel="noopener noreferrer" className="inline-block bg-emerald-600 hover:bg-emerald-700 text-white text-sm px-3 py-2 rounded transition">
+              <a href={dashboardApiUrl('/docs')} target="_blank" rel="noopener noreferrer" className="inline-block bg-emerald-600 hover:bg-emerald-700 text-white text-sm px-3 py-2 rounded transition">
                 📖 Open API Docs
               </a>
             </div>
@@ -193,7 +193,7 @@ export default function Dashboard() {
               <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-xl font-semibold text-white">📦 Generated Files</h2>
-                  <a href="http://localhost:8000/docs" target="_blank" rel="noopener noreferrer" className="bg-blue-600 hover:bg-blue-700 text-white text-sm px-3 py-2 rounded transition">
+                  <a href={appUrl('/docs')} target="_blank" rel="noopener noreferrer" className="bg-blue-600 hover:bg-blue-700 text-white text-sm px-3 py-2 rounded transition">
                     🌐 Open API
                   </a>
                 </div>

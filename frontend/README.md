@@ -14,3 +14,15 @@ The React Compiler is not enabled on this template because of its impact on dev 
 ## Expanding the ESLint configuration
 
 If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+
+
+## Configuration
+
+The dashboard talks to two services, configured at build time (see `.env.example`):
+
+- `VITE_DASHBOARD_API_URL` - the dashboard backend (default `http://localhost:8001`).
+- `VITE_APP_URL` - the compiled application used by the endpoint tester and its `/docs` link
+  (default `http://localhost:8000`).
+
+Trailing slashes are ignored. The browser calls these URLs directly, so each service must
+allow this origin in its CORS settings (`NOTEBOOK_API_ALLOWED_ORIGINS`).

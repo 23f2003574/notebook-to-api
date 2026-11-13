@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { appUrl } from '../dashboardApi'
 
 export default function EndpointTester({
   endpoints = [],
@@ -108,7 +109,7 @@ export default function EndpointTester({
       const key = apiKey.trim()
 
       const response = await fetch(
-        `http://localhost:8000${selectedEndpoint}`,
+        appUrl(selectedEndpoint),
         {
           method: 'POST',
           headers: {
