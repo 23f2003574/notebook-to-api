@@ -242,3 +242,82 @@ describe('dashboard backend errors', () => {
     expect(container.textContent).toContain('Dependencies: numpy')
   })
 })
+
+describe('actual inspection data', () => {
+  // Shapes copied from the real POST /api/inspect and /api/compile responses.
+  const fn = {
+    name: 'double', return_type: 'int', is_async: false,
+    args: [
+      { name: 'x', type: 'int', has_default: false, kind: 'positional' },
+      { name: 'label', type: 'str', has_default: true, default: 'a', kind: 'positional' },
+    ],
+  }
+  const inspected = {
+    functions: [fn],
+    endpoints: [{ path: '/double', method: 'POST', is_async: false, deprecated: false }],
+    generated_files: ['Dockerfile', 'app.py', 'requirements.txt', 'runtime/notebook_module.py'],
+  }
+  const ok = (body) => ({ ok: true, status: 200, json: async () => body })
+  const open = async (inspect) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(ok({ filename: 'n.ipynb' })).mockResolvedValueOnce(ok(inspect)))
+    const view = render(<Dashboard />)
+    fireEvent.change(view.container.querySelector('input[type=file]'), { target: { files: [new File(['{}'], 'n.ipynb')] } })
+    await screen.findByText(/Found \d+ functions/)
+    return view
+  }
+
+  it('renders function arguments from args', () => {
+    const { container } = render(<FunctionList functions={[fn]} />)
+    expect(container.textContent).toContain('Params: x: int, label: str')
+  })
+
+  it('says "none" for an empty args list and shows no params line when args is absent', () => {
+    const { container, rerender } = render(<FunctionList functions={[{ name: 'f', args: [] }]} />)
+    expect(container.textContent).toContain('Params: none')
+    rerender(<FunctionList functions={[{ name: 'f' }]} />)
+    expect(container.textContent).not.toContain('Params')
+  })
+
+  it('lists generated files and endpoints exactly as the backend returned them', async () => {
+    const { container } = await open(inspected)
+    expect(screen.getByText(/Generated Files/)).toBeInTheDocument()
+    for (const name of inspected.generated_files) expect(screen.getByText(name)).toBeInTheDocument()
+    expect(container.textContent).toContain('Generated 1 endpoints')
+    expect(screen.getAllByText('/double').length).toBeGreaterThan(0)
+    expect(screen.getByText('POST')).toBeInTheDocument()
+  })
+
+  it('does not show files or endpoints the backend did not return', async () => {
+    const { container } = await open(inspected)
+    expect(container.textContent).not.toContain('openapi.json')
+    expect(container.textContent).not.toContain('python_client.py')
+    expect(screen.queryByText('/add')).toBeNull()
+  })
+
+  it('survives partial or malformed responses', async () => {
+    const { container } = await open({ functions: [{ name: 'f' }], endpoints: [null, 5, { method: 'GET' }, { path: '/ok' }], generated_files: ['app.py', 7, null] })
+    expect(container.textContent).toContain('Generated 1 endpoints')
+    expect(screen.getByText('app.py')).toBeInTheDocument()
+  })
+
+  it('shows no endpoints or file panel when the backend returns none', async () => {
+    const { container } = await open({ functions: [{ name: 'f' }] })
+    expect(container.textContent).toContain('Generated 0 endpoints')
+    expect(screen.queryByText(/Generated Files/)).toBeNull()
+  })
+
+  it('compile refreshes files and endpoints from its own response', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(ok({ filename: 'n.ipynb' }))
+      .mockResolvedValueOnce(ok(inspected))
+      .mockResolvedValueOnce(ok({ functions: [fn], endpoints: [{ path: '/triple', method: 'POST' }], generated_files: ['app.py'] }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { container } = render(<Dashboard />)
+    fireEvent.change(container.querySelector('input[type=file]'), { target: { files: [new File(['{}'], 'n.ipynb')] } })
+    await screen.findByText(/Found 1 functions/)
+    fireEvent.click(screen.getByText(/Compile Now/))
+    await screen.findByText(/Compilation successful/)
+    expect(screen.getAllByText('/triple').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Dockerfile')).toBeNull()
+  })
+})

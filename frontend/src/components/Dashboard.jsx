@@ -6,13 +6,29 @@ import FunctionList from './FunctionList'
 import CompilationLogs from './CompilationLogs'
 import EndpointTester from "./EndpointTester"
 
+// Backend lists are used only when well formed; anything else counts as "not returned".
+const asList = (value) => (Array.isArray(value) ? value : [])
+const asEndpoints = (value) => asList(value).filter((e) => e && typeof e.path === 'string')
+const asFiles = (value) => asList(value).filter((f) => typeof f === 'string')
+
+// Presentation only: the file names themselves always come from the backend response.
+function fileIcon(name) {
+  if (name.endsWith('.py')) return '🐍'
+  if (name === 'Dockerfile' || name.startsWith('docker-compose')) return '🐳'
+  if (name.endsWith('.md')) return '📖'
+  if (name.endsWith('.txt')) return '📋'
+  if (/\.(ya?ml)$/.test(name)) return '⚙️'
+  return '📄'
+}
+
 export default function Dashboard() {
   const [uploadedNotebook, setUploadedNotebook] = useState(null)
   const [functions, setFunctions] = useState([])
   const [logs, setLogs] = useState([])
   const [isCompiling, setIsCompiling] = useState(false)
   const [lastCompiled, setLastCompiled] = useState(null)
-  const [endpoints, setEndpoints] = useState([])
+  const [endpoints, setEndpoints] = useState([]) // [{ path, method, ... }] as returned by the backend
+  const [generatedFiles, setGeneratedFiles] = useState([])
 
   const handleUploadSuccess = async (response) => {
     setUploadedNotebook(response.filename)
@@ -28,12 +44,13 @@ export default function Dashboard() {
       if (inspectResponse.ok) {
         const inspectData = await inspectResponse.json()
         setFunctions(inspectData.functions || [])
-        const generatedEndpoints = (inspectData.functions || []).map(func => '/' + func.name)
-        setEndpoints(generatedEndpoints)
+        const returnedEndpoints = asEndpoints(inspectData.endpoints)
+        setEndpoints(returnedEndpoints)
+        setGeneratedFiles(asFiles(inspectData.generated_files))
         setLogs([
           '✅ Upload successful',
           '📦 Found ' + (inspectData.functions?.length || 0) + ' functions',
-          '🚀 Generated ' + generatedEndpoints.length + ' endpoints'
+          '🚀 Generated ' + returnedEndpoints.length + ' endpoints'
         ])
       } else {
         setLogs(['⚠️ Upload succeeded', '❌ Inspection failed: ' + await errorFromResponse(inspectResponse, 'Unknown error')])
@@ -62,6 +79,8 @@ export default function Dashboard() {
       if (response.ok) {
         const data = await response.json()
         setFunctions(data.functions || [])
+        if (Array.isArray(data.endpoints)) setEndpoints(asEndpoints(data.endpoints))
+        if (Array.isArray(data.generated_files)) setGeneratedFiles(asFiles(data.generated_files))
         setLogs([
           '✅ Compilation successful',
           '📦 Generated ' + (data.functions?.length || 0) + ' functions',
@@ -78,13 +97,7 @@ export default function Dashboard() {
     }
   }
 
-  const generatedFiles = [
-    { icon: '🐍', name: 'app.py' },
-    { icon: '📋', name: 'requirements.txt' },
-    { icon: '🐳', name: 'Dockerfile' },
-    { icon: '📖', name: 'openapi.json' },
-    { icon: '📦', name: 'python_client.py' }
-  ]
+  const endpointPaths = endpoints.map(endpoint => endpoint.path)
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800">
@@ -146,10 +159,10 @@ export default function Dashboard() {
                   🚀 Generated Endpoints <span className="ml-1 bg-emerald-600 text-white text-sm font-bold px-3 py-1 rounded-full">{endpoints.length}</span>
                 </h2>
                 <div className="space-y-2">
-                  {endpoints.map((endpoint) => (
+                  {endpoints.map(({ path: endpoint, method }) => (
                     <div key={endpoint} className="flex items-center justify-between bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 hover:border-emerald-500 transition">
                       <div className="flex items-center gap-4">
-                        <span className="bg-emerald-600 text-white text-xs font-bold px-2 py-1 rounded">POST</span>
+                        <span className="bg-emerald-600 text-white text-xs font-bold px-2 py-1 rounded">{method || 'POST'}</span>
                         <span className="text-emerald-400 font-mono">{endpoint}</span>
                       </div>
                       <button
@@ -176,7 +189,7 @@ export default function Dashboard() {
               </div>
             )}
 
-            {functions.length > 0 && (
+            {generatedFiles.length > 0 && (
               <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-xl font-semibold text-white">📦 Generated Files</h2>
@@ -185,9 +198,9 @@ export default function Dashboard() {
                   </a>
                 </div>
                 <div className="space-y-2">
-                  {generatedFiles.map(({ icon, name }) => (
+                  {generatedFiles.map((name) => (
                     <div key={name} className="bg-slate-900 rounded px-4 py-2 text-slate-300 flex items-center gap-2">
-                      <span>{icon}</span>
+                      <span>{fileIcon(name)}</span>
                       <span>{name}</span>
                     </div>
                   ))}
@@ -196,7 +209,7 @@ export default function Dashboard() {
             )}
             {endpoints.length > 0 && (
               <EndpointTester
-                endpoints={endpoints}
+                endpoints={endpointPaths}
                 functions={functions}
               />
             )}

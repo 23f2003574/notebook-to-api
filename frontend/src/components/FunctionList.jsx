@@ -21,7 +21,17 @@ export default function FunctionList({ functions }) {
               )}
             </div>
           </div>
-          {func.params && (
+          {Array.isArray(func.args) && (
+            <p className="text-xs text-slate-400">
+              📥 Params:{' '}
+              {func.args.length === 0
+                ? 'none'
+                : func.args
+                    .map((arg) => (arg.type ? `${arg.name}: ${arg.type}` : arg.name))
+                    .join(', ')}
+            </p>
+          )}
+          {!Array.isArray(func.args) && func.params && (
             <p className="text-xs text-slate-400">
               📥 Params: {Array.isArray(func.params) ? func.params.join(', ') : JSON.stringify(func.params)}
             </p>
