@@ -2871,6 +2871,9 @@ def _bypass_import_url_ssrf_guard(monkeypatch):
     monkeypatch.setattr(
         upload_module, "_reject_unsafe_import_url_host", lambda url: None
     )
+    # The connect-time check (_pinned_import_addresses) would refuse the local
+    # 127.0.0.1 test server just the same.
+    monkeypatch.setattr(upload_module, "_import_ip_is_unsafe", lambda address: False)
 
 
 def test_import_url_fetches_and_saves_a_notebook(
@@ -3126,6 +3129,7 @@ def test_import_url_rechecks_the_ssrf_guard_on_every_redirect_hop(
             raise HTTPException(status_code=400, detail="blocked by test guard")
 
     monkeypatch.setattr(upload_module, "_reject_unsafe_import_url_host", fake_guard)
+    monkeypatch.setattr(upload_module, "_import_ip_is_unsafe", lambda address: False)
 
     resp = client.post(
         "/api/notebooks/import-url",

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List
 from urllib.parse import urljoin, urlsplit
 import asyncio
+import contextlib
 import csv
 import hashlib
 import importlib
@@ -35,6 +36,7 @@ import httpx
 # CLI_USER_FACING_ERRORS in cli.py).
 from nbformat import ValidationError as NotebookValidationError
 
+from backend.runtime.destination_guard import ip_is_unsafe as _import_ip_is_unsafe
 from backend.compiler import (
     notebook_failure_location,
     _extract_rate_limit_overrides,
@@ -2471,20 +2473,46 @@ def _reject_unsafe_import_url_host(url):
 
     for _, _, _, _, sockaddr in addr_infos:
 
-        ip = ipaddress.ip_address(sockaddr[0])
-
-        if (
-            ip.is_private or ip.is_loopback or ip.is_link_local
-            or ip.is_reserved or ip.is_multicast or ip.is_unspecified
-        ):
+        if _import_ip_is_unsafe(sockaddr[0]):
             raise HTTPException(
                 status_code=400,
                 detail=(
                     f"URL host '{hostname}' resolves to a non-public "
-                    f"address ({ip}); only publicly-routable URLs may be "
-                    "imported."
+                    "address; only publicly-routable URLs may be imported."
                 )
             )
+
+
+async def _pinned_import_addresses(hostname, port):
+    """Resolve `hostname` once, validate every address, and return them.
+
+    _reject_unsafe_import_url_host resolves the name too, but httpx would then
+    resolve it a second time when connecting, so a DNS answer that changes in
+    between (DNS rebinding) could reach an internal address. The caller connects
+    to one of the addresses returned here instead of the name, so the address
+    that was validated is the address that is dialled.
+    """
+    try:
+        infos = await asyncio.to_thread(
+            socket.getaddrinfo, hostname, port, 0, socket.SOCK_STREAM
+        )
+    except socket.gaierror as e:
+        raise HTTPException(
+            status_code=400, detail=f"Could not resolve host '{hostname}': {e}"
+        )
+
+    addresses = list(dict.fromkeys(info[4][0] for info in infos))
+
+    if not addresses or any(_import_ip_is_unsafe(a) for a in addresses):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"URL host '{hostname}' resolves to a non-public "
+                "address; only publicly-routable URLs may be imported."
+            )
+        )
+
+    return addresses
 
 
 def _url_origin(url):
@@ -2503,6 +2531,31 @@ def _url_origin(url):
     default_port = {"http": 80, "https": 443}.get(parsed.scheme)
 
     return (parsed.scheme, parsed.hostname, parsed.port or default_port)
+
+
+@contextlib.asynccontextmanager
+async def _stream_from_first_reachable(client, url, addresses, headers, extensions):
+    """client.stream("GET", url) connecting to the first reachable validated
+    address rather than letting httpx resolve the hostname itself. The Host
+    header and TLS server name stay those of the original URL."""
+    last_error = None
+
+    async with contextlib.AsyncExitStack() as stack:
+        for address in addresses:
+            pinned = httpx.URL(url).copy_with(host=address)
+
+            try:
+                response = await stack.enter_async_context(client.stream(
+                    "GET", pinned, headers=headers, extensions=extensions
+                ))
+            except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+                last_error = e
+                continue
+
+            yield response
+            return
+
+    raise last_error
 
 
 async def _download_url_for_import(url, headers=None):
@@ -2563,8 +2616,14 @@ async def _download_url_for_import(url, headers=None):
                     else None
                 )
 
-                async with client.stream(
-                    "GET", current_url, headers=request_headers
+                parts = urlsplit(current_url)
+                port = parts.port or (443 if parts.scheme == "https" else 80)
+                addresses = await _pinned_import_addresses(parts.hostname, port)
+                request_headers = {**(request_headers or {}), "Host": parts.netloc.rsplit("@", 1)[-1]}
+                extensions = {"sni_hostname": parts.hostname} if parts.scheme == "https" else {}
+
+                async with _stream_from_first_reachable(
+                    client, current_url, addresses, request_headers, extensions
                 ) as response:
 
                     if response.status_code in (301, 302, 303, 307, 308):
