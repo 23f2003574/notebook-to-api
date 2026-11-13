@@ -109,3 +109,65 @@ describe('Dashboard', () => {
     expect(screen.getByText(/Compile Now/).closest('button')).toBeDisabled()
   })
 })
+
+describe('EndpointTester API key', () => {
+  const setup = (reply) => {
+    const fetchMock = vi.fn().mockResolvedValue({ status: reply.status, json: async () => reply.body })
+    vi.stubGlobal('fetch', fetchMock)
+    const view = render(<EndpointTester endpoints={['/add']} functions={[]} />)
+    fireEvent.change(view.container.querySelector('select'), { target: { value: '/add' } })
+    return { fetchMock, ...view }
+  }
+  const keyInput = () => screen.getByLabelText(/API Key/)
+
+  it('accepts typed input in a masked field', () => {
+    setup({ status: 200, body: {} })
+    fireEvent.change(keyInput(), { target: { value: 'secret-key' } })
+    expect(keyInput().value).toBe('secret-key')
+    expect(keyInput().type).toBe('password')
+  })
+
+  it('sends X-API-Key when a key is entered and keeps the request otherwise unchanged', async () => {
+    const { fetchMock } = setup({ status: 200, body: { result: 4 } })
+    fireEvent.change(keyInput(), { target: { value: ' secret-key ' } })
+    fireEvent.click(screen.getByText('Send Request'))
+    expect(await screen.findByText('HTTP 200')).toBeInTheDocument()
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('http://localhost:8000/add')
+    expect(init.method).toBe('POST')
+    expect(init.headers).toEqual({ 'Content-Type': 'application/json', 'X-API-Key': 'secret-key' })
+    expect(JSON.parse(init.body)).toEqual({ example: 'value' })
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('omits the header when no key is entered', async () => {
+    const { fetchMock } = setup({ status: 200, body: {} })
+    fireEvent.click(screen.getByText('Send Request'))
+    await screen.findByText('HTTP 200')
+    expect(fetchMock.mock.calls[0][1].headers).toEqual({ 'Content-Type': 'application/json' })
+  })
+
+  it('explains a 401 without echoing the key', async () => {
+    setup({ status: 401, body: { detail: 'Invalid API key' } })
+    fireEvent.click(screen.getByText('Send Request'))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Authentication required.*NOTEBOOK_API_KEY/)
+
+    fireEvent.change(keyInput(), { target: { value: 'wrong-key-123' } })
+    fireEvent.click(screen.getByText('Send Request'))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/key was rejected/))
+    expect(screen.getByRole('alert').textContent).not.toContain('wrong-key-123')
+    expect(document.body.textContent.includes('wrong-key-123')).toBe(false)
+  })
+
+  it('never writes the key to browser storage', async () => {
+    window.localStorage.clear()
+    window.sessionStorage.clear()
+    const { fetchMock } = setup({ status: 200, body: {} })
+    fireEvent.change(keyInput(), { target: { value: 'secret-key' } })
+    fireEvent.click(screen.getByText('Send Request'))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    expect(window.localStorage.length).toBe(0)
+    expect(window.sessionStorage.length).toBe(0)
+    expect(document.cookie).not.toContain('secret-key')
+  })
+})

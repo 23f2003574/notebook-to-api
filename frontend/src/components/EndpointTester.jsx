@@ -28,6 +28,9 @@ export default function EndpointTester({
   )
   const [isSending, setIsSending] = useState(false)
   const [jsonError, setJsonError] = useState('')
+  // Held in component state only (never written to browser storage) and sent as X-API-Key.
+  const [apiKey, setApiKey] = useState('')
+  const [authError, setAuthError] = useState('')
 
   const clearPlayground = () => {
     setSelectedEndpoint('')
@@ -101,19 +104,30 @@ export default function EndpointTester({
     }
     try {
       setIsSending(true)
+      setAuthError('')
+      const key = apiKey.trim()
 
       const response = await fetch(
         `http://localhost:8000${selectedEndpoint}`,
         {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            ...(key ? { 'X-API-Key': key } : {})
           },
           body: requestBody
         }
       )
 
       setResponseStatus(response.status)
+
+      if (response.status === 401) {
+        setAuthError(
+          key
+            ? 'Authentication failed (HTTP 401): the API key was rejected. Enter the key the app was started with (NOTEBOOK_API_KEY).'
+            : 'Authentication required (HTTP 401): enter the API key the app was started with (NOTEBOOK_API_KEY) in the API Key field.'
+        )
+      }
 
       const data = await response.json()
 
@@ -479,6 +493,18 @@ export default function EndpointTester({
             )}
 
             <div>
+              <label htmlFor="endpoint-tester-api-key" className="block text-slate-300 text-sm mb-2">
+                API Key (sent as X-API-Key)
+              </label>
+              <input
+                id="endpoint-tester-api-key"
+                type="password"
+                autoComplete="off"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="NOTEBOOK_API_KEY of the running app"
+                className="w-full mb-4 bg-slate-900 border border-slate-700 rounded-lg p-3 text-white font-mono text-sm"
+              />
               <label className="block text-slate-300 text-sm mb-2">
                 Request Body
               </label>
@@ -506,6 +532,11 @@ export default function EndpointTester({
               {jsonError && (
                 <p className="text-red-400 text-sm mt-2">
                   ❌ {jsonError}
+                </p>
+              )}
+              {authError && (
+                <p role="alert" className="text-red-400 text-sm mt-2">
+                  🔒 {authError}
                 </p>
               )}
               <button
