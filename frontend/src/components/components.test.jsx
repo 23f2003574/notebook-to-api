@@ -9,6 +9,14 @@ import NotebookUpload from './NotebookUpload'
 
 afterEach(() => vi.unstubAllGlobals())
 
+// Dashboard polls GET /api/health on mount; tests that script the other requests' replies in
+// order keep their mock for everything except that health probe.
+const stubFetch = (mock) =>
+  vi.stubGlobal('fetch', (url, init) =>
+    /\/api\/health$/.test(String(url))
+      ? Promise.resolve({ ok: true, json: async () => ({ status: 'healthy' }) })
+      : mock(url, init))
+
 describe('CompilationLogs', () => {
   it('shows a placeholder when empty and every line otherwise', () => {
     const { rerender } = render(<CompilationLogs logs={[]} />)
@@ -110,6 +118,77 @@ describe('Dashboard', () => {
   })
 })
 
+describe('Dashboard backend health', () => {
+  const healthy = { ok: true, json: async () => ({ status: 'healthy' }) }
+  afterEach(() => vi.useRealTimers())
+  const status = () => screen.getByRole('status')
+
+  it('shows Checking first, then Running after a healthy response', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(healthy)
+    vi.stubGlobal('fetch', fetchMock)
+    render(<Dashboard />)
+    expect(status()).toHaveTextContent('Checking')
+    await waitFor(() => expect(status()).toHaveTextContent('Running'))
+    expect(fetchMock.mock.calls[0][0]).toMatch(/\/api\/health$/)
+  })
+
+  it('shows Unavailable when the request is rejected', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('down')))
+    render(<Dashboard />)
+    await waitFor(() => expect(status()).toHaveTextContent('Unavailable'))
+  })
+
+  it.each([
+    ['an HTTP error', { ok: false, json: async () => ({ status: 'healthy' }) }],
+    ['an unhealthy body', { ok: true, json: async () => ({ status: 'degraded' }) }]
+  ])('does not show Running for %s', async (_, reply) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(reply))
+    render(<Dashboard />)
+    await waitFor(() => expect(status()).toHaveTextContent('Unavailable'))
+    expect(status()).not.toHaveTextContent('Running')
+  })
+
+  it('refreshes the status by polling', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const fetchMock = vi.fn().mockResolvedValue(healthy)
+    vi.stubGlobal('fetch', fetchMock)
+    render(<Dashboard />)
+    await waitFor(() => expect(status()).toHaveTextContent('Running'))
+    fetchMock.mockRejectedValue(new Error('down'))
+    await vi.advanceTimersByTimeAsync(15000)
+    await waitFor(() => expect(status()).toHaveTextContent('Unavailable'))
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('stops polling and aborts the request on unmount', async () => {
+    vi.useFakeTimers()
+    let signal
+    const fetchMock = vi.fn((url, init) => { signal = init.signal; return new Promise(() => {}) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { unmount } = render(<Dashboard />)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    unmount()
+    expect(signal.aborted).toBe(true)
+    await vi.advanceTimersByTimeAsync(60000)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores a stale response that resolves after a newer one', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    let resolveFirst
+    const fetchMock = vi.fn()
+      .mockImplementationOnce(() => new Promise((r) => { resolveFirst = r }))
+      .mockResolvedValue({ ok: false, json: async () => ({}) })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<Dashboard />)
+    await vi.advanceTimersByTimeAsync(15000)
+    await waitFor(() => expect(status()).toHaveTextContent('Unavailable'))
+    resolveFirst(healthy)
+    await vi.advanceTimersByTimeAsync(10)
+    expect(status()).toHaveTextContent('Unavailable')
+  })
+})
+
 describe('EndpointTester API key', () => {
   const setup = (reply) => {
     const fetchMock = vi.fn().mockResolvedValue({ status: reply.status, json: async () => reply.body })
@@ -185,7 +264,7 @@ describe('dashboard backend errors', () => {
   }
 
   it('upload shows the backend detail', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fail(400, { detail: 'File must be a .ipynb notebook' })))
+    stubFetch(vi.fn().mockResolvedValue(fail(400, { detail: 'File must be a .ipynb notebook' })))
     const { container } = render(<Dashboard />)
     upload(container)
     expect(await screen.findByText(/File must be a \.ipynb notebook/)).toBeInTheDocument()
@@ -193,7 +272,7 @@ describe('dashboard backend errors', () => {
   })
 
   it('inspect shows the backend detail and keeps the upload', async () => {
-    vi.stubGlobal('fetch', vi.fn()
+    stubFetch(vi.fn()
       .mockResolvedValueOnce(ok({ filename: 'n.ipynb' }))
       .mockResolvedValueOnce(fail(404, { detail: 'Notebook file not found' })))
     const { container } = render(<Dashboard />)
@@ -208,7 +287,7 @@ describe('dashboard backend errors', () => {
       .mockResolvedValueOnce(ok({ functions: [] }))
       .mockResolvedValueOnce(fail(404, { detail: 'Notebook file not found' }))
       .mockResolvedValueOnce(fail(422, { detail: [{ loc: ['body', 'notebook_path'], msg: 'Field required' }] }))
-    vi.stubGlobal('fetch', fetchMock)
+    stubFetch(fetchMock)
     const { container } = render(<Dashboard />)
     upload(container)
     await compile()
@@ -219,7 +298,7 @@ describe('dashboard backend errors', () => {
 
   it('falls back safely for an empty or non-JSON error body', async () => {
     const broken = { ok: false, status: 500, json: async () => { throw new SyntaxError('bad json') } }
-    vi.stubGlobal('fetch', vi.fn()
+    stubFetch(vi.fn()
       .mockResolvedValueOnce(ok({ filename: 'n.ipynb' }))
       .mockResolvedValueOnce(ok({ functions: [] }))
       .mockResolvedValueOnce(broken))
@@ -230,7 +309,7 @@ describe('dashboard backend errors', () => {
   })
 
   it('successful upload, inspect and compile are unchanged', async () => {
-    vi.stubGlobal('fetch', vi.fn()
+    stubFetch(vi.fn()
       .mockResolvedValueOnce(ok({ filename: 'n.ipynb' }))
       .mockResolvedValueOnce(ok({ functions: [{ name: 'add' }] }))
       .mockResolvedValueOnce(ok({ functions: [{ name: 'add' }], dependencies: ['numpy'] })))
@@ -259,7 +338,7 @@ describe('actual inspection data', () => {
   }
   const ok = (body) => ({ ok: true, status: 200, json: async () => body })
   const open = async (inspect) => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(ok({ filename: 'n.ipynb' })).mockResolvedValueOnce(ok(inspect)))
+    stubFetch(vi.fn().mockResolvedValueOnce(ok({ filename: 'n.ipynb' })).mockResolvedValueOnce(ok(inspect)))
     const view = render(<Dashboard />)
     fireEvent.change(view.container.querySelector('input[type=file]'), { target: { files: [new File(['{}'], 'n.ipynb')] } })
     await screen.findByText(/Found \d+ functions/)
@@ -311,7 +390,7 @@ describe('actual inspection data', () => {
       .mockResolvedValueOnce(ok({ filename: 'n.ipynb' }))
       .mockResolvedValueOnce(ok(inspected))
       .mockResolvedValueOnce(ok({ functions: [fn], endpoints: [{ path: '/triple', method: 'POST' }], generated_files: ['app.py'] }))
-    vi.stubGlobal('fetch', fetchMock)
+    stubFetch(fetchMock)
     const { container } = render(<Dashboard />)
     fireEvent.change(container.querySelector('input[type=file]'), { target: { files: [new File(['{}'], 'n.ipynb')] } })
     await screen.findByText(/Found 1 functions/)

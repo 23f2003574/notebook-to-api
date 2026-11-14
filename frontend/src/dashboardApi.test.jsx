@@ -13,6 +13,14 @@ afterEach(() => {
 
 const ok = (body) => ({ ok: true, status: 200, json: async () => body })
 
+// Dashboard polls GET /api/health on mount; tests that script the other requests' replies in
+// order keep their mock for everything except that health probe.
+const stubFetch = (mock) =>
+  vi.stubGlobal('fetch', (url, init) =>
+    /\/api\/health$/.test(String(url))
+      ? Promise.resolve({ ok: true, json: async () => ({ status: 'healthy' }) })
+      : mock(url, init))
+
 describe('base URL configuration', () => {
   it('keeps the local development defaults', () => {
     expect(dashboardApiUrl('/api/upload')).toBe('http://localhost:8001/api/upload')
@@ -56,7 +64,7 @@ describe('every audited call site uses the configuration', () => {
       .mockResolvedValueOnce(ok({ filename: 'n.ipynb' }))
       .mockResolvedValueOnce(ok({ functions: [{ name: 'f' }], generated_files: ['app.py'], endpoints: [{ path: '/f', method: 'POST' }] }))
       .mockResolvedValueOnce(ok({ functions: [] }))
-    vi.stubGlobal('fetch', fetchMock)
+    stubFetch(fetchMock)
     const { container } = render(<Dashboard />)
     fireEvent.change(container.querySelector('input[type=file]'), { target: { files: [new File(['{}'], 'n.ipynb')] } })
     await screen.findByText(/Found 1 functions/)

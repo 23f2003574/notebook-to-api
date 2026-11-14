@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import NotebookUpload from './NotebookUpload'
 import { appUrl, dashboardApiUrl, dashboardHeaders } from '../dashboardApi'
 import { errorFromResponse } from '../errorMessage'
@@ -21,7 +21,64 @@ function fileIcon(name) {
   return '📄'
 }
 
+const HEALTH_POLL_MS = 15000
+const HEALTH_TIMEOUT_MS = 5000
+
+// Backend health as reported by GET /api/health: 'checking' until the first answer,
+// 'running' only for a successful response whose status is "healthy", else 'unavailable'.
+function useBackendHealth() {
+  const [status, setStatus] = useState('checking')
+
+  useEffect(() => {
+    let active = true
+    let latest = 0
+    let controller = null
+
+    const check = async () => {
+      const id = ++latest
+      controller?.abort()
+      const current = new AbortController()
+      controller = current
+      const timer = setTimeout(() => current.abort(), HEALTH_TIMEOUT_MS)
+      let next = 'unavailable'
+      try {
+        const response = await fetch(dashboardApiUrl('/api/health'), {
+          headers: dashboardHeaders(),
+          signal: current.signal
+        })
+        if (response.ok) {
+          const body = await response.json()
+          if (body && body.status === 'healthy') next = 'running'
+        }
+      } catch {
+        // network failure, timeout, abort or unreadable body: unavailable
+      } finally {
+        clearTimeout(timer)
+      }
+      if (active && id === latest) setStatus(next)
+    }
+
+    check()
+    const interval = setInterval(check, HEALTH_POLL_MS)
+    return () => {
+      active = false
+      clearInterval(interval)
+      controller?.abort()
+    }
+  }, [])
+
+  return status
+}
+
+const HEALTH_DISPLAY = {
+  checking: { label: 'Checking…', icon: '🟡', color: 'text-amber-400' },
+  running: { label: 'Running', icon: '🟢', color: 'text-emerald-400' },
+  unavailable: { label: 'Unavailable', icon: '🔴', color: 'text-red-400' }
+}
+
 export default function Dashboard() {
+  const backendStatus = useBackendHealth()
+  const health = HEALTH_DISPLAY[backendStatus]
   const [uploadedNotebook, setUploadedNotebook] = useState(null)
   const [functions, setFunctions] = useState([])
   const [logs, setLogs] = useState([])
@@ -110,10 +167,10 @@ export default function Dashboard() {
               <p className="text-slate-400">Transform Jupyter notebooks into production-ready APIs</p>
             </div>
             <div className="text-right">
-              <p className="text-sm text-slate-400 mb-2">
+              <p className="text-sm text-slate-400 mb-2" role="status" aria-live="polite">
                 Backend:
-                <span className="text-emerald-400 font-semibold">
-                  {' '}🟢 Running
+                <span className={health.color + ' font-semibold'}>
+                  {' '}<span aria-hidden="true">{health.icon}</span> {health.label}
                 </span>
               </p>
               <a href={dashboardApiUrl('/docs')} target="_blank" rel="noopener noreferrer" className="inline-block bg-emerald-600 hover:bg-emerald-700 text-white text-sm px-3 py-2 rounded transition">
