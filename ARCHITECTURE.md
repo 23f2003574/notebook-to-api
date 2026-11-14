@@ -215,6 +215,9 @@ generated app includes:
   running generated app.
 - `serve.py`: `watchdog` file watcher; recompiles and restarts a uvicorn
   subprocess on save; also watches local modules, `.env` and shipped data files.
+- Dashboard security: `NOTEBOOK_API_DASHBOARD_HOST` defaults to `127.0.0.1`; a
+  non-loopback host without `NOTEBOOK_API_DASHBOARD_KEY` is refused at startup
+  (`validate_dashboard_exposure`), and a set key is required as `X-API-Key`.
 - `dashboard.py` + `routes/upload.py` (about 20k lines): FastAPI management
   server. Stores uploaded notebooks (with versions, tags, descriptions,
   duplicate detection, search, zip import, URL import), compiles them, builds

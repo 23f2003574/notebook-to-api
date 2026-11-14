@@ -54,6 +54,12 @@ After installing `requirements-dev.txt`, run the same command CI runs from the r
 ## Dashboard (optional)
 A web dashboard for uploading, inspecting and deploying notebooks. `./start-dashboard.sh` starts the API (`python -m backend.dashboard`, default port 8001, override with `NOTEBOOK_API_DASHBOARD_PORT`) and the frontend dev server (`npm run dev` in `frontend/`, port 5173, needs Node.js and `npm install` once).
 
+The dashboard API can upload, delete and compile notebooks and manage secrets and API keys, so it is secured by default:
+
+- It binds to `127.0.0.1` (`NOTEBOOK_API_DASHBOARD_HOST`), reachable only from the same machine.
+- `NOTEBOOK_API_DASHBOARD_KEY`, when set, requires every request to send it as the `X-API-Key` header (the frontend sends `VITE_DASHBOARD_API_KEY`, see `frontend/README.md`).
+- Binding to any non-loopback host (for example `0.0.0.0`) **without** `NOTEBOOK_API_DASHBOARD_KEY` is refused at startup with an error. To expose the dashboard on the network, set both, for example `NOTEBOOK_API_DASHBOARD_HOST=0.0.0.0 NOTEBOOK_API_DASHBOARD_KEY=<secret> ./start-dashboard.sh`, and serve it over HTTPS (`NOTEBOOK_API_DASHBOARD_SSL_KEYFILE`/`NOTEBOOK_API_DASHBOARD_SSL_CERTFILE` or a TLS-terminating proxy).
+
 ## Building the Docker Image
 Make sure Docker is installed on your system.
 ```bash

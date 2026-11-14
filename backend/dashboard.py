@@ -923,7 +923,44 @@ def dashboard_host():
     call below, with no way to bind to a specific interface instead
     without editing this file.
     """
-    return os.getenv("NOTEBOOK_API_DASHBOARD_HOST", "0.0.0.0")
+    return os.getenv("NOTEBOOK_API_DASHBOARD_HOST", "127.0.0.1")
+
+
+def host_is_loopback(host):
+    """True for localhost and loopback addresses (127.0.0.0/8, ::1) -- the
+    only interfaces that cannot be reached from another machine. Anything
+    else, including 0.0.0.0, :: and unresolvable names, is treated as
+    network-exposed."""
+    import ipaddress
+
+    host = (host or "").strip().strip("[]")
+
+    if host.lower() == "localhost":
+        return True
+
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def validate_dashboard_exposure(host, key):
+    """Refuse to serve the dashboard's administrative API (secrets, API
+    keys, upload, delete, compile) on a network interface without
+    authentication. Raises ValueError, before uvicorn starts, when `host`
+    is not loopback and `key` (NOTEBOOK_API_DASHBOARD_KEY) is empty. The
+    key itself is never included in the message."""
+    if host_is_loopback(host) or key:
+        return
+
+    raise ValueError(
+        f"Refusing to start: NOTEBOOK_API_DASHBOARD_HOST={host!r} exposes the "
+        "dashboard on a network interface, but NOTEBOOK_API_DASHBOARD_KEY is "
+        "not set, so every request (including secrets, API keys, upload, "
+        "delete and compile) would be unauthenticated. Set "
+        "NOTEBOOK_API_DASHBOARD_KEY to a secret value (clients send it as the "
+        "X-API-Key header), or bind to 127.0.0.1."
+    )
 
 
 def dashboard_port():
@@ -1040,6 +1077,11 @@ def dashboard_log_level():
 
 if __name__ == "__main__":
     ssl_keyfile, ssl_certfile = dashboard_ssl_config()
+
+    try:
+        validate_dashboard_exposure(dashboard_host(), dashboard_api_key())
+    except ValueError as exc:
+        sys.exit(f"error: {exc}")
 
     uvicorn.run(
         "backend.dashboard:app",

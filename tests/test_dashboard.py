@@ -31,11 +31,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 client = TestClient(app)
 
 
-def test_dashboard_host_defaults_to_all_interfaces(monkeypatch):
+def test_dashboard_host_defaults_to_loopback(monkeypatch):
 
     monkeypatch.delenv("NOTEBOOK_API_DASHBOARD_HOST", raising=False)
 
-    assert dashboard_host() == "0.0.0.0"
+    assert dashboard_host() == "127.0.0.1"
 
 
 def test_dashboard_host_env_var_overrides_the_default(monkeypatch):
@@ -703,7 +703,7 @@ uvicorn.run = fake_run
 import runpy
 runpy.run_module("backend.dashboard", run_name="__main__")
 
-assert captured["host"] == "0.0.0.0", captured
+assert captured["host"] == "127.0.0.1", captured
 assert captured["port"] == 8001, captured
 
 print("DASHBOARD_MAIN_DEFAULT_OK")
