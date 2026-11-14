@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import NotebookUpload from './NotebookUpload'
-import { appUrl, dashboardApiUrl, dashboardHeaders } from '../dashboardApi'
+import { appUrl, configError, dashboardApiUrl, dashboardHeaders } from '../dashboardApi'
 import { errorFromResponse } from '../errorMessage'
 import FunctionList from './FunctionList'
 import CompilationLogs from './CompilationLogs'
@@ -19,6 +19,12 @@ function fileIcon(name) {
   if (name.endsWith('.txt')) return '📋'
   if (/\.(ya?ml)$/.test(name)) return '⚙️'
   return '📄'
+}
+
+// A link target built from the configured URLs; a bad configuration (reported in the banner
+// below) leaves the link without a target instead of breaking the page.
+const linkTo = (build, path) => {
+  try { return build(path) } catch { return undefined }
 }
 
 const HEALTH_POLL_MS = 15000
@@ -85,6 +91,7 @@ const HEALTH_DISPLAY = {
 export default function Dashboard() {
   const backendStatus = useBackendHealth()
   const health = HEALTH_DISPLAY[backendStatus]
+  const settingsError = configError()
   const [uploadedNotebook, setUploadedNotebook] = useState(null)
   const [functions, setFunctions] = useState([])
   const [logs, setLogs] = useState([])
@@ -229,13 +236,19 @@ export default function Dashboard() {
                   {' '}<span aria-hidden="true">{health.icon}</span> {health.label}
                 </span>
               </p>
-              <a href={dashboardApiUrl('/docs')} target="_blank" rel="noopener noreferrer" className="inline-block bg-emerald-600 hover:bg-emerald-700 text-white text-sm px-3 py-2 rounded transition">
+              <a href={linkTo(dashboardApiUrl, '/docs')} target="_blank" rel="noopener noreferrer" className="inline-block bg-emerald-600 hover:bg-emerald-700 text-white text-sm px-3 py-2 rounded transition">
                 📖 Open API Docs
               </a>
             </div>
           </div>
         </div>
       </div>
+
+      {settingsError && (
+        <div role="alert" className="max-w-7xl mx-auto mt-6 px-4 py-3 rounded border border-red-500 bg-red-950/40 text-red-300 text-sm">
+          ⚙️ Dashboard configuration problem: {settingsError}
+        </div>
+      )}
 
       <div className="max-w-7xl mx-auto px-6 py-8">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -306,7 +319,7 @@ export default function Dashboard() {
               <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-xl font-semibold text-white">📦 Generated Files</h2>
-                  <a href={appUrl('/docs')} target="_blank" rel="noopener noreferrer" className="bg-blue-600 hover:bg-blue-700 text-white text-sm px-3 py-2 rounded transition">
+                  <a href={linkTo(appUrl, '/docs')} target="_blank" rel="noopener noreferrer" className="bg-blue-600 hover:bg-blue-700 text-white text-sm px-3 py-2 rounded transition">
                     🌐 Open API
                   </a>
                 </div>

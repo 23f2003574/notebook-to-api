@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import Dashboard from './components/Dashboard'
 import EndpointTester from './components/EndpointTester'
 import NotebookUpload from './components/NotebookUpload'
-import { appUrl, dashboardApiUrl, normalizeBaseUrl } from './dashboardApi'
+import { appUrl, configError, dashboardApiUrl, normalizeBaseUrl } from './dashboardApi'
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -114,5 +114,79 @@ describe('no stray hardcoded URLs', () => {
       .map(([file]) => file)
     expect(Object.keys(sources).length).toBeGreaterThan(5)
     expect(offenders).toEqual(['./dashboardApi.js'])
+  })
+})
+
+describe('URL resolution across deployments', () => {
+  const header = () => dashboardApiUrl('/api/health')
+  const production = (env = {}) => {
+    vi.stubEnv('PROD', true)
+    vi.stubEnv('VITE_APP_URL', 'https://api.example.com')
+    Object.entries(env).forEach(([k, v]) => vi.stubEnv(k, v))
+  }
+
+  it('development defaults still point at the local services', () => {
+    vi.stubEnv('VITE_DASHBOARD_API_URL', '')
+    vi.stubEnv('VITE_APP_URL', '')
+    expect(header()).toBe('http://localhost:8001/api/health')
+    expect(appUrl('/add')).toBe('http://localhost:8000/add')
+  })
+
+  it('a production build with no dashboard URL uses the page\'s own origin, never localhost', () => {
+    production({ VITE_DASHBOARD_API_URL: '' })
+    expect(header()).toBe('/api/health')
+    expect(dashboardApiUrl()).toBe('')
+  })
+
+  it('an explicit origin is respected, with or without trailing slashes', () => {
+    production({ VITE_DASHBOARD_API_URL: ' https://dash.example.com// ' })
+    expect(header()).toBe('https://dash.example.com/api/health')
+    expect(dashboardApiUrl('api/health')).toBe('https://dash.example.com/api/health')
+  })
+
+  it('keeps a configured base path, absolute or same-origin', () => {
+    production({ VITE_DASHBOARD_API_URL: 'https://example.com/tools/dashboard/' })
+    expect(header()).toBe('https://example.com/tools/dashboard/api/health')
+    vi.stubEnv('VITE_DASHBOARD_API_URL', '/dashboard/')
+    expect(header()).toBe('/dashboard/api/health')
+    vi.stubEnv('VITE_DASHBOARD_API_URL', '/')
+    expect(header()).toBe('/api/health')
+  })
+
+  it('rejects settings that would silently resolve to the wrong place', () => {
+    production()
+    for (const bad of ['localhost:8001', 'dashboard.example.com', '//evil.example.com', 'ftp://x.example.com']) {
+      vi.stubEnv('VITE_DASHBOARD_API_URL', bad)
+      expect(() => header()).toThrow(/VITE_DASHBOARD_API_URL must be an absolute http\(s\) URL/)
+    }
+  })
+
+  it('requires the compiled application URL in production and says how to set it', () => {
+    production({ VITE_APP_URL: '' })
+    expect(() => appUrl('/add')).toThrow(/VITE_APP_URL is not set\. Set it when building/)
+    expect(configError()).toMatch(/VITE_APP_URL/)
+  })
+
+  it('reports no problem for a valid configuration', () => {
+    production({ VITE_DASHBOARD_API_URL: 'https://dash.example.com' })
+    expect(configError()).toBeNull()
+  })
+
+  it('sends the dashboard key with requests to a configured URL', async () => {
+    production({ VITE_DASHBOARD_API_URL: 'https://dash.example.com/base', VITE_DASHBOARD_API_KEY: 'k-123' })
+    const fetchMock = vi.fn().mockResolvedValue(ok({ filename: 'n.ipynb' }))
+    vi.stubGlobal('fetch', fetchMock)
+    const view = render(<NotebookUpload onSuccess={vi.fn()} />)
+    fireEvent.change(view.container.querySelector('input[type=file]'), { target: { files: [new File(['{}'], 'n.ipynb')] } })
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    expect(fetchMock.mock.calls[0][0]).toBe('https://dash.example.com/base/api/upload')
+    expect(fetchMock.mock.calls[0][1].headers['X-API-Key']).toBe('k-123')
+  })
+
+  it('shows a visible configuration problem instead of failing silently', async () => {
+    production({ VITE_APP_URL: '' })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(ok({ status: 'healthy' })))
+    render(<Dashboard />)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/VITE_APP_URL is not set/)
   })
 })
