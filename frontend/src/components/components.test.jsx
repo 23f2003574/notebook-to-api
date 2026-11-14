@@ -118,10 +118,78 @@ describe('Dashboard', () => {
   })
 })
 
+describe('NotebookUpload accessibility', () => {
+  const notebook = () => new File(['{}'], 'n.ipynb')
+  const mount = (reply = { ok: true, json: async () => ({ filename: 'n.ipynb' }) }) => {
+    const fetchMock = vi.fn().mockResolvedValue(reply)
+    vi.stubGlobal('fetch', fetchMock)
+    const view = render(<NotebookUpload onSuccess={vi.fn()} />)
+    return { fetchMock, input: view.container.querySelector('input[type=file]'), ...view }
+  }
+
+  it('is reachable by keyboard and has an accessible name without the decorative icon', () => {
+    const { input } = mount()
+    expect(input.tabIndex).toBeGreaterThanOrEqual(0)
+    input.focus()
+    expect(input).toHaveFocus()
+    expect(input).toHaveAccessibleName(/Click to upload or drag & drop/)
+    expect(input).not.toHaveAccessibleName(/📁/)
+  })
+
+  it('opens the picker once per activation: only the native input handles it', () => {
+    const { input, container } = mount()
+    const clicks = vi.fn()
+    input.addEventListener('click', clicks)
+    fireEvent.click(container.querySelector('label'))
+    expect(clicks).toHaveBeenCalledTimes(1)
+    // No custom key handlers that could duplicate the browser's own Enter/Space activation.
+    expect(container.querySelector('label').onkeydown).toBeNull()
+    expect(input.onkeydown).toBeNull()
+  })
+
+  it('announces a validation error, links it to the input and clears it', async () => {
+    const { input, container } = mount()
+    fireEvent.change(input, { target: { files: [new File(['x'], 'notes.txt')] } })
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Please upload a .ipynb file')
+    expect(input).toHaveAttribute('aria-invalid', 'true')
+    expect(input).toHaveAccessibleDescription(/Please upload a \.ipynb file/)
+    fireEvent.change(input, { target: { files: [notebook()] } })
+    await waitFor(() => expect(container.querySelector('[role=alert]')).toBeNull())
+    expect(input).not.toHaveAttribute('aria-invalid')
+  })
+
+  it('keeps focus on the control while uploading, ignores input, then announces success', async () => {
+    let finish
+    const fetchMock = vi.fn(() => new Promise((r) => { finish = r }))
+    vi.stubGlobal('fetch', fetchMock)
+    const view = render(<NotebookUpload onSuccess={vi.fn()} />)
+    const input = view.container.querySelector('input[type=file]')
+    input.focus()
+    fireEvent.change(input, { target: { files: [notebook()] } })
+    expect(await screen.findByRole('status')).toHaveTextContent('Uploading')
+    expect(input).toHaveFocus()
+    expect(input).not.toBeDisabled()
+    expect(input).toHaveAttribute('aria-disabled', 'true')
+    expect(fireEvent.click(input)).toBe(false) // picker blocked while busy
+    fireEvent.change(input, { target: { files: [notebook()] } })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    finish({ ok: true, json: async () => ({ filename: 'n.ipynb' }) })
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Uploaded n.ipynb'))
+    expect(input).toHaveFocus()
+  })
+
+  it('still accepts a dropped notebook', async () => {
+    const { fetchMock, container } = mount()
+    fireEvent.drop(container.querySelector('label'), { dataTransfer: { files: [notebook()] } })
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+  })
+})
+
 describe('Dashboard backend health', () => {
   const healthy = { ok: true, json: async () => ({ status: 'healthy' }) }
   afterEach(() => vi.useRealTimers())
-  const status = () => screen.getByRole('status')
+  const status = () => screen.getAllByRole('status').find((el) => /Backend/.test(el.textContent))
 
   it('shows Checking first, then Running after a healthy response', async () => {
     const fetchMock = vi.fn().mockResolvedValue(healthy)
