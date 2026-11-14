@@ -135,7 +135,7 @@ def test_api_store_secret(client: TestClient, vault: SecretVaultService, monkeyp
     )
 
     assert response.status_code == 200
-    assert response.json()["value"] == "s3cr3t"
+    assert "value" not in response.json()
 
 
 def test_api_store_invalid_type_returns_422(client: TestClient, vault: SecretVaultService, monkeypatch):
@@ -160,7 +160,7 @@ def test_api_retrieve_secret(client: TestClient, vault: SecretVaultService, monk
     response = client.get("/security/secrets/api-retrieve")
 
     assert response.status_code == 200
-    assert response.json()["value"] == "s3cr3t"
+    assert "value" not in response.json()
 
 
 def test_api_retrieve_unknown_secret_returns_404(client: TestClient, vault: SecretVaultService, monkeypatch):
@@ -182,7 +182,7 @@ def test_api_rotate_secret(client: TestClient, vault: SecretVaultService, monkey
     response = client.post("/security/secrets/api-rotate/rotate", json={"value": "new-secret"})
 
     assert response.status_code == 200
-    assert response.json()["value"] == "new-secret"
+    assert "value" not in response.json()
     assert response.json()["version"] == 2
 
 

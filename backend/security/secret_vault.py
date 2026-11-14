@@ -76,7 +76,12 @@ class SecretEntry:
     value: str
 
     def to_dict(self) -> dict:
+        """Internal use only: includes the decrypted value. Never serialize to an API response."""
         return {**self.metadata.to_dict(), "value": self.value}
+
+    def to_public_dict(self) -> dict:
+        """What an API response may show: metadata only, never the decrypted value."""
+        return self.metadata.to_dict()
 
 
 class SecretVaultService:
@@ -205,7 +210,7 @@ def store_secret_endpoint(payload: dict = Body(default={})) -> dict:
         raise HTTPException(status_code=422, detail=str(exc))
     except SecretAlreadyExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
-    return entry.to_dict()
+    return entry.to_public_dict()
 
 
 @router.get("/{secret}")
@@ -214,7 +219,7 @@ def retrieve_secret_endpoint(secret: str) -> dict:
         entry = get_secret_vault_service().retrieve(secret)
     except UnknownSecretError:
         raise HTTPException(status_code=404, detail="unknown secret")
-    return entry.to_dict()
+    return entry.to_public_dict()
 
 
 @router.post("/{secret}/rotate")
@@ -223,7 +228,7 @@ def rotate_secret_endpoint(secret: str, payload: dict = Body(default={})) -> dic
         entry = get_secret_vault_service().rotate(secret, payload.get("value", ""))
     except UnknownSecretError:
         raise HTTPException(status_code=404, detail="unknown secret")
-    return entry.to_dict()
+    return entry.to_public_dict()
 
 
 @router.delete("/{secret}")

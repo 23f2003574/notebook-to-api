@@ -202,7 +202,7 @@ def test_api_store_secret(client: TestClient):
     )
 
     assert response.status_code == 200
-    assert response.json()["value"] == "s3cr3t"
+    assert "value" not in response.json()
 
 
 def test_api_store_secret_invalid_type_returns_422(client: TestClient):
@@ -237,7 +237,7 @@ def test_api_retrieve_secret(client: TestClient):
     response = client.get("/security/secrets/api-retrieve-secret")
 
     assert response.status_code == 200
-    assert response.json()["value"] == "s3cr3t"
+    assert "value" not in response.json()
 
 
 def test_api_retrieve_unknown_secret_returns_404(client: TestClient):
@@ -255,7 +255,7 @@ def test_api_rotate_secret(client: TestClient):
     response = client.post("/security/secrets/api-rotate-secret/rotate", json={"value": "new"})
 
     assert response.status_code == 200
-    assert response.json()["value"] == "new"
+    assert "value" not in response.json()
     assert response.json()["version"] == 2
 
 
