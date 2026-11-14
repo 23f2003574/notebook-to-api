@@ -109,6 +109,16 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      # Same scripts as package.json; none needs environment variables (the VITE_* settings
+      # are optional and default to the local development URLs).
+      - name: Lint frontend
+        working-directory: frontend
+        run: npm run lint
+
       - name: Run frontend tests
         working-directory: frontend
         run: npm test
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
