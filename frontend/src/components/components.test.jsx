@@ -186,6 +186,102 @@ describe('NotebookUpload accessibility', () => {
   })
 })
 
+describe('Dashboard request lifecycle', () => {
+  const json = (body, ok = true) => ({ ok, status: ok ? 200 : 500, json: async () => body })
+  const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r }); return { promise, resolve } }
+
+  // Routes by URL; /api/inspect and /api/compile replies are controlled per notebook.
+  const setup = () => {
+    const pending = { inspect: {}, compile: {} }
+    const calls = []
+    vi.stubGlobal('fetch', vi.fn((url, init = {}) => {
+      if (/\/api\/health$/.test(url)) return Promise.resolve(json({ status: 'healthy' }))
+      if (/\/api\/upload$/.test(url)) return Promise.resolve(json({ filename: init.body.get('file').name }))
+      const kind = /\/api\/inspect$/.test(url) ? 'inspect' : 'compile'
+      const name = JSON.parse(init.body).notebook_path
+      calls.push({ kind, name, signal: init.signal })
+      pending[kind][name] = deferred()
+      return pending[kind][name].promise
+    }))
+    const view = render(<Dashboard />)
+    const input = view.container.querySelector('input[type=file]')
+    const upload = (name) => fireEvent.change(input, { target: { files: [new File(['{}'], name)] } })
+    return { pending, calls, upload, ...view }
+  }
+  const inspected = (fn) => json({ functions: [{ name: fn }], endpoints: [{ path: '/' + fn, method: 'POST' }], generated_files: [] })
+
+  it('keeps the newest notebook\'s inspection when an older one answers late', async () => {
+    const { pending, calls, upload } = setup()
+    upload('a.ipynb')
+    await waitFor(() => expect(pending.inspect['a.ipynb']).toBeDefined())
+    upload('b.ipynb')
+    await waitFor(() => expect(pending.inspect['b.ipynb']).toBeDefined())
+    expect(calls[0].signal.aborted).toBe(true) // the obsolete request is cancelled
+    pending.inspect['b.ipynb'].resolve(inspected('from_b'))
+    await waitFor(() => expect(screen.getAllByText('from_b').length).toBeGreaterThan(0))
+    pending.inspect['a.ipynb'].resolve(inspected('from_a'))
+    await Promise.resolve()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(screen.queryByText('from_a')).toBeNull()
+    expect(screen.getAllByText('from_b').length).toBeGreaterThan(0)
+  })
+
+  it('does not let a late failure of an older inspection replace the current logs', async () => {
+    const { pending, upload } = setup()
+    upload('a.ipynb')
+    await waitFor(() => expect(pending.inspect['a.ipynb']).toBeDefined())
+    upload('b.ipynb')
+    await waitFor(() => expect(pending.inspect['b.ipynb']).toBeDefined())
+    pending.inspect['b.ipynb'].resolve(inspected('from_b'))
+    await waitFor(() => expect(screen.getByText(/Found 1 functions/)).toBeInTheDocument())
+    pending.inspect['a.ipynb'].resolve(json({ detail: 'old failure' }, false))
+    await new Promise((r) => setTimeout(r, 0))
+    expect(screen.queryByText(/old failure/)).toBeNull()
+    expect(screen.getByText(/Found 1 functions/)).toBeInTheDocument()
+  })
+
+  it('ignores a compile that finishes after a newer upload and frees the Compile button', async () => {
+    const { pending, upload } = setup()
+    upload('a.ipynb')
+    await waitFor(() => expect(pending.inspect['a.ipynb']).toBeDefined())
+    pending.inspect['a.ipynb'].resolve(inspected('from_a'))
+    await waitFor(() => expect(screen.getByText(/Compile Now/).closest('button')).not.toBeDisabled())
+    fireEvent.click(screen.getByText(/Compile Now/))
+    await waitFor(() => expect(pending.compile['a.ipynb']).toBeDefined())
+    upload('b.ipynb')
+    await waitFor(() => expect(pending.inspect['b.ipynb']).toBeDefined())
+    expect(screen.getByText(/Compile Now/).closest('button')).not.toBeDisabled()
+    pending.inspect['b.ipynb'].resolve(inspected('from_b'))
+    await waitFor(() => expect(screen.getAllByText('from_b').length).toBeGreaterThan(0))
+    pending.compile['a.ipynb'].resolve(json({ functions: [{ name: 'compiled_a' }], endpoints: [], generated_files: [], dependencies: [] }))
+    await new Promise((r) => setTimeout(r, 0))
+    expect(screen.queryByText(/Compilation successful/)).toBeNull()
+    expect(screen.queryByText('compiled_a')).toBeNull()
+    expect(screen.getAllByText('from_b').length).toBeGreaterThan(0)
+  })
+
+  it('aborts in-flight requests and makes no state updates after unmount', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { pending, calls, upload, unmount } = setup()
+    upload('a.ipynb')
+    await waitFor(() => expect(pending.inspect['a.ipynb']).toBeDefined())
+    unmount()
+    expect(calls[0].signal.aborted).toBe(true)
+    pending.inspect['a.ipynb'].resolve(inspected('from_a'))
+    await new Promise((r) => setTimeout(r, 0))
+    expect(errors).not.toHaveBeenCalled()
+    errors.mockRestore()
+  })
+
+  it('still reports the current inspection error', async () => {
+    const { pending, upload } = setup()
+    upload('a.ipynb')
+    await waitFor(() => expect(pending.inspect['a.ipynb']).toBeDefined())
+    pending.inspect['a.ipynb'].resolve(json({ detail: 'bad notebook' }, false))
+    expect(await screen.findByText(/Inspection failed: .*bad notebook/)).toBeInTheDocument()
+  })
+})
+
 describe('Dashboard backend health', () => {
   const healthy = { ok: true, json: async () => ({ status: 'healthy' }) }
   afterEach(() => vi.useRealTimers())

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import NotebookUpload from './NotebookUpload'
 import { appUrl, dashboardApiUrl, dashboardHeaders } from '../dashboardApi'
 import { errorFromResponse } from '../errorMessage'
@@ -87,7 +87,26 @@ export default function Dashboard() {
   const [endpoints, setEndpoints] = useState([]) // [{ path, method, ... }] as returned by the backend
   const [generatedFiles, setGeneratedFiles] = useState([])
 
+  // Inspect and compile each describe one notebook. Starting new work (a fresh upload, or a
+  // compile) supersedes whatever is still in flight: its request is aborted and, should its
+  // response still arrive, it is ignored, so an older notebook's functions, endpoints, files
+  // and logs can never replace the current ones. Unmounting supersedes everything.
+  const workRef = useRef({ id: 0, controller: null })
+  const beginWork = () => {
+    workRef.current.controller?.abort()
+    const controller = new AbortController()
+    workRef.current = { id: workRef.current.id + 1, controller }
+    return { id: workRef.current.id, signal: controller.signal }
+  }
+  const isCurrent = (work) => workRef.current.id === work.id
+  useEffect(() => () => {
+    workRef.current.id += 1
+    workRef.current.controller?.abort()
+  }, [])
+
   const handleUploadSuccess = async (response) => {
+    const work = beginWork()
+    setIsCompiling(false)
     setUploadedNotebook(response.filename)
     setLogs(['✅ Notebook uploaded successfully', '🔍 Inspecting notebook...'])
 
@@ -95,11 +114,14 @@ export default function Dashboard() {
       const inspectResponse = await fetch(dashboardApiUrl('/api/inspect'), {
         method: 'POST',
         headers: dashboardHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ notebook_path: response.filename })
+        body: JSON.stringify({ notebook_path: response.filename }),
+        signal: work.signal
       })
 
+      if (!isCurrent(work)) return
       if (inspectResponse.ok) {
         const inspectData = await inspectResponse.json()
+        if (!isCurrent(work)) return
         setFunctions(inspectData.functions || [])
         const returnedEndpoints = asEndpoints(inspectData.endpoints)
         setEndpoints(returnedEndpoints)
@@ -110,9 +132,12 @@ export default function Dashboard() {
           '🚀 Generated ' + returnedEndpoints.length + ' endpoints'
         ])
       } else {
-        setLogs(['⚠️ Upload succeeded', '❌ Inspection failed: ' + await errorFromResponse(inspectResponse, 'Unknown error')])
+        const detail = await errorFromResponse(inspectResponse, 'Unknown error')
+        if (!isCurrent(work)) return
+        setLogs(['⚠️ Upload succeeded', '❌ Inspection failed: ' + detail])
       }
     } catch (error) {
+      if (!isCurrent(work)) return
       setLogs(['⚠️ Upload succeeded', '❌ Inspection error: ' + error.message])
     }
   }
@@ -123,6 +148,7 @@ export default function Dashboard() {
       return
     }
 
+    const work = beginWork()
     setIsCompiling(true)
     setLogs(['🔄 Starting compilation...'])
 
@@ -130,11 +156,14 @@ export default function Dashboard() {
       const response = await fetch(dashboardApiUrl('/api/compile'), {
         method: 'POST',
         headers: dashboardHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ notebook_path: uploadedNotebook })
+        body: JSON.stringify({ notebook_path: uploadedNotebook }),
+        signal: work.signal
       })
 
+      if (!isCurrent(work)) return
       if (response.ok) {
         const data = await response.json()
+        if (!isCurrent(work)) return
         setFunctions(data.functions || [])
         if (Array.isArray(data.endpoints)) setEndpoints(asEndpoints(data.endpoints))
         if (Array.isArray(data.generated_files)) setGeneratedFiles(asFiles(data.generated_files))
@@ -145,12 +174,15 @@ export default function Dashboard() {
         ])
         setLastCompiled(new Date().toLocaleTimeString())
       } else {
-        setLogs(['❌ Compilation failed: ' + await errorFromResponse(response, 'Unknown error')])
+        const detail = await errorFromResponse(response, 'Unknown error')
+        if (!isCurrent(work)) return
+        setLogs(['❌ Compilation failed: ' + detail])
       }
     } catch (error) {
+      if (!isCurrent(work)) return
       setLogs(['❌ Error: ' + error.message])
     } finally {
-      setIsCompiling(false)
+      if (isCurrent(work)) setIsCompiling(false)
     }
   }
 
