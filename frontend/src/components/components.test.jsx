@@ -273,6 +273,42 @@ describe('Dashboard request lifecycle', () => {
     errors.mockRestore()
   })
 
+  it('says when the generated files belong to another notebook instead of listing them', async () => {
+    const { pending, upload } = setup()
+    upload('b.ipynb')
+    await waitFor(() => expect(pending.inspect['b.ipynb']).toBeDefined())
+    pending.inspect['b.ipynb'].resolve(json({ functions: [{ name: 'f' }], endpoints: [], generated_files: [], generated_files_status: 'other_notebook' }))
+    expect(await screen.findByText(/belong to a different notebook/)).toBeInTheDocument()
+  })
+
+  it('does not keep the previous notebook\'s results when the next inspection fails', async () => {
+    const { pending, upload } = setup()
+    upload('a.ipynb')
+    await waitFor(() => expect(pending.inspect['a.ipynb']).toBeDefined())
+    pending.inspect['a.ipynb'].resolve(json({ functions: [{ name: 'from_a' }], endpoints: [{ path: '/from_a', method: 'POST' }], generated_files: ['app.py'] }))
+    await screen.findByText('app.py')
+    upload('b.ipynb')
+    await waitFor(() => expect(pending.inspect['b.ipynb']).toBeDefined())
+    expect(screen.queryByText('app.py')).toBeNull() // cleared as soon as the new upload starts
+    pending.inspect['b.ipynb'].resolve(json({ detail: 'cannot inspect' }, false))
+    await screen.findByText(/Inspection failed/)
+    expect(screen.queryByText('app.py')).toBeNull()
+    expect(screen.queryByText('from_a')).toBeNull()
+  })
+
+  it('shows a failed-compilation state instead of the earlier files', async () => {
+    const { pending, upload } = setup()
+    upload('a.ipynb')
+    await waitFor(() => expect(pending.inspect['a.ipynb']).toBeDefined())
+    pending.inspect['a.ipynb'].resolve(json({ functions: [{ name: 'f' }], endpoints: [], generated_files: ['old_app.py'] }))
+    await screen.findByText('old_app.py')
+    fireEvent.click(screen.getByText(/Compile Now/))
+    await waitFor(() => expect(pending.compile['a.ipynb']).toBeDefined())
+    pending.compile['a.ipynb'].resolve(json({ detail: 'syntax error' }, false))
+    expect(await screen.findByText(/Compilation failed, so there are no generated files/)).toBeInTheDocument()
+    expect(screen.queryByText('old_app.py')).toBeNull()
+  })
+
   it('still reports the current inspection error', async () => {
     const { pending, upload } = setup()
     upload('a.ipynb')
@@ -543,10 +579,11 @@ describe('actual inspection data', () => {
     expect(screen.getByText('app.py')).toBeInTheDocument()
   })
 
-  it('shows no endpoints or file panel when the backend returns none', async () => {
+  it('shows no endpoints and an explicit empty file state when the backend returns none', async () => {
     const { container } = await open({ functions: [{ name: 'f' }] })
     expect(container.textContent).toContain('Generated 0 endpoints')
-    expect(screen.queryByText(/Generated Files/)).toBeNull()
+    expect(screen.getByText(/No files generated yet/)).toBeInTheDocument()
+    expect(screen.queryByText('app.py')).toBeNull()
   })
 
   it('compile refreshes files and endpoints from its own response', async () => {

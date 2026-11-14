@@ -70,6 +70,12 @@ function useBackendHealth() {
   return status
 }
 
+const FILES_MESSAGES = {
+  none: 'No files generated yet. Compile this notebook to generate them.',
+  other_notebook: 'The generated files on the server belong to a different notebook. Compile this one to generate its files.',
+  failed: 'Compilation failed, so there are no generated files to show.'
+}
+
 const HEALTH_DISPLAY = {
   checking: { label: 'Checking…', icon: '🟡', color: 'text-amber-400' },
   running: { label: 'Running', icon: '🟢', color: 'text-emerald-400' },
@@ -86,6 +92,9 @@ export default function Dashboard() {
   const [lastCompiled, setLastCompiled] = useState(null)
   const [endpoints, setEndpoints] = useState([]) // [{ path, method, ... }] as returned by the backend
   const [generatedFiles, setGeneratedFiles] = useState([])
+  // Why the file list is what it is: null until known, then 'generated', 'none' (nothing
+  // compiled yet), 'other_notebook' (the output belongs to another notebook) or 'failed'.
+  const [filesStatus, setFilesStatus] = useState(null)
 
   // Inspect and compile each describe one notebook. Starting new work (a fresh upload, or a
   // compile) supersedes whatever is still in flight: its request is aborted and, should its
@@ -107,6 +116,11 @@ export default function Dashboard() {
   const handleUploadSuccess = async (response) => {
     const work = beginWork()
     setIsCompiling(false)
+    // The previous notebook's results must not stay on screen as if they were this one's.
+    setFunctions([])
+    setEndpoints([])
+    setGeneratedFiles([])
+    setFilesStatus(null)
     setUploadedNotebook(response.filename)
     setLogs(['✅ Notebook uploaded successfully', '🔍 Inspecting notebook...'])
 
@@ -125,7 +139,9 @@ export default function Dashboard() {
         setFunctions(inspectData.functions || [])
         const returnedEndpoints = asEndpoints(inspectData.endpoints)
         setEndpoints(returnedEndpoints)
-        setGeneratedFiles(asFiles(inspectData.generated_files))
+        const files = asFiles(inspectData.generated_files)
+        setGeneratedFiles(files)
+        setFilesStatus(files.length > 0 ? 'generated' : (inspectData.generated_files_status === 'other_notebook' ? 'other_notebook' : 'none'))
         setLogs([
           '✅ Upload successful',
           '📦 Found ' + (inspectData.functions?.length || 0) + ' functions',
@@ -166,7 +182,11 @@ export default function Dashboard() {
         if (!isCurrent(work)) return
         setFunctions(data.functions || [])
         if (Array.isArray(data.endpoints)) setEndpoints(asEndpoints(data.endpoints))
-        if (Array.isArray(data.generated_files)) setGeneratedFiles(asFiles(data.generated_files))
+        if (Array.isArray(data.generated_files)) {
+          const files = asFiles(data.generated_files)
+          setGeneratedFiles(files)
+          setFilesStatus(files.length > 0 ? 'generated' : 'none')
+        }
         setLogs([
           '✅ Compilation successful',
           '📦 Generated ' + (data.functions?.length || 0) + ' functions',
@@ -176,10 +196,14 @@ export default function Dashboard() {
       } else {
         const detail = await errorFromResponse(response, 'Unknown error')
         if (!isCurrent(work)) return
+        setGeneratedFiles([])
+        setFilesStatus('failed')
         setLogs(['❌ Compilation failed: ' + detail])
       }
     } catch (error) {
       if (!isCurrent(work)) return
+      setGeneratedFiles([])
+      setFilesStatus('failed')
       setLogs(['❌ Error: ' + error.message])
     } finally {
       if (isCurrent(work)) setIsCompiling(false)
@@ -278,7 +302,7 @@ export default function Dashboard() {
               </div>
             )}
 
-            {generatedFiles.length > 0 && (
+            {(generatedFiles.length > 0 || ['none', 'other_notebook', 'failed'].includes(filesStatus)) && (
               <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-xl font-semibold text-white">📦 Generated Files</h2>
@@ -286,6 +310,9 @@ export default function Dashboard() {
                     🌐 Open API
                   </a>
                 </div>
+                {generatedFiles.length === 0 && (
+                  <p className="text-slate-400 text-sm" role="status">{FILES_MESSAGES[filesStatus]}</p>
+                )}
                 <div className="space-y-2">
                   {generatedFiles.map((name) => (
                     <div key={name} className="bg-slate-900 rounded px-4 py-2 text-slate-300 flex items-center gap-2">

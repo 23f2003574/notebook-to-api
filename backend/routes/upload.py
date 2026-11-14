@@ -13853,6 +13853,19 @@ def inspect_notebook_endpoint(
                 GENERATED_DIR
             )
 
+            # GENERATED_DIR holds one compile's output. When it was produced from a
+            # different notebook, those files are not this notebook's: reporting them
+            # would claim a generation that never happened.
+            compiled_source = _currently_compiled_notebook_metadata()[0]
+
+        if compiled_source is not None and compiled_source != full_path.resolve():
+            inspection["generated_files"] = []
+            inspection["generated_files_status"] = "other_notebook"
+        else:
+            inspection["generated_files_status"] = (
+                "generated" if inspection["generated_files"] else "none"
+            )
+
     except Exception as e:
 
         raise HTTPException(
