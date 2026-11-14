@@ -58,6 +58,7 @@ The dashboard API can upload, delete and compile notebooks and manage secrets an
 
 - It binds to `127.0.0.1` (`NOTEBOOK_API_DASHBOARD_HOST`), reachable only from the same machine.
 - `NOTEBOOK_API_DASHBOARD_KEY`, when set, requires every request to send it as the `X-API-Key` header (the frontend sends `VITE_DASHBOARD_API_KEY`, see `frontend/README.md`).
+- Without a key, only requests from this machine are served, whichever way the dashboard is launched (`python -m backend.dashboard`, `uvicorn backend.dashboard:app`, a container); any other peer gets `401`. Every route, including `/api/health`, then requires the `X-API-Key` header when a key is set.
 - Binding to any non-loopback host (for example `0.0.0.0`) **without** `NOTEBOOK_API_DASHBOARD_KEY` is refused at startup with an error. To expose the dashboard on the network, set both, for example `NOTEBOOK_API_DASHBOARD_HOST=0.0.0.0 NOTEBOOK_API_DASHBOARD_KEY=<secret> ./start-dashboard.sh`, and serve it over HTTPS (`NOTEBOOK_API_DASHBOARD_SSL_KEYFILE`/`NOTEBOOK_API_DASHBOARD_SSL_CERTFILE` or a TLS-terminating proxy).
 
 ## Building the Docker Image

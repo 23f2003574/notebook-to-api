@@ -463,6 +463,16 @@ def dashboard_api_key():
     return os.getenv("NOTEBOOK_API_DASHBOARD_KEY", "")
 
 
+# Starlette's TestClient reports this literal as the peer; a real socket peer is an IP
+# address (or absent, for a unix socket), so it never matches a network client.
+_IN_PROCESS_TEST_PEER = "testclient"
+
+
+def _peer_is_local(request):
+    client = request.client
+    return client is None or client.host == _IN_PROCESS_TEST_PEER or host_is_loopback(client.host)
+
+
 @app.middleware("http")
 async def _require_dashboard_api_key(request: Request, call_next):
     """Answer 401 unless the X-API-Key header matches
@@ -473,6 +483,15 @@ async def _require_dashboard_api_key(request: Request, call_next):
     """
 
     expected = dashboard_api_key()
+
+    if not expected and request.method != "OPTIONS" and not _peer_is_local(request):
+        # No key configured: only this machine may use the dashboard. This holds for
+        # every launch path (`uvicorn backend.dashboard:app --host 0.0.0.0`,
+        # backend.app:app, a container CMD), not just `python -m backend.dashboard`,
+        # whose startup check cannot see how another launcher binds the socket.
+        return JSONResponse(status_code=401, content={"detail": (
+            "Remote access is refused until NOTEBOOK_API_DASHBOARD_KEY is set"
+        )})
 
     if expected and request.method != "OPTIONS":
         supplied = request.headers.get("X-API-Key", "")
