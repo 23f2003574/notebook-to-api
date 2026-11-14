@@ -5742,6 +5742,7 @@ def generate_fastapi_code(
         "TASKS[task_id].get('webhook_redelivery_count', 0) + 1"
         ")"
     )
+    lines.append("        _persist_tasks()")
     lines.append("")
     lines.append("    return {")
     lines.append("        'task_id': task_id,")
@@ -6309,6 +6310,7 @@ def generate_fastapi_code(
     lines.append("            TASKS[task_id][\"status\"] = \"completed\"")
     lines.append("            TASKS[task_id][\"finished_at\"] = time.time()")
     lines.append("            TASKS[task_id][\"result\"] = result")
+    lines.append("            _persist_tasks()")
     # Built from the local outcome directly, not read back from TASKS --
     # this must still deliver the real result even when the entry is
     # already gone by the time we get here (POST /tasks/reset firing
@@ -6332,6 +6334,7 @@ def generate_fastapi_code(
     )
     lines.append("            if task_id in TASKS:")
     lines.append("                TASKS[task_id][\"webhook\"] = webhook_result")
+    lines.append("                _persist_tasks()")
     # A separate except clause from the generic Exception one below,
     # rather than letting it fall through to that one's own str(e) --
     # anyio.fail_after's own TimeoutError carries no message at all
@@ -6359,6 +6362,7 @@ def generate_fastapi_code(
     # whose notebook function raised, without parsing the "error" text.
     # Set only on a timeout; any other failure simply lacks it.
     lines.append("            TASKS[task_id][\"timed_out\"] = True")
+    lines.append("            _persist_tasks()")
     lines.append("        if callback_url:")
     lines.append("            webhook_result = await anyio.to_thread.run_sync(")
     lines.append(
@@ -6374,12 +6378,14 @@ def generate_fastapi_code(
     )
     lines.append("            if task_id in TASKS:")
     lines.append("                TASKS[task_id][\"webhook\"] = webhook_result")
+    lines.append("                _persist_tasks()")
     lines.append("    except Exception as e:")
     lines.append("        _log_notebook_error(getattr(func, '__name__', 'unknown'), e)")
     lines.append("        if task_id in TASKS:")
     lines.append("            TASKS[task_id][\"status\"] = \"failed\"")
     lines.append("            TASKS[task_id][\"finished_at\"] = time.time()")
     lines.append("            TASKS[task_id][\"error\"] = _error_text(e, True)")
+    lines.append("            _persist_tasks()")
     lines.append("        if callback_url:")
     lines.append("            webhook_result = await anyio.to_thread.run_sync(")
     lines.append(
@@ -6394,12 +6400,17 @@ def generate_fastapi_code(
     )
     lines.append("            if task_id in TASKS:")
     lines.append("                TASKS[task_id][\"webhook\"] = webhook_result")
+    lines.append("                _persist_tasks()")
     lines.append("")
     # POST /tasks/{id}/cancel support: a registry entry per task that has begun
     # running, holding the cancel Event the isolated child's owner thread
     # watches (it then kills + reaps the child's process group), the anyio
     # CancelScope around the whole run (frees a task still waiting for a call
     # slot, and stops awaiting an async function), and the child's pid.
+    # Each terminal transition and each webhook outcome is saved as it happens
+    # (_persist_tasks snapshots under its lock, so a later write never restores
+    # older state): a restart during slow webhook delivery must not turn a
+    # finished task into "interrupted_by_restart", and redelivery state must survive.
     lines.append("_TASK_CANCEL = {}")
     lines.append("")
     lines.append("async def _run_background_task(func, task_id, *args, callback_url=None, **kwargs):")
