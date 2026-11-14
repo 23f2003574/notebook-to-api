@@ -214,7 +214,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "_evict_expired_tasks", "_run_background_task", "_json_safe",
     "_evict_expired_tasks_throttled", "_evict_loop", "_TASK_TERMINAL", "_LAST_EVICT",
     "_run_background_task_inner", "_TASK_CANCEL",
-    "_TaskRegistry", "_persist_tasks", "_load_persisted_tasks", "TASK_STORE_PATH",
+    "_TaskRegistry", "_persist_tasks", "_TASK_TRANSITIONS", "_transition_task", "_deliver_task_webhook_safely", "_load_persisted_tasks", "TASK_STORE_PATH",
     "_coerce_array_like", "_safe_annotation", "_shield_exit",
     "_png_data_uri", "_bytes_json", "_openapi_json_safe", "_default_kwargs", "_function_default",
     # Every name below is one of this file's own top-level `import`s --
@@ -1027,6 +1027,21 @@ def _load_persisted_tasks():
 
 
 _load_persisted_tasks()
+
+# A task leaves "processing" exactly once; completed, failed and cancelled are final.
+_TASK_TRANSITIONS = {"processing": ("completed", "failed", "cancelled")}
+
+
+def _transition_task(task_id, status, **fields):
+    """Move a task to a final status together with its result/error fields and finish time in
+    one update, then save it. Refused (False) when the task is gone or already final, so a
+    late completion, failure or cancellation can never overwrite what was recorded first."""
+    task = TASKS.get(task_id)
+    if task is None or status not in _TASK_TRANSITIONS.get(task.get("status"), ()):
+        return False
+    task.update(status=status, finished_at=time.time(), **fields)
+    _persist_tasks()
+    return True
 '''
 
 
@@ -6306,11 +6321,7 @@ def generate_fastapi_code(
     # retrieved" rather than surfaced anywhere. This task's own result is
     # honestly gone either way (the caller asked to forget it); the fix
     # is just to let that happen quietly instead of crashing on it.
-    lines.append("        if task_id in TASKS:")
-    lines.append("            TASKS[task_id][\"status\"] = \"completed\"")
-    lines.append("            TASKS[task_id][\"finished_at\"] = time.time()")
-    lines.append("            TASKS[task_id][\"result\"] = result")
-    lines.append("            _persist_tasks()")
+    lines.append("        _transition_task(task_id, \"completed\", result=result)")
     # Built from the local outcome directly, not read back from TASKS --
     # this must still deliver the real result even when the entry is
     # already gone by the time we get here (POST /tasks/reset firing
@@ -6323,7 +6334,7 @@ def generate_fastapi_code(
     lines.append("        if callback_url:")
     lines.append("            webhook_result = await anyio.to_thread.run_sync(")
     lines.append(
-        "                _deliver_task_webhook, callback_url, "
+        "                _deliver_task_webhook_safely, callback_url, "
         "{\"task_id\": task_id, \"status\": \"completed\", \"result\": result}"
     )
     lines.append("            )")
@@ -6352,21 +6363,16 @@ def generate_fastapi_code(
         "f'Task exceeded its {task_limit}s '"
         "'execution timeout')"
     )
-    lines.append("        if task_id in TASKS:")
-    lines.append("            TASKS[task_id][\"status\"] = \"failed\"")
-    lines.append("            TASKS[task_id][\"finished_at\"] = time.time()")
-    lines.append("            TASKS[task_id][\"error\"] = timeout_error")
+    lines.append("        _transition_task(task_id, \"failed\", error=timeout_error, timed_out=True)")
     # "timed_out": the machine-readable twin of a synchronous endpoint's
     # X-Notebook-API-Timeout header -- a task failed by its own execution
     # limit (deterministic: retrying re-runs the same slow call) vs one
     # whose notebook function raised, without parsing the "error" text.
     # Set only on a timeout; any other failure simply lacks it.
-    lines.append("            TASKS[task_id][\"timed_out\"] = True")
-    lines.append("            _persist_tasks()")
     lines.append("        if callback_url:")
     lines.append("            webhook_result = await anyio.to_thread.run_sync(")
     lines.append(
-        "                _deliver_task_webhook, callback_url, "
+        "                _deliver_task_webhook_safely, callback_url, "
         "{\"task_id\": task_id, \"status\": \"failed\", \"error\": timeout_error, "
         "\"timed_out\": True}"
     )
@@ -6381,15 +6387,11 @@ def generate_fastapi_code(
     lines.append("                _persist_tasks()")
     lines.append("    except Exception as e:")
     lines.append("        _log_notebook_error(getattr(func, '__name__', 'unknown'), e)")
-    lines.append("        if task_id in TASKS:")
-    lines.append("            TASKS[task_id][\"status\"] = \"failed\"")
-    lines.append("            TASKS[task_id][\"finished_at\"] = time.time()")
-    lines.append("            TASKS[task_id][\"error\"] = _error_text(e, True)")
-    lines.append("            _persist_tasks()")
+    lines.append("        _transition_task(task_id, \"failed\", error=_error_text(e, True))")
     lines.append("        if callback_url:")
     lines.append("            webhook_result = await anyio.to_thread.run_sync(")
     lines.append(
-        "                _deliver_task_webhook, callback_url, "
+        "                _deliver_task_webhook_safely, callback_url, "
         "{\"task_id\": task_id, \"status\": \"failed\", \"error\": _error_text(e, True)}"
     )
     lines.append("            )")
@@ -6411,6 +6413,14 @@ def generate_fastapi_code(
     # (_persist_tasks snapshots under its lock, so a later write never restores
     # older state): a restart during slow webhook delivery must not turn a
     # finished task into "interrupted_by_restart", and redelivery state must survive.
+    lines.append("def _deliver_task_webhook_safely(callback_url, payload):")
+    lines.append("    # A delivery problem is recorded as the webhook outcome; it never changes the task's status.")
+    lines.append("    try:")
+    lines.append("        return _deliver_task_webhook(callback_url, payload)")
+    lines.append("    except Exception as exc:")
+    lines.append("        _log_notebook_error('webhook delivery', exc)")
+    lines.append("        return {'delivered': False, 'error': 'webhook delivery failed unexpectedly'}")
+    lines.append("")
     lines.append("_TASK_CANCEL = {}")
     lines.append("")
     lines.append("async def _run_background_task(func, task_id, *args, callback_url=None, **kwargs):")
