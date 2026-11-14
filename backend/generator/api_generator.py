@@ -6452,6 +6452,11 @@ def generate_fastapi_code(
     lines.append("        raise HTTPException(status_code=404, detail=f'Task {task_id} not found')")
     lines.append("    status = task.get('status')")
     lines.append("    if status == 'cancelled':")
+    # A repeat (or concurrent) cancel starts nothing new, but answers under the same guarantee as
+    # the first: not before the child is killed and reaped.
+    lines.append("        entry = _TASK_CANCEL.get(task_id)")
+    lines.append("        if entry is not None and entry.get('pid') is not None:")
+    lines.append("            await anyio.to_thread.run_sync(entry['reaped'].wait, 10)")
     lines.append("        return {'task_id': task_id, 'status': 'cancelled'}")
     lines.append("    if status != 'processing':")
     lines.append("        raise HTTPException(status_code=409, detail=f'Task {task_id} is already {status} and cannot be cancelled')")
@@ -6460,9 +6465,7 @@ def generate_fastapi_code(
     lines.append("        raise HTTPException(status_code=409, detail=(")
     lines.append("            f'Task {task_id} is running synchronous notebook code in this process and cannot be stopped; '")
     lines.append("            'set NOTEBOOK_API_ISOLATE_EXECUTION=1 to make running tasks cancellable'))")
-    lines.append("    task['status'] = 'cancelled'")
-    lines.append("    task['finished_at'] = time.time()")
-    lines.append("    _persist_tasks()")
+    lines.append("    _transition_task(task_id, 'cancelled')")
     lines.append("    if entry is not None:")
     lines.append("        entry['event'].set()")
     lines.append("        entry['scope'].cancel()")
