@@ -1,3 +1,4 @@
+import { describeExecution, TONE_CLASSES } from '../executionStatus'
 import { useState } from 'react'
 import { appUrl } from '../dashboardApi'
 
@@ -20,6 +21,8 @@ export default function EndpointTester({
   const [responseData, setResponseData] = useState(null)
   const [responseStatus, setResponseStatus] = useState(null)
   const [responseMeta, setResponseMeta] = useState(null)
+  const [unavailable, setUnavailable] = useState(false)
+  const [isRefreshing, setIsRefreshing] = useState(false)
   const [requestHistory, setRequestHistory] = useState([])
   const [exampleResponse, setExampleResponse] = useState(null)
   const [selectedFunction, setSelectedFunction] = useState(null)
@@ -28,6 +31,7 @@ export default function EndpointTester({
     endpoint.toLowerCase().includes(searchTerm.toLowerCase())
   )
   const [isSending, setIsSending] = useState(false)
+  const execution = describeExecution({ httpStatus: responseStatus, data: responseData, unavailable })
   const [jsonError, setJsonError] = useState('')
   // Held in component state only (never written to browser storage) and sent as X-API-Key.
   const [apiKey, setApiKey] = useState('')
@@ -106,6 +110,11 @@ export default function EndpointTester({
     try {
       setIsSending(true)
       setAuthError('')
+      // A new request starts from a clean slate: the previous response's status must never
+      // sit beside this request's outcome.
+      setResponseStatus(null)
+      setResponseMeta(null)
+      setUnavailable(false)
       const key = apiKey.trim()
 
       const response = await fetch(
@@ -147,11 +156,34 @@ export default function EndpointTester({
         ...prev
       ])
     } catch (error) {
+      setUnavailable(true)
       setResponseData({
         error: error.message
       })
     } finally {
       setIsSending(false)
+    }
+  }
+
+  // Re-reads a submitted background task from the app (GET /tasks/{task_id}).
+  const refreshTask = async () => {
+    const taskId = responseData?.task_id
+    if (typeof taskId !== 'string') return
+    setIsRefreshing(true)
+    try {
+      const key = apiKey.trim()
+      const response = await fetch(appUrl('/tasks/' + encodeURIComponent(taskId)), {
+        headers: key ? { 'X-API-Key': key } : {}
+      })
+      const data = await response.json()
+      setResponseStatus(response.status)
+      setUnavailable(false)
+      // Only a real task record replaces the display; an error body (e.g. 404) is shown as one.
+      setResponseData(response.ok ? { task_id: taskId, ...data } : data)
+    } catch {
+      setUnavailable(true)
+    } finally {
+      setIsRefreshing(false)
     }
   }
 
@@ -551,19 +583,27 @@ export default function EndpointTester({
               {responseData && (
                 <div className="mt-4">
 
-                  {responseStatus && (
-                    <div className="mb-3">
+                  {(responseStatus || unavailable) && (
+                    <div className="mb-3 flex flex-wrap items-center gap-2">
                       <span
-                        className={`px-3 py-1 rounded-full text-sm font-semibold ${
-                          responseStatus >= 200 && responseStatus < 300
-                            ? 'bg-emerald-600 text-white'
-                            : responseStatus >= 400
-                            ? 'bg-red-600 text-white'
-                            : 'bg-yellow-600 text-white'
-                        }`}
+                        role="status"
+                        className={`px-3 py-1 rounded-full text-sm font-semibold ${TONE_CLASSES[execution.tone]}`}
                       >
-                        HTTP {responseStatus}
+                        <span aria-hidden="true">{execution.icon}</span> {execution.label}
+                        {responseStatus && !unavailable && <span className="ml-2 font-normal">HTTP {responseStatus}</span>}
                       </span>
+                      {unavailable && responseData?.task_id && (
+                        <span className="text-xs text-slate-400">Showing the last known state.</span>
+                      )}
+                      {typeof responseData?.task_id === 'string' && (
+                        <button
+                          onClick={refreshTask}
+                          disabled={isRefreshing}
+                          className="bg-slate-700 hover:bg-slate-600 text-white text-xs px-3 py-1 rounded"
+                        >
+                          {isRefreshing ? 'Refreshing...' : '🔄 Refresh task status'}
+                        </button>
+                      )}
                     </div>
                   )}
 
