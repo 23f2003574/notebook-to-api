@@ -15,6 +15,7 @@ import ipaddress
 import json
 import os
 import re
+import signal
 import shutil
 import socket
 import subprocess
@@ -16823,6 +16824,37 @@ emit({"passed": response.status_code == 200, "status_code": response.status_code
 """.replace("__PREFIX__", _SMOKE_TEST_RESULT_PREFIX)
 
 
+# Names whose values are never passed to the smoke-test child: it runs uploaded notebook code.
+_SMOKE_TEST_SECRET_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|DASHBOARD", re.IGNORECASE)
+
+
+def _smoke_test_environment():
+    env = {k: v for k, v in os.environ.items() if not _SMOKE_TEST_SECRET_NAME.search(k)}
+    env["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p)
+    return env
+
+
+def _kill_process_group(pid, sig=None):
+    sig = sig if sig is not None else getattr(signal, "SIGKILL", signal.SIGTERM)
+    try:
+        if hasattr(os, "killpg"):
+            os.killpg(pid, sig)
+        else:
+            os.kill(pid, sig)
+    except OSError:
+        pass
+
+
+def _terminate_process_group(process, grace_seconds=2):
+    """SIGTERM the child's whole process group, SIGKILL it if it ignores that, then reap it."""
+    _kill_process_group(process.pid, signal.SIGTERM)
+    try:
+        process.communicate(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        _kill_process_group(process.pid)
+        process.communicate()
+
+
 def _run_compile_smoke_test(package_name):
     """Actually import the just-compiled "<package_name>.app" module and
     call its own GET /health in-process, to catch a class of failure
@@ -16862,14 +16894,23 @@ def _run_compile_smoke_test(package_name):
     why, not proof the compile itself is broken.
     """
     try:
-        completed = subprocess.run(
+        process = subprocess.Popen(
             [sys.executable, "-c", _SMOKE_TEST_CHILD_SCRIPT, package_name],
-            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=SMOKE_TEST_TIMEOUT_SECONDS,
-            env={**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)},
+            cwd=os.getcwd(),
+            env=_smoke_test_environment(),
+            start_new_session=True,
         )
+    except OSError as e:
+        return {"passed": False, "status_code": None, "detail": f"Could not start the smoke test: {e}"}
+
+    try:
+        stdout, stderr = process.communicate(timeout=SMOKE_TEST_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
+        _terminate_process_group(process)
         return {
             "passed": False,
             "status_code": None,
@@ -16879,8 +16920,14 @@ def _run_compile_smoke_test(package_name):
                 "NOTEBOOK_API_SMOKE_TEST_TIMEOUT_SECONDS to allow longer"
             ),
         }
-    except OSError as e:
-        return {"passed": False, "status_code": None, "detail": f"Could not start the smoke test: {e}"}
+    except BaseException:
+        _terminate_process_group(process)
+        raise
+    finally:
+        # Anything the notebook left running in the child's session goes with it.
+        _kill_process_group(process.pid)
+
+    completed = subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
 
     for line in reversed(completed.stdout.splitlines()):
         if line.startswith(_SMOKE_TEST_RESULT_PREFIX):
