@@ -26,7 +26,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "WEBHOOK_MAX_RETRIES", "WEBHOOK_RETRY_BACKOFF_SECONDS",
     "TASK_EXECUTION_TIMEOUT_SECONDS",
     "REQUEST_TIMEOUT_SECONDS", "_call_notebook_function", "_log_notebook_error", "_request_id_var",
-    "_NotebookTimeoutError", "_REQUEST_TIMEOUTS",
+    "_NotebookTimeoutError", "_REQUEST_TIMEOUTS", "_ENDPOINT_METRICS",
     "_ENDPOINT_TIMEOUTS", "_TASK_TIMEOUTS", "_TASK_TIMEOUT_FAILURES",
     "_ENDPOINT_RATE_LIMIT_WINDOWS", "_enforce_endpoint_rate_limit",
     "_ENDPOINT_RATE_LIMITED", "_RESPONSE_CACHE", "_RESPONSE_CACHE_LOCK",
@@ -2850,6 +2850,20 @@ def generate_fastapi_code(
         "    _HTTP_METRICS['duration_ms_sum'] += float("
         "response.headers.get('X-Process-Time-Ms', '0'))"
     )
+    # Per-route breakdown (route template, so /tasks/{task_id} is one series and a
+    # 404 for an unknown path is the single "(unmatched)" series): the totals above
+    # cannot say which endpoint is slow or failing.
+    lines.append("    _route = getattr(request.scope.get('route'), 'path', None) or '(unmatched)'")
+    lines.append(
+        "    _entry = _ENDPOINT_METRICS.setdefault("
+        "_route, {'requests': 0, 'errors_5xx': 0, 'duration_ms_sum': 0.0})"
+    )
+    lines.append("    _entry['requests'] += 1")
+    lines.append("    _entry['errors_5xx'] += 1 if response.status_code >= 500 else 0")
+    lines.append(
+        "    _entry['duration_ms_sum'] += float("
+        "response.headers.get('X-Process-Time-Ms', '0'))"
+    )
     lines.append("    return response")
     lines.append("")
     # GET /metrics/GET /metrics/prometheus above already report this
@@ -3038,6 +3052,7 @@ def generate_fastapi_code(
     lines.append("    raise RuntimeError(str(_limits_error)) from None")
     lines.append("")
     lines.append("_REQUEST_TIMEOUTS = {}")
+    lines.append("_ENDPOINT_METRICS = {}")
     # {path: seconds} for every synchronous endpoint with its own
     # "# notebook-to-api: timeout N" directive (timeout_overrides) --
     # reported by GET /config beside the global REQUEST_TIMEOUT_SECONDS,
@@ -5290,6 +5305,9 @@ def generate_fastapi_code(
         "        'request_timeouts_by_endpoint': dict(sorted(_REQUEST_TIMEOUTS.items())),"
     )
     lines.append(
+        "        'http_requests_by_endpoint': {p: dict(v) for p, v in sorted(_ENDPOINT_METRICS.items())},"
+    )
+    lines.append(
         "        'rate_limited_by_endpoint': dict(sorted(_ENDPOINT_RATE_LIMITED.items())),"
     )
     lines.append(
@@ -5502,6 +5520,15 @@ def generate_fastapi_code(
     )
     # Only endpoints that have actually timed out appear (a counter
     # created on first timeout), with HELP/TYPE emitted once any has.
+    lines.append("    for _name, _key, _help in (")
+    lines.append("        ('notebook_api_endpoint_requests_total', 'requests', 'Total HTTP requests, by route.'),")
+    lines.append("        ('notebook_api_endpoint_errors_total', 'errors_5xx', 'Total 5xx responses, by route.'),")
+    lines.append("        ('notebook_api_endpoint_duration_ms_sum', 'duration_ms_sum', 'Accumulated handling time in milliseconds, by route.'),")
+    lines.append("    ):")
+    lines.append("        if _ENDPOINT_METRICS:")
+    lines.append("            body += f'# HELP {_name} {_help}\\n# TYPE {_name} counter\\n'")
+    lines.append("            for _path, _entry in sorted(_ENDPOINT_METRICS.items()):")
+    lines.append("                body += f'{_name}{{route=\"{_path}\"}} {_entry[_key]}\\n'")
     lines.append("    if _REQUEST_TIMEOUTS:")
     lines.append(
         "        body += ('# HELP notebook_api_request_timeouts_total Total "

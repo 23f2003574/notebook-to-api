@@ -1092,6 +1092,11 @@ def test_generated_app_exposes_get_metrics_as_json(monkeypatch):
     duration_ms_sum = body.pop("http_request_duration_ms_sum")
     assert isinstance(duration_ms_sum, float)
     assert duration_ms_sum >= 0
+    # Per-route breakdown: the one POST above, with a non-deterministic duration.
+    by_endpoint = body.pop("http_requests_by_endpoint")
+    assert set(by_endpoint) == {"/train_model"}
+    assert by_endpoint["/train_model"]["requests"] == 1 and by_endpoint["/train_model"]["errors_5xx"] == 0
+    assert by_endpoint["/train_model"]["duration_ms_sum"] >= 0
 
     assert body == {
         "total_tasks": 1, "processing": 0, "completed": 1, "failed": 0, "cancelled": 0,
