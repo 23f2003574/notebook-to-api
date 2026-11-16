@@ -16787,6 +16787,42 @@ def _evict_compiled_app_from_module_cache(package_name):
             del sys.modules[name]
 
 
+SMOKE_TEST_TIMEOUT_SECONDS = int(os.getenv("NOTEBOOK_API_SMOKE_TEST_TIMEOUT_SECONDS", "60"))
+
+_SMOKE_TEST_RESULT_PREFIX = "NOTEBOOK_API_SMOKE_RESULT="
+
+# Run in a child process (see _run_compile_smoke_test): imports the compiled app
+# and calls GET /health in-process, then prints one JSON result line.
+_SMOKE_TEST_CHILD_SCRIPT = """
+import importlib, json, sys
+def emit(result):
+    print("__PREFIX__" + json.dumps(result), flush=True)
+try:
+    from backend.compiler import notebook_failure_location
+except Exception:
+    notebook_failure_location = lambda exc: ""
+try:
+    app = importlib.import_module(sys.argv[1] + ".app").app
+except (Exception, SystemExit) as e:
+    if isinstance(e, SystemExit):
+        detail = (f"Compiled app failed to import: it called sys.exit({e.code!r}) at the top level, "
+                  "so a real server would exit on startup")
+    else:
+        detail = f"Compiled app failed to import: {type(e).__name__}: {e}{notebook_failure_location(e)}"
+    emit({"passed": False, "status_code": None, "detail": detail})
+    sys.exit(0)
+try:
+    from fastapi.testclient import TestClient
+    response = TestClient(app).get("/health")
+except Exception as e:
+    emit({"passed": False, "status_code": None,
+          "detail": f"Compiled app raised handling GET /health: {type(e).__name__}: {e}"})
+    sys.exit(0)
+emit({"passed": response.status_code == 200, "status_code": response.status_code,
+      "detail": None if response.status_code == 200 else response.text})
+""".replace("__PREFIX__", _SMOKE_TEST_RESULT_PREFIX)
+
+
 def _run_compile_smoke_test(package_name):
     """Actually import the just-compiled "<package_name>.app" module and
     call its own GET /health in-process, to catch a class of failure
@@ -16809,6 +16845,11 @@ def _run_compile_smoke_test(package_name):
     from -- this is a diagnostic on top of an already-successful compile,
     not a retroactive verdict on it.
 
+    The import and request run in a child Python process bounded by
+    SMOKE_TEST_TIMEOUT_SECONDS: notebook code runs at import time, so a
+    notebook that hangs or calls os._exit() would otherwise block this
+    endpoint (holding COMPILE_LOCK) or kill the whole dashboard.
+
     Caveat, spelled out here since it's easy to misread a failure as a
     codegen bug when it isn't one: this imports the compiled app inside
     *this dashboard process's own* Python environment, not inside a
@@ -16821,51 +16862,40 @@ def _run_compile_smoke_test(package_name):
     why, not proof the compile itself is broken.
     """
     try:
-
-        module = importlib.import_module(f"{package_name}.app")
-        app = module.app
-
-    except (Exception, SystemExit) as e:
-
-        # sys.exit() at a notebook's top level raises SystemExit, which is not
-        # an Exception: uncaught here it ended this whole process silently
-        # (exit status 0, no smoke-test verdict) -- just as uvicorn would exit
-        # on startup.
-        if isinstance(e, SystemExit):
-            return {
-                "passed": False,
-                "status_code": None,
-                "detail": (
-                    f"Compiled app failed to import: it called sys.exit({e.code!r}) "
-                    "at the top level, so a real server would exit on startup"
-                ),
-            }
-
+        completed = subprocess.run(
+            [sys.executable, "-c", _SMOKE_TEST_CHILD_SCRIPT, package_name],
+            capture_output=True,
+            text=True,
+            timeout=SMOKE_TEST_TIMEOUT_SECONDS,
+            env={**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)},
+        )
+    except subprocess.TimeoutExpired:
         return {
             "passed": False,
             "status_code": None,
             "detail": (
-                f"Compiled app failed to import: {type(e).__name__}: {e}"
-                f"{notebook_failure_location(e)}"
+                f"Compiled app did not answer GET /health within {SMOKE_TEST_TIMEOUT_SECONDS} "
+                "seconds (its notebook code may block at import); set "
+                "NOTEBOOK_API_SMOKE_TEST_TIMEOUT_SECONDS to allow longer"
             ),
         }
+    except OSError as e:
+        return {"passed": False, "status_code": None, "detail": f"Could not start the smoke test: {e}"}
 
-    try:
-
-        response = TestClient(app).get("/health")
-
-    except Exception as e:
-
-        return {
-            "passed": False,
-            "status_code": None,
-            "detail": f"Compiled app raised handling GET /health: {type(e).__name__}: {e}",
-        }
-
+    for line in reversed(completed.stdout.splitlines()):
+        if line.startswith(_SMOKE_TEST_RESULT_PREFIX):
+            try:
+                return json.loads(line[len(_SMOKE_TEST_RESULT_PREFIX):])
+            except ValueError:
+                break
+    tail = (completed.stderr or completed.stdout).strip().splitlines()[-1:] or [""]
     return {
-        "passed": response.status_code == 200,
-        "status_code": response.status_code,
-        "detail": None if response.status_code == 200 else response.text,
+        "passed": False,
+        "status_code": None,
+        "detail": (
+            f"Compiled app exited with status {completed.returncode} before answering "
+            f"GET /health (the notebook may call exit at import): {tail[0]}"
+        ),
     }
 
 
