@@ -16855,6 +16855,9 @@ _SMOKE_TEST_RESULT_PREFIX = "NOTEBOOK_API_SMOKE_RESULT="
 # and calls GET /health in-process, then prints one JSON result line.
 _SMOKE_TEST_CHILD_SCRIPT = """
 import importlib, json, sys
+# Only the project root, and last: the parent's sys.path can hold directories such as backend/
+# whose platform/ or security/ packages would shadow the standard library and site-packages.
+sys.path.append(sys.argv[2])
 def emit(result):
     print("__PREFIX__" + json.dumps(result), flush=True)
 def location_of(exc):
@@ -16899,15 +16902,7 @@ _SMOKE_TEST_SECRET_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTI
 
 
 def _smoke_test_environment():
-    env = {k: v for k, v in os.environ.items() if not _SMOKE_TEST_SECRET_NAME.search(k)}
-    # The child finds the standard library and site-packages itself; forwarding those (in this
-    # process's order) only risks shadowing. Pass the extra entries, such as the project root.
-    import sysconfig
-    own = {os.path.realpath(sysconfig.get_path(k)) for k in ("stdlib", "platstdlib", "purelib", "platlib")}
-    extra = [p for p in sys.path if p and os.path.isdir(p) and os.path.realpath(p) not in own
-             and not os.path.realpath(p).startswith(os.path.realpath(sys.base_prefix) + os.sep + "lib" + os.sep)]
-    env["PYTHONPATH"] = os.pathsep.join(extra)
-    return env
+    return {k: v for k, v in os.environ.items() if not _SMOKE_TEST_SECRET_NAME.search(k)}
 
 
 def _kill_process_group(pid, sig=None):
@@ -16971,7 +16966,7 @@ def _run_compile_smoke_test(package_name):
     """
     try:
         process = subprocess.Popen(
-            [sys.executable, "-c", _SMOKE_TEST_CHILD_SCRIPT, package_name],
+            [sys.executable, "-c", _SMOKE_TEST_CHILD_SCRIPT, package_name, str(Path(__file__).resolve().parents[2])],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

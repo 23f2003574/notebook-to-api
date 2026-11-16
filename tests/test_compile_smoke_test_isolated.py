@@ -113,3 +113,11 @@ def test_concurrent_smoke_tests_stay_isolated(smoke):
         results = list(pool.map(lambda i: smoke("" if i % 2 == 0 else "import sys\nsys.exit(1)\n"), range(4)))
     assert [r["passed"] for r in results] == [True, False, True, False]
 
+
+
+def test_a_leaked_backend_directory_on_sys_path_cannot_shadow_the_child_imports(smoke, monkeypatch):
+    """backend/ holds packages named platform, security, ... that would replace the standard
+    library in the child if the parent's sys.path were forwarded (it broke pydantic on 3.11)."""
+    import pathlib
+    monkeypatch.syspath_prepend(str(pathlib.Path(upload_module.__file__).resolve().parents[1]))
+    assert smoke("import platform\n")["passed"] is True
