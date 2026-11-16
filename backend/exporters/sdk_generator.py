@@ -401,7 +401,42 @@ _JSON_SCHEMA_TYPE_TO_TS = {
 }
 
 
-def _json_schema_type_to_typescript(prop_schema):
+def _deref_schema(prop_schema, defs, seen):
+    """Resolve a local "$ref" (and a single-schema or merged "allOf") in
+    `prop_schema` against `defs` ({name: schema}, the OpenAPI
+    components/schemas). Returns (schema, seen) -- `schema` is
+    unchanged when it has neither, or None for an unresolvable or
+    cyclic reference, so callers fall back to Any/unknown instead of
+    recursing forever on a self-referencing model."""
+    ref = prop_schema.get("$ref")
+    if isinstance(ref, str):
+        name = ref.rsplit("/", 1)[-1]
+        target = (defs or {}).get(name)
+        if not isinstance(target, dict) or name in seen:
+            return None, seen
+        merged = {k: v for k, v in prop_schema.items() if k != "$ref"}
+        merged.update(target)
+        return merged, seen | {name}
+    parts = prop_schema.get("allOf")
+    if isinstance(parts, list) and parts:
+        merged = {k: v for k, v in prop_schema.items() if k != "allOf"}
+        for part in parts:
+            if not isinstance(part, dict):
+                return None, seen
+            part, seen = _deref_schema(part, defs, seen)
+            if part is None:
+                return None, seen
+            for key, value in part.items():
+                if key == "properties" and isinstance(merged.get(key), dict):
+                    value = {**merged[key], **value}
+                elif key == "required" and isinstance(merged.get(key), list):
+                    value = list(dict.fromkeys([*merged[key], *value]))
+                merged[key] = value
+        return merged, seen
+    return prop_schema, seen
+
+
+def _json_schema_type_to_typescript(prop_schema, defs=None, _seen=frozenset()):
     """The closest TypeScript type for `prop_schema` (one property's own
     JSON-schema object from an OpenAPI request body model, e.g.
     {"type": "integer"} or {"anyOf": [{"type": "string"}, {"type":
@@ -465,9 +500,13 @@ def _json_schema_type_to_typescript(prop_schema):
     if not isinstance(prop_schema, dict):
         return "unknown"
 
+    prop_schema, _seen = _deref_schema(prop_schema, defs, _seen)
+    if prop_schema is None:
+        return "unknown"
+
     if "anyOf" in prop_schema:
         mapped = [
-            _json_schema_type_to_typescript(sub) for sub in prop_schema["anyOf"]
+            _json_schema_type_to_typescript(sub, defs, _seen) for sub in prop_schema["anyOf"]
         ]
         return " | ".join(dict.fromkeys(mapped))
 
@@ -487,16 +526,25 @@ def _json_schema_type_to_typescript(prop_schema):
         prefix_items = prop_schema.get("prefixItems")
         if isinstance(prefix_items, list):
             element_types = [
-                _json_schema_type_to_typescript(item) for item in prefix_items
+                _json_schema_type_to_typescript(item, defs, _seen) for item in prefix_items
             ]
             return f"[{', '.join(element_types)}]"
-        item_type = _json_schema_type_to_typescript(prop_schema.get("items", {}))
+        item_type = _json_schema_type_to_typescript(prop_schema.get("items", {}), defs, _seen)
         return _as_typescript_array_element(item_type)
 
     if schema_type == "object":
         value_schema = prop_schema.get("additionalProperties")
         if isinstance(value_schema, dict):
-            return f"Record<string, {_json_schema_type_to_typescript(value_schema)}>"
+            return f"Record<string, {_json_schema_type_to_typescript(value_schema, defs, _seen)}>"
+        fields = prop_schema.get("properties")
+        if isinstance(fields, dict) and fields:
+            required = set(prop_schema.get("required") or [])
+            members = "; ".join(
+                f"{json.dumps(name)}{'' if name in required else '?'}: "
+                f"{_json_schema_type_to_typescript(sub, defs, _seen)}"
+                for name, sub in fields.items()
+            )
+            return "{ " + members + " }"
         return "Record<string, unknown>"
 
     return _JSON_SCHEMA_TYPE_TO_TS.get(schema_type, "unknown")
@@ -525,7 +573,12 @@ def _request_body_schema(openapi_schema, methods):
 
     schema_name = ref.rsplit("/", 1)[-1]
 
-    return openapi_schema.get("components", {}).get("schemas", {}).get(schema_name)
+    schemas = openapi_schema.get("components", {}).get("schemas", {})
+    request_schema = schemas.get(schema_name)
+    if not isinstance(request_schema, dict):
+        return request_schema
+    # "$defs" carries the other component schemas so a property's "$ref" resolves.
+    return {**request_schema, "$defs": schemas}
 
 
 def _typescript_request_interface(interface_name, request_schema):
@@ -554,7 +607,7 @@ def _typescript_request_interface(interface_name, request_schema):
     else:
         for prop_name, prop_schema in properties.items():
             optional = "" if prop_name in required else "?"
-            ts_type = _json_schema_type_to_typescript(prop_schema)
+            ts_type = _json_schema_type_to_typescript(prop_schema, (request_schema or {}).get("$defs"))
             lines.append(f"  {prop_name}{optional}: {ts_type};")
 
     lines.append("}")
@@ -782,7 +835,7 @@ _JSON_SCHEMA_TYPE_TO_PYTHON = {
 }
 
 
-def _json_schema_type_to_python(prop_schema):
+def _json_schema_type_to_python(prop_schema, defs=None, _seen=frozenset()):
     """The closest Python type annotation for `prop_schema` (one
     property's own JSON-schema object from an OpenAPI request body
     model) -- the Python-client mirror of
@@ -816,9 +869,13 @@ def _json_schema_type_to_python(prop_schema):
     if not isinstance(prop_schema, dict):
         return "Any"
 
+    prop_schema, _seen = _deref_schema(prop_schema, defs, _seen)
+    if prop_schema is None:
+        return "Any"
+
     if "anyOf" in prop_schema:
         mapped = [
-            _json_schema_type_to_python(sub) for sub in prop_schema["anyOf"]
+            _json_schema_type_to_python(sub, defs, _seen) for sub in prop_schema["anyOf"]
         ]
         return _join_python_union(mapped)
 
@@ -837,15 +894,15 @@ def _json_schema_type_to_python(prop_schema):
         prefix_items = prop_schema.get("prefixItems")
         if isinstance(prefix_items, list):
             element_types = ", ".join(
-                _json_schema_type_to_python(item) for item in prefix_items
+                _json_schema_type_to_python(item, defs, _seen) for item in prefix_items
             )
             return f"Tuple[{element_types}]"
-        return f"List[{_json_schema_type_to_python(prop_schema.get('items', {}))}]"
+        return f"List[{_json_schema_type_to_python(prop_schema.get('items', {}), defs, _seen)}]"
 
     if schema_type == "object":
         value_schema = prop_schema.get("additionalProperties")
         if isinstance(value_schema, dict):
-            return f"Dict[str, {_json_schema_type_to_python(value_schema)}]"
+            return f"Dict[str, {_json_schema_type_to_python(value_schema, defs, _seen)}]"
         return "Dict[str, Any]"
 
     return _JSON_SCHEMA_TYPE_TO_PYTHON.get(schema_type, "Any")
@@ -908,13 +965,14 @@ def _python_request_typeddict_lines(class_name, request_schema):
     """
     properties = (request_schema or {}).get("properties") or {}
     required = set((request_schema or {}).get("required") or [])
+    defs = (request_schema or {}).get("$defs")
 
     required_fields = {
-        name: _json_schema_type_to_python(prop)
+        name: _json_schema_type_to_python(prop, defs)
         for name, prop in properties.items() if name in required
     }
     optional_fields = {
-        name: _json_schema_type_to_python(prop)
+        name: _json_schema_type_to_python(prop, defs)
         for name, prop in properties.items() if name not in required
     }
 
