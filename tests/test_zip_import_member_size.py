@@ -56,3 +56,30 @@ def test_importing_a_compression_bomb_stays_in_small_memory(tmp_path, monkeypatc
     tracemalloc.stop()
     assert "maximum upload size" in response.json()["results"][0]["detail"]
     assert peak < 40_000_000
+
+
+def test_an_oversized_archive_upload_is_refused_with_413(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(upload_module, "MAX_ARCHIVE_BYTES", 1_000_000)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_STORED) as archive:
+        archive.writestr("junk.bin", bytes(range(256)) * 8000)  # ~2 MB, stored
+    response = TestClient(dashboard.app).post(
+        "/api/notebooks/import", files={"file": ("a.zip", buffer.getvalue(), "application/zip")}
+    )
+    assert response.status_code == 413 and "maximum size" in response.json()["detail"]
+
+
+def test_an_archive_within_the_cap_still_imports(tmp_path, monkeypatch):
+    import nbformat
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "uploads").mkdir()
+    notebook = nbformat.writes(nbformat.v4.new_notebook())
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("ok.ipynb", notebook)
+    response = TestClient(dashboard.app).post(
+        "/api/notebooks/import", files={"file": ("a.zip", buffer.getvalue(), "application/zip")}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["results"][0]["status"] == "success", response.text

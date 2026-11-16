@@ -1236,6 +1236,31 @@ def _restore_version_snapshots_from_archive(archive, entry_names, versions_dir):
     return sorted(imported_version_ids)
 
 
+# Cap on an uploaded .zip itself (notebook import, version import). Unset, only the
+# members were size-checked, so the archive was read whole into memory at any size.
+MAX_ARCHIVE_BYTES = int(
+    os.getenv("NOTEBOOK_API_MAX_ARCHIVE_BYTES", str(10 * MAX_UPLOAD_BYTES))
+)
+
+
+async def _read_uploaded_archive(file):
+    """The uploaded zip's bytes, refusing with 413 once it passes MAX_ARCHIVE_BYTES."""
+    chunks, total = [], 0
+
+    while chunk := await file.read(1024 * 1024):
+        total += len(chunk)
+
+        if total > MAX_ARCHIVE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Zip archive exceeds the maximum size of {MAX_ARCHIVE_BYTES} bytes",
+            )
+
+        chunks.append(chunk)
+
+    return b"".join(chunks)
+
+
 def _read_archive_member(archive, name):
     """One zip member's bytes, never more than MAX_UPLOAD_BYTES of them in memory.
 
@@ -2281,7 +2306,11 @@ async def import_notebooks(
 
     try:
 
-        zip_bytes = await file.read()
+        zip_bytes = await _read_uploaded_archive(file)
+
+    except HTTPException:
+
+        raise
 
     except Exception as e:
 
@@ -11605,7 +11634,11 @@ async def import_notebook_versions(
 
     try:
 
-        zip_bytes = await file.read()
+        zip_bytes = await _read_uploaded_archive(file)
+
+    except HTTPException:
+
+        raise
 
     except Exception as e:
 
