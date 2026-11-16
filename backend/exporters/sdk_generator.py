@@ -2492,8 +2492,29 @@ def generate_typescript_sdk(
     _pascal_names = _unique_pascal_names(method_names)
     # Prepare client code lines
     lines = []
-    lines.append('import { createHmac, timingSafeEqual } from "node:crypto";')
-    lines.append("")
+    # No top-level import of node:crypto and no Node-only globals in types: a static
+    # `import ... from "node:crypto"` makes every browser bundler fail on the whole
+    # client even for apps that never verify a webhook, and `process`/`Buffer` need
+    # @types/node to type-check. Node is reached lazily, only by verifyWebhookSignature.
+    lines.extend([
+        "// Node.js built-ins are looked up lazily (see verifyWebhookSignature) so this file bundles for browsers.",
+        "interface NodeCrypto {",
+        '  createHmac(algorithm: string, key: string): { update(data: string | Uint8Array): { digest(encoding: "hex"): string } };',
+        "  timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean;",
+        "}",
+        "declare const require: ((id: string) => unknown) | undefined;",
+        "declare const process: { env?: Record<string, string | undefined>; getBuiltinModule?: (id: string) => unknown } | undefined;",
+        "",
+        "function loadNodeCrypto(): NodeCrypto {",
+        '  const viaBuiltin = typeof process !== "undefined" ? process.getBuiltinModule?.("node:crypto") : undefined;',
+        '  const loaded = viaBuiltin ?? (typeof require === "function" ? require("node:crypto") : undefined);',
+        "  if (!loaded) {",
+        '    throw new Error("verifyWebhookSignature needs Node.js (node:crypto); it is not available in this runtime");',
+        "  }",
+        "  return loaded as NodeCrypto;",
+        "}",
+        "",
+    ])
     # Mirrors generate_python_sdk's own verify_webhook_signature -- see its
     # docstring above for the full "why". `payloadBody` accepts either the
     # raw string or Buffer of the received request body (Node's own http
@@ -2543,7 +2564,7 @@ def generate_typescript_sdk(
     lines.append(" * rotation regardless of which one actually signed it.")
     lines.append(" */")
     lines.append("export function verifyWebhookSignature(")
-    lines.append("  payloadBody: string | Buffer,")
+    lines.append("  payloadBody: string | Uint8Array,")
     lines.append("  signatureHeader: string | null | undefined,")
     lines.append("  secret: string | string[]")
     lines.append("): boolean {")
@@ -2557,7 +2578,11 @@ def generate_typescript_sdk(
     lines.append("    return false;")
     lines.append("  }")
     lines.append(
-        "  const receivedBuffer = Buffer.from(signature, \"utf-8\");"
+        "  const { createHmac, timingSafeEqual } = loadNodeCrypto();"
+    )
+    lines.append("  const encoder = new TextEncoder();")
+    lines.append(
+        "  const receivedBuffer = encoder.encode(signature);"
     )
     lines.append(
         "  const secrets = Array.isArray(secret) ? secret : [secret];"
@@ -2574,8 +2599,7 @@ def generate_typescript_sdk(
     # handler instead of just failing verification, so the length check
     # below must happen first.
     lines.append(
-        "    const expectedBuffer = Buffer.from(expectedSignature, "
-        "\"utf-8\");"
+        "    const expectedBuffer = encoder.encode(expectedSignature);"
     )
     lines.append(
         "    if (expectedBuffer.length !== receivedBuffer.length) {"
@@ -2662,7 +2686,8 @@ def generate_typescript_sdk(
     # exactly as safe to read as os.getenv is in the Python client.
     lines.append(
         "    this.apiKey = options.apiKey ?? "
-        'process.env.NOTEBOOK_API_KEY ?? "notebook-to-api-dev-key";'
+        '(typeof process !== "undefined" ? process.env?.NOTEBOOK_API_KEY : undefined) '
+        '?? "notebook-to-api-dev-key";'
     )
     # fetch() has no default timeout of its own -- a call with no signal
     # can hang indefinitely on a server that accepts the connection but

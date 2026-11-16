@@ -2647,8 +2647,8 @@ def test_generate_typescript_sdk_falls_back_to_the_notebook_api_key_env_var(tmp_
     source = output_path.read_text(encoding="utf-8")
 
     assert (
-        'this.apiKey = options.apiKey ?? process.env.NOTEBOOK_API_KEY ?? '
-        '"notebook-to-api-dev-key";'
+        'this.apiKey = options.apiKey ?? (typeof process !== "undefined" ? process.env?.NOTEBOOK_API_KEY : undefined) '
+        '?? "notebook-to-api-dev-key";'
         in source
     )
 
@@ -6494,7 +6494,8 @@ def test_generate_typescript_sdk_verify_webhook_signature_round_trips(tmp_path):
     generate_typescript_sdk(str(schema_path), str(client_path))
 
     source = client_path.read_text(encoding="utf-8")
-    assert 'import { createHmac, timingSafeEqual } from "node:crypto";' in source
+    # node:crypto is loaded lazily so the client still bundles for browsers.
+    assert 'from "node:crypto"' not in source and "loadNodeCrypto()" in source
     assert "export function verifyWebhookSignature(" in source
 
     runner_path = tmp_path / "run.mjs"
