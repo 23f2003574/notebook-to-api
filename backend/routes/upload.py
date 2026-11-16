@@ -16857,10 +16857,14 @@ _SMOKE_TEST_CHILD_SCRIPT = """
 import importlib, json, sys
 def emit(result):
     print("__PREFIX__" + json.dumps(result), flush=True)
-try:
-    from backend.compiler import notebook_failure_location
-except Exception:
-    notebook_failure_location = lambda exc: ""
+def location_of(exc):
+    # Imported only now: loading backend.compiler first would run before, and could
+    # disturb, the import of the compiled app's own dependencies.
+    try:
+        from backend.compiler import notebook_failure_location
+        return notebook_failure_location(exc)
+    except Exception:
+        return ""
 try:
     app = importlib.import_module(sys.argv[1] + ".app").app
 except (Exception, SystemExit) as e:
@@ -16870,7 +16874,9 @@ except (Exception, SystemExit) as e:
     else:
         cause = e.__cause__ or e.__context__
         why = f" (caused by {type(cause).__name__}: {cause})" if cause is not None else ""
-        detail = f"Compiled app failed to import: {type(e).__name__}: {e}{why}{notebook_failure_location(e)}"
+        detail = f"Compiled app failed to import: {type(e).__name__}: {e}{why}{location_of(e)}"
+    import traceback
+    traceback.print_exc()
     emit({"passed": False, "status_code": None, "detail": detail})
     sys.exit(0)
 try:
@@ -16999,9 +17005,13 @@ def _run_compile_smoke_test(package_name):
     for line in reversed(completed.stdout.splitlines()):
         if line.startswith(_SMOKE_TEST_RESULT_PREFIX):
             try:
-                return json.loads(line[len(_SMOKE_TEST_RESULT_PREFIX):])
+                result = json.loads(line[len(_SMOKE_TEST_RESULT_PREFIX):])
             except ValueError:
                 break
+            if not result.get("passed") and stderr.strip():
+                # The child's traceback: the one-line detail alone can hide which import failed.
+                result["detail"] = f"{result.get('detail')} | child stderr: {stderr.strip()[-600:]}"
+            return result
     tail = (completed.stderr or completed.stdout).strip().splitlines()[-1:] or [""]
     return {
         "passed": False,
