@@ -5930,6 +5930,7 @@ def generate_fastapi_code(
     lines.append("            'status': 'processing',")
     lines.append("            'created_at': time.time(),")
     lines.append("            'callback_url': callback_url,")
+    lines.append("            'request_id': _request_id_var.get()[:128],")
     # 'retried_from' is left in the caller-facing shape on purpose (unlike
     # '_replay') -- it is exactly the kind of lineage a caller polling
     # GET /tasks/{new_task_id} benefits from seeing: which original,
@@ -7225,6 +7226,7 @@ def generate_fastapi_code(
             lines.append(
                 "        TASKS[task_id] = {\"status\": \"processing\", "
                 "\"created_at\": time.time(), \"callback_url\": callback_url, "
+                "\"request_id\": _request_id_var.get()[:128], "
                 f"\"endpoint\": {'/' + func_name!r}}}"
             )
             # Recorded only now, after TASKS[task_id] above already exists
