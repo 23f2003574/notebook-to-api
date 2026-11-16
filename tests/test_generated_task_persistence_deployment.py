@@ -13,6 +13,10 @@ from backend.compiler import compile_notebook
 
 STORE = "/data/tasks.json"
 
+# A unique package name: the generic "app" resolves to whichever regular app.py/app/
+# package an earlier test left importable, which beats this test's namespace package.
+PACKAGE = "persist_generated_app"
+
 
 @pytest.fixture(scope="module")
 def out(tmp_path_factory):
@@ -20,8 +24,8 @@ def out(tmp_path_factory):
     nb = nbformat.v4.new_notebook()
     nb.cells = [nbformat.v4.new_code_cell("# notebook-to-api: background\ndef work(x: int) -> int:\n    return x\n")]
     nbformat.write(nb, str(tmp / "nb.ipynb"))
-    compile_notebook(str(tmp / "nb.ipynb"), str(tmp / "app"))
-    return tmp / "app"
+    compile_notebook(str(tmp / "nb.ipynb"), str(tmp / PACKAGE))
+    return tmp / PACKAGE
 
 
 def _text(out, name):
@@ -79,8 +83,8 @@ def test_the_configured_store_path_round_trips_through_the_runtime(out, tmp_path
     monkeypatch.setenv("NOTEBOOK_API_TASK_STORE_PATH", str(store))
     monkeypatch.setenv("NOTEBOOK_API_KEY", "k")
     monkeypatch.syspath_prepend(str(out.parent))
-    for name in [m for m in sys.modules if m == "app" or m.startswith("app.")]:
+    for name in [m for m in sys.modules if m == PACKAGE or m.startswith(PACKAGE + ".")]:
         monkeypatch.delitem(sys.modules, name)
-    module = importlib.import_module("app.app")
+    module = importlib.import_module(f"{PACKAGE}.app")
     module.TASKS["t1"] = {"status": "completed", "result": 1, "created_at": 1.0}
     assert '"t1"' in store.read_text(encoding="utf-8")
