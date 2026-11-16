@@ -473,6 +473,31 @@ def _peer_is_local(request):
     return client is None or client.host == _IN_PROCESS_TEST_PEER or host_is_loopback(client.host)
 
 
+def _is_frontend_shell_file(request):
+    """Whether this GET/HEAD names a file of the built frontend (HTML, JS, CSS).
+
+    A browser cannot attach X-API-Key to a page load or a <script> request, so
+    with the key required on these too the bundled dashboard could never open.
+    The files hold no data and no secret; every /api and other route still
+    needs the key.
+    """
+
+    dist_dir = getattr(request.app.state, "frontend_dist", None)
+
+    if dist_dir is None or request.method not in ("GET", "HEAD"):
+        return False
+
+    relative = request.url.path.lstrip("/")
+
+    if not relative or "\\" in relative or "\x00" in relative:
+        return False
+
+    root = Path(dist_dir).resolve()
+    candidate = (root / relative).resolve()
+
+    return candidate.is_file() and root in candidate.parents
+
+
 @app.middleware("http")
 async def _require_dashboard_api_key(request: Request, call_next):
     """Answer 401 unless the X-API-Key header matches
@@ -493,7 +518,7 @@ async def _require_dashboard_api_key(request: Request, call_next):
             "Remote access is refused until NOTEBOOK_API_DASHBOARD_KEY is set"
         )})
 
-    if expected and request.method != "OPTIONS":
+    if expected and request.method != "OPTIONS" and not _is_frontend_shell_file(request):
         supplied = request.headers.get("X-API-Key", "")
 
         if not hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8")):
@@ -925,6 +950,7 @@ def mount_frontend_static_files(app, dist_dir=FRONTEND_DIST_DIR):
     if not dist_dir.is_dir():
         return
 
+    app.state.frontend_dist = dist_dir
     app.mount("/", StaticFiles(directory=str(dist_dir), html=True), name="frontend")
 
 
