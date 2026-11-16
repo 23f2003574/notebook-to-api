@@ -16877,6 +16877,9 @@ except (Exception, SystemExit) as e:
         detail = f"Compiled app failed to import: {type(e).__name__}: {e}{why}{location_of(e)}"
     import traceback
     traceback.print_exc()
+    _p = sys.modules.get("pydantic")
+    print(f"child sys.path={sys.path!r} pydantic={getattr(_p, '__file__', None)!r} "
+          f"has_BaseModel={hasattr(_p, 'BaseModel')} cwd={__import__('os').getcwd()!r}", file=sys.stderr)
     emit({"passed": False, "status_code": None, "detail": detail})
     sys.exit(0)
 try:
@@ -17010,7 +17013,7 @@ def _run_compile_smoke_test(package_name):
                 break
             if not result.get("passed") and stderr.strip():
                 # The child's traceback: the one-line detail alone can hide which import failed.
-                result["detail"] = f"{result.get('detail')} | child stderr: {stderr.strip()[-600:]}"
+                result["detail"] = f"{result.get('detail')} | child stderr: {stderr.strip()[-3500:]}"
             return result
     tail = (completed.stderr or completed.stdout).strip().splitlines()[-1:] or [""]
     return {
