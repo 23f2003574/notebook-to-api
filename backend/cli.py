@@ -4085,7 +4085,7 @@ def _dispatch_core_command(args):
             # this dashboard -- the same reasoning `delete-batch`/
             # `prune-versions` already prompt for. Not asked at all under
             # --dry-run, which never deletes anything.
-            answer = input(
+            answer = _confirmation_input(
                 f"Permanently delete every duplicate notebook (keeping "
                 f"one per group) on {dashboard_url}? [y/N] "
             )
@@ -4420,7 +4420,7 @@ def _dispatch_core_command(args):
         elif args.generated_command == "delete":
 
             if not args.dry_run and not args.yes:
-                answer = input(
+                answer = _confirmation_input(
                     f"Delete the compiled app on {dashboard_url}? [y/N] "
                 )
                 if answer.strip().lower() not in ("y", "yes"):
@@ -4607,7 +4607,7 @@ def _dispatch_core_command(args):
                     f"every notebook {' and '.join(target_parts)}" if target_parts
                     else "ALL uploaded notebooks"
                 )
-                answer = input(f"Delete {target} on {dashboard_url}? [y/N] ")
+                answer = _confirmation_input(f"Delete {target} on {dashboard_url}? [y/N] ")
                 if answer.strip().lower() not in ("y", "yes"):
                     print("Aborted.")
                     return
@@ -4686,7 +4686,7 @@ def _dispatch_core_command(args):
                 # here, so this asks on the terminal instead. --yes skips
                 # the prompt for scripting/automation; --dry-run skips it
                 # too, since nothing irreversible happens under it.
-                answer = input(f"Delete '{args.filename}' from {dashboard_url}? [y/N] ")
+                answer = _confirmation_input(f"Delete '{args.filename}' from {dashboard_url}? [y/N] ")
                 if answer.strip().lower() not in ("y", "yes"):
                     print("Aborted.")
                     return
@@ -4736,7 +4736,7 @@ def _dispatch_core_command(args):
             # prompt for. Not asked at all under --dry-run, which never
             # deletes anything.
             filenames_display = ", ".join(args.filename)
-            answer = input(
+            answer = _confirmation_input(
                 f"Delete {filenames_display} from {dashboard_url}? [y/N] "
             )
             if answer.strip().lower() not in ("y", "yes"):
@@ -4812,7 +4812,7 @@ def _dispatch_core_command(args):
                 f"every notebook {' and '.join(scope_parts)}" if scope_parts
                 else "every notebook"
             )
-            answer = input(
+            answer = _confirmation_input(
                 f"Permanently discard every version older than "
                 f"{args.older_than_days} day(s) across {scope} on "
                 f"{dashboard_url}? [y/N] "
@@ -4903,7 +4903,7 @@ def _dispatch_core_command(args):
             # same reasoning `prune-versions`'s own confirmation already
             # applies. Not asked at all under --dry-run, which never
             # deletes anything.
-            answer = input(
+            answer = _confirmation_input(
                 f"Permanently remove orphaned upload temp files on "
                 f"{dashboard_url}? [y/N] "
             )
@@ -5313,7 +5313,7 @@ def _dispatch_core_command(args):
                 # `delete`'s own single-filename path and `versions
                 # delete` already prompt for. Not asked at all under
                 # --dry-run, which never removes anything.
-                answer = input(
+                answer = _confirmation_input(
                     f"Remove tag '{args.tag}' from every notebook on "
                     f"{dashboard_url}? [y/N] "
                 )
@@ -5451,7 +5451,7 @@ def _dispatch_core_command(args):
                 # carrying the tag at once -- the same reasoning `tags
                 # delete` already prompts for. Not asked at all under
                 # --dry-run, which never renames anything.
-                answer = input(
+                answer = _confirmation_input(
                     f"Rename tag '{args.tag}' to '{args.new_tag}' on every "
                     f"notebook on {dashboard_url}? [y/N] "
                 )
@@ -7904,7 +7904,7 @@ def _dispatch_core_command(args):
                 # and is irreversible -- the same reasoning `delete`'s own
                 # single-filename path above already applies. Not asked
                 # at all under --dry-run, which never discards anything.
-                answer = input(
+                answer = _confirmation_input(
                     f"Permanently delete version '{args.version_id}' of "
                     f"'{args.filename}' from {dashboard_url}? [y/N] "
                 )
@@ -7953,7 +7953,7 @@ def _dispatch_core_command(args):
                 # delete` above already applies. Not asked at all under
                 # --dry-run, which never deletes anything.
                 version_ids_display = ", ".join(args.version_id)
-                answer = input(
+                answer = _confirmation_input(
                     f"Permanently delete version(s) {version_ids_display} "
                     f"of '{args.filename}' from {dashboard_url}? [y/N] "
                 )
@@ -8027,7 +8027,7 @@ def _dispatch_core_command(args):
                 # and is irreversible -- the same reasoning `versions
                 # delete` above already applies. Not asked at all under
                 # --dry-run, which never deletes anything.
-                answer = input(
+                answer = _confirmation_input(
                     f"Permanently delete every version{age_clause} of "
                     f"'{args.filename}' from {dashboard_url}? [y/N] "
                 )
@@ -8203,7 +8203,7 @@ def _dispatch_core_command(args):
                 # confirmation step of its own and is irreversible -- the
                 # same reasoning as `delete`'s own confirmation prompt for
                 # an uploaded notebook.
-                answer = input(
+                answer = _confirmation_input(
                     f"Delete the compiled app on {dashboard_url}? [y/N] "
                 )
                 if answer.strip().lower() not in ("y", "yes"):
@@ -8903,7 +8903,7 @@ def _dispatch_core_command(args):
                 f"{dashboard_url}" if target_parts
                 else f"the entire deploy history on {dashboard_url}"
             )
-            answer = input(f"Permanently discard {target}? [y/N] ")
+            answer = _confirmation_input(f"Permanently discard {target}? [y/N] ")
             if answer.strip().lower() not in ("y", "yes"):
                 print("Aborted.")
                 return
@@ -9068,7 +9068,7 @@ def _dispatch_core_command(args):
                 f"{dashboard_url}" if target_parts
                 else f"the entire compile history on {dashboard_url}"
             )
-            answer = input(f"Permanently discard {target}? [y/N] ")
+            answer = _confirmation_input(f"Permanently discard {target}? [y/N] ")
             if answer.strip().lower() not in ("y", "yes"):
                 print("Aborted.")
                 return
@@ -10509,7 +10509,7 @@ def _dispatch_core_command(args):
             # clear-deploy-history/prune-versions/tags-delete already
             # prompt for.
             if not args.yes:
-                answer = input(
+                answer = _confirmation_input(
                     f"Permanently delete every completed task on {app_url}? [y/N] "
                 )
                 if answer.strip().lower() not in ("y", "yes"):
@@ -10529,7 +10529,7 @@ def _dispatch_core_command(args):
         elif args.app_tasks_command == "purge-failed":
 
             if not args.yes:
-                answer = input(
+                answer = _confirmation_input(
                     f"Permanently delete every failed task on {app_url}? [y/N] "
                 )
                 if answer.strip().lower() not in ("y", "yes"):
@@ -10555,7 +10555,7 @@ def _dispatch_core_command(args):
         elif args.app_tasks_command == "cleanup":
 
             if not args.yes:
-                answer = input(
+                answer = _confirmation_input(
                     "Permanently delete every completed and failed task "
                     f"on {app_url}? [y/N] "
                 )
@@ -10582,7 +10582,7 @@ def _dispatch_core_command(args):
             # including one still processing -- so this warns about that
             # explicitly in the prompt itself, not just in --help.
             if not args.yes:
-                answer = input(
+                answer = _confirmation_input(
                     f"Permanently delete EVERY task on {app_url}, "
                     "including any still processing? [y/N] "
                 )
@@ -10596,6 +10596,21 @@ def _dispatch_core_command(args):
                 print(json.dumps(data, indent=2))
             else:
                 print(f"Deleted {data.get('deleted_tasks', 0)} task(s).")
+
+
+def _confirmation_input(prompt):
+    """input() for a destructive-action confirmation, failing cleanly without a terminal.
+
+    With stdin closed or redirected from /dev/null (a script, CI, `ssh -T`) input()
+    raised EOFError and the command died with a full traceback. Say what to do instead.
+    """
+    try:
+        return input(prompt)
+    except EOFError:
+        raise SystemExit(
+            "Error: this command asks for confirmation but there is no terminal to answer on. "
+            "Pass --yes to proceed (or --dry-run to preview)."
+        ) from None
 
 
 def main():
