@@ -1,8 +1,29 @@
 // Headers for requests to the dashboard API. When the dashboard runs with
-// NOTEBOOK_API_DASHBOARD_KEY, build the frontend with VITE_DASHBOARD_API_KEY
-// set to the same value; unset, no key header is sent.
+// NOTEBOOK_API_DASHBOARD_KEY, the user enters that key in the page (see Dashboard); it is kept
+// in sessionStorage for the tab only. It is deliberately not a build-time VITE_* setting:
+// those are inlined into the public JavaScript bundle that every visitor downloads.
+const KEY_STORAGE = 'notebook-api-dashboard-key'
+
+export function getDashboardKey() {
+  try {
+    return sessionStorage.getItem(KEY_STORAGE) || ''
+  } catch {
+    return ''
+  }
+}
+
+export function setDashboardKey(key) {
+  try {
+    const trimmed = (key || '').trim()
+    if (trimmed) sessionStorage.setItem(KEY_STORAGE, trimmed)
+    else sessionStorage.removeItem(KEY_STORAGE)
+  } catch {
+    // storage unavailable (private mode): the key just is not remembered
+  }
+}
+
 export function dashboardHeaders(extra = {}) {
-  const key = import.meta.env.VITE_DASHBOARD_API_KEY
+  const key = getDashboardKey()
   return key ? { ...extra, 'X-API-Key': key } : extra
 }
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import NotebookUpload from './NotebookUpload'
-import { appUrl, configError, dashboardApiUrl, dashboardHeaders } from '../dashboardApi'
+import { appUrl, configError, dashboardApiUrl, dashboardHeaders, setDashboardKey } from '../dashboardApi'
 import { errorFromResponse } from '../errorMessage'
 import FunctionList from './FunctionList'
 import CompilationLogs from './CompilationLogs'
@@ -52,7 +52,9 @@ function useBackendHealth() {
           headers: dashboardHeaders(),
           signal: current.signal
         })
-        if (response.ok) {
+        if (response.status === 401) {
+          next = 'locked'
+        } else if (response.ok) {
           const body = await response.json()
           if (body && body.status === 'healthy') next = 'running'
         }
@@ -76,6 +78,33 @@ function useBackendHealth() {
   return status
 }
 
+// Shown when the backend answers 401: the key is kept for this tab only, then the page reloads.
+function DashboardKeyForm() {
+  const [value, setValue] = useState('')
+  const save = (event) => {
+    event.preventDefault()
+    setDashboardKey(value)
+    window.location.reload()
+  }
+  return (
+    <form onSubmit={save} className="flex gap-2 justify-end mb-2">
+      <label className="sr-only" htmlFor="dashboard-key">Dashboard API key</label>
+      <input
+        id="dashboard-key"
+        type="password"
+        autoComplete="off"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder="Dashboard API key"
+        className="px-2 py-1 rounded bg-slate-800 text-white text-sm border border-slate-600"
+      />
+      <button type="submit" className="bg-emerald-600 hover:bg-emerald-700 text-white text-sm px-3 py-1 rounded">
+        Unlock
+      </button>
+    </form>
+  )
+}
+
 const FILES_MESSAGES = {
   none: 'No files generated yet. Compile this notebook to generate them.',
   other_notebook: 'The generated files on the server belong to a different notebook. Compile this one to generate its files.',
@@ -85,6 +114,7 @@ const FILES_MESSAGES = {
 const HEALTH_DISPLAY = {
   checking: { label: 'Checking…', icon: '🟡', color: 'text-amber-400' },
   running: { label: 'Running', icon: '🟢', color: 'text-emerald-400' },
+  locked: { label: 'API key required', icon: '🔒', color: 'text-amber-400' },
   unavailable: { label: 'Unavailable', icon: '🔴', color: 'text-red-400' }
 }
 
@@ -236,6 +266,7 @@ export default function Dashboard() {
                   {' '}<span aria-hidden="true">{health.icon}</span> {health.label}
                 </span>
               </p>
+              {backendStatus === 'locked' && <DashboardKeyForm />}
               <a href={linkTo(dashboardApiUrl, '/docs')} target="_blank" rel="noopener noreferrer" className="inline-block bg-emerald-600 hover:bg-emerald-700 text-white text-sm px-3 py-2 rounded transition">
                 📖 Open API Docs
               </a>

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import Dashboard from './components/Dashboard'
 import EndpointTester from './components/EndpointTester'
 import NotebookUpload from './components/NotebookUpload'
-import { appUrl, configError, dashboardApiUrl, normalizeBaseUrl } from './dashboardApi'
+import { appUrl, configError, dashboardApiUrl, normalizeBaseUrl, setDashboardKey } from './dashboardApi'
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -173,7 +173,8 @@ describe('URL resolution across deployments', () => {
   })
 
   it('sends the dashboard key with requests to a configured URL', async () => {
-    production({ VITE_DASHBOARD_API_URL: 'https://dash.example.com/base', VITE_DASHBOARD_API_KEY: 'k-123' })
+    production({ VITE_DASHBOARD_API_URL: 'https://dash.example.com/base' })
+    setDashboardKey('k-123')
     const fetchMock = vi.fn().mockResolvedValue(ok({ filename: 'n.ipynb' }))
     vi.stubGlobal('fetch', fetchMock)
     const view = render(<NotebookUpload onSuccess={vi.fn()} />)
@@ -181,6 +182,7 @@ describe('URL resolution across deployments', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalled())
     expect(fetchMock.mock.calls[0][0]).toBe('https://dash.example.com/base/api/upload')
     expect(fetchMock.mock.calls[0][1].headers['X-API-Key']).toBe('k-123')
+    setDashboardKey('')
   })
 
   it('shows a visible configuration problem instead of failing silently', async () => {

@@ -6,8 +6,12 @@ import Dashboard from './Dashboard'
 import EndpointTester from './EndpointTester'
 import FunctionList from './FunctionList'
 import NotebookUpload from './NotebookUpload'
+import { dashboardHeaders, getDashboardKey, setDashboardKey } from '../dashboardApi'
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.unstubAllGlobals()
+  setDashboardKey('')
+})
 
 // Dashboard polls GET /api/health on mount; tests that script the other requests' replies in
 // order keep their mock for everything except that health probe.
@@ -75,7 +79,7 @@ describe('NotebookUpload', () => {
 })
 
 describe('dashboard API key', () => {
-  it('is sent on uploads only when VITE_DASHBOARD_API_KEY is set', async () => {
+  it('is sent on uploads only once the user has entered it', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) })
     vi.stubGlobal('fetch', fetchMock)
     const { container } = render(<NotebookUpload onSuccess={() => {}} />)
@@ -85,11 +89,27 @@ describe('dashboard API key', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
     expect(fetchMock.mock.calls[0][1].headers).toEqual({})
 
-    vi.stubEnv('VITE_DASHBOARD_API_KEY', 'k')
+    setDashboardKey('k')
     fireEvent.change(input(), { target: { files: [new File(['{}'], 'b.ipynb')] } })
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
     expect(fetchMock.mock.calls[1][1].headers).toEqual({ 'X-API-Key': 'k' })
+  })
+
+  it('ignores a build-time VITE_DASHBOARD_API_KEY, which would ship in the public bundle', async () => {
+    vi.stubEnv('VITE_DASHBOARD_API_KEY', 'baked')
+    expect(dashboardHeaders()).toEqual({})
     vi.unstubAllEnvs()
+  })
+
+  it('asks for the key when the backend answers 401 and remembers it for the tab', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 401, json: async () => ({}) }))
+    const reload = vi.fn()
+    vi.stubGlobal('location', { ...window.location, reload })
+    render(<Dashboard />)
+    fireEvent.change(await screen.findByLabelText('Dashboard API key'), { target: { value: ' secret ' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock' }))
+    expect(getDashboardKey()).toBe('secret')
+    expect(reload).toHaveBeenCalled()
   })
 })
 
