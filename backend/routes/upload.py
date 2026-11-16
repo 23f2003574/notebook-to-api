@@ -16868,7 +16868,9 @@ except (Exception, SystemExit) as e:
         detail = (f"Compiled app failed to import: it called sys.exit({e.code!r}) at the top level, "
                   "so a real server would exit on startup")
     else:
-        detail = f"Compiled app failed to import: {type(e).__name__}: {e}{notebook_failure_location(e)}"
+        cause = e.__cause__ or e.__context__
+        why = f" (caused by {type(cause).__name__}: {cause})" if cause is not None else ""
+        detail = f"Compiled app failed to import: {type(e).__name__}: {e}{why}{notebook_failure_location(e)}"
     emit({"passed": False, "status_code": None, "detail": detail})
     sys.exit(0)
 try:
@@ -16889,7 +16891,13 @@ _SMOKE_TEST_SECRET_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTI
 
 def _smoke_test_environment():
     env = {k: v for k, v in os.environ.items() if not _SMOKE_TEST_SECRET_NAME.search(k)}
-    env["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p)
+    # The child finds the standard library and site-packages itself; forwarding those (in this
+    # process's order) only risks shadowing. Pass the extra entries, such as the project root.
+    import sysconfig
+    own = {os.path.realpath(sysconfig.get_path(k)) for k in ("stdlib", "platstdlib", "purelib", "platlib")}
+    extra = [p for p in sys.path if p and os.path.isdir(p) and os.path.realpath(p) not in own
+             and not os.path.realpath(p).startswith(os.path.realpath(sys.base_prefix) + os.sep + "lib" + os.sep)]
+    env["PYTHONPATH"] = os.pathsep.join(extra)
     return env
 
 

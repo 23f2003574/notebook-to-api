@@ -8415,8 +8415,10 @@ def test_compiler_pipeline_background_task_does_not_block_the_event_loop(tmp_pat
             "started_at": task["started_at"],
             "finished_at": task["finished_at"],
             "callback_url": None,
+            "request_id": task["request_id"],
             "endpoint": "/train_slow",
         }
+        assert task["request_id"]
         assert task["created_at"] <= task["started_at"] <= task["finished_at"]
 
     finally:
