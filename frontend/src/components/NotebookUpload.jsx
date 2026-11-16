@@ -1,4 +1,4 @@
-import { dashboardApiUrl, dashboardHeaders } from '../dashboardApi'
+import { dashboardFetch } from '../dashboardApi'
 import { errorFromResponse } from '../errorMessage'
 import { useState } from 'react'
 
@@ -23,9 +23,8 @@ export default function NotebookUpload({ onSuccess }) {
       const formData = new FormData()
       formData.append('file', file)
 
-      const response = await fetch(dashboardApiUrl('/api/upload'), {
+      const response = await dashboardFetch('/api/upload', {
         method: 'POST',
-        headers: dashboardHeaders(),
         body: formData
       })
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import NotebookUpload from './NotebookUpload'
-import { appUrl, configError, dashboardApiUrl, dashboardHeaders, setDashboardKey } from '../dashboardApi'
+import { appUrl, configError, dashboardApiUrl, dashboardFetch, getDashboardKey, setDashboardKey } from '../dashboardApi'
 import { errorFromResponse } from '../errorMessage'
 import FunctionList from './FunctionList'
 import CompilationLogs from './CompilationLogs'
@@ -48,12 +48,11 @@ function useBackendHealth() {
       const timer = setTimeout(() => current.abort(), HEALTH_TIMEOUT_MS)
       let next = 'unavailable'
       try {
-        const response = await fetch(dashboardApiUrl('/api/health'), {
-          headers: dashboardHeaders(),
+        const response = await dashboardFetch('/api/health', {
           signal: current.signal
         })
         if (response.status === 401) {
-          next = 'locked'
+          next = getDashboardKey() ? 'rejected' : 'locked'
         } else if (response.ok) {
           const body = await response.json()
           if (body && body.status === 'healthy') next = 'running'
@@ -79,7 +78,8 @@ function useBackendHealth() {
 }
 
 // Shown when the backend answers 401: the key is kept for this tab only, then the page reloads.
-function DashboardKeyForm() {
+// The key is never rendered back, and an empty submission clears it.
+function DashboardKeyForm({ rejected }) {
   const [value, setValue] = useState('')
   const save = (event) => {
     event.preventDefault()
@@ -99,7 +99,7 @@ function DashboardKeyForm() {
         className="px-2 py-1 rounded bg-slate-800 text-white text-sm border border-slate-600"
       />
       <button type="submit" className="bg-emerald-600 hover:bg-emerald-700 text-white text-sm px-3 py-1 rounded">
-        Unlock
+        {rejected ? 'Replace key' : 'Unlock'}
       </button>
     </form>
   )
@@ -115,6 +115,7 @@ const HEALTH_DISPLAY = {
   checking: { label: 'Checking…', icon: '🟡', color: 'text-amber-400' },
   running: { label: 'Running', icon: '🟢', color: 'text-emerald-400' },
   locked: { label: 'API key required', icon: '🔒', color: 'text-amber-400' },
+  rejected: { label: 'API key rejected', icon: '🔒', color: 'text-red-400' },
   unavailable: { label: 'Unavailable', icon: '🔴', color: 'text-red-400' }
 }
 
@@ -162,9 +163,9 @@ export default function Dashboard() {
     setLogs(['✅ Notebook uploaded successfully', '🔍 Inspecting notebook...'])
 
     try {
-      const inspectResponse = await fetch(dashboardApiUrl('/api/inspect'), {
+      const inspectResponse = await dashboardFetch('/api/inspect', {
         method: 'POST',
-        headers: dashboardHeaders({ 'Content-Type': 'application/json' }),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ notebook_path: response.filename }),
         signal: work.signal
       })
@@ -206,9 +207,9 @@ export default function Dashboard() {
     setLogs(['🔄 Starting compilation...'])
 
     try {
-      const response = await fetch(dashboardApiUrl('/api/compile'), {
+      const response = await dashboardFetch('/api/compile', {
         method: 'POST',
-        headers: dashboardHeaders({ 'Content-Type': 'application/json' }),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ notebook_path: uploadedNotebook }),
         signal: work.signal
       })
@@ -266,7 +267,18 @@ export default function Dashboard() {
                   {' '}<span aria-hidden="true">{health.icon}</span> {health.label}
                 </span>
               </p>
-              {backendStatus === 'locked' && <DashboardKeyForm />}
+              {(backendStatus === 'locked' || backendStatus === 'rejected') && (
+                <DashboardKeyForm rejected={backendStatus === 'rejected'} />
+              )}
+              {backendStatus !== 'locked' && getDashboardKey() && (
+                <button
+                  type="button"
+                  onClick={() => { setDashboardKey(''); window.location.reload() }}
+                  className="text-sm text-slate-400 underline mr-3"
+                >
+                  Forget key
+                </button>
+              )}
               <a href={linkTo(dashboardApiUrl, '/docs')} target="_blank" rel="noopener noreferrer" className="inline-block bg-emerald-600 hover:bg-emerald-700 text-white text-sm px-3 py-2 rounded transition">
                 📖 Open API Docs
               </a>

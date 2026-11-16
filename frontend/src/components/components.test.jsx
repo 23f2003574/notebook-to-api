@@ -6,7 +6,7 @@ import Dashboard from './Dashboard'
 import EndpointTester from './EndpointTester'
 import FunctionList from './FunctionList'
 import NotebookUpload from './NotebookUpload'
-import { dashboardHeaders, getDashboardKey, setDashboardKey } from '../dashboardApi'
+import { dashboardFetch, dashboardHeaders, getDashboardKey, setDashboardKey } from '../dashboardApi'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -687,5 +687,49 @@ describe('NotebookUpload drag and drop', () => {
     fireEvent.change(input, { target: { files: [notebook()] } })
     await waitFor(() => expect(onSuccess).toHaveBeenCalled())
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('dashboard credential handling', () => {
+  const stubReload = () => {
+    const reload = vi.fn()
+    vi.stubGlobal('location', { ...window.location, reload })
+    return reload
+  }
+
+  it('attaches the key only to dashboard API requests, never to other URLs', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+    vi.stubGlobal('fetch', fetchMock)
+    setDashboardKey('s3cret')
+    await dashboardFetch('/api/health')
+    expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/api\/health$/)
+    expect(fetchMock.mock.calls[0][1].headers['X-API-Key']).toBe('s3cret')
+    // code that calls the app, a static asset or another origin directly builds its own headers
+    expect(JSON.stringify(fetchMock.mock.calls[0][1])).not.toContain('evil')
+    render(<EndpointTester endpoints={['/add']} functions={[]} />)
+    expect(document.body.innerHTML).not.toContain('s3cret')
+  })
+
+  it('reports a rejected key distinctly, never shows it, and lets the user replace it', async () => {
+    setDashboardKey('old-key')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 401, json: async () => ({}) }))
+    const reload = stubReload()
+    render(<Dashboard />)
+    expect(await screen.findByText(/API key rejected/)).toBeInTheDocument()
+    expect(document.body.innerHTML).not.toContain('old-key')
+    fireEvent.change(screen.getByLabelText('Dashboard API key'), { target: { value: 'new-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Replace key' }))
+    expect(getDashboardKey()).toBe('new-key')
+    expect(reload).toHaveBeenCalled()
+  })
+
+  it('forgets a stored key on request', async () => {
+    setDashboardKey('keep-me-not')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'healthy' }) }))
+    const reload = stubReload()
+    render(<Dashboard />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Forget key' }))
+    expect(getDashboardKey()).toBe('')
+    expect(reload).toHaveBeenCalled()
   })
 })

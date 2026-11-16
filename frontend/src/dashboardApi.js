@@ -27,6 +27,14 @@ export function dashboardHeaders(extra = {}) {
   return key ? { ...extra, 'X-API-Key': key } : extra
 }
 
+// The only way the key leaves the page: a request to the dashboard API itself. The URL is always
+// built from the configured dashboard base, so the key cannot reach static assets, the compiled
+// application or any other origin.
+export function dashboardFetch(path, init = {}) {
+  const { headers, ...rest } = init
+  return fetch(dashboardApiUrl(path), { ...rest, headers: dashboardHeaders(headers) })
+}
+
 // Base URLs are fixed at build time (Vite inlines import.meta.env.VITE_*): set them when
 // running `vite` / `vite build`. Anything VITE_-prefixed ends up in the public bundle, so
 // never put a secret in them.
