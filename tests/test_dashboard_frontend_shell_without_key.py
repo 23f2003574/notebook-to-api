@@ -39,3 +39,22 @@ def test_only_get_and_existing_files_are_public(client):
     assert client.get("/assets/missing.js").status_code == 401
     assert client.get("/assets/../../secret.txt").status_code == 401
     assert client.get("/%2e%2e/secret.txt").status_code == 401
+
+
+def test_root_serves_the_frontend_without_the_key(client):
+    response = client.get("/")
+    assert response.status_code == 200 and "spa" in response.text
+
+
+def test_wrong_and_correct_keys_on_protected_routes(client):
+    assert client.get("/api/notebooks", headers={"X-API-Key": "wrong"}).status_code == 401
+    assert client.get("/api/notebooks", headers={"X-API-Key": "k"}).status_code == 200
+    assert client.get("/api/health", headers={"X-API-Key": "wrong"}).status_code == 401
+
+
+def test_without_a_built_frontend_root_stays_protected_json(monkeypatch):
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_KEY", "k")
+    monkeypatch.setattr(dashboard.app.state, "frontend_dist", None, raising=False)
+    plain = TestClient(dashboard.app)
+    assert plain.get("/").status_code == 401
+    assert plain.get("/", headers={"X-API-Key": "k"}).json()["status"] == "running"

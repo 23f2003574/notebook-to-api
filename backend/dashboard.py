@@ -19,7 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
@@ -487,9 +487,9 @@ def _is_frontend_shell_file(request):
     if dist_dir is None or request.method not in ("GET", "HEAD"):
         return False
 
-    relative = request.url.path.lstrip("/")
+    relative = request.url.path.lstrip("/") or "index.html"
 
-    if not relative or "\\" in relative or "\x00" in relative:
+    if "\\" in relative or "\x00" in relative:
         return False
 
     root = Path(dist_dir).resolve()
@@ -891,8 +891,22 @@ app.include_router(cluster_export_router)
 bootstrap_cluster_subsystem()
 
 
+def _frontend_index_file():
+    """The built frontend's index.html when one is mounted, else None."""
+
+    dist_dir = getattr(app.state, "frontend_dist", None)
+    index = Path(dist_dir) / "index.html" if dist_dir is not None else None
+
+    return index if index is not None and index.is_file() else None
+
+
 @app.get("/")
 async def root():
+    index = _frontend_index_file()
+
+    if index is not None:
+        return FileResponse(index)
+
     return {
         "status": "running",
         "service": "notebook-to-api Dashboard API",
@@ -943,9 +957,9 @@ def mount_frontend_static_files(app, dist_dir=FRONTEND_DIST_DIR):
     FastAPI/Starlette matches routes in registration order, and this is
     always called last (after every app.include_router/@app.get in this
     module), so each of those already matches its own exact path before
-    this catch-all mount is ever consulted -- confirmed live: GET / still
-    reaches root()'s own JSON response, not a file from `dist_dir`, even
-    with a frontend mounted.
+    this catch-all mount is ever consulted. GET / is the exception by design:
+    root() itself returns the mounted index.html (its JSON status when no
+    frontend is built).
     """
     if not dist_dir.is_dir():
         return
