@@ -1215,7 +1215,7 @@ def _restore_version_snapshots_from_archive(archive, entry_names, versions_dir):
         )
 
         with open(version_path, "wb") as f:
-            f.write(archive.read(entry_name))
+            f.write(_read_archive_member(archive, entry_name))
 
         try:
 
@@ -1234,6 +1234,32 @@ def _restore_version_snapshots_from_archive(archive, entry_names, versions_dir):
     _prune_notebook_versions(versions_dir)
 
     return sorted(imported_version_ids)
+
+
+def _read_archive_member(archive, name):
+    """One zip member's bytes, never more than MAX_UPLOAD_BYTES of them in memory.
+
+    A zip's compressed size says nothing about what it expands to: a ~600 KB
+    archive held a 600 MB member, which ZipFile.read() inflated fully into
+    memory before any size check ran. The declared size is checked first, and
+    the read itself is capped because that declared size can lie.
+    """
+    too_large = HTTPException(
+        status_code=413,
+        detail=f"Notebook exceeds the maximum upload size of {MAX_UPLOAD_BYTES} bytes",
+    )
+    info = archive.getinfo(name)
+
+    if info.file_size > MAX_UPLOAD_BYTES:
+        raise too_large
+
+    with archive.open(info) as member:
+        data = member.read(MAX_UPLOAD_BYTES + 1)
+
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise too_large
+
+    return data
 
 
 def _notebook_metadata_archive_entry_names(filename: str = None):
@@ -1350,7 +1376,7 @@ def _read_notebook_metadata_from_archive(
 
         try:
 
-            loaded = json.loads(archive.read(tags_entry_name))
+            loaded = json.loads(_read_archive_member(archive, tags_entry_name))
 
             if isinstance(loaded, list) and all(isinstance(t, str) for t in loaded):
                 tags = _validate_and_normalize_tags(loaded)
@@ -1365,7 +1391,7 @@ def _read_notebook_metadata_from_archive(
         try:
 
             description = _validate_and_normalize_description(
-                archive.read(description_entry_name).decode("utf-8")
+                _read_archive_member(archive, description_entry_name).decode("utf-8")
             )
 
         except (UnicodeDecodeError, HTTPException):
@@ -1377,7 +1403,7 @@ def _read_notebook_metadata_from_archive(
 
         try:
 
-            loaded = json.loads(archive.read(source_url_entry_name))
+            loaded = json.loads(_read_archive_member(archive, source_url_entry_name))
             candidate = loaded.get("source_url") if isinstance(loaded, dict) else None
 
             if isinstance(candidate, str) and candidate:
@@ -2334,7 +2360,7 @@ async def import_notebooks(
 
         try:
 
-            entry_bytes = archive.read(entry_name)
+            entry_bytes = _read_archive_member(archive, entry_name)
 
             upload_file = UploadFile(
                 file=io.BytesIO(entry_bytes), filename=filename
@@ -11627,7 +11653,7 @@ async def import_notebook_versions(
             )
         )
 
-    current_content_bytes = archive.read(current_content_entries[0])
+    current_content_bytes = _read_archive_member(archive, current_content_entries[0])
 
     upload_file = UploadFile(
         file=io.BytesIO(current_content_bytes), filename=filename
