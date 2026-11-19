@@ -14,6 +14,7 @@ import io
 import ipaddress
 import json
 import os
+import logging
 import re
 import signal
 import shutil
@@ -1682,7 +1683,7 @@ async def _save_uploaded_notebook(
 
             raise HTTPException(
                 status_code=400,
-                detail=f"Uploaded file is not a valid Jupyter notebook: {e}"
+                detail=f"Uploaded file is not a valid Jupyter notebook: {_public_error_text(e)}"
             )
 
         sha256 = hash_notebook_file(str(temp_path))
@@ -1764,6 +1765,28 @@ async def _save_uploaded_notebook(
             "sha256": sha256,
             "was_currently_compiled": was_currently_compiled,
         }
+
+
+_ABSOLUTE_PATH = re.compile(r"(?:[A-Za-z]:[\\/]|/)(?:[^\s:'\"<>|*?,;()]+[\\/])*[^\s:'\"<>|*?,;()]*")
+_TEMP_UPLOAD_NAME = re.compile(r"^\.(.+)\.[0-9a-f]{32}\.part$")
+
+
+def _public_error_text(exc):
+    """`exc`'s message with server filesystem paths reduced to bare file
+    names (an upload's ".name.<hash>.part" temp file shows as "name"), so a
+    validation error never reveals directory layout. The original is logged
+    server-side."""
+    text = str(exc)
+
+    def _basename(match):
+        name = re.split(r"[\\/]", match.group(0).rstrip("/\\"))[-1]
+        temp = _TEMP_UPLOAD_NAME.match(name)
+        return temp.group(1) if temp else name
+
+    public = _ABSOLUTE_PATH.sub(_basename, text)
+    if public != text:
+        logging.getLogger(__name__).info("notebook validation error (full detail): %s", text)
+    return public
 
 
 # Per-notebook compiled apps. Without a "notebook"/"per_notebook" request
@@ -12704,7 +12727,7 @@ def inspect_notebook_version(
 
         raise HTTPException(
             status_code=400,
-            detail=f"Uploaded file is not a valid Jupyter notebook: {e}"
+            detail=f"Uploaded file is not a valid Jupyter notebook: {_public_error_text(e)}"
         )
 
     # Held for the same reason POST /api/inspect's identical
@@ -12909,7 +12932,7 @@ def diff_notebook_version(
 
             raise HTTPException(
                 status_code=400,
-                detail=f"{label} is not a valid Jupyter notebook: {e}"
+                detail=f"{label} is not a valid Jupyter notebook: {_public_error_text(e)}"
             )
 
     only_names, exclude_names = _resolve_diff_tag_selection(
@@ -13931,7 +13954,7 @@ def inspect_notebook_endpoint(
 
         raise HTTPException(
             status_code=400,
-            detail=f"Uploaded file is not a valid Jupyter notebook: {e}"
+            detail=f"Uploaded file is not a valid Jupyter notebook: {_public_error_text(e)}"
         )
 
     try:
@@ -14254,7 +14277,7 @@ def validate_notebook_endpoint(
 
         raise HTTPException(
             status_code=400,
-            detail=f"Uploaded file is not a valid Jupyter notebook: {e}"
+            detail=f"Uploaded file is not a valid Jupyter notebook: {_public_error_text(e)}"
         )
 
     # Held for the same reason POST /api/inspect's identical
@@ -14706,7 +14729,7 @@ def validate_all_notebooks(
                 "ignored_cache_directives": [],
                 "import_time_hazards": [],
                 "cells_with_errors": [],
-                "detail": f"Uploaded file is not a valid Jupyter notebook: {e}",
+                "detail": f"Uploaded file is not a valid Jupyter notebook: {_public_error_text(e)}",
             }
             if checksums:
                 malformed_result["sha256"] = entry_sha256
@@ -15003,7 +15026,7 @@ def requirements_preview_endpoint(data: dict):
 
         raise HTTPException(
             status_code=400,
-            detail=f"Uploaded file is not a valid Jupyter notebook: {e}"
+            detail=f"Uploaded file is not a valid Jupyter notebook: {_public_error_text(e)}"
         )
 
     code_cells = [
@@ -15247,7 +15270,7 @@ def app_preview_endpoint(data: dict):
 
         raise HTTPException(
             status_code=400,
-            detail=f"Uploaded file is not a valid Jupyter notebook: {e}"
+            detail=f"Uploaded file is not a valid Jupyter notebook: {_public_error_text(e)}"
         )
 
     except ValueError as e:
@@ -15469,7 +15492,7 @@ def readme_preview_endpoint(data: dict):
 
         raise HTTPException(
             status_code=400,
-            detail=f"Uploaded file is not a valid Jupyter notebook: {e}"
+            detail=f"Uploaded file is not a valid Jupyter notebook: {_public_error_text(e)}"
         )
 
     except ValueError as e:
@@ -15650,7 +15673,7 @@ def curl_preview_endpoint(data: dict):
 
         raise HTTPException(
             status_code=400,
-            detail=f"Uploaded file is not a valid Jupyter notebook: {e}"
+            detail=f"Uploaded file is not a valid Jupyter notebook: {_public_error_text(e)}"
         )
 
     host = data.get("host", "localhost")
@@ -15810,7 +15833,7 @@ def postman_preview_endpoint(data: dict):
 
         raise HTTPException(
             status_code=400,
-            detail=f"Uploaded file is not a valid Jupyter notebook: {e}"
+            detail=f"Uploaded file is not a valid Jupyter notebook: {_public_error_text(e)}"
         )
 
     host = data.get("host", "localhost")
@@ -15955,7 +15978,7 @@ def dockerfile_preview_endpoint(notebook_path: str = None, version_id: str = Non
 
             raise HTTPException(
                 status_code=400,
-                detail=f"Uploaded file is not a valid Jupyter notebook: {e}"
+                detail=f"Uploaded file is not a valid Jupyter notebook: {_public_error_text(e)}"
             )
 
         code_cells = [
@@ -16408,7 +16431,7 @@ def openapi_preview_endpoint(data: dict):
 
         raise HTTPException(
             status_code=400,
-            detail=f"Uploaded file is not a valid Jupyter notebook: {e}"
+            detail=f"Uploaded file is not a valid Jupyter notebook: {_public_error_text(e)}"
         )
 
     except ValueError as e:
@@ -16839,7 +16862,7 @@ def compile_notebook_endpoint(
         # is, not a 500.
         raise HTTPException(
             status_code=400,
-            detail=f"Uploaded file is not a valid Jupyter notebook: {e}"
+            detail=f"Uploaded file is not a valid Jupyter notebook: {_public_error_text(e)}"
         )
 
     except ValueError as e:
