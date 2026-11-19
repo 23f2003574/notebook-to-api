@@ -46,6 +46,32 @@ def _context() -> mp.context.BaseContext:
     return mp.get_context("fork" if "fork" in methods else "spawn")
 
 
+def scrub_service_secrets(environ: Any = None) -> list[str]:
+    """Remove the service's own credentials from `environ` (default
+    os.environ) and return the removed names.
+
+    The service's credentials are NOTEBOOK_API_* variables whose name says
+    they are secret (KEY, SECRET, TOKEN, PASSWORD, CREDENTIAL); notebook code
+    in an isolated child has no business reading them. Every other variable
+    (including the author's own keys, e.g. OPENAI_API_KEY) is untouched, and
+    names listed (comma separated) in NOTEBOOK_API_ISOLATE_ALLOW_ENV are kept.
+    """
+    import re  # local: this module's source is embedded in generated apps
+
+    env = os.environ if environ is None else environ
+    allow_name = "NOTEBOOK_API_ISOLATE_ALLOW_ENV"
+    allowed = {n.strip() for n in env.get(allow_name, "").split(",") if n.strip()}
+    secret = re.compile(r"(KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL)", re.IGNORECASE)
+    removed = [
+        name for name in list(env)
+        if name.startswith("NOTEBOOK_API_") and name != allow_name
+        and secret.search(name[len("NOTEBOOK_API_"):]) and name not in allowed
+    ]
+    for name in removed:
+        del env[name]
+    return removed
+
+
 def _apply_memory_limit(limit_mb: float) -> None:
     """Cap the child's address space (RLIMIT_AS) before any notebook code runs.
 
@@ -170,6 +196,7 @@ def _child(
                     os.setsid()  # own process group so the parent can reap grandchildren
                 except OSError:
                     pass
+            scrub_service_secrets()
             if memory_limit_mb:
                 _apply_memory_limit(memory_limit_mb)
             if cpu_limit_seconds:
@@ -332,6 +359,7 @@ def _worker_main(conn: Any, handler: Callable[[Any], Any], memory_limit_mb: floa
             os.setsid()
         except OSError:
             pass
+    scrub_service_secrets()
     # Forked from the app: forget its children and any lock held at fork time.
     _ACTIVE_LOCK = threading.Lock()
     _FORK_LOCK = threading.Lock()

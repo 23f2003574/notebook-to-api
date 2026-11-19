@@ -162,7 +162,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # off; `_webhook_connect` would disable the SSRF guard). tests/test_reserved_names_cover_generated_app.py
     # derives this inventory from a real generated app.py, so a new generated name fails there.
     "HIDE_ERROR_DETAILS", "IDEMPOTENCY_FINGERPRINTS", "IDEMPOTENCY_KEYS",
-    "ISOLATE_CPU_LIMIT_SECONDS", "ISOLATE_EXECUTION", "ISOLATE_MAX_PROCESSES",
+    "ISOLATE_ALLOW_ENV", "scrub_service_secrets", "ISOLATE_CPU_LIMIT_SECONDS", "ISOLATE_EXECUTION", "ISOLATE_MAX_PROCESSES",
     "ISOLATE_MEMORY_LIMIT_MB", "IsolatedExecutionCancelled", "IsolatedExecutionError",
     "IsolatedExecutionTimeout", "IsolatedWorker", "MAX_ERROR_DETAIL_CHARS",
     "MIN_MEMORY_LIMIT_MB", "_ACTIVE", "_ACTIVE_LOCK", "_CACHE_FLIGHTS", "_CONST_IN_FLIGHT",
@@ -616,6 +616,19 @@ GENERATED_APP_ENV_VARS = [
             "background tasks run in a child too, which is what lets "
             "POST /tasks/{task_id}/cancel terminate a running one. "
             "0 (the default) keeps in-process execution."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_ISOLATE_ALLOW_ENV",
+        "default": "",
+        "description": (
+            "With NOTEBOOK_API_ISOLATE_EXECUTION=1, isolated notebook code "
+            "cannot read the service's own credentials: every NOTEBOOK_API_* "
+            "variable whose name contains KEY, SECRET, TOKEN, PASSWORD or "
+            "CREDENTIAL (NOTEBOOK_API_KEY, NOTEBOOK_API_WEBHOOK_SECRET, ...) "
+            "is removed from the child's environment. List variable names "
+            "here, comma separated, that the notebook legitimately needs to "
+            "keep. Other variables (your own API keys) are always kept."
         ),
     },
     {
@@ -3056,6 +3069,12 @@ def generate_fastapi_code(
         '"NOTEBOOK_API_ISOLATE_MAX_PROCESSES", '
         f'"{_generated_app_env_var_default("NOTEBOOK_API_ISOLATE_MAX_PROCESSES")}"'
         ')'
+    )
+    # Read by isolated_execution.scrub_service_secrets in each child; named here
+    # so the app visibly owns the setting.
+    lines.append(
+        'ISOLATE_ALLOW_ENV = os.getenv("NOTEBOOK_API_ISOLATE_ALLOW_ENV", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_ISOLATE_ALLOW_ENV")}")'
     )
     lines.append("_ISOLATE_SLOTS = threading.BoundedSemaphore(ISOLATE_MAX_PROCESSES) if ISOLATE_MAX_PROCESSES > 0 else None")
     lines.append(
