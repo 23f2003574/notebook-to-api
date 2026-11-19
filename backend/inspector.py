@@ -796,6 +796,12 @@ def inspect_notebook_data(
 
     return {
         "functions": all_functions,
+        # Endpoints that compile as background (task_id) endpoints purely
+        # because of a name guess -- no sync/background directive says so.
+        "inferred_background": sorted(
+            name for name in directive_endpoints
+            if name not in background_overrides and resolve_is_background(name)
+        ),
         "dependencies": _third_party_dependencies(all_imports),
         "apt_packages": apt_packages,
         # Hugging Face models the generated Dockerfile prefetches at build time.
@@ -1031,6 +1037,18 @@ def hazard_message(hazard):
             f"compiled app won't ship{unshipped_reason_text(hazard)}"
         )
     return "Import-time hazard", what, "the app will fail on startup"
+
+
+def inferred_background_notice_lines(data):
+    """One line per endpoint that compiles into a background (task_id)
+    endpoint only because its name looks long-running. Informational: the
+    guess can be wrong, and it changes the endpoint's response contract."""
+    return [
+        f"{name} is a background endpoint inferred from its name (it returns a "
+        f"task_id); add '# notebook-to-api: sync' or '# notebook-to-api: "
+        f"background' above it to make that explicit"
+        for name in data.get("inferred_background") or []
+    ]
 
 
 def startup_warning_lines(data):

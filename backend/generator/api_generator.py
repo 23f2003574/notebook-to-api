@@ -420,6 +420,38 @@ LONG_RUNNING_KEYWORDS = [
     "scrape",
 ]
 
+# Whole name tokens (and their common inflections) that mark a function as
+# long running. Matching is per token, never per substring: "preprocess_text"
+# and "is_trained" contain "process"/"train" but are not long-running.
+_LONG_RUNNING_TOKENS = frozenset(
+    kw + suffix
+    for kw in LONG_RUNNING_KEYWORDS
+    for suffix in ("", "s")
+) | {"embedding", "embeddings", "training", "processing", "generating", "scraping", "scraper"}
+
+# A "generate_id" / "generate_uuid" call is instant: when the name's other
+# tokens say it produces a small value, the keyword does not make it slow.
+_CHEAP_OBJECT_TOKENS = frozenset({
+    "id", "ids", "uuid", "guid", "key", "token", "slug", "hash", "name",
+    "password", "timestamp", "seed", "nonce", "salt",
+})
+
+
+def _name_tokens(func_name):
+    """Lower-case word tokens of a snake_case or camelCase function name."""
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", func_name)
+    return [t for t in re.split(r"[^A-Za-z0-9]+", spaced.lower()) if t]
+
+
+def infer_background_by_name(func_name):
+    """Whether the name alone suggests a long-running function: one of its
+    whole word tokens is a long-running keyword and no other token marks
+    the result as a cheap value."""
+    tokens = _name_tokens(func_name)
+    if not any(t in _LONG_RUNNING_TOKENS for t in tokens):
+        return False
+    return not any(t in _CHEAP_OBJECT_TOKENS for t in tokens)
+
 
 def resolve_endpoint_tag(func_name, tag_overrides=None):
     """The OpenAPI tag (and x-notebook-to-api-category) a compiled
@@ -461,7 +493,7 @@ def resolve_is_background(func_name, background_overrides=None):
     if background_overrides and func_name in background_overrides:
         return background_overrides[func_name]
 
-    return any(kw in func_name.lower() for kw in LONG_RUNNING_KEYWORDS)
+    return infer_background_by_name(func_name)
 
 
 def resolve_deprecation(func_name, deprecated_overrides=None):

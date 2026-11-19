@@ -58,6 +58,7 @@ from backend.inspector import (
     hazard_message,
     shipped_data_lines,
     startup_warning_lines,
+    inferred_background_notice_lines,
     DEFAULT_DEV_API_KEY,
     classify_notebook_diff,
     diff_notebook_functions,
@@ -2356,6 +2357,16 @@ def _dispatch_core_command(args):
                     if endpoint["path"].lstrip("/") in kept_names
                 ]
             data["no_endpoints"] = not data["endpoints"]
+            inferred = inferred_background_notice_lines({
+                "inferred_background": [
+                    n for n in data["inferred_background"]
+                    if n in {e["path"].lstrip("/") for e in data["endpoints"]}
+                ]
+            })
+            if inferred:
+                print("\nⓘ Background endpoints inferred from function names:")
+                for line in inferred:
+                    print(f"  - {line}")
             if data["no_endpoints"]:
                 print(
                     "\n⚠ No endpoints were generated: nothing in this notebook "
@@ -2551,6 +2562,10 @@ def _dispatch_core_command(args):
         # (the one a pre-commit hook or per-PR CI step actually runs)
         # said nothing. --fail-on-past-sunset turns the latter into a gate.
         past_sunset = past_sunset_functions(data["deprecated_functions"])
+        validate_inferred = [
+            n for n in data["inferred_background"]
+            if not (only or exclude) or n in kept_names
+        ]
 
         if args.json_output:
             print(json.dumps(
@@ -2572,11 +2587,14 @@ def _dispatch_core_command(args):
                     "cells_with_errors": data["cells_with_errors"],
                     "unparseable_cells": unparseable_cells,
                     "no_endpoints": no_endpoints,
+                    "inferred_background": validate_inferred,
                 },
                 indent=2,
             ))
         else:
             print(f"Validating {args.notebook}")
+            for line in inferred_background_notice_lines({"inferred_background": validate_inferred}):
+                print(f"ⓘ {line}")
 
             if reserved_name_conflicts:
                 print("\n✗ Reserved name conflicts (compilation will fail):")
