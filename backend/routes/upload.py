@@ -2731,7 +2731,9 @@ async def _download_url_for_import(url, headers=None):
 
             for _ in range(_URL_IMPORT_MAX_REDIRECTS + 1):
 
-                _reject_unsafe_import_url_host(current_url)
+                # getaddrinfo blocks: keep it off the event loop so a slow
+                # DNS answer cannot stall every other dashboard request.
+                await asyncio.to_thread(_reject_unsafe_import_url_host, current_url)
 
                 request_headers = (
                     headers
