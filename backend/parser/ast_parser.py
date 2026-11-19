@@ -470,6 +470,50 @@ def names_rebound_to_literals(codes):
     return {name for name, rebound in state.items() if rebound}
 
 
+# Annotation names whose values a JSON request body can never carry (binary
+# file objects are NOT here: the generated app accepts data URIs for them): a
+# function that *requires* one has no way to be called through the API.
+_UNREPRESENTABLE_TYPES = {
+    "Callable": "a callable",
+    "ModuleType": "a module",
+}
+
+
+def _unrepresentable_kind(annotation):
+    """Description of the first JSON-unrepresentable type named anywhere in
+    the annotation AST (including quoted forward references), else None."""
+    if annotation is None:
+        return None
+    if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+        try:
+            annotation = ast.parse(annotation.value, mode="eval").body
+        except SyntaxError:
+            return None
+    for node in ast.walk(annotation):
+        name = node.id if isinstance(node, ast.Name) else node.attr if isinstance(node, ast.Attribute) else None
+        if name in _UNREPRESENTABLE_TYPES:
+            return _UNREPRESENTABLE_TYPES[name]
+    return None
+
+
+def unsupported_required_parameters(node):
+    """[(parameter, description)] for each *required* parameter of the
+    function `node` whose annotation a JSON client cannot supply (a
+    Callable or a module). Optional ones are left alone: the
+    caller can omit them and the function's own default applies."""
+    positional = node.args.posonlyargs + node.args.args
+    first_default = len(positional) - len(node.args.defaults)
+    required = [arg for i, arg in enumerate(positional) if i < first_default]
+    required += [arg for arg, default in zip(node.args.kwonlyargs, node.args.kw_defaults) if default is None]
+    found = []
+    for arg in required:
+        kind = _unrepresentable_kind(arg.annotation)
+        if kind:
+            found.append((arg.arg, kind))
+    return found
+
+
+
 def extract_functions_from_code(code):
     try:
         tree = ast.parse(code)
@@ -488,6 +532,8 @@ def extract_functions_from_code(code):
             # `POST /__init__` and the like.
             if node.name.startswith("__") and node.name.endswith("__"):
                 continue
+            if unsupported_required_parameters(node):
+                continue  # reported by extract_skipped_functions_from_code
             args = []
             type_param_names = {
                 param.name for param in getattr(node, "type_params", ())
@@ -759,6 +805,17 @@ def extract_skipped_functions_from_code(code):
             continue
 
         if id(node) in module_level_ids:
+            unsupported = unsupported_required_parameters(node)
+            if unsupported and not (node.name.startswith("__") and node.name.endswith("__")):
+                skipped.append({
+                    "name": node.name,
+                    "reason": (
+                        "requires " + ", ".join(
+                            f"'{param}' ({kind})" for param, kind in unsupported
+                        ) + ", which a JSON request cannot provide, so no "
+                        "endpoint is generated"
+                    ),
+                })
             continue
 
         skipped.append({
