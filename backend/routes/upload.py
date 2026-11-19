@@ -17266,6 +17266,27 @@ def export_sdk_endpoint(
                 detail="No exported OpenAPI schema found. Run /api/export-openapi first."
             )
 
+        if data.get("package"):
+
+            from backend.exporters.sdk_generator import generate_sdk_package
+
+            package_dir = os.path.join(GENERATED_DIR, "sdk", f"{language}-package")
+
+            try:
+                files = generate_sdk_package(
+                    openapi_path, package_dir, language=language,
+                    package_name=data.get("package_name"),
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=f"SDK generation error: {e}")
+
+            return {
+                "status": "success",
+                "language": language,
+                "path": package_dir,
+                "files": files,
+            }
+
         try:
 
             if language == "typescript":

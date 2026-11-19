@@ -2802,6 +2802,22 @@ def _dispatch_core_command(args):
                 )
             print(f"Exported {openapi_path} from the compiled app first.", file=sys.stderr)
 
+        if args.package:
+            from backend.exporters.sdk_generator import generate_sdk_package
+
+            package_dir = args.output or os.path.join(openapi_dir, "sdk", f"{args.language}-package")
+            files = generate_sdk_package(
+                openapi_path, package_dir, language=args.language, package_name=args.package_name,
+            )
+            if args.json_output:
+                print(json.dumps(
+                    {"status": "success", "language": args.language, "path": package_dir, "files": files},
+                    indent=2,
+                ))
+            else:
+                print(f"{args.language} SDK package generated at {package_dir}: {', '.join(files)}")
+            return
+
         if args.language == "typescript":
             from backend.exporters.sdk_generator import generate_typescript_sdk as generate_sdk
             default_name = "typescript_client.ts"
@@ -10944,6 +10960,22 @@ def main():
             "<openapi-dir>/sdk/typescript_client.ts for --language "
             "typescript, where <openapi-dir> is --openapi's own directory."
         )
+    )
+    sdk_parser.add_argument(
+        "--package",
+        action="store_true",
+        help=(
+            "Write an installable package instead of one loose file: "
+            "pyproject.toml + module for python (declares requests), "
+            "package.json + tsconfig.json + src/index.ts for typescript. "
+            "--output then names the package directory (default "
+            "<openapi-dir>/sdk/<language>-package)."
+        )
+    )
+    sdk_parser.add_argument(
+        "--package-name",
+        default=None,
+        help="Distribution name for --package (default: the OpenAPI title).",
     )
     sdk_parser.add_argument(
         "--json",
