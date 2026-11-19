@@ -362,6 +362,7 @@ def generate_dockerfile(
     hub_models=None,
     language_data=None,
     torch_weights=None,
+    announce=True,
 ):
     """Write a Dockerfile for the compiled app at `output_path`.
 
@@ -387,7 +388,8 @@ def generate_dockerfile(
             torch_weights,
         ))
 
-    print(f"Dockerfile generated at: {output_path}")
+    if announce:
+        print(f"Dockerfile generated at: {output_path}")
 
 
 # Where generated deployments keep the task store (NOTEBOOK_API_TASK_STORE_PATH). The
@@ -558,6 +560,7 @@ def generate_docker_compose(
     package_name="generated",
     env_vars=None,
     notebook_env_vars=None,
+    announce=True,
 ):
     """Write a docker-compose.yml for the compiled app at `output_path`,
     alongside the Dockerfile/.dockerignore generate_dockerfile/
@@ -568,7 +571,8 @@ def generate_docker_compose(
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(docker_compose_content(package_name, env_vars, notebook_env_vars))
 
-    print(f"docker-compose.yml generated at: {output_path}")
+    if announce:
+        print(f"docker-compose.yml generated at: {output_path}")
 
 
 def env_example_content(env_vars=None, notebook_env_vars=None):
@@ -669,6 +673,7 @@ def env_example_content(env_vars=None, notebook_env_vars=None):
 
 def generate_env_example(
     output_path="generated/.env.example", env_vars=None, notebook_env_vars=None,
+    announce=True,
 ):
     """Write a .env.example for the compiled app at `output_path`,
     alongside the Dockerfile/.dockerignore/docker-compose.yml
@@ -679,7 +684,8 @@ def generate_env_example(
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(env_example_content(env_vars, notebook_env_vars))
 
-    print(f".env.example generated at: {output_path}")
+    if announce:
+        print(f".env.example generated at: {output_path}")
 
 
 def readme_content(
@@ -1092,6 +1098,7 @@ def generate_readme(
     deprecated_overrides=None, timeout_overrides=None,
     rate_limit_overrides=None, cache_overrides=None, tag_overrides=None,
     notebook_env_vars=None,
+    announce=True,
 ):
     """Write a README.md for the compiled app at `output_path`, alongside
     the Dockerfile/.dockerignore/docker-compose.yml/.env.example
@@ -1110,7 +1117,8 @@ def generate_readme(
             )
         )
 
-    print(f"README.md generated at: {output_path}")
+    if announce:
+        print(f"README.md generated at: {output_path}")
 
 
 def gitignore_content():
@@ -1179,7 +1187,7 @@ sdk/
 """
 
 
-def generate_dockerignore(output_path="generated/.dockerignore"):
+def generate_dockerignore(output_path="generated/.dockerignore", announce=True):
     """Without this, `COPY . {package_name}/` in the generated Dockerfile
     picks up .git, __pycache__, local venvs, notebooks, and other
     unrelated files from the build context into the image -- bloating it
@@ -1247,4 +1255,5 @@ def generate_dockerignore(output_path="generated/.dockerignore"):
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(dockerignore_content())
 
-    print(f".dockerignore generated at: {output_path}")
+    if announce:
+        print(f".dockerignore generated at: {output_path}")

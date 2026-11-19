@@ -392,6 +392,7 @@ def generate_kubernetes_manifest(
     env_vars=None,
     image=None,
     notebook_env_vars=None,
+    announce=True,
 ):
     """Write a kubernetes.yaml for the compiled app at `output_path`,
     alongside the Dockerfile/.dockerignore/docker-compose.yml/.env.example/
@@ -404,4 +405,5 @@ def generate_kubernetes_manifest(
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(kubernetes_manifest_content(package_name, env_vars, image, notebook_env_vars))
 
-    print(f"kubernetes.yaml generated at: {output_path}")
+    if announce:
+        print(f"kubernetes.yaml generated at: {output_path}")

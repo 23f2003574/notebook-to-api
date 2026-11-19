@@ -6057,6 +6057,7 @@ def _compile_notebook_to_api(
                 hub_models=hub_model_ids(code_cells),
                 language_data=language_data_packages(code_cells),
                 torch_weights=torch_weight_prefetches(code_cells),
+                announce=False,
             )
 
             dockerignore_path = os.path.join(
@@ -6064,7 +6065,7 @@ def _compile_notebook_to_api(
                 ".dockerignore"
             )
 
-            generate_dockerignore(dockerignore_path)
+            generate_dockerignore(dockerignore_path, announce=False)
             # Staged only when the output has none: publishing the staged
             # copy would otherwise replace the user's own ignore rules.
             if not os.path.exists(os.path.join(output_dir, ".gitignore")):
@@ -6080,6 +6081,7 @@ def _compile_notebook_to_api(
             generate_docker_compose(
                 docker_compose_path, package_name, GENERATED_APP_ENV_VARS,
                 notebook_env_vars=notebook_env_vars,
+                announce=False,
             )
 
             env_example_path = os.path.join(
@@ -6090,6 +6092,7 @@ def _compile_notebook_to_api(
             generate_env_example(
                 env_example_path, GENERATED_APP_ENV_VARS,
                 notebook_env_vars=notebook_env_vars,
+                announce=False,
             )
 
             kubernetes_manifest_path = os.path.join(
@@ -6100,6 +6103,7 @@ def _compile_notebook_to_api(
             generate_kubernetes_manifest(
                 kubernetes_manifest_path, package_name, GENERATED_APP_ENV_VARS,
                 notebook_env_vars=notebook_env_vars,
+                announce=False,
             )
 
             readme_path = os.path.join(
@@ -6116,6 +6120,7 @@ def _compile_notebook_to_api(
                 cache_overrides=_extract_cache_overrides(code_cells),
                 tag_overrides=_extract_tag_overrides(code_cells),
                 notebook_env_vars=notebook_env_vars,
+                announce=False,
             )
 
             _publish_staged_artifacts(stage_dir, output_dir)
@@ -6139,6 +6144,15 @@ def _compile_notebook_to_api(
 
         finally:
             shutil.rmtree(stage_dir, ignore_errors=True)
+
+        # Reported only now, from where the files really are: the generators
+        # wrote into a staging directory that no longer exists.
+        for artifact in (
+            "Dockerfile", ".dockerignore", "docker-compose.yml", ".env.example",
+            "kubernetes.yaml", "README.md",
+        ):
+            if os.path.isfile(os.path.join(output_dir, artifact)):
+                print(f"{artifact} generated at: {os.path.join(output_dir, artifact)}")
 
         print(
             f"Successfully generated FastAPI app at: {output_path}"

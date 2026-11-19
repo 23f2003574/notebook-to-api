@@ -99,7 +99,7 @@ def test_compile_publishes_nothing_when_an_artifact_is_empty(tmp_path, monkeypat
     out = tmp_path / "out"
     compile_notebook_to_api(_nb(tmp_path), str(out / "app.py"))
     before = _snapshot(out)
-    monkeypatch.setattr(compiler, "generate_dockerignore", lambda path: open(path, "w").close())
+    monkeypatch.setattr(compiler, "generate_dockerignore", lambda path, **_: open(path, "w").close())
     with pytest.raises(ValueError, match=r"\.dockerignore: .*empty"):
         compile_notebook_to_api(_nb(tmp_path), str(out / "app.py"))
     assert _snapshot(out) == before
