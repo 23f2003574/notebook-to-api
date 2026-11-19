@@ -742,6 +742,22 @@ def extract_functions_from_code(code):
             # checking "did the author document anything here".
             raises_descriptions = _parse_docstring_raises_descriptions(docstring)
 
+            # `cb: Optional[Callable] = None`: a JSON client cannot supply a
+            # callable, so the field accepts only null (the function's own
+            # default) instead of passing arbitrary JSON in as the callback.
+            annotations = {
+                a.arg: a.annotation
+                for a in node.args.posonlyargs + node.args.args + node.args.kwonlyargs
+            }
+            for arg_info in args:
+                if (
+                    arg_info["has_default"] and arg_info["default"] is None
+                    and arg_info.get("default_is_literal", True)
+                    and arg_info.get("kind") in ("positional", "keyword_only")
+                    and _unrepresentable_kind(annotations.get(arg_info["name"]))
+                ):
+                    arg_info["type"] = "None"
+
             function_info = {
                 "name": node.name,
                 "args": args,
