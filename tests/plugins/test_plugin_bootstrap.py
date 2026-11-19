@@ -135,7 +135,7 @@ def test_discover_plugins_finds_manifest_files(tmp_path):
     assert [manifest.name for manifest in manifests] == [name]
 
 
-def test_discover_plugins_creates_default_directory_if_missing(tmp_path, monkeypatch):
+def test_discover_plugins_leaves_a_missing_default_directory_uncreated(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     bootstrap = PluginBootstrap()
     bootstrap.register()
@@ -143,7 +143,7 @@ def test_discover_plugins_creates_default_directory_if_missing(tmp_path, monkeyp
     manifests = bootstrap.discover_plugins()
 
     assert manifests == []
-    assert (tmp_path / PLUGINS_DIR).is_dir()
+    assert not (tmp_path / PLUGINS_DIR).exists()
 
 
 def test_install_discovered_plugins_installs_new_manifests(tmp_path, plugin_module):

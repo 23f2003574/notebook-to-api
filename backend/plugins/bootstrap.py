@@ -157,8 +157,11 @@ class PluginBootstrap:
     def discover_plugins(self, directory: Optional[str] = None) -> list:
         """Scan a directory for plugin manifests (*.plugin.json) without installing them."""
         loader = self.discover("plugin_loader")
-        directory = directory or PLUGINS_DIR
-        os.makedirs(directory, exist_ok=True)
+        directory = directory or os.getenv("NOTEBOOK_API_PLUGINS_DIR") or PLUGINS_DIR
+        # Read-only: importing the dashboard runs discovery, and that must not
+        # create a "plugins" directory in whatever the current directory is.
+        if not os.path.isdir(directory):
+            return []
         return loader.discover(directory)
 
     def install_discovered_plugins(self, directory: Optional[str] = None) -> list:
