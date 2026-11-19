@@ -589,13 +589,13 @@ def resolve_upload_path(name: str) -> Path:
     return _resolve_path_within(UPLOAD_DIR, name, "uploads")
 
 
-def resolve_generated_path(name: str) -> Path:
+def resolve_generated_path(name: str, root: str = None) -> Path:
     """Resolve `name` against GENERATED_DIR, rejecting anything that
     would escape it -- same protection as resolve_upload_path, applied to
     GET /api/generated/{filename}'s filename, which is exactly as much
     client input as an uploaded file's own name.
     """
-    return _resolve_path_within(GENERATED_DIR, name, "generated output")
+    return _resolve_path_within(root or GENERATED_DIR, name, "generated output")
 
 
 # Serializes upload_notebook's own check-then-write critical section per
@@ -1764,6 +1764,50 @@ async def _save_uploaded_notebook(
             "sha256": sha256,
             "was_currently_compiled": was_currently_compiled,
         }
+
+
+# Per-notebook compiled apps. Without a "notebook"/"per_notebook" request
+# field every route keeps using the single shared GENERATED_DIR (compiling a
+# second notebook there replaces the first). With one, the app lives in its
+# own directory next to GENERATED_DIR, named from the notebook filename.
+GENERATED_APPS_DIR = os.getenv(
+    "NOTEBOOK_API_GENERATED_APPS_DIR", GENERATED_DIR.rstrip("/\\") + "_apps"
+)
+
+
+def _notebook_app_id(filename):
+    """A filesystem-safe Python-identifier directory name for `filename`.
+    Never derived by trusting the filename as a path: only its sanitized
+    stem plus a short hash of the exact name (so "a-b.ipynb" and "a_b.ipynb"
+    cannot collide) is used."""
+    stem = re.sub(r"[^0-9A-Za-z]+", "_", Path(filename).stem).strip("_").lower()
+    if not stem or not stem[0].isalpha():
+        stem = "nb_" + stem
+    digest = hashlib.sha256(filename.encode("utf-8")).hexdigest()[:8]
+    return f"{stem[:40]}_{digest}"
+
+
+def _generated_root(notebook=None, create=False):
+    """GENERATED_DIR itself, or the notebook-specific compiled-app directory
+    when `notebook` (an uploaded notebook's filename) is given."""
+    if not notebook:
+        return GENERATED_DIR
+    if (
+        not isinstance(notebook, str)
+        or os.path.basename(notebook) != notebook
+        or "\\" in notebook
+        or notebook in (".", "..")
+        or not notebook.lower().endswith(".ipynb")
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="notebook must be a single .ipynb filename, not a path",
+        )
+    root = os.path.join(GENERATED_APPS_DIR, _notebook_app_id(notebook))
+    if create:
+        os.makedirs(root, exist_ok=True)
+    return root
+
 
 
 @router.post("/upload")
@@ -16514,6 +16558,9 @@ def compile_notebook_endpoint(
         )
 
     only = data.get("only")
+    per_notebook = bool(data.get("per_notebook"))
+    GENERATED_DIR = _generated_root(notebook_path if per_notebook else None, create=True)
+
     exclude = data.get("exclude")
     version_id = data.get("version_id")
     smoke_test = bool(data.get("smoke_test", False))
@@ -16761,7 +16808,10 @@ def compile_notebook_endpoint(
 
                 _evict_compiled_app_from_module_cache(package_name)
 
-                response["smoke_test"] = _run_compile_smoke_test(package_name)
+                response["smoke_test"] = _run_compile_smoke_test(
+                    package_name,
+                    str(Path(GENERATED_DIR).resolve().parent) if per_notebook else None,
+                )
 
         return response
 
@@ -16926,7 +16976,7 @@ def _terminate_process_group(process, grace_seconds=2):
         process.communicate()
 
 
-def _run_compile_smoke_test(package_name):
+def _run_compile_smoke_test(package_name, app_parent=None):
     """Actually import the just-compiled "<package_name>.app" module and
     call its own GET /health in-process, to catch a class of failure
     nothing else at compile time can: every check POST /api/compile
@@ -16971,7 +17021,7 @@ def _run_compile_smoke_test(package_name):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            cwd=os.getcwd(),
+            cwd=app_parent or os.getcwd(),
             env=_smoke_test_environment(),
             start_new_session=True,
         )
@@ -17033,6 +17083,8 @@ def export_openapi_endpoint(
 
     data = data or {}
 
+    GENERATED_DIR = _generated_root(data.get("notebook"))
+
     export_format = data.get("format", "json")
 
     if export_format not in ("json", "yaml"):
@@ -17075,7 +17127,8 @@ def export_openapi_endpoint(
             export_openapi_schema(
                 output_path,
                 package_name,
-                format=export_format
+                format=export_format,
+                app_dir=GENERATED_DIR if data.get("notebook") else None,
             )
 
             with open(output_path, "r", encoding="utf-8") as f:
@@ -17123,6 +17176,8 @@ def export_sdk_endpoint(
     )
 
     data = data or {}
+
+    GENERATED_DIR = _generated_root(data.get("notebook"))
 
     language = data.get("language", "python")
 
@@ -17700,6 +17755,8 @@ def deploy_generated_app(data: dict = None):
     disagreeing with whatever this deploy actually just built the moment
     a custom "tag" was given.
     """
+
+    GENERATED_DIR = _generated_root((data or {}).get("notebook"))
 
     generated_path = Path(GENERATED_DIR)
 
@@ -18900,7 +18957,7 @@ def clear_compile_history(
 
 
 @router.get("/download")
-def download_generated_app(request: Request):
+def download_generated_app(request: Request, notebook: str = None):
     """Download the compiled app as a zip archive.
 
     /api/compile only ever returned metadata (the function list and
@@ -18969,6 +19026,8 @@ def download_generated_app(request: Request):
     large compiled app) work of compressing a zip nobody was going to
     read.
     """
+
+    GENERATED_DIR = _generated_root(notebook)
 
     generated_path = Path(GENERATED_DIR)
 
@@ -19077,7 +19136,7 @@ def _bundle_sha256(file_details_with_sha256):
 
 
 @router.get("/generated")
-def list_generated_files_endpoint(checksums: bool = False, format: str = "json"):
+def list_generated_files_endpoint(checksums: bool = False, format: str = "json", notebook: str = None):
     """List the files currently sitting in GENERATED_DIR, without requiring
     a notebook_path -- unlike POST /api/inspect, which can also list this
     same generated_files set, but only alongside a full inspection of a
@@ -19185,6 +19244,8 @@ def list_generated_files_endpoint(checksums: bool = False, format: str = "json")
     validation every other "format"-accepting endpoint here already
     applies.
     """
+
+    GENERATED_DIR = _generated_root(notebook)
 
     if format not in ("json", "csv"):
 
@@ -19300,7 +19361,7 @@ def list_generated_files_endpoint(checksums: bool = False, format: str = "json")
 
 
 @router.delete("/generated")
-def delete_generated_app(dry_run: bool = False):
+def delete_generated_app(dry_run: bool = False, notebook: str = None):
     """Remove GENERATED_DIR and everything compiled into it, resetting the
     dashboard's compiled-app state back to "nothing compiled yet".
 
@@ -19343,6 +19404,8 @@ def delete_generated_app(dry_run: bool = False):
     files, real disk space) actually amounted to before wiping it
     irreversibly.
     """
+
+    GENERATED_DIR = _generated_root(notebook)
 
     generated_path = Path(GENERATED_DIR)
 
@@ -19422,7 +19485,7 @@ def delete_generated_app(dry_run: bool = False):
 
 
 @router.get("/generated/{filename:path}")
-def get_generated_file(filename: str, request: Request):
+def get_generated_file(filename: str, request: Request, notebook: str = None):
     """Preview a single compiled output file's raw text content by name
     (e.g. "app.py", "requirements.txt", "Dockerfile", or
     "runtime/notebook_module.py").
@@ -19472,7 +19535,9 @@ def get_generated_file(filename: str, request: Request):
     body) instead.
     """
 
-    file_path = resolve_generated_path(filename)
+    GENERATED_DIR = _generated_root(notebook)
+
+    file_path = resolve_generated_path(filename, GENERATED_DIR)
 
     generated_root = Path(GENERATED_DIR).resolve()
 
