@@ -5901,6 +5901,8 @@ def _dispatch_core_command(args):
         exclude = _parse_comma_separated_names(args.exclude)
 
         request_body = {"notebook_path": args.filename}
+        if args.per_notebook:
+            request_body["per_notebook"] = True
 
         # Omitted entirely (rather than sent as null) when unset, so a
         # dashboard's POST /api/compile sees exactly the same request
@@ -8693,7 +8695,7 @@ def _dispatch_core_command(args):
             try:
                 response = httpx.post(
                     f"{dashboard_url}/api/export-openapi",
-                    json={"format": args.format},
+                    json={"format": args.format, **({"notebook": args.notebook} if args.notebook else {})},
                     timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
@@ -8738,7 +8740,7 @@ def _dispatch_core_command(args):
             try:
                 response = httpx.post(
                     f"{dashboard_url}/api/export-sdk",
-                    json={"language": args.language},
+                    json={"language": args.language, **({"notebook": args.notebook} if args.notebook else {})},
                     timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
@@ -8775,6 +8777,9 @@ def _dispatch_core_command(args):
         dashboard_url = args.dashboard_url.rstrip("/")
 
         body = {"push": args.push, "force": args.force}
+
+        if args.notebook:
+            body["notebook"] = args.notebook
 
         if args.tag:
             body["tag"] = args.tag
@@ -14765,6 +14770,16 @@ def main():
         help="Compile a notebook already uploaded to a running dashboard instance, via its POST /api/compile."
     )
     remote_compile_parser.add_argument(
+        "--per-notebook",
+        action="store_true",
+        help=(
+            "Compile into this notebook's own app directory on the dashboard "
+            "instead of the shared one, so compiling another notebook does "
+            "not replace it. Use `remote-export --notebook` and "
+            "`remote-deploy --notebook` to act on it afterwards."
+        ),
+    )
+    remote_compile_parser.add_argument(
         "--drop-past-sunset",
         action="store_true",
         dest="drop_past_sunset",
@@ -17796,6 +17811,11 @@ def main():
         help="Export the OpenAPI schema via POST /api/export-openapi."
     )
     remote_export_openapi_parser.add_argument(
+        "--notebook",
+        default=None,
+        help="Act on this uploaded notebook's own per-notebook app (compiled with `remote-compile --per-notebook`) instead of the shared one.",
+    )
+    remote_export_openapi_parser.add_argument(
         "--format",
         choices=["json", "yaml"],
         default="json",
@@ -17822,6 +17842,11 @@ def main():
     remote_export_sdk_parser = remote_export_subparsers.add_parser(
         "sdk",
         help="Generate an SDK client from the exported OpenAPI schema via POST /api/export-sdk."
+    )
+    remote_export_sdk_parser.add_argument(
+        "--notebook",
+        default=None,
+        help="Act on this uploaded notebook's own per-notebook app (compiled with `remote-compile --per-notebook`) instead of the shared one.",
     )
     remote_export_sdk_parser.add_argument(
         "--language",
@@ -17854,6 +17879,11 @@ def main():
     remote_deploy_parser = subparsers.add_parser(
         "remote-deploy",
         help="Build (and optionally push) a Docker image from the app currently compiled on a running dashboard instance, via its POST /api/deploy."
+    )
+    remote_deploy_parser.add_argument(
+        "--notebook",
+        default=None,
+        help="Act on this uploaded notebook's own per-notebook app (compiled with `remote-compile --per-notebook`) instead of the shared one.",
     )
     remote_deploy_parser.add_argument(
         "--tag",
