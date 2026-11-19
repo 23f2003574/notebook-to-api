@@ -52,8 +52,8 @@ def sdks(tmp_path_factory):
 def test_python_sdk_resolves_refs(sdks):
     code = sdks[0]
     assert "color: Literal['red', 'blue']" in code
-    assert "pts: List[Dict[str, Any]]" in code
-    assert "one: Dict[str, Any]" in code
+    assert "pts: List[PtType]" in code
+    assert "one: PtType" in code
     assert "maybe: Optional[Literal['red', 'blue']]" in code
     compile(code, "c.py", "exec")
 
@@ -68,5 +68,18 @@ def test_typescript_sdk_resolves_refs(sdks):
 
 def test_cyclic_and_missing_refs_fall_back_without_recursing(sdks):
     code, ts = sdks
-    assert "tree: Dict[str, Any]" in code and "gone: Any" in code
+    assert "tree: NodeType" in code and "gone: Any" in code
+    assert "class NodeType(TypedDict, total=False):\n    next: Any" in code
     assert '"next"?: unknown' in ts and "gone?: unknown;" in ts
+
+
+def test_python_sdk_defines_component_models_as_typeddicts(sdks):
+    code = sdks[0]
+    assert code.index("class PtType") < code.index("class UseRequest")
+    assert code.count("class PtType(") == 1  # shared by pts and one, defined once
+    assert "x: int" in code and "c: Literal['red', 'blue']" in code
+    pytest.importorskip("requests")  # the generated client imports it
+    namespace = {}
+    exec(compile(code, "c.py", "exec"), namespace)
+    assert namespace["PtType"].__required_keys__ == frozenset({"x", "y"})
+    assert namespace["UseRequest"].__annotations__["one"] is namespace["PtType"]

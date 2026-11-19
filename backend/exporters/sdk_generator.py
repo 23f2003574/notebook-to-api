@@ -835,6 +835,38 @@ _JSON_SCHEMA_TYPE_TO_PYTHON = {
 }
 
 
+# While generate_python_sdk builds its request classes, object schemas that
+# a request field references (a component model such as Point) are
+# collected here as named TypedDicts instead of collapsing to Dict[str, Any]
+# -- the Python mirror of the TypeScript client's expanded object types.
+_NESTED_TYPEDICTS = None
+
+
+def _nested_typeddict_name(prop_schema, defs, seen):
+    """Register `prop_schema` (an object with properties) as a TypedDict in
+    the active collector and return its class name, or None when no
+    collector is active or the schema has no usable title/properties."""
+    collector = _NESTED_TYPEDICTS
+    properties = prop_schema.get("properties")
+    title = prop_schema.get("title")
+    if collector is None or not isinstance(properties, dict) or not properties or not isinstance(title, str):
+        return None
+    name = re.sub(r"[^0-9A-Za-z_]", "", title)
+    if not name or name[0].isdigit() or keyword.iskeyword(name):
+        return None
+    name += "Type"
+    if name not in collector:
+        collector[name] = None  # reserve first: a self-reference falls back to Any via _seen
+        required = set(prop_schema.get("required") or [])
+        collector[name] = _python_typeddict_lines(
+            name,
+            {k: _json_schema_type_to_python(v, defs, seen) for k, v in properties.items() if k in required},
+            {k: _json_schema_type_to_python(v, defs, seen) for k, v in properties.items() if k not in required},
+        )
+    return name
+
+
+
 def _json_schema_type_to_python(prop_schema, defs=None, _seen=frozenset()):
     """The closest Python type annotation for `prop_schema` (one
     property's own JSON-schema object from an OpenAPI request body
@@ -903,6 +935,9 @@ def _json_schema_type_to_python(prop_schema, defs=None, _seen=frozenset()):
         value_schema = prop_schema.get("additionalProperties")
         if isinstance(value_schema, dict):
             return f"Dict[str, {_json_schema_type_to_python(value_schema, defs, _seen)}]"
+        nested = _nested_typeddict_name(prop_schema, defs, _seen)
+        if nested:
+            return nested
         return "Dict[str, Any]"
 
     return _JSON_SCHEMA_TYPE_TO_PYTHON.get(schema_type, "Any")
@@ -2227,6 +2262,7 @@ def generate_python_sdk(
     lines.append("            timeout=self.timeout,")
     lines.append("        ), parse_json=False)")
     lines.append("")
+    _emitted_nested = set()
     for path, method_name in method_names.items():
         is_background = _is_background_path(paths[path])
         description = _operation_description(paths[path])
@@ -2238,11 +2274,21 @@ def generate_python_sdk(
             "x-notebook-to-api-return-type"
         )
 
-        typeddict_lines.extend(
-            _python_request_typeddict_lines(
+        global _NESTED_TYPEDICTS
+        _NESTED_TYPEDICTS = {}
+        try:
+            request_lines = _python_request_typeddict_lines(
                 request_class, _request_body_schema(schema, paths[path])
             )
-        )
+            nested_lines = [
+                line for name, block in _NESTED_TYPEDICTS.items()
+                if block and name not in _emitted_nested for line in block
+            ]
+            _emitted_nested.update(_NESTED_TYPEDICTS)
+        finally:
+            _NESTED_TYPEDICTS = None
+        typeddict_lines.extend(nested_lines)
+        typeddict_lines.extend(request_lines)
 
         if is_background:
             typeddict_lines.extend(
