@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import NotebookUpload from './NotebookUpload'
+import NotebookLibrary from './NotebookLibrary'
 import { appUrl, configError, dashboardApiUrl, dashboardFetch, getDashboardKey, setDashboardKey } from '../dashboardApi'
 import { errorFromResponse } from '../errorMessage'
 import FunctionList from './FunctionList'
@@ -306,6 +307,11 @@ export default function Dashboard() {
                   ✅ Uploaded: <code className="bg-slate-900 px-2 py-1 rounded ml-2">{uploadedNotebook}</code>
                 </p>
               )}
+            </div>
+
+            <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 hover:border-slate-600 transition">
+              <h2 className="text-xl font-semibold text-white mb-4">📚 Your Notebooks</h2>
+              <NotebookLibrary onOpen={handleUploadSuccess} refreshKey={uploadedNotebook} />
             </div>
 
             <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 hover:border-slate-600 transition">

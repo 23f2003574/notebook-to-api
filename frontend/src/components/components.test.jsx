@@ -5,6 +5,7 @@ import CompilationLogs from './CompilationLogs'
 import Dashboard from './Dashboard'
 import EndpointTester from './EndpointTester'
 import FunctionList from './FunctionList'
+import NotebookLibrary from './NotebookLibrary'
 import NotebookUpload from './NotebookUpload'
 import { dashboardFetch, dashboardHeaders, getDashboardKey, setDashboardKey } from '../dashboardApi'
 
@@ -19,7 +20,9 @@ const stubFetch = (mock) =>
   vi.stubGlobal('fetch', (url, init) =>
     /\/api\/health$/.test(String(url))
       ? Promise.resolve({ ok: true, json: async () => ({ status: 'healthy' }) })
-      : mock(url, init))
+      : /\/api\/notebooks$/.test(String(url))
+        ? Promise.resolve({ ok: true, json: async () => ({ notebooks: [] }) })
+        : mock(url, init))
 
 describe('CompilationLogs', () => {
   it('shows a placeholder when empty and every line otherwise', () => {
@@ -349,7 +352,7 @@ describe('Dashboard backend health', () => {
     render(<Dashboard />)
     expect(status()).toHaveTextContent('Checking')
     await waitFor(() => expect(status()).toHaveTextContent('Running'))
-    expect(fetchMock.mock.calls[0][0]).toMatch(/\/api\/health$/)
+    expect(fetchMock.mock.calls.some(([url]) => /\/api\/health$/.test(String(url)))).toBe(true)
   })
 
   it('shows Unavailable when the request is rejected', async () => {
@@ -386,11 +389,12 @@ describe('Dashboard backend health', () => {
     const fetchMock = vi.fn((url, init) => { signal = init.signal; return new Promise(() => {}) })
     vi.stubGlobal('fetch', fetchMock)
     const { unmount } = render(<Dashboard />)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+    // The health probe and the notebook list, each requested once on mount.
+    expect(fetchMock).toHaveBeenCalledTimes(2)
     unmount()
     expect(signal.aborted).toBe(true)
     await vi.advanceTimersByTimeAsync(60000)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
   it('ignores a stale response that resolves after a newer one', async () => {
@@ -731,5 +735,45 @@ describe('dashboard credential handling', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Forget key' }))
     expect(getDashboardKey()).toBe('')
     expect(reload).toHaveBeenCalled()
+  })
+})
+
+describe('NotebookLibrary', () => {
+  const stubList = (reply) => vi.stubGlobal('fetch', (url) => {
+    expect(String(url)).toMatch(/\/api\/notebooks$/)
+    return Promise.resolve(reply)
+  })
+
+  it('lists stored notebooks and opens the chosen one', async () => {
+    stubList({
+      ok: true,
+      json: async () => ({ notebooks: [
+        { filename: 'a.ipynb', size_bytes: 2048, currently_compiled: true },
+        { filename: 'b.ipynb', size_bytes: 12 },
+        { size_bytes: 1 },
+      ] }),
+    })
+    const onOpen = vi.fn()
+    render(<NotebookLibrary onOpen={onOpen} refreshKey={null} />)
+
+    expect(await screen.findByText('a.ipynb')).toBeInTheDocument()
+    expect(screen.getByText('2.0 KB')).toBeInTheDocument()
+    expect(screen.getByText('compiled')).toBeInTheDocument()
+    expect(screen.getByText('12 B')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Open' })).toHaveLength(2)
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Open' })[1])
+    expect(onOpen).toHaveBeenCalledWith({ filename: 'b.ipynb' })
+  })
+
+  it('says so when nothing is stored and when the list cannot be loaded', async () => {
+    stubList({ ok: true, json: async () => ({ notebooks: [] }) })
+    const { unmount } = render(<NotebookLibrary onOpen={() => {}} refreshKey={null} />)
+    expect(await screen.findByText('No notebooks uploaded yet')).toBeInTheDocument()
+    unmount()
+
+    stubList({ ok: false, status: 500, statusText: 'boom', json: async () => ({ detail: 'disk gone' }), text: async () => 'disk gone' })
+    render(<NotebookLibrary onOpen={() => {}} refreshKey={null} />)
+    expect(await screen.findByText(/disk gone|Could not list notebooks/)).toBeInTheDocument()
   })
 })
