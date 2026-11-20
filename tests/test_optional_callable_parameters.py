@@ -25,7 +25,7 @@ def test_parser_types_the_field_as_none_only():
     assert args["a"]["type"] == "int" and args["c"]["type"] == "int"
 
 
-def test_generated_endpoint_rejects_json_callbacks_and_keeps_the_default(tmp_path):
+def test_generated_endpoint_rejects_json_callbacks_and_keeps_the_default(tmp_path, monkeypatch):
     nb = nbformat.v4.new_notebook()
     nb.cells.append(nbformat.v4.new_code_cell(CODE))
     nbformat.write(nb, tmp_path / "nb.ipynb")
@@ -33,7 +33,7 @@ def test_generated_endpoint_rejects_json_callbacks_and_keeps_the_default(tmp_pat
                            "--output", str(tmp_path / "app")], capture_output=True, text=True, cwd=ROOT,
                           env={**os.environ, "PYTHONPATH": str(ROOT)})
     assert done.returncode == 0, done.stderr
-    os.environ["NOTEBOOK_API_KEY"] = "k"
+    monkeypatch.setenv("NOTEBOOK_API_KEY", "k")  # restored after the test
     sys.path.insert(0, str(tmp_path))
     try:
         spec = importlib.util.spec_from_file_location("app_cb", tmp_path / "app" / "app.py")
