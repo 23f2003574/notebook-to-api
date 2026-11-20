@@ -491,8 +491,53 @@ _AUTH_FAILURES = {}
 _AUTH_FAILURES_LOCK = threading.Lock()
 
 
+def dashboard_trusted_proxies():
+    """Networks (NOTEBOOK_API_DASHBOARD_TRUSTED_PROXIES: comma-separated IPs or
+    CIDR ranges) whose X-Forwarded-For may identify the real client for the
+    failed-authentication throttle. Empty (default): no proxy is trusted."""
+    import ipaddress
+
+    networks = []
+    for part in os.getenv("NOTEBOOK_API_DASHBOARD_TRUSTED_PROXIES", "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(part, strict=False))
+        except ValueError:
+            raise RuntimeError(
+                f"NOTEBOOK_API_DASHBOARD_TRUSTED_PROXIES must list IP addresses or CIDR ranges, got {part!r}"
+            ) from None
+    return tuple(networks)
+
+
 def _auth_client(request):
-    return request.client.host if request.client else "unknown"
+    """The throttle key: the peer address, or -- only when the peer is a trusted
+    proxy -- the first X-Forwarded-For hop from the right that is not itself
+    a trusted proxy."""
+    import ipaddress
+
+    peer = request.client.host if request.client else "unknown"
+    networks = dashboard_trusted_proxies()
+
+    def trusted(address):
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError:
+            return False
+        return any(ip in n for n in networks if ip.version == n.version)
+
+    if not networks or not trusted(peer):
+        return peer
+
+    for hop in reversed([h.strip() for h in request.headers.get("x-forwarded-for", "").split(",") if h.strip()]):
+        try:
+            ipaddress.ip_address(hop)
+        except ValueError:
+            return peer
+        if not trusted(hop):
+            return hop
+    return peer
 
 
 def _auth_retry_after_if_blocked(client):

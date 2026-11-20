@@ -71,6 +71,7 @@ def test_generated_app_env_vars_default_matches_the_actual_generated_code():
         "NOTEBOOK_API_MAX_TASKS",
         "NOTEBOOK_API_TASK_EXECUTION_TIMEOUT_SECONDS",
         "NOTEBOOK_API_AUTH_FAILURE_LIMIT_PER_MINUTE",
+        "NOTEBOOK_API_TRUSTED_PROXIES",
         "NOTEBOOK_API_RATE_LIMIT_PER_MINUTE",
         "NOTEBOOK_API_WEBHOOK_TIMEOUT_SECONDS",
         "NOTEBOOK_API_WEBHOOK_SECRET",

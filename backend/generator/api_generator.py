@@ -143,7 +143,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # subsystem every endpoint depends on" exposure, just one level
     # removed from _enforce_rate_limit's own name instead of the call
     # site.
-    "_enforce_rate_limit", "_notebook_result_schema", "AUTH_FAILURE_LIMIT_PER_MINUTE", "AUTH_FAILURE_WINDOW_SECONDS", "_AUTH_FAILURE_MAX_CLIENTS", "_AUTH_FAILURES", "_AUTH_FAILURES_LOCK", "_auth_client_id", "_auth_throttle_check", "_auth_throttle_record_failure", "_Request", "RATE_LIMIT_PER_MINUTE", "RATE_LIMIT_WINDOW_SECONDS",
+    "_enforce_rate_limit", "_notebook_result_schema", "AUTH_FAILURE_LIMIT_PER_MINUTE", "AUTH_FAILURE_WINDOW_SECONDS", "_AUTH_FAILURE_MAX_CLIENTS", "_AUTH_FAILURES", "_AUTH_FAILURES_LOCK", "_auth_client_id", "TRUSTED_PROXIES", "_parse_trusted_proxies", "_TRUSTED_NETWORKS", "_is_trusted_proxy", "_auth_throttle_check", "_auth_throttle_record_failure", "_Request", "RATE_LIMIT_PER_MINUTE", "RATE_LIMIT_WINDOW_SECONDS",
     "_RATE_LIMIT_WINDOWS", "_RATE_LIMIT_LOCK", "_TASKS_ADMISSION_LOCK",
     "verify_api_key", "custom_openapi",
     "root", "health_check", "readiness_check", "auth_status", "auth_info",
@@ -701,6 +701,21 @@ GENERATED_APP_ENV_VARS = [
             "hung tasks eventually starve the entire app, not just "
             "background ones. 0 (the default) disables this entirely, "
             "preserving the previous unbounded-execution-time behavior."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_TRUSTED_PROXIES",
+        "default": "",
+        "description": (
+            "Comma-separated IP addresses or CIDR ranges of the reverse "
+            "proxies / ingress controllers in front of this app. Only a "
+            "request arriving from one of them may name the real client "
+            "through X-Forwarded-For (the first address from the right that "
+            "is not itself a trusted proxy); everyone else is identified by "
+            "their own address. Used to keep the failed-authentication "
+            "throttle per client instead of one shared bucket for the whole "
+            "proxy. Empty (the default) trusts no proxy, so a forged header "
+            "can never choose the bucket."
         ),
     },
     {
@@ -4343,8 +4358,53 @@ def generate_fastapi_code(
     lines.append("_AUTH_FAILURES = {}")
     lines.append("_AUTH_FAILURES_LOCK = threading.Lock()")
     lines.append("")
+    # Who is "the client" behind a reverse proxy? Only a request whose *peer* is
+    # one of NOTEBOOK_API_TRUSTED_PROXIES may name someone else through
+    # X-Forwarded-For, and then only the first hop from the right that is not
+    # itself a trusted proxy counts -- entries further left are whatever the
+    # caller typed. With nothing configured (the default) the peer address is
+    # always used, so a forged header can never pick the throttle bucket.
+    lines.append(
+        'TRUSTED_PROXIES = os.getenv("NOTEBOOK_API_TRUSTED_PROXIES", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_TRUSTED_PROXIES")}")'
+    )
+    lines.append("def _parse_trusted_proxies(raw):")
+    lines.append("    import ipaddress")
+    lines.append("    networks = []")
+    lines.append("    for part in raw.split(','):")
+    lines.append("        part = part.strip()")
+    lines.append("        if not part:")
+    lines.append("            continue")
+    lines.append("        try:")
+    lines.append("            networks.append(ipaddress.ip_network(part, strict=False))")
+    lines.append("        except ValueError:")
+    lines.append("            raise RuntimeError(f'NOTEBOOK_API_TRUSTED_PROXIES must list IP addresses or CIDR ranges, got {part!r}') from None")
+    lines.append("    return tuple(networks)")
+    lines.append("")
+    lines.append("_TRUSTED_NETWORKS = _parse_trusted_proxies(TRUSTED_PROXIES)")
+    lines.append("")
+    lines.append("def _is_trusted_proxy(address):")
+    lines.append("    import ipaddress")
+    lines.append("    try:")
+    lines.append("        ip = ipaddress.ip_address(address)")
+    lines.append("    except ValueError:")
+    lines.append("        return False")
+    lines.append("    return any(ip in network for network in _TRUSTED_NETWORKS if ip.version == network.version)")
+    lines.append("")
     lines.append("def _auth_client_id(request):")
-    lines.append("    return request.client.host if request.client else 'unknown'")
+    lines.append("    peer = request.client.host if request.client else 'unknown'")
+    lines.append("    if not _TRUSTED_NETWORKS or not _is_trusted_proxy(peer):")
+    lines.append("        return peer")
+    lines.append("    import ipaddress")
+    lines.append("    hops = [h.strip() for h in request.headers.get('x-forwarded-for', '').split(',') if h.strip()]")
+    lines.append("    for hop in reversed(hops):")
+    lines.append("        try:")
+    lines.append("            ipaddress.ip_address(hop)")
+    lines.append("        except ValueError:")
+    lines.append("            return peer")
+    lines.append("        if not _is_trusted_proxy(hop):")
+    lines.append("            return hop")
+    lines.append("    return peer")
     lines.append("")
     lines.append("def _auth_throttle_check(client):")
     lines.append("    if AUTH_FAILURE_LIMIT_PER_MINUTE <= 0:")

@@ -359,7 +359,12 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \\
 # uvicorn replace the shell as PID 1: a PID 1 shell ignores SIGTERM, so
 # `docker stop` / a k8s rollout waited out the grace period and SIGKILLed
 # the server mid-request instead of letting it drain.
-CMD ["sh", "-c", "exec uvicorn {package_name}.app:app --host 0.0.0.0 --port ${{PORT:-8000}}"]
+#
+# --no-proxy-headers: uvicorn would otherwise replace the client address with
+# X-Forwarded-For whenever the peer is 127.0.0.1 (or FORWARDED_ALLOW_IPS). The app
+# applies the forwarded header itself, and only for the proxies listed in
+# NOTEBOOK_API_TRUSTED_PROXIES, so a forged header never picks a client identity.
+CMD ["sh", "-c", "exec uvicorn {package_name}.app:app --host 0.0.0.0 --port ${{PORT:-8000}} --no-proxy-headers"]
 """
 
 
