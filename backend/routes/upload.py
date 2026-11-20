@@ -16883,8 +16883,57 @@ def openapi_preview_endpoint(data: dict):
     return response
 
 
+def _record_governance(action, data, outcome, response=None, error=None):
+    """Append one compile/deploy outcome to the governance audit chain.
+
+    Uses the same audit service GET /governance/audit reads. A recording failure never
+    changes the operation's own outcome (the compile/deploy really happened or really
+    failed); it is logged and reported to the caller in "governance_audit_error"."""
+    try:
+        from backend.observability.deployment_governance_api import _build_audit_service
+
+        data = data if isinstance(data, dict) else {}
+        notebook = data.get("notebook") or data.get("notebook_path")
+        notebook = os.path.basename(notebook) if isinstance(notebook, str) and notebook else None
+        resp = response if isinstance(response, dict) else {}
+        metadata = {"notebook": notebook, "per_notebook": bool(data.get("per_notebook") or data.get("notebook"))}
+        for key in ("version", "tag", "image", "pushed", "sha256", "compiled_sha256"):
+            if isinstance(resp.get(key), (str, int, bool)):
+                metadata[key] = resp[key]
+        if error is not None:
+            metadata["error"] = str(error)[:300]
+        return _build_audit_service().record(
+            action=action,
+            actor="dashboard",
+            resource=f"notebook:{notebook}" if notebook else "generated",
+            outcome=outcome,
+            metadata=metadata,
+        )
+    except Exception as exc:  # noqa: BLE001 - auditing must not break the operation
+        logging.getLogger("uvicorn.error").warning("governance audit record failed: %s", exc)
+        return exc
+
+
+def _audited(action, data, run):
+    """Run `run()`, record its success or failure exactly once, and re-raise failures."""
+    try:
+        result = run()
+    except BaseException as exc:
+        _record_governance(action, data, "failure", error=getattr(exc, "detail", exc))
+        raise
+    recorded = _record_governance(action, data, "success", response=result)
+    if isinstance(recorded, Exception) and isinstance(result, dict):
+        result = {**result, "governance_audit_error": "governance audit record could not be written"}
+    return result
+
+
 @router.post("/compile")
 def compile_notebook_endpoint(data: dict):
+    """Compile an uploaded notebook; the outcome is recorded in the governance audit trail."""
+    return _audited("notebook.compile", data, lambda: _compile_with_lifecycle(data))
+
+
+def _compile_with_lifecycle(data: dict):
     """Compile an uploaded notebook (see _compile_notebook_locked for the request fields).
 
     Serialized with that notebook's own delete and rename: a compile can no longer run
@@ -18099,6 +18148,11 @@ def _poll_deploy_smoke_test_container(container_id):
 
 @router.post("/deploy")
 def deploy_generated_app(data: dict = None):
+    """Build (and optionally push) a Docker image; the outcome is recorded in the governance audit trail."""
+    return _audited("notebook.deploy", data, lambda: _deploy_generated_app(data))
+
+
+def _deploy_generated_app(data: dict = None):
     """Build (and optionally push) a Docker image from the compiled app.
 
     The CLI's `deploy` command already does this (compile + `docker
