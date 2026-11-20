@@ -44,11 +44,11 @@ test('a failed compile is recorded as a failure and linked', async ({ page, requ
   await expect(linked.getByTestId('audit-outcome')).toHaveText(/failure/)
 
   // Filtering to failures shows it; filtering to successes does not.
-  await page.getByLabel('Outcome').selectOption('failure')
+  await page.getByTestId('governance-audit').getByLabel('Outcome').selectOption('failure')
   await page.getByText('Apply filters').click()
   await expect(page.getByTestId('governance-audit').getByText('e2e_gone.ipynb').first()).toBeVisible()
-  await page.getByLabel('Notebook').fill('e2e_gone.ipynb')
-  await page.getByLabel('Outcome').selectOption('success')
+  await page.getByTestId('governance-audit').getByLabel('Notebook').fill('e2e_gone.ipynb')
+  await page.getByTestId('governance-audit').getByLabel('Outcome').selectOption('success')
   await page.getByText('Apply filters').click()
   await expect(page.getByText(/No compile or deploy records match/)).toBeVisible()
 })

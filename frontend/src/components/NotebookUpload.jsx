@@ -7,21 +7,42 @@ export default function NotebookUpload({ onSuccess }) {
   const [error, setError] = useState(null)
   const [dragging, setDragging] = useState(false)
   const [uploaded, setUploaded] = useState(null)
+  const [importSummary, setImportSummary] = useState(null)
 
   // The one upload path: used for a file chosen with the picker and for a dropped file.
   const uploadFile = async (file) => {
-    if (!file.name.endsWith('.ipynb')) {
-      setError('❌ Please upload a .ipynb file')
+    const isArchive = file.name.toLowerCase().endsWith('.zip')
+    if (!isArchive && !file.name.endsWith('.ipynb')) {
+      setError('❌ Please upload a .ipynb file or a .zip archive of notebooks')
       return
     }
 
     setLoading(true)
     setError(null)
     setUploaded(null)
+    setImportSummary(null)
 
     try {
       const formData = new FormData()
       formData.append('file', file)
+
+      if (isArchive) {
+        // An archive can carry data and model files next to its notebooks; the server stores them
+        // with each notebook and says what it kept and what it refused.
+        const response = await dashboardFetch('/api/notebooks/import', { method: 'POST', body: formData })
+        if (!response.ok) throw new Error(await errorFromResponse(response, 'Import failed'))
+        const data = await response.json()
+        const results = Array.isArray(data.results) ? data.results : []
+        setImportSummary(results)
+        const first = results.find((r) => r.status === 'success')
+        if (first) {
+          setUploaded(first.filename)
+          onSuccess({ filename: first.filename })
+        } else {
+          setError('❌ No notebook was imported from the archive')
+        }
+        return
+      }
 
       const response = await dashboardFetch('/api/upload', {
         method: 'POST',
@@ -90,11 +111,11 @@ export default function NotebookUpload({ onSuccess }) {
         <div className="flex flex-col items-center justify-center">
           <span className="text-2xl mb-2" aria-hidden="true">📁</span>
           <span className="text-white font-medium">Click to upload or drag & drop</span>
-          <span className="text-xs text-slate-400 mt-1">.ipynb files only</span>
+          <span className="text-xs text-slate-400 mt-1">.ipynb notebooks, or a .zip with their data files</span>
         </div>
         <input
           type="file"
-          accept=".ipynb"
+          accept=".ipynb,.zip"
           onChange={handleFileUpload}
           // Not `disabled`: a disabled control drops keyboard focus mid-upload. The picker is
           // blocked instead, so focus stays on the control while it is busy.
@@ -109,6 +130,24 @@ export default function NotebookUpload({ onSuccess }) {
         {loading && <p className="mt-3 text-slate-400">⏳ Uploading...</p>}
         {uploaded && !loading && !error && <p className="mt-3 text-emerald-400 text-sm">✅ Uploaded {uploaded}</p>}
       </div>
+      {importSummary && (
+        <ul className="mt-3 space-y-2 text-sm" data-testid="import-summary">
+          {importSummary.map((r, i) => (
+            <li key={`${r.filename}-${i}`} className="text-slate-300">
+              {r.status === 'success' ? '✅' : '❌'} <code>{r.filename}</code>
+              {r.status !== 'success' && r.error ? `: ${r.error}` : ''}
+              {Array.isArray(r.companion_files) && r.companion_files.length > 0 && (
+                <span className="block text-slate-400">
+                  Data files kept: {r.companion_files.map((f) => f.path).join(', ')}
+                </span>
+              )}
+              {Array.isArray(r.companion_skipped) && r.companion_skipped.map((f) => (
+                <span key={f.path} className="block text-amber-300">⚠ Skipped <code>{f.path}</code>: {f.reason}</span>
+              ))}
+            </li>
+          ))}
+        </ul>
+      )}
       {error && <p id="notebook-upload-error" role="alert" className="mt-3 text-red-400 text-sm">{error}</p>}
     </div>
   )

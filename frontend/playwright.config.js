@@ -7,7 +7,9 @@ import { defineConfig } from '@playwright/test'
 // (same origin), with throwaway upload/generated/audit directories so runs are deterministic and
 // need no credentials or external services. Build first: `npm run e2e` does.
 const PORT = Number(process.env.E2E_PORT || 8123)
-const work = mkdtempSync(join(tmpdir(), 'n2a-e2e-'))
+// The config is evaluated again in each worker; the env var makes them share the runner's directory.
+const work = process.env.E2E_WORK_DIR || mkdtempSync(join(tmpdir(), 'n2a-e2e-'))
+process.env.E2E_WORK_DIR = work
 
 export default defineConfig({
   testDir: './e2e',

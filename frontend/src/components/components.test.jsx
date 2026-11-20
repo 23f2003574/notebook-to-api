@@ -85,6 +85,37 @@ describe('NotebookUpload', () => {
   })
 })
 
+describe('NotebookUpload archives', () => {
+  it('imports a zip through the import endpoint and reports kept and skipped data files', async () => {
+    const reply = { results: [{
+      filename: 'm.ipynb', status: 'success',
+      companion_files: [{ path: 'weights.json', bytes: 8 }],
+      companion_skipped: [{ path: 'link.json', reason: 'symbolic links are not imported' }],
+    }] }
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => reply })
+    vi.stubGlobal('fetch', fetchMock)
+    const onSuccess = vi.fn()
+    const { container } = render(<NotebookUpload onSuccess={onSuccess} />)
+    fireEvent.change(container.querySelector('input[type=file]'), { target: { files: [new File(['PK'], 'bundle.zip')] } })
+    const summary = await screen.findByTestId('import-summary')
+    expect(summary).toHaveTextContent('m.ipynb')
+    expect(summary).toHaveTextContent('Data files kept: weights.json')
+    expect(summary).toHaveTextContent('Skipped link.json: symbolic links are not imported')
+    expect(fetchMock.mock.calls[0][0]).toMatch(/\/api\/notebooks\/import$/)
+    expect(onSuccess).toHaveBeenCalledWith({ filename: 'm.ipynb' })
+  })
+
+  it('shows an error when nothing in the archive could be imported', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ results: [{ filename: 'x.ipynb', status: 'error', error: 'already exists' }] }) }))
+    const onSuccess = vi.fn()
+    const { container } = render(<NotebookUpload onSuccess={onSuccess} />)
+    fireEvent.change(container.querySelector('input[type=file]'), { target: { files: [new File(['PK'], 'b.zip')] } })
+    expect(await screen.findByRole('alert')).toHaveTextContent('No notebook was imported')
+    expect(screen.getByTestId('import-summary')).toHaveTextContent('already exists')
+    expect(onSuccess).not.toHaveBeenCalled()
+  })
+})
+
 describe('dashboard API key', () => {
   it('is sent on uploads only once the user has entered it', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) })
