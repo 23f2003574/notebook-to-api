@@ -2,6 +2,8 @@
 import asyncio
 import importlib
 import json
+
+from tests.task_store import read_tasks
 import sys
 import threading
 
@@ -81,7 +83,7 @@ def test_concurrent_cancels_both_wait_for_reaping_and_clean_up_once(mod):
     assert r1.status_code == r2.status_code == 200
     assert r1.json() == r2.json() == {"task_id": "t", "status": "cancelled"}
     assert entry["event"].sets == 1 and entry["scope"].cancels == 1  # cleanup requested once
-    assert json.loads(mod.store.read_text())["tasks"]["t"]["status"] == "cancelled"
+    assert read_tasks(mod.store)["t"]["status"] == "cancelled"
 
 
 def test_repeated_cancel_after_finish_is_idempotent(mod):
@@ -112,7 +114,7 @@ def test_cancelling_a_finished_task_is_refused_and_leaves_it_untouched(mod, fina
     r = _run(scenario())
     assert r.status_code == 409 and final in r.json()["detail"]
     assert mod.TASKS["t"] == before
-    assert json.loads(mod.store.read_text())["tasks"]["t"]["status"] == final
+    assert read_tasks(mod.store)["t"]["status"] == final
 
 
 def test_completion_or_failure_after_cancel_cannot_change_the_outcome(mod):
@@ -127,7 +129,7 @@ def test_completion_or_failure_after_cancel_cannot_change_the_outcome(mod):
     assert mod._transition_task("t", "failed", error="late") is False
     task = mod.TASKS["t"]
     assert task["status"] == "cancelled" and "result" not in task and "error" not in task
-    assert json.loads(mod.store.read_text())["tasks"]["t"] == task
+    assert read_tasks(mod.store)["t"] == task
 
 
 def test_unknown_task_is_404(mod):

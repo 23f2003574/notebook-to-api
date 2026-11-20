@@ -214,7 +214,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "_evict_expired_tasks", "_run_background_task", "_json_safe",
     "_evict_expired_tasks_throttled", "_evict_loop", "_TASK_TERMINAL", "_LAST_EVICT",
     "_run_background_task_inner", "_TASK_CANCEL",
-    "_TaskRegistry", "_persist_tasks", "_TASK_TRANSITIONS", "_transition_task", "_deliver_task_webhook_safely", "_load_persisted_tasks", "TASK_STORE_PATH",
+    "_TaskRegistry", "_persist_tasks", "_Task", "_TASK_DIRTY", "_TASK_REMOVED", "_TASK_DIRTY_LOCK", "_TASK_JOURNAL", "_TASK_JOURNAL_PATH", "_task_record", "_write_task_snapshot", "_quarantine", "_TASK_TRANSITIONS", "_transition_task", "_deliver_task_webhook_safely", "_load_persisted_tasks", "TASK_STORE_PATH",
     "_coerce_array_like", "_safe_annotation", "_shield_exit",
     "_png_data_uri", "_bytes_json", "_openapi_json_safe", "_default_kwargs", "_function_default",
     # Every name below is one of this file's own top-level `import`s --
@@ -1005,55 +1005,162 @@ _TASK_STORE_SOURCE = '''\
 import logging as _task_logging
 
 TASK_STORE_PATH = os.getenv("NOTEBOOK_API_TASK_STORE_PATH", "").strip()
+_TASK_JOURNAL_PATH = TASK_STORE_PATH + ".journal" if TASK_STORE_PATH else ""
 _TASK_STORE_LOCK = threading.Lock()
+_TASK_DIRTY_LOCK = threading.Lock()
 _TASK_NOT_PERSISTED = ("_replay",)
+_TASK_DIRTY = set()
+_TASK_REMOVED = set()
+# epoch: bumped by every compaction; a journal line is only valid for the snapshot of its epoch,
+# so a crash between "write the new snapshot" and "empty the journal" can never replay old
+# states over newer ones. records: lines appended since the last compaction.
+_TASK_JOURNAL = {"epoch": 0, "records": 0}
+
+
+class _Task(dict):
+    """One task record. Every change marks it dirty, so saving writes only what changed."""
+
+    def _touch(self):
+        task_id = getattr(self, "_task_id", None)
+        if task_id is not None:
+            with _TASK_DIRTY_LOCK:
+                _TASK_DIRTY.add(task_id)
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        self._touch()
+
+    def __delitem__(self, key):
+        super().__delitem__(key)
+        self._touch()
+
+    def pop(self, key, *default):
+        result = super().pop(key, *default)
+        self._touch()
+        return result
+
+    def popitem(self):
+        result = super().popitem()
+        self._touch()
+        return result
+
+    def setdefault(self, key, default=None):
+        result = super().setdefault(key, default)
+        self._touch()
+        return result
+
+    def update(self, *args, **kwargs):
+        super().update(*args, **kwargs)
+        self._touch()
+
+    def clear(self):
+        super().clear()
+        self._touch()
+
+
+def _task_record(task):
+    return {k: v for k, v in dict(task).items() if k not in _TASK_NOT_PERSISTED}
+
+
+def _write_task_snapshot():
+    """Atomically replace the snapshot with every task and start a new journal epoch.
+    Called with _TASK_STORE_LOCK held."""
+    snapshot = {tid: _task_record(task) for tid, task in list(TASKS.items())}
+    epoch = _TASK_JOURNAL["epoch"] + 1
+    tmp = f"{TASK_STORE_PATH}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"version": 1, "epoch": epoch, "tasks": snapshot}, fh, default=str)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, TASK_STORE_PATH)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    _TASK_JOURNAL["epoch"] = epoch
+    with open(_TASK_JOURNAL_PATH, "w", encoding="utf-8") as fh:  # emptied only after the snapshot is safe
+        fh.flush()
+        os.fsync(fh.fileno())
+    _TASK_JOURNAL["records"] = 0
 
 
 def _persist_tasks():
-    """Atomically write the task registry (minus request arguments) to disk."""
+    """Append what changed since the last save to the journal (one line per changed or
+    removed task, fsynced); fold the journal into a fresh snapshot once it outgrows the
+    live tasks. The cost of a save no longer depends on how many tasks exist."""
     if not TASK_STORE_PATH:
         return
     with _TASK_STORE_LOCK:
-        tmp = f"{TASK_STORE_PATH}.{os.getpid()}.tmp"
+        with _TASK_DIRTY_LOCK:
+            dirty, removed = set(_TASK_DIRTY), set(_TASK_REMOVED)
+            _TASK_DIRTY.clear()
+            _TASK_REMOVED.clear()
+        if not dirty and not removed:
+            return
         try:
-            snapshot = {
-                tid: {k: v for k, v in dict(task).items() if k not in _TASK_NOT_PERSISTED}
-                for tid, task in list(TASKS.items())
-            }
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump({"version": 1, "tasks": snapshot}, fh, default=str)
+            if not os.path.exists(TASK_STORE_PATH):
+                _write_task_snapshot()  # the first save creates the store, containing everything
+                return
+            epoch = _TASK_JOURNAL["epoch"]
+            lines = [json.dumps({"e": epoch, "op": "del", "id": tid}) for tid in sorted(removed - dirty)]
+            for tid in sorted(dirty):
+                task = TASKS.get(tid)
+                if task is None:
+                    lines.append(json.dumps({"e": epoch, "op": "del", "id": tid}))
+                else:
+                    lines.append(json.dumps({"e": epoch, "op": "put", "id": tid, "task": _task_record(task)}, default=str))
+            with open(_TASK_JOURNAL_PATH, "a", encoding="utf-8") as fh:
+                fh.write("\\n".join(lines) + "\\n")
                 fh.flush()
                 os.fsync(fh.fileno())
-            os.replace(tmp, TASK_STORE_PATH)
+            _TASK_JOURNAL["records"] += len(lines)
+            if _TASK_JOURNAL["records"] > max(1000, 4 * len(TASKS)):
+                _write_task_snapshot()
         except (OSError, TypeError, ValueError, RuntimeError) as exc:
+            with _TASK_DIRTY_LOCK:  # keep them for the next save
+                _TASK_DIRTY.update(dirty)
+                _TASK_REMOVED.update(removed)
             _task_logging.getLogger("uvicorn.error").error(
                 "could not save tasks to NOTEBOOK_API_TASK_STORE_PATH=%s: %s", TASK_STORE_PATH, exc
             )
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
 
 
 class _TaskRegistry(dict):
     """dict of task_id -> task that saves itself whenever tasks come or go."""
 
     def __setitem__(self, key, value):
-        super().__setitem__(key, value)
+        task = value if isinstance(value, _Task) else _Task(value)
+        task._task_id = key
+        super().__setitem__(key, task)
+        with _TASK_DIRTY_LOCK:
+            _TASK_DIRTY.add(key)
+            _TASK_REMOVED.discard(key)
         _persist_tasks()
 
     def __delitem__(self, key):
         super().__delitem__(key)
+        with _TASK_DIRTY_LOCK:
+            _TASK_DIRTY.discard(key)
+            _TASK_REMOVED.add(key)
         _persist_tasks()
 
     def pop(self, key, *default):
         present = key in self
         result = super().pop(key, *default)
         if present:
+            with _TASK_DIRTY_LOCK:
+                _TASK_DIRTY.discard(key)
+                _TASK_REMOVED.add(key)
             _persist_tasks()
         return result
 
     def clear(self):
+        with _TASK_DIRTY_LOCK:
+            _TASK_REMOVED.update(self.keys())
+            _TASK_DIRTY.clear()
         super().clear()
         _persist_tasks()
 
@@ -1061,30 +1168,55 @@ class _TaskRegistry(dict):
 TASKS = _TaskRegistry()
 
 
+def _quarantine(path, log, reason):
+    quarantine = f"{path}.corrupt-{int(time.time())}"
+    os.replace(path, quarantine)
+    log.error("%s is not valid task data (%s); moved to %s and starting empty", path, reason, quarantine)
+
+
 def _load_persisted_tasks():
-    if not TASK_STORE_PATH or not os.path.exists(TASK_STORE_PATH):
+    if not TASK_STORE_PATH or not (os.path.exists(TASK_STORE_PATH) or os.path.exists(_TASK_JOURNAL_PATH)):
         return
     log = _task_logging.getLogger("uvicorn.error")
-    try:
-        with open(TASK_STORE_PATH, encoding="utf-8") as fh:
-            raw = fh.read()
-    except OSError as exc:
-        raise RuntimeError(
-            f"cannot read NOTEBOOK_API_TASK_STORE_PATH={TASK_STORE_PATH}: {exc}; "
-            "fix its permissions or point the variable at a writable file"
-        ) from exc
-    try:
-        stored = json.loads(raw)["tasks"]
-        if not isinstance(stored, dict):
-            raise ValueError("'tasks' is not an object")
-    except (ValueError, KeyError, TypeError) as exc:
-        quarantine = f"{TASK_STORE_PATH}.corrupt-{int(time.time())}"
-        os.replace(TASK_STORE_PATH, quarantine)
-        log.error(
-            "NOTEBOOK_API_TASK_STORE_PATH=%s is not valid task data (%s); moved to %s and starting empty",
-            TASK_STORE_PATH, exc, quarantine,
-        )
-        return
+    stored, epoch = {}, 0
+    if os.path.exists(TASK_STORE_PATH):
+        try:
+            with open(TASK_STORE_PATH, encoding="utf-8") as fh:
+                raw = fh.read()
+        except OSError as exc:
+            raise RuntimeError(
+                f"cannot read NOTEBOOK_API_TASK_STORE_PATH={TASK_STORE_PATH}: {exc}; "
+                "fix its permissions or point the variable at a writable file"
+            ) from exc
+        try:
+            document = json.loads(raw)
+            stored = document["tasks"]
+            if not isinstance(stored, dict):
+                raise ValueError("'tasks' is not an object")
+            epoch = int(document.get("epoch", 0))  # a pre-journal store has no epoch
+        except (ValueError, KeyError, TypeError) as exc:
+            _quarantine(TASK_STORE_PATH, log, exc)
+            if os.path.exists(_TASK_JOURNAL_PATH):
+                _quarantine(_TASK_JOURNAL_PATH, log, "its snapshot was corrupt")
+            return
+    if os.path.exists(_TASK_JOURNAL_PATH):
+        replayed = 0
+        with open(_TASK_JOURNAL_PATH, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                try:
+                    entry = json.loads(line)
+                    if entry.get("e") != epoch:
+                        continue  # written for an older snapshot, already folded into this one
+                    if entry["op"] == "put" and isinstance(entry["task"], dict):
+                        stored[entry["id"]] = entry["task"]
+                    elif entry["op"] == "del":
+                        stored.pop(entry["id"], None)
+                    replayed += 1
+                except (ValueError, KeyError, TypeError, AttributeError):
+                    continue  # a torn last line from a crash, or damage: skip just that line
+        if replayed:
+            log.info("replayed %d task journal record(s) from %s", replayed, _TASK_JOURNAL_PATH)
+    _TASK_JOURNAL["epoch"] = epoch
     now = time.time()
     skipped = 0
     for task_id, task in stored.items():
@@ -1097,10 +1229,16 @@ def _load_persisted_tasks():
                 error="interrupted_by_restart: the app restarted while this task was running; "
                       "its execution was not resumed",
             )
-        dict.__setitem__(TASKS, task_id, task)
+        restored = _Task(task)
+        restored._task_id = task_id
+        dict.__setitem__(TASKS, task_id, restored)
     if skipped:
         log.warning("ignored %d malformed task record(s) in %s", skipped, TASK_STORE_PATH)
-    _persist_tasks()
+    with _TASK_STORE_LOCK:
+        try:
+            _write_task_snapshot()  # one clean snapshot, empty journal
+        except (OSError, TypeError, ValueError) as exc:
+            log.error("could not save tasks to NOTEBOOK_API_TASK_STORE_PATH=%s: %s", TASK_STORE_PATH, exc)
 
 
 _load_persisted_tasks()

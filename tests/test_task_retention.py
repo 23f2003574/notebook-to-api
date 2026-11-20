@@ -2,6 +2,8 @@
 import asyncio
 import importlib
 import json
+
+from tests.task_store import read_tasks
 import sys
 import threading
 import time
@@ -137,5 +139,5 @@ def test_eviction_is_written_through_to_the_persisted_store(tmp_path, monkeypatc
     module = _boot(tmp_path, monkeypatch, store=store)
     _seed(module)
     TestClient(module.app).get("/tasks/done_new", headers=HEADERS)
-    saved = set(json.loads(store.read_text())["tasks"])
+    saved = set(read_tasks(store))
     assert saved == {"done_new", "processing_old", "queued_old"}

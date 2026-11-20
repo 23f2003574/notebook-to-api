@@ -1,3 +1,4 @@
+from tests.task_store import read_tasks
 """Generated Compose and Kubernetes deployments configure the existing task store.
 
 Structural checks only: Docker and a cluster are not available here, so volume
@@ -87,4 +88,4 @@ def test_the_configured_store_path_round_trips_through_the_runtime(out, tmp_path
         monkeypatch.delitem(sys.modules, name)
     module = importlib.import_module(f"{PACKAGE}.app")
     module.TASKS["t1"] = {"status": "completed", "result": 1, "created_at": 1.0}
-    assert '"t1"' in store.read_text(encoding="utf-8")
+    assert "t1" in read_tasks(store)

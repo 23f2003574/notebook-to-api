@@ -1,6 +1,8 @@
 """Task state is saved as each transition happens, not only when the run function exits."""
 import importlib
 import json
+
+from tests.task_store import read_tasks
 import sys
 
 import nbformat
@@ -33,7 +35,7 @@ def _boot(tmp_path, monkeypatch):
 
 
 def _stored(store):
-    return json.loads(store.read_text())["tasks"]
+    return read_tasks(store)
 
 
 def _record_store_during_delivery(module, store, seen, delivered=True):

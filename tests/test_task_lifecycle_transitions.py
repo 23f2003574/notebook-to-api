@@ -2,6 +2,8 @@
 import asyncio
 import importlib
 import json
+
+from tests.task_store import read_tasks
 import sys
 
 import httpx
@@ -36,7 +38,7 @@ def mod(tmp_path, monkeypatch):
 
 
 def _stored(mod, tid):
-    return json.loads(mod.store.read_text())["tasks"][tid]
+    return read_tasks(mod.store)[tid]
 
 
 @pytest.mark.parametrize("final, fields", [("completed", {"result": 3}), ("failed", {"error": "x"}), ("cancelled", {})])

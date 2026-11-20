@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.compiler import compile_notebook
+from tests.task_store import read_tasks
 from backend.generator.docker_generator import TASK_STORE_FILE, TASK_STORE_VAR
 
 
@@ -61,7 +62,7 @@ def test_the_app_persists_to_the_configured_path_and_override_disables_it(built,
         spec.loader.exec_module(module)
         client = TestClient(module.app)
         task_id = client.post("/train_model", json={}, headers={"X-API-Key": "k"}).json()["task_id"]
-        assert store.is_file() and task_id in store.read_text()
+        assert store.is_file() and task_id in read_tasks(store)
         assert module.TASK_STORE_PATH == str(store)
         monkeypatch.setenv(TASK_STORE_VAR, "")
         spec.loader.exec_module(module)

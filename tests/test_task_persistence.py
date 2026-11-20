@@ -1,6 +1,8 @@
 """Task metadata survives a restart; interrupted tasks are failed, never resumed."""
 import importlib
 import json
+
+from tests.task_store import read_tasks
 import os
 import sys
 import time
@@ -47,8 +49,8 @@ def test_completed_and_failed_tasks_and_results_survive_restart(tmp_path, monkey
     done = client.post("/work", json={"x": 4}, headers=HEADERS).json()["task_id"]
     failed = client.post("/boom", json={}, headers=HEADERS).json()["task_id"]
 
-    data = json.loads((tmp_path / "store.json").read_text())
-    assert data["version"] == 1 and data["tasks"][done]["result"] == 8
+    data = {"tasks": read_tasks(tmp_path / "store.json")}
+    assert data["tasks"][done]["result"] == 8
     assert all("_replay" not in t for t in data["tasks"].values())  # request args are never written
     assert not list(tmp_path.glob("store.json.*.tmp"))  # atomic replace leaves no partial file
 
@@ -77,7 +79,7 @@ def test_interrupted_tasks_fail_with_reason_and_cancelled_is_preserved(tmp_path,
     assert client.get("/tasks/c", headers=HEADERS).json()["status"] == "cancelled"
     assert client.get("/tasks/bad", headers=HEADERS).status_code == 404
     # The recovered state was written back, so a second restart sees the same thing.
-    assert json.loads((tmp_path / "store.json").read_text())["tasks"]["p"]["status"] == "failed"
+    assert read_tasks((tmp_path / "store.json"))["p"]["status"] == "failed"
 
 
 def test_malformed_store_is_quarantined_not_deleted(tmp_path, monkeypatch):
@@ -97,7 +99,7 @@ def test_eviction_after_recovery_removes_expired_tasks_from_disk(tmp_path, monke
     (tmp_path / "store.json").write_text(json.dumps(store))
     module = _boot(tmp_path, monkeypatch, ttl="50")
     TestClient(module.app).post("/work", json={"x": 1}, headers=HEADERS)  # submitting evicts expired tasks
-    saved = json.loads((tmp_path / "store.json").read_text())["tasks"]
+    saved = read_tasks((tmp_path / "store.json"))
     assert "old" not in saved and "new" in saved
 
 
