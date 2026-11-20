@@ -6,6 +6,7 @@ Serves the React dashboard frontend and provides API endpoints for compilation
 import hmac
 import json
 import os
+import logging
 import sys
 import threading
 import time
@@ -1265,6 +1266,19 @@ if __name__ == "__main__":
         validate_dashboard_exposure(dashboard_host(), dashboard_api_key())
     except ValueError as exc:
         sys.exit(f"error: {exc}")
+
+    from backend.observability.deployment_governance_audit_store import (
+        GovernanceAuditStorageError,
+        validate_audit_storage_for_startup,
+    )
+
+    try:
+        _audit_status = validate_audit_storage_for_startup()
+    except GovernanceAuditStorageError as exc:
+        sys.exit(f"error: {exc}")
+
+    for _issue in _audit_status["issues"]:
+        logging.getLogger("uvicorn.error").warning("governance audit storage: %s", _issue)
 
     uvicorn.run(
         "backend.dashboard:app",

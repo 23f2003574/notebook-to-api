@@ -388,7 +388,7 @@ _CORE_COMMANDS = frozenset({
     "download", "export-notebooks", "generated", "delete", "delete-batch", "rename", "copy",
     "copy-batch", "copy-many", "rename-many", "tags", "prune-versions", "prune-temp-files", "description", "source-url", "deploy-history",
     "clear-deploy-history", "compile-history", "clear-compile-history",
-    "remote-compile", "remote-inspect", "remote-build", "apps",
+    "remote-compile", "remote-inspect", "remote-build", "apps", "dashboard-deployment",
     "versions", "remote-files", "remote-diff", "diff-notebooks", "remote-export", "remote-deploy",
     "status", "metrics", "remote-validate", "validate-all", "requirements-preview", "curl-preview",
     "remote-curl", "remote-postman", "app-preview", "readme-preview", "dockerfile-preview", "docker-compose-preview", "env-example-preview", "env-vars-preview",
@@ -7033,6 +7033,11 @@ def _dispatch_core_command(args):
             for env_var in data.get("environment_variables", []):
                 print(f"{env_var['name']} (default: {env_var['default']!r})")
                 print(f"  {env_var['description']}\n")
+    elif args.command == "dashboard-deployment":
+        from backend.generator.dashboard_deployment import generate_dashboard_deployment
+
+        written = generate_dashboard_deployment(args.output)
+        print(f"Wrote {', '.join(written)} to {args.output}")
     elif args.command == "apps":
         import httpx
 
@@ -15851,6 +15856,12 @@ def main():
         "--json", action="store_true", dest="json_output",
         help="Print the dashboard's own JSON answer.",
     )
+
+    dashboard_deployment_parser = subparsers.add_parser(
+        "dashboard-deployment",
+        help="Write Dockerfile, docker-compose.yml and kubernetes.yaml for the dashboard itself, with a persistent governance audit volume."
+    )
+    dashboard_deployment_parser.add_argument("--output", default="dashboard-deployment", help="Directory to write the files to.")
 
     remote_build_parser = subparsers.add_parser(
         "remote-build",

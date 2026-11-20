@@ -109,3 +109,59 @@ class SqliteAuditStore:
 
     def count(self) -> int:
         return self._connect().execute("SELECT COUNT(*) FROM audit_records").fetchone()[0]
+
+
+def _in_container(environ) -> bool:
+    import os
+
+    return bool(environ.get("KUBERNETES_SERVICE_HOST")) or os.path.exists("/.dockerenv")
+
+
+def audit_storage_status(environ=None) -> dict:
+    """Describe (without paths or credentials) whether audit storage is configured and durable.
+
+    "durable" is only True for sqlite whose directory is not on a container's ephemeral layer. In a
+    container the data directory must be a mounted volume; set NOTEBOOK2API_GOVERNANCE_VOLUME_PERSISTENT=1
+    to assert that it is (the generated compose and Kubernetes files do)."""
+    import os
+    import tempfile
+
+    environ = os.environ if environ is None else environ
+    backend = environ.get("NOTEBOOK2API_GOVERNANCE_PERSISTENCE_BACKEND", "").strip().lower() or "memory"
+    production = environ.get("NOTEBOOK2API_ENVIRONMENT", "").strip().lower() in {"production", "prod"}
+    issues: list[str] = []
+    if backend != "sqlite":
+        issues.append("audit records are process-local and are lost on restart")
+        return {"backend": backend, "durable": False, "production": production, "issues": issues}
+    path = Path(environ.get("NOTEBOOK2API_GOVERNANCE_DATABASE_PATH", "data/notebook2api.db")).resolve()
+    asserted = environ.get("NOTEBOOK2API_GOVERNANCE_VOLUME_PERSISTENT", "").strip().lower() in {"1", "true", "yes"}
+    if not asserted:
+        tmp_roots = {Path(tempfile.gettempdir()).resolve(), Path("/tmp"), Path("/var/tmp")}
+        if any(root == path or root in path.parents for root in tmp_roots):
+            issues.append("the audit database is in a temporary directory")
+        elif _in_container(environ):
+            try:
+                probe = path.parent
+                while not probe.exists() and probe != probe.parent:
+                    probe = probe.parent
+                if os.stat(probe).st_dev == os.stat("/").st_dev:
+                    issues.append(
+                        "the audit database is on the container's ephemeral filesystem; mount a volume "
+                        "there and set NOTEBOOK2API_GOVERNANCE_VOLUME_PERSISTENT=1"
+                    )
+            except OSError:
+                pass
+    return {"backend": backend, "durable": not issues, "production": production, "issues": issues}
+
+
+def validate_audit_storage_for_startup(environ=None) -> dict:
+    """Fail fast on unusable production audit storage; otherwise return audit_storage_status()."""
+    from .deployment_governance_audit import build_audit_service_from_env
+
+    status = audit_storage_status(environ)
+    build_audit_service_from_env(environ)  # raises GovernanceAuditStorageError when misconfigured
+    if status["production"] and status["backend"] == "sqlite" and not status["durable"]:
+        raise GovernanceAuditStorageError(
+            "production audit storage is not durable: " + "; ".join(status["issues"])
+        )
+    return status
