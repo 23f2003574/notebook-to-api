@@ -88,6 +88,7 @@ from backend.generator.kubernetes_generator import (
     kubernetes_manifest_content,
 )
 from backend.inspector import (
+    startup_warning_lines,
     apply_drop_past_sunset,
     apply_tag_selection,
     past_sunset_functions,
@@ -1870,6 +1871,22 @@ def _list_per_notebook_apps():
                 "notebook_exists": bool(notebook) and (Path(UPLOAD_DIR) / notebook).is_file()}
         apps.append(info)
     return apps
+
+
+def _diagnostic_fields(inspection, endpoint_paths=None):
+    """The compiler diagnostics every inspection-shaped response shares:
+    background endpoints inferred from names (not by a directive) and the
+    human-readable startup warnings (directive typos, import-time hazards,
+    cells that errored or are not valid Python). `endpoint_paths` limits the
+    inferred list to endpoints that are really exposed."""
+    inferred = inspection.get("inferred_background") or []
+    if endpoint_paths is not None:
+        exposed = {path.lstrip("/") for path in endpoint_paths}
+        inferred = [name for name in inferred if name in exposed]
+    return {
+        "inferred_background": inferred,
+        "startup_warnings": startup_warning_lines(inspection),
+    }
 
 
 def _remove_notebook_app(notebook_filename):
@@ -14094,6 +14111,7 @@ def inspect_notebook_endpoint(
         # The notebook's own per-notebook app (POST /api/compile with
         # per_notebook) is reported when the shared directory holds nothing of it.
         inspection["per_notebook_app"] = _per_notebook_app_info(full_path.name, full_path)
+        inspection["startup_warnings"] = startup_warning_lines(inspection)
         if inspection["per_notebook_app"] and inspection["generated_files_status"] != "generated":
             with COMPILE_LOCK:
                 own = inspect_notebook_data(
@@ -14521,6 +14539,7 @@ def validate_notebook_endpoint(
         "import_time_hazards": inspection["import_time_hazards"],
         "cells_with_errors": inspection["cells_with_errors"],
         "no_endpoints": no_endpoints,
+        **_diagnostic_fields(inspection),
     }
 
 
@@ -14839,6 +14858,8 @@ def validate_all_notebooks(
                 "ignored_cache_directives": [],
                 "import_time_hazards": [],
                 "cells_with_errors": [],
+                "inferred_background": [],
+                "startup_warnings": [],
                 "detail": f"Uploaded file is not a valid Jupyter notebook: {_public_error_text(e)}",
             }
             if checksums:
@@ -14941,6 +14962,7 @@ def validate_all_notebooks(
             "import_time_hazards": inspection["import_time_hazards"],
             "cells_with_errors": inspection["cells_with_errors"],
             "no_endpoints": no_endpoints,
+            **_diagnostic_fields(inspection),
             "detail": None,
         }
         if upcoming_cutoff is not None:
@@ -16924,6 +16946,7 @@ def compile_notebook_endpoint(
             "unrecognized_directives": data["unrecognized_directives"],
             "import_time_hazards": data["import_time_hazards"],
             "cells_with_errors": data["cells_with_errors"],
+            **_diagnostic_fields(data, [e["path"] for e in data["endpoints"]]),
             "message": "Notebook compiled successfully"
         }
 

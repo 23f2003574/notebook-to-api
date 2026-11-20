@@ -2,6 +2,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import CompilationLogs from './CompilationLogs'
+import Diagnostics from './Diagnostics'
+import { diagnosticsFrom } from '../diagnostics'
 import Dashboard from './Dashboard'
 import EndpointTester from './EndpointTester'
 import FunctionList from './FunctionList'
@@ -775,5 +777,43 @@ describe('NotebookLibrary', () => {
     stubList({ ok: false, status: 500, statusText: 'boom', json: async () => ({ detail: 'disk gone' }), text: async () => 'disk gone' })
     render(<NotebookLibrary onOpen={() => {}} refreshKey={null} />)
     expect(await screen.findByText(/disk gone|Could not list notebooks/)).toBeInTheDocument()
+  })
+})
+
+describe('Diagnostics', () => {
+  it('renders nothing without diagnostics', () => {
+    const { container } = render(<Diagnostics diagnostics={diagnosticsFrom({})} />)
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('shows skipped functions, inferred background endpoints and startup warnings', () => {
+    render(<Diagnostics diagnostics={diagnosticsFrom({
+      skipped_functions: [{ name: 'bad', reason: 'requires a callable' }, { reason: 'ignored: no name' }],
+      inferred_background: ['train_x', 7],
+      startup_warnings: ['Cell 1, line 2: input() blocks'],
+    })} />)
+    expect(screen.getByText('bad')).toBeInTheDocument()
+    expect(screen.getByText(/requires a callable/)).toBeInTheDocument()
+    expect(screen.getByText('train_x')).toBeInTheDocument()
+    expect(screen.getByText(/inferred from their names/)).toBeInTheDocument()
+    expect(screen.getByText('Cell 1, line 2: input() blocks')).toBeInTheDocument()
+  })
+
+  it('is filled from the inspect response and replaced by the compile response in the dashboard', async () => {
+    const inspect = {
+      functions: [{ name: 'train_x' }], endpoints: [{ path: '/train_x' }], generated_files: [],
+      skipped_functions: [{ name: 'bad', reason: 'needs a callable' }], inferred_background: ['train_x'], startup_warnings: [],
+    }
+    const compile = { functions: [{ name: 'train_x' }], endpoints: [{ path: '/train_x' }], generated_files: ['app.py'],
+      skipped_functions: [], inferred_background: [], startup_warnings: ['Ignored directive: # notebook-to-api: cahce 60'] }
+    const replies = [{ filename: 'n.ipynb' }, inspect, compile]
+    stubFetch(() => Promise.resolve({ ok: true, json: async () => replies.shift() }))
+    const { container } = render(<Dashboard />)
+    fireEvent.change(container.querySelector('input[type=file]'), { target: { files: [new File(['{}'], 'n.ipynb')] } })
+    expect(await screen.findByText(/needs a callable/)).toBeInTheDocument()
+    expect(screen.getByText(/inferred from their names/)).toBeInTheDocument()
+    fireEvent.click(screen.getByText(/Compile Now/))
+    expect(await screen.findByText(/Ignored directive/)).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByText(/needs a callable/)).toBeNull())
   })
 })

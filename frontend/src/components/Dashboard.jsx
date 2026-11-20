@@ -4,6 +4,8 @@ import NotebookLibrary from './NotebookLibrary'
 import { appUrl, configError, dashboardApiUrl, dashboardFetch, getDashboardKey, setDashboardKey } from '../dashboardApi'
 import { errorFromResponse } from '../errorMessage'
 import FunctionList from './FunctionList'
+import Diagnostics from './Diagnostics'
+import { diagnosticsFrom, emptyDiagnostics } from '../diagnostics'
 import CompilationLogs from './CompilationLogs'
 import EndpointTester from "./EndpointTester"
 
@@ -126,6 +128,7 @@ export default function Dashboard() {
   const settingsError = configError()
   const [uploadedNotebook, setUploadedNotebook] = useState(null)
   const [functions, setFunctions] = useState([])
+  const [diagnostics, setDiagnostics] = useState(emptyDiagnostics)
   const [logs, setLogs] = useState([])
   const [isCompiling, setIsCompiling] = useState(false)
   const [lastCompiled, setLastCompiled] = useState(null)
@@ -157,6 +160,7 @@ export default function Dashboard() {
     setIsCompiling(false)
     // The previous notebook's results must not stay on screen as if they were this one's.
     setFunctions([])
+    setDiagnostics(emptyDiagnostics)
     setEndpoints([])
     setGeneratedFiles([])
     setFilesStatus(null)
@@ -176,6 +180,7 @@ export default function Dashboard() {
         const inspectData = await inspectResponse.json()
         if (!isCurrent(work)) return
         setFunctions(inspectData.functions || [])
+        setDiagnostics(diagnosticsFrom(inspectData))
         const returnedEndpoints = asEndpoints(inspectData.endpoints)
         setEndpoints(returnedEndpoints)
         const files = asFiles(inspectData.generated_files)
@@ -220,6 +225,7 @@ export default function Dashboard() {
         const data = await response.json()
         if (!isCurrent(work)) return
         setFunctions(data.functions || [])
+        setDiagnostics(diagnosticsFrom(data))
         if (Array.isArray(data.endpoints)) setEndpoints(asEndpoints(data.endpoints))
         if (Array.isArray(data.generated_files)) {
           const files = asFiles(data.generated_files)
@@ -361,6 +367,13 @@ export default function Dashboard() {
                   🔧 Extracted Functions <span className="ml-1 bg-blue-600 text-white text-sm font-bold px-3 py-1 rounded-full">{functions.length}</span>
                 </h2>
                 <FunctionList functions={functions} />
+              </div>
+            )}
+
+            {(diagnostics.skipped.length > 0 || diagnostics.inferredBackground.length > 0 || diagnostics.warnings.length > 0) && (
+              <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
+                <h2 className="text-xl font-semibold text-white mb-4">🩺 Diagnostics</h2>
+                <Diagnostics diagnostics={diagnostics} />
               </div>
             )}
 

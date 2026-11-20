@@ -23635,6 +23635,8 @@ def test_validate_reports_pass_for_a_clean_notebook():
         "import_time_hazards": [],
         "cells_with_errors": [],
         "no_endpoints": False,
+        "inferred_background": [],
+        "startup_warnings": [],
     }
 
 
