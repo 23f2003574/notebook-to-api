@@ -143,7 +143,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # subsystem every endpoint depends on" exposure, just one level
     # removed from _enforce_rate_limit's own name instead of the call
     # site.
-    "_enforce_rate_limit", "_notebook_result_schema", "AUTH_FAILURE_LIMIT_PER_MINUTE", "AUTH_FAILURE_WINDOW_SECONDS", "_AUTH_FAILURE_MAX_CLIENTS", "_AUTH_FAILURES", "_AUTH_FAILURES_LOCK", "_auth_client_id", "TRUSTED_PROXIES", "_parse_trusted_proxies", "_TRUSTED_NETWORKS", "_is_trusted_proxy", "_auth_throttle_check", "_auth_throttle_record_failure", "_Request", "RATE_LIMIT_PER_MINUTE", "RATE_LIMIT_WINDOW_SECONDS",
+    "_enforce_rate_limit", "_notebook_result_schema", "AUTH_FAILURE_LIMIT_PER_MINUTE", "AUTH_FAILURE_WINDOW_SECONDS", "_AUTH_FAILURE_MAX_CLIENTS", "_AUTH_FAILURES", "_AUTH_FAILURES_LOCK", "_auth_client_id", "_auth_logging", "_AUTH_METRICS", "_AUTH_FAILURES_BY_ENDPOINT", "_auth_endpoint", "_auth_log", "TRUSTED_PROXIES", "_parse_trusted_proxies", "_TRUSTED_NETWORKS", "_is_trusted_proxy", "_auth_throttle_check", "_auth_throttle_record_failure", "_Request", "RATE_LIMIT_PER_MINUTE", "RATE_LIMIT_WINDOW_SECONDS",
     "_RATE_LIMIT_WINDOWS", "_RATE_LIMIT_LOCK", "_TASKS_ADMISSION_LOCK",
     "verify_api_key", "custom_openapi",
     "root", "health_check", "readiness_check", "auth_status", "auth_info",
@@ -4544,7 +4544,25 @@ def generate_fastapi_code(
     lines.append("            return hop")
     lines.append("    return peer")
     lines.append("")
-    lines.append("def _auth_throttle_check(client):")
+    # What an operator can see of an attack: counters (JSON /metrics and Prometheus) and one
+    # structured warning for the first failure of a client's window and one when it is locked
+    # out. Never the key that was tried, and the only labels are the route template, so
+    # cardinality is bounded by the number of routes.
+    lines.append("import logging as _auth_logging")
+    lines.append("_AUTH_METRICS = {'failures': 0, 'throttled': 0, 'lockouts': 0}")
+    lines.append("_AUTH_FAILURES_BY_ENDPOINT = {}")
+    lines.append("")
+    lines.append("def _auth_endpoint(request):")
+    lines.append("    route = request.scope.get('route')")
+    lines.append("    return getattr(route, 'path', None) or 'unmatched'")
+    lines.append("")
+    lines.append("def _auth_log(event, client, endpoint, **fields):")
+    lines.append("    _auth_logging.getLogger('uvicorn.error').warning(")
+    lines.append("        'security_event %s',")
+    lines.append("        json.dumps({'event': event, 'client': client, 'endpoint': endpoint, **fields}, sort_keys=True),")
+    lines.append("    )")
+    lines.append("")
+    lines.append("def _auth_throttle_check(client, endpoint='unmatched'):")
     lines.append("    if AUTH_FAILURE_LIMIT_PER_MINUTE <= 0:")
     lines.append("        return")
     lines.append("    now = time.time()")
@@ -4553,7 +4571,10 @@ def generate_fastapi_code(
     lines.append("        if now - window_start >= AUTH_FAILURE_WINDOW_SECONDS:")
     lines.append("            _AUTH_FAILURES.pop(client, None)")
     lines.append("            return")
-    lines.append("    if count >= AUTH_FAILURE_LIMIT_PER_MINUTE:")
+    lines.append("        blocked = count >= AUTH_FAILURE_LIMIT_PER_MINUTE")
+    lines.append("        if blocked:")
+    lines.append("            _AUTH_METRICS['throttled'] += 1")
+    lines.append("    if blocked:")
     lines.append("        retry_after = max(1, int(AUTH_FAILURE_WINDOW_SECONDS - (now - window_start)))")
     lines.append("        raise HTTPException(")
     lines.append("            status_code=429,")
@@ -4561,20 +4582,30 @@ def generate_fastapi_code(
     lines.append("            headers={'Retry-After': str(retry_after)},")
     lines.append("        )")
     lines.append("")
-    lines.append("def _auth_throttle_record_failure(client):")
-    lines.append("    if AUTH_FAILURE_LIMIT_PER_MINUTE <= 0:")
-    lines.append("        return")
+    lines.append("def _auth_throttle_record_failure(client, endpoint='unmatched', reason='invalid_key'):")
     lines.append("    now = time.time()")
+    lines.append("    count = 0")
     lines.append("    with _AUTH_FAILURES_LOCK:")
-    lines.append("        window_start, count = _AUTH_FAILURES.get(client, (now, 0))")
-    lines.append("        if now - window_start >= AUTH_FAILURE_WINDOW_SECONDS:")
-    lines.append("            window_start, count = now, 0")
-    lines.append("        if client not in _AUTH_FAILURES and len(_AUTH_FAILURES) >= _AUTH_FAILURE_MAX_CLIENTS:")
-    lines.append("            for key in [k for k, (started, _) in _AUTH_FAILURES.items() if now - started >= AUTH_FAILURE_WINDOW_SECONDS]:")
-    lines.append("                del _AUTH_FAILURES[key]")
-    lines.append("            while len(_AUTH_FAILURES) >= _AUTH_FAILURE_MAX_CLIENTS:")
-    lines.append("                _AUTH_FAILURES.pop(next(iter(_AUTH_FAILURES)))")
-    lines.append("        _AUTH_FAILURES[client] = (window_start, count + 1)")
+    lines.append("        _AUTH_METRICS['failures'] += 1")
+    lines.append("        if endpoint in _AUTH_FAILURES_BY_ENDPOINT or len(_AUTH_FAILURES_BY_ENDPOINT) < 1000:")
+    lines.append("            _AUTH_FAILURES_BY_ENDPOINT[endpoint] = _AUTH_FAILURES_BY_ENDPOINT.get(endpoint, 0) + 1")
+    lines.append("        if AUTH_FAILURE_LIMIT_PER_MINUTE > 0:")
+    lines.append("            window_start, count = _AUTH_FAILURES.get(client, (now, 0))")
+    lines.append("            if now - window_start >= AUTH_FAILURE_WINDOW_SECONDS:")
+    lines.append("                window_start, count = now, 0")
+    lines.append("            if client not in _AUTH_FAILURES and len(_AUTH_FAILURES) >= _AUTH_FAILURE_MAX_CLIENTS:")
+    lines.append("                for key in [k for k, (started, _) in _AUTH_FAILURES.items() if now - started >= AUTH_FAILURE_WINDOW_SECONDS]:")
+    lines.append("                    del _AUTH_FAILURES[key]")
+    lines.append("                while len(_AUTH_FAILURES) >= _AUTH_FAILURE_MAX_CLIENTS:")
+    lines.append("                    _AUTH_FAILURES.pop(next(iter(_AUTH_FAILURES)))")
+    lines.append("            count += 1")
+    lines.append("            _AUTH_FAILURES[client] = (window_start, count)")
+    lines.append("            if count == AUTH_FAILURE_LIMIT_PER_MINUTE:")
+    lines.append("                _AUTH_METRICS['lockouts'] += 1")
+    lines.append("    if count == 1 or count == 0:")
+    lines.append("        _auth_log('auth_failure', client, endpoint, reason=reason)")
+    lines.append("    if AUTH_FAILURE_LIMIT_PER_MINUTE > 0 and count == AUTH_FAILURE_LIMIT_PER_MINUTE:")
+    lines.append("        _auth_log('auth_lockout', client, endpoint, limit_per_minute=AUTH_FAILURE_LIMIT_PER_MINUTE)")
     lines.append("")
     lines.append("def verify_api_key(request: _Request, response: Response, x_api_key: str = Header(None)):")
     lines.append("    # hmac.compare_digest instead of != : a plain string")
@@ -4589,11 +4620,12 @@ def generate_fastapi_code(
     lines.append("    # with non-ASCII characters, which turned a wrong key such as")
     lines.append("    # 'clé' into a 500 instead of a 401.")
     lines.append("    client = _auth_client_id(request)")
-    lines.append("    _auth_throttle_check(client)")
+    lines.append("    endpoint = _auth_endpoint(request)")
+    lines.append("    _auth_throttle_check(client, endpoint)")
     lines.append("    if x_api_key is None or not any(")
     lines.append("        hmac.compare_digest(x_api_key.encode(), key.encode()) for key in API_KEYS")
     lines.append("    ):")
-    lines.append("        _auth_throttle_record_failure(client)")
+    lines.append("        _auth_throttle_record_failure(client, endpoint, 'missing_key' if x_api_key is None else 'invalid_key')")
     lines.append("        raise HTTPException(")
     lines.append("            status_code=401,")
     lines.append("            detail='Invalid API key'")
@@ -5712,6 +5744,10 @@ def generate_fastapi_code(
     lines.append(
         "        'rate_limited_by_endpoint': dict(sorted(_ENDPOINT_RATE_LIMITED.items())),"
     )
+    lines.append("        'auth_failures_total': _AUTH_METRICS['failures'],")
+    lines.append("        'auth_throttled_total': _AUTH_METRICS['throttled'],")
+    lines.append("        'auth_lockouts_total': _AUTH_METRICS['lockouts'],")
+    lines.append("        'auth_failures_by_endpoint': dict(sorted(_AUTH_FAILURES_BY_ENDPOINT.items())),")
     lines.append(
         "        'cache_hits_by_endpoint': dict(sorted(_RESPONSE_CACHE_HITS.items())),"
     )
@@ -5958,6 +5994,17 @@ def generate_fastapi_code(
             f"            body += f'{metric}"
             "{{path=\"{path}\"}} {count}\\n'"
         )
+    for _metric, _help, _key in (
+        ("notebook_api_auth_failures_total", "Requests rejected for a missing or invalid API key.", "failures"),
+        ("notebook_api_auth_throttled_total", "Requests refused with 429 because their client had too many failed authentication attempts.", "throttled"),
+        ("notebook_api_auth_lockouts_total", "Times a client reached the failed-authentication limit and was locked out for the rest of its window.", "lockouts"),
+    ):
+        lines.append(f"    body += '# HELP {_metric} {_help}\\n# TYPE {_metric} counter\\n'")
+        lines.append(f"    body += f'{_metric} {{_AUTH_METRICS[\"{_key}\"]}}\\n'")
+    lines.append("    if _AUTH_FAILURES_BY_ENDPOINT:")
+    lines.append("        body += '# HELP notebook_api_auth_failures_by_endpoint_total Failed authentications by route.\\n# TYPE notebook_api_auth_failures_by_endpoint_total counter\\n'")
+    lines.append("        for path, count in sorted(_AUTH_FAILURES_BY_ENDPOINT.items()):")
+    lines.append("            body += f'notebook_api_auth_failures_by_endpoint_total{{path=\"{path}\"}} {count}\\n'")
     lines.append("    if _ENDPOINT_RATE_LIMITED:")
     lines.append(
         "        body += ('# HELP notebook_api_endpoint_rate_limited_total Total "

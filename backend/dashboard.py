@@ -26,6 +26,7 @@ import uvicorn
 
 from backend.compiler import NOTEBOOK_TO_API_VERSION
 from backend.routes.upload import router as upload_router
+from backend import auth_metrics
 from backend.observability.deployment_governance_api import (
     register_governance_metrics_middleware,
     router as governance_metrics_router,
@@ -557,8 +558,10 @@ def _auth_retry_after_if_blocked(client):
 
 
 def _auth_record_failure(client):
+    """Count one failed attempt by `client`; returns how many it has made in the current window
+    (0 when the throttle is off)."""
     if dashboard_auth_failure_limit_per_minute() <= 0:
-        return
+        return 0
     now = time.time()
     with _AUTH_FAILURES_LOCK:
         started, count = _AUTH_FAILURES.get(client, (now, 0))
@@ -570,6 +573,7 @@ def _auth_record_failure(client):
             while len(_AUTH_FAILURES) >= _AUTH_FAILURE_MAX_CLIENTS:
                 _AUTH_FAILURES.pop(next(iter(_AUTH_FAILURES)))
         _AUTH_FAILURES[client] = (started, count + 1)
+        return count + 1
 
 
 def _peer_is_local(request):
@@ -629,6 +633,7 @@ async def _require_dashboard_api_key(request: Request, call_next):
         retry_after = _auth_retry_after_if_blocked(client)
 
         if retry_after is not None:
+            auth_metrics.record_throttled()
             return JSONResponse(
                 status_code=429,
                 content={"detail": "Too many failed authentication attempts; try again later"},
@@ -636,7 +641,11 @@ async def _require_dashboard_api_key(request: Request, call_next):
             )
 
         if not hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8")):
-            _auth_record_failure(client)
+            window_count = _auth_record_failure(client)
+            auth_metrics.record_failure(
+                client, "missing_key" if not supplied else "invalid_key",
+                window_count, dashboard_auth_failure_limit_per_minute(),
+            )
             return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
 
     return await call_next(request)

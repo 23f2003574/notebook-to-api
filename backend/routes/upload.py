@@ -42,6 +42,7 @@ import httpx
 from nbformat import ValidationError as NotebookValidationError
 
 from backend.runtime.destination_guard import ip_is_unsafe as _import_ip_is_unsafe
+from backend import auth_metrics
 from backend.compiler import (
     notebook_failure_location,
     _extract_rate_limit_overrides,
@@ -20337,7 +20338,7 @@ def dashboard_metrics_prometheus():
         "this dashboard process started.\n"
         "# TYPE notebook_to_api_dashboard_uptime_seconds counter\n"
         f"notebook_to_api_dashboard_uptime_seconds {uptime_seconds}\n"
-    )
+    ) + auth_metrics.prometheus_text()
 
     return Response(
         content=body, media_type="text/plain; version=0.0.4; charset=utf-8"

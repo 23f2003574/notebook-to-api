@@ -1109,6 +1109,8 @@ def test_generated_app_exposes_get_metrics_as_json(monkeypatch):
         # _track_http_metrics' own comment -- it increments _HTTP_METRICS
         # only *after* call_next returns, i.e. after this exact dict was
         # already built).
+        "auth_failures_total": 0, "auth_throttled_total": 0, "auth_lockouts_total": 0,
+        "auth_failures_by_endpoint": {},
         "http_requests_total": 1,
         "http_requests_by_status_class": {
             "1xx": 0, "2xx": 1, "3xx": 0, "4xx": 0, "5xx": 0,

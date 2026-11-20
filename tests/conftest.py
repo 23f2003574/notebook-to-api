@@ -27,6 +27,9 @@ def _dashboard_auth_failures_do_not_carry_over():
     module = sys.modules.get("backend.dashboard")
     if module is not None:
         module._AUTH_FAILURES.clear()
+    metrics = sys.modules.get("backend.auth_metrics")
+    if metrics is not None:
+        metrics.reset()
     yield
     module = sys.modules.get("backend.dashboard")
     if module is not None:
