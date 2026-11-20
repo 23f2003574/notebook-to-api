@@ -267,8 +267,8 @@ def kubernetes_manifest_content(
             f"              mountPath: {TASK_STORE_DIR}\n"
         )
         volumes_lines = (
-            "      # task-data (emptyDir): survives container restarts in this Pod, not Pod\n"
-            "      # replacement (rollout, eviction, node loss). Use a PersistentVolumeClaim for that.\n"
+            "      # task-data (emptyDir): survives container restarts in this Pod, not Pod replacement\n"
+            "      # (rollout, eviction, node loss). Use a PersistentVolumeClaim for that.\n"
             "      # tmp (emptyDir): the only other writable path, since the root filesystem is read-only.\n"
             "      volumes:\n"
             "        - name: tmp\n"
