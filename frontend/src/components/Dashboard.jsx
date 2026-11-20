@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import NotebookUpload from './NotebookUpload'
 import NotebookLibrary from './NotebookLibrary'
+import GovernanceAudit from './GovernanceAudit'
 import { appUrl, configError, dashboardApiUrl, dashboardFetch, getDashboardKey, setDashboardKey } from '../dashboardApi'
 import { errorFromResponse } from '../errorMessage'
 import FunctionList from './FunctionList'
@@ -410,6 +411,11 @@ export default function Dashboard() {
             <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 sticky top-6">
               <h2 className="text-xl font-semibold text-white mb-4">📜 Logs</h2>
               <CompilationLogs logs={logs} />
+            </div>
+
+            <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mt-6">
+              <h2 className="text-xl font-semibold text-white mb-4">🛡 Governance Audit</h2>
+              <GovernanceAudit refreshKey={lastCompiled} />
             </div>
           </div>
 

@@ -22,7 +22,9 @@ const stubFetch = (mock) =>
   vi.stubGlobal('fetch', (url, init) =>
     /\/api\/health$/.test(String(url))
       ? Promise.resolve({ ok: true, json: async () => ({ status: 'healthy' }) })
-      : /\/api\/notebooks$/.test(String(url))
+      : /\/governance\/audit/.test(String(url))
+        ? Promise.resolve({ ok: true, json: async () => [] })
+        : /\/api\/notebooks$/.test(String(url))
         ? Promise.resolve({ ok: true, json: async () => ({ notebooks: [] }) })
         : mock(url, init))
 
@@ -391,12 +393,13 @@ describe('Dashboard backend health', () => {
     const fetchMock = vi.fn((url, init) => { signal = init.signal; return new Promise(() => {}) })
     vi.stubGlobal('fetch', fetchMock)
     const { unmount } = render(<Dashboard />)
-    // The health probe and the notebook list, each requested once on mount.
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    // The health probe, the notebook list and the two governance audit queries (compile, deploy),
+    // each requested once on mount.
+    expect(fetchMock).toHaveBeenCalledTimes(4)
     unmount()
     expect(signal.aborted).toBe(true)
     await vi.advanceTimersByTimeAsync(60000)
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock).toHaveBeenCalledTimes(4)
   })
 
   it('ignores a stale response that resolves after a newer one', async () => {
@@ -950,6 +953,7 @@ describe('per-notebook compilation and its diagnostics in the dashboard', () => 
       calls.push([path, init])
       if (path === '/api/health') return Promise.resolve(ok({ status: 'healthy' }))
       if (path === '/api/notebooks') return Promise.resolve(ok({ notebooks: [] }))
+      if (path.startsWith('/governance/audit')) return Promise.resolve(ok([]))
       return Promise.resolve(replies.shift())
     })
     const { container } = render(<Dashboard />)

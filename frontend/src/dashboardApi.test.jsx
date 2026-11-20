@@ -19,7 +19,9 @@ const stubFetch = (mock) =>
   vi.stubGlobal('fetch', (url, init) =>
     /\/api\/health$/.test(String(url))
       ? Promise.resolve({ ok: true, json: async () => ({ status: 'healthy' }) })
-      : /\/api\/notebooks$/.test(String(url))
+      : /\/governance\/audit/.test(String(url))
+        ? Promise.resolve({ ok: true, json: async () => [] })
+        : /\/api\/notebooks$/.test(String(url))
         ? Promise.resolve({ ok: true, json: async () => ({ notebooks: [] }) })
         : mock(url, init))
 
