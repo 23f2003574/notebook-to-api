@@ -321,9 +321,25 @@ class GovernanceAuditService:
             )
 
         if self._store is not None:
-            return self._store.append(
-                lambda sequence, previous_hash: build(sequence, previous_hash)
-            )
+            try:
+                written = self._store.append(
+                    lambda sequence, previous_hash: build(sequence, previous_hash)
+                )
+
+            except Exception as exc:
+                from .deployment_governance_audit_health import audit_health
+
+                audit_health.record_failure(exc)
+
+                exc.audit_failure_counted = True
+
+                raise
+
+            from .deployment_governance_audit_health import audit_health
+
+            audit_health.record_success()
+
+            return written
 
         with self._lock:
             record = build(self._next_sequence, self._last_hash)
@@ -333,6 +349,10 @@ class GovernanceAuditService:
             self._next_sequence += 1
 
             self._last_hash = record.record_hash
+
+        from .deployment_governance_audit_health import audit_health
+
+        audit_health.record_success()
 
         return record
 
@@ -662,7 +682,7 @@ def build_audit_service_from_env(environ=None) -> "GovernanceAuditService":
     import os
 
     from .deployment_governance_audit_store import (
-        GovernanceAuditStorageError,
+        GovernanceAuditConfigurationError as GovernanceAuditStorageError,
         SqliteAuditStore,
     )
 

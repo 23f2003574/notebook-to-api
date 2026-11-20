@@ -645,6 +645,26 @@ async def get_governance_audit_verify():
     return result.to_dict()
 
 
+@health_router.get("/audit/health")
+async def get_governance_audit_health():
+    """
+    Audit-storage health, separate from compile/deploy outcomes: backend, durability, write and
+    failure counters by reason, and whether the storage is usable right now. 503 when unavailable,
+    so a load balancer or probe can act on it. No paths, record contents or credentials.
+    """
+
+    from fastapi.responses import JSONResponse
+
+    from .deployment_governance_audit_health import audit_health
+
+    snapshot = audit_health.snapshot(probe=True)
+
+    return JSONResponse(
+        status_code=503 if snapshot["state"] == "unavailable" else 200,
+        content=snapshot,
+    )
+
+
 @health_router.get("/audit/{sequence}")
 async def get_governance_audit_record(sequence: int):
     """

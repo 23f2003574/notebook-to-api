@@ -30,6 +30,9 @@ def _dashboard_auth_failures_do_not_carry_over():
     metrics = sys.modules.get("backend.auth_metrics")
     if metrics is not None:
         metrics.reset()
+    health = sys.modules.get("backend.observability.deployment_governance_audit_health")
+    if health is not None:
+        health.audit_health.reset()
     yield
     module = sys.modules.get("backend.dashboard")
     if module is not None:

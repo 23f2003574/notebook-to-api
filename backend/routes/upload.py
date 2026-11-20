@@ -16883,6 +16883,15 @@ def openapi_preview_endpoint(data: dict):
     return response
 
 
+def _audit_health_prometheus():
+    from backend.observability.deployment_governance_audit_health import audit_health
+
+    try:
+        return audit_health.prometheus_text()
+    except Exception:  # noqa: BLE001 - metrics must never break the scrape
+        return ""
+
+
 def _record_governance(action, data, outcome, response=None, error=None):
     """Append one compile/deploy outcome to the governance audit chain.
 
@@ -16910,7 +16919,11 @@ def _record_governance(action, data, outcome, response=None, error=None):
             metadata=metadata,
         )
     except Exception as exc:  # noqa: BLE001 - auditing must not break the operation
-        logging.getLogger("uvicorn.error").warning("governance audit record failed: %s", exc)
+        if not getattr(exc, "audit_failure_counted", False):
+            from backend.observability.deployment_governance_audit_health import audit_health
+
+            audit_health.record_failure(exc)  # failed before the store was reached (e.g. misconfigured)
+        logging.getLogger("uvicorn.error").warning("governance audit record failed (%s)", type(exc).__name__)
         return exc
 
 
@@ -20401,7 +20414,7 @@ def dashboard_metrics_prometheus():
         "this dashboard process started.\n"
         "# TYPE notebook_to_api_dashboard_uptime_seconds counter\n"
         f"notebook_to_api_dashboard_uptime_seconds {uptime_seconds}\n"
-    ) + auth_metrics.prometheus_text()
+    ) + auth_metrics.prometheus_text() + _audit_health_prometheus()
 
     return Response(
         content=body, media_type="text/plain; version=0.0.4; charset=utf-8"

@@ -32,6 +32,14 @@ CREATE TABLE IF NOT EXISTS audit_meta (
 class GovernanceAuditStorageError(RuntimeError):
     """The audit storage is misconfigured or unavailable (message is safe to show: no paths)."""
 
+    configuration = False
+
+
+class GovernanceAuditConfigurationError(GovernanceAuditStorageError):
+    """The storage is configured wrongly (as opposed to failing while in use)."""
+
+    configuration = True
+
 
 class SqliteAuditStore:
     def __init__(self, path: str | Path, *, timeout_seconds: float = 30.0) -> None:
@@ -45,7 +53,7 @@ class SqliteAuditStore:
                 conn.execute("INSERT OR IGNORE INTO audit_meta VALUES (1, 0, ?)", (GENESIS_HASH,))
                 conn.execute("PRAGMA journal_mode=WAL")
         except (OSError, sqlite3.Error) as exc:
-            raise GovernanceAuditStorageError(
+            raise GovernanceAuditConfigurationError(
                 f"governance audit database could not be opened ({type(exc).__name__}); check that "
                 "NOTEBOOK2API_GOVERNANCE_DATABASE_PATH points to a writable location"
             ) from None
@@ -191,7 +199,7 @@ def validate_audit_storage_for_startup(environ=None) -> dict:
     status = audit_storage_status(environ)
     build_audit_service_from_env(environ)  # raises GovernanceAuditStorageError when misconfigured
     if status["production"] and status["backend"] == "sqlite" and not status["durable"]:
-        raise GovernanceAuditStorageError(
+        raise GovernanceAuditConfigurationError(
             "production audit storage is not durable: " + "; ".join(status["issues"])
         )
     return status
