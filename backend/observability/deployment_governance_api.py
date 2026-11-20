@@ -571,7 +571,16 @@ async def get_governance_audit_verify():
     it is intact and, if not, the first broken record.
     """
 
-    result = _build_audit_service().verify_chain()
+    from .deployment_governance_audit_store import GovernanceAuditStorageError
+
+    try:
+        result = _build_audit_service().verify_chain()
+
+    except GovernanceAuditStorageError as exc:
+        # Not "the chain is broken": the chain could not be read at all. The message is path-free.
+        raise HTTPException(
+            status_code=503, detail=f"audit chain unavailable: {exc}"
+        ) from exc
 
     return result.to_dict()
 

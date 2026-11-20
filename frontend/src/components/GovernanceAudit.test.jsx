@@ -82,3 +82,32 @@ describe('GovernanceAudit linked record', () => {
     expect(await screen.findByText(/#9 was not found/)).toBeInTheDocument()
   })
 })
+
+describe('GovernanceAudit verification', () => {
+  const run = async (verifyReply) => {
+    vi.stubGlobal('fetch', vi.fn((url) => Promise.resolve(
+      /\/audit\/verify$/.test(String(url)) ? verifyReply : { ok: true, status: 200, json: async () => [] })))
+    render(<GovernanceAudit />)
+    await screen.findByText(/No compile or deploy operations/)
+    fireEvent.click(screen.getByText('Verify audit chain'))
+    return screen.findByTestId('verification')
+  }
+  const json = (body, ok = true, status = 200) => ({ ok, status, json: async () => body, text: async () => JSON.stringify(body) })
+
+  it('reports an intact chain', async () => {
+    expect(await run(json({ valid: true, checked: 12, first_broken_sequence: null, reason: null }))).toHaveTextContent('Chain intact: 12 records')
+  })
+  it('distinguishes an empty valid chain', async () => {
+    expect(await run(json({ valid: true, checked: 0, first_broken_sequence: null, reason: null }))).toHaveTextContent('valid but empty')
+  })
+  it('explains a broken chain with where and what to do', async () => {
+    const el = await run(json({ valid: false, checked: 5, first_broken_sequence: 3, reason: "record 3's hash does not match its recorded fields" }))
+    expect(el).toHaveTextContent('broken at record #3')
+    expect(el).toHaveTextContent('cannot be trusted')
+  })
+  it('says an unavailable chain is not the same as a broken one', async () => {
+    const el = await run(json({ detail: 'audit chain unavailable: read failed' }, false, 503))
+    expect(el).toHaveTextContent('Could not verify')
+    expect(el).toHaveTextContent('does not mean the chain is broken')
+  })
+})
