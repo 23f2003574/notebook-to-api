@@ -1747,7 +1747,7 @@ async def _save_uploaded_notebook(
             return {
                 "status": "success",
                 "filename": file.filename,
-                "path": str(file_path),
+                "path": file_path.name,
                 "overwritten": overwritten,
                 "sha256": sha256,
                 "was_currently_compiled": was_currently_compiled,
@@ -1761,7 +1761,7 @@ async def _save_uploaded_notebook(
         return {
             "status": "success",
             "filename": file.filename,
-            "path": str(file_path),
+            "path": file_path.name,
             "overwritten": overwritten,
             "sha256": sha256,
             "was_currently_compiled": was_currently_compiled,
@@ -1829,6 +1829,15 @@ def _notebook_app_id(filename):
         stem = "nb_" + stem
     digest = hashlib.sha256(filename.encode("utf-8")).hexdigest()[:8]
     return f"{stem[:40]}_{digest}"
+
+
+def _artifact_name(path, root):
+    """`path` relative to `root`, with forward slashes: a name a client can pass back
+    to GET /api/generated/{name} -- never the server's absolute location."""
+    try:
+        return Path(os.path.relpath(path, root)).as_posix()
+    except ValueError:  # different drives on Windows
+        return Path(path).name
 
 
 def _per_notebook_image_tag(filename):
@@ -17327,7 +17336,7 @@ def export_openapi_endpoint(
     response = {
         "status": "success",
         "format": export_format,
-        "path": output_path,
+        "path": _artifact_name(output_path, GENERATED_DIR),
     }
 
     if export_format == "json":
@@ -17436,7 +17445,7 @@ def export_sdk_endpoint(
             return {
                 "status": "success",
                 "language": language,
-                "path": package_dir,
+                "path": _artifact_name(package_dir, GENERATED_DIR),
                 "files": files,
             }
 
@@ -17476,7 +17485,7 @@ def export_sdk_endpoint(
     return {
         "status": "success",
         "language": language,
-        "path": output_path,
+        "path": _artifact_name(output_path, GENERATED_DIR),
         "code": code,
     }
 

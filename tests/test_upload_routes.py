@@ -1759,7 +1759,7 @@ def test_upload_batch_continues_past_a_single_invalid_file():
     assert good_result == {
         "status": "success",
         "filename": "batch_good.ipynb",
-        "path": str(resolve_upload_path("batch_good.ipynb")),
+        "path": "batch_good.ipynb",
         "overwritten": False,
         "sha256": hashlib.sha256(good_content).hexdigest(),
         "was_currently_compiled": False,
