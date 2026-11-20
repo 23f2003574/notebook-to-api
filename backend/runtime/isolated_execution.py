@@ -71,9 +71,67 @@ def scrub_service_secrets(environ: Any = None) -> list[str]:
     env = os.environ if environ is None else environ
     allowed = _allowed_names(env)
     removed = [name for name in list(env) if _is_service_secret(name, allowed)]
+    secrets = set()
+    for name in removed:
+        value = env[name]
+        secrets.add(value)
+        secrets.update(part.strip() for part in value.split(",") if part.strip())  # NOTEBOOK_API_KEY=a,b
     for name in removed:
         del env[name]
+    if environ is None and secrets:
+        _blank_secrets_in_loaded_modules(secrets)
     return removed
+
+
+def _blank_secrets_in_loaded_modules(secrets: set) -> int:
+    """Forget the service's credentials the app already copied into module globals.
+
+    A forked child shares a copy of the whole app, so notebook code could read
+    `API_KEYS` or a webhook secret from the app module. Only attributes whose
+    name looks like a credential (KEY, SECRET, TOKEN, PASSWORD, CREDENTIAL) and
+    whose value is, or is a short tuple/list/set/dict holding, one of
+    `secrets` are replaced by an empty value -- in this child only, never in the
+    service. Returns how many attributes were blanked. Best effort: it does
+    not zero memory the interpreter may still hold, and it cannot protect
+    against code that reaches the original process by other means."""
+    import re
+    import sys
+
+    sensitive = re.compile(r"(KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL)", re.IGNORECASE)
+
+    def holds(value: Any, depth: int = 0) -> bool:
+        if isinstance(value, (str, bytes)):
+            text = value.decode("utf-8", "replace") if isinstance(value, bytes) else value
+            return text in secrets
+        if depth < 2 and isinstance(value, (tuple, list, set, frozenset)):
+            return any(holds(item, depth + 1) for item in value)
+        if depth < 2 and isinstance(value, dict):
+            return any(holds(item, depth + 1) for item in list(value.keys()) + list(value.values()))
+        return False
+
+    def empty(value: Any) -> Any:
+        if isinstance(value, bytes):
+            return b""
+        if isinstance(value, str):
+            return ""
+        if isinstance(value, (list, set, dict)):
+            value.clear()
+            return value
+        return type(value)()  # tuple / frozenset
+
+    blanked = 0
+    for module in list(sys.modules.values()):
+        namespace = getattr(module, "__dict__", None)
+        if not isinstance(namespace, dict):
+            continue
+        for attribute in [a for a in list(namespace) if isinstance(a, str) and sensitive.search(a)]:
+            try:
+                if holds(namespace[attribute]):
+                    namespace[attribute] = empty(namespace[attribute])
+                    blanked += 1
+            except Exception:  # noqa: BLE001 - a hostile __eq__/__hash__ must not abort the scrub
+                continue
+    return blanked
 
 
 def hide_service_secrets_in_proc_environ() -> list[str]:
