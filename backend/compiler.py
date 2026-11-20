@@ -2,6 +2,8 @@ import ast
 import datetime
 import fnmatch
 import functools
+import contextlib
+import contextvars
 import hashlib
 import importlib.metadata
 import io
@@ -4201,7 +4203,7 @@ def _find_import_time_hazards(code_cells, notebook_path=None):
 
     if notebook_path:
         shipped = find_data_files(notebook_path, hazards=hazards)
-        directory = Path(notebook_path).resolve().parent
+        directory = _notebook_data_directory(notebook_path)
 
         def path_shipped(path):
             if path in shipped:
@@ -4305,6 +4307,28 @@ def _unshipped_reason(item, directory, shipped):
     return "size_limit"
 
 
+_COMPANION_DATA_DIRECTORY = contextvars.ContextVar("notebook_companion_data_directory", default=None)
+
+
+@contextlib.contextmanager
+def companion_data_directory(directory):
+    """Within this block, the data files a notebook reads are looked up in `directory`
+    (a dashboard notebook's own companion-file folder) instead of beside the notebook
+    file -- which, for an uploaded notebook, is a folder shared by every notebook."""
+    token = _COMPANION_DATA_DIRECTORY.set(str(directory) if directory else None)
+    try:
+        yield
+    finally:
+        _COMPANION_DATA_DIRECTORY.reset(token)
+
+
+def _notebook_data_directory(notebook_path):
+    override = _COMPANION_DATA_DIRECTORY.get()
+    if override and Path(override).is_dir():
+        return Path(override).resolve()
+    return Path(notebook_path).resolve().parent
+
+
 def find_data_files(notebook_path, code_cells=None, hazards=None):
     """{relative path as written: absolute Path} for the relative data files
     the notebook reads at import time (`pd.read_csv("sales.csv")`,
@@ -4319,7 +4343,7 @@ def find_data_files(notebook_path, code_cells=None, hazards=None):
     if hazards is None:
         hazards = _find_import_time_hazards(code_cells or [])
 
-    directory = Path(notebook_path).resolve().parent
+    directory = _notebook_data_directory(notebook_path)
     found = {}
     total = 0
 

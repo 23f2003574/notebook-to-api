@@ -8,6 +8,7 @@ from urllib.parse import urljoin, urlsplit
 import asyncio
 import contextlib
 import csv
+import functools
 import hashlib
 import importlib
 import io
@@ -17,7 +18,9 @@ import os
 import logging
 import re
 import signal
+import posixpath
 import shutil
+import stat
 import socket
 import subprocess
 import sys
@@ -1918,6 +1921,132 @@ def _diagnostic_fields(inspection, endpoint_paths=None):
     }
 
 
+_COMPANION_EXTENSIONS = frozenset({
+    ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".txt", ".md", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".xml", ".sql",
+    ".parquet", ".feather", ".arrow", ".xlsx", ".xls", ".pkl", ".pickle", ".joblib", ".npy", ".npz", ".h5", ".hdf5",
+    ".pt", ".pth", ".onnx", ".bin", ".safetensors", ".pb", ".tflite", ".sav", ".model", ".vocab", ".spm",
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".wav", ".mp3", ".py",
+})
+_MAX_COMPANION_FILES = 500
+
+
+def _companion_dir(filename):
+    """Where `filename`'s companion data/model files live: a folder of its own beside the
+    notebook, so two notebooks reading "data.csv" never share or overwrite a file."""
+    return Path(UPLOAD_DIR) / f".{os.path.basename(filename)}.files"
+
+
+def _remove_companion_files(filename):
+    shutil.rmtree(_companion_dir(filename), ignore_errors=True)
+
+
+def _list_companion_files(filename):
+    root = _companion_dir(filename)
+    if not root.is_dir():
+        return []
+    return [
+        {"path": p.relative_to(root).as_posix(), "bytes": p.stat().st_size}
+        for p in sorted(root.rglob("*")) if p.is_file() and not p.is_symlink()
+    ]
+
+
+def _companion_candidates(archive, entry_name):
+    """Archive members that belong to the notebook at `entry_name`: every non-notebook file in
+    its folder (or anywhere, for a notebook at the archive root), as (member, relative path)."""
+    folder = posixpath.dirname(entry_name)
+    prefix = folder + "/" if folder else ""
+    exported_metadata = {"tags.json", "description.txt", "source_url.json"}  # this tool's own export entries
+    for info in archive.infolist():
+        name = info.filename
+        if name.endswith("/") or name.startswith("versions/") or name.endswith(".ipynb"):
+            continue
+        if name in exported_metadata or name.startswith(("tags/", "description/", "source_url/")):
+            continue
+        if prefix and not name.startswith(prefix):
+            continue
+        yield info, name[len(prefix):]
+
+
+def _store_companion_files(archive, entry_name, filename, dry_run):
+    """Store the files that travel with a notebook in an archive. Returns
+    (stored [{"path","bytes"}], skipped [{"path","reason"}]); nothing is written on a dry run.
+    Each notebook gets its own copy, so notebooks sharing an archive folder stay independent."""
+    from backend.compiler import max_shipped_data_bytes
+
+    limit = max_shipped_data_bytes()
+    stored, skipped, seen, total = [], [], set(), 0
+    staging = Path(UPLOAD_DIR) / f".{filename}.files.{uuid.uuid4().hex}.tmp"
+
+    def skip(path, reason):
+        skipped.append({"path": path, "reason": reason})
+
+    try:
+        for info, relative in _companion_candidates(archive, entry_name):
+            parts = posixpath.normpath(relative).split("/")
+            if (
+                relative.startswith("/") or "\\" in relative or "\0" in relative
+                or ".." in relative.split("/") or any(part in ("", ".") for part in parts) or posixpath.normpath(relative) != relative
+            ):
+                skip(relative, "unsafe path")
+                continue
+            if stat.S_ISLNK(info.external_attr >> 16):
+                skip(relative, "symbolic links are not imported")
+                continue
+            if Path(relative).suffix.lower() not in _COMPANION_EXTENSIONS:
+                skip(relative, "unsupported file type")
+                continue
+            key = relative.lower()
+            if key in seen:
+                skip(relative, "duplicate name (names are compared case-insensitively)")
+                continue
+            if len(stored) >= _MAX_COMPANION_FILES:
+                skip(relative, f"more than {_MAX_COMPANION_FILES} companion files")
+                continue
+            if info.file_size > limit or total + info.file_size > limit:
+                skip(relative, f"exceeds the {limit} byte limit for a notebook's companion files")
+                continue
+            if dry_run:
+                data = None
+            else:
+                with archive.open(info) as member:
+                    data = member.read(limit + 1)
+                if len(data) > info.file_size or total + len(data) > limit:
+                    skip(relative, "its real size is larger than the archive declared or over the limit")
+                    continue
+                target = staging / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+            seen.add(key)
+            total += info.file_size if data is None else len(data)
+            stored.append({"path": relative, "bytes": info.file_size if data is None else len(data)})
+        if not dry_run and stored:
+            final = _companion_dir(filename)
+            shutil.rmtree(final, ignore_errors=True)  # a re-import replaces the previous set
+            os.replace(staging, final)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    return stored, skipped
+
+
+def _with_companion_files(func):
+    """Run a route that reads a notebook so the files it reads are looked up in that notebook's
+    own companion folder."""
+    from backend.compiler import companion_data_directory
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        data = kwargs.get("data", args[0] if args else None)
+        name = data.get("notebook_path") if isinstance(data, dict) else None
+        if isinstance(name, str) and name:
+            directory = _companion_dir(name)
+            if directory.is_dir():
+                with companion_data_directory(directory):
+                    return func(*args, **kwargs)
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
 _LIFECYCLE_LOCKS = {}
 _LIFECYCLE_GUARD = threading.Lock()
 
@@ -2655,6 +2784,12 @@ async def import_notebooks(
             # override concept" reasoning POST /api/notebooks/{filename}/copy
             # already applies to source_url), so it's simply what the
             # archive carried, or null.
+            companion_files, companion_skipped = _store_companion_files(
+                archive, entry_name, result["filename"], dry_run
+            )
+            result["companion_files"] = companion_files
+            result["companion_skipped"] = companion_skipped
+
             result["restored_tags"] = archived_tags if normalized_tags is None else None
             result["restored_description"] = (
                 archived_description if normalized_description is None else None
@@ -7082,6 +7217,7 @@ def resolve_duplicate_notebooks(data: dict = None):
                 _version_notes_sidecar_path(file_path.name).unlink(missing_ok=True)
                 shutil.rmtree(_notebook_versions_dir(file_path.name), ignore_errors=True)
                 _remove_notebook_app(file_path.name)
+                _remove_companion_files(file_path.name)
 
             deleted_filenames.append({
                 "filename": filename,
@@ -8662,6 +8798,7 @@ def delete_all_notebooks(
             _version_notes_sidecar_path(entry.name).unlink(missing_ok=True)
             shutil.rmtree(_notebook_versions_dir(entry.name), ignore_errors=True)
             _remove_notebook_app(entry.name)
+            _remove_companion_files(entry.name)
 
         deleted_filenames.append(entry.name)
 
@@ -9115,6 +9252,7 @@ def _delete_notebook_locked(filename: str, dry_run: bool = False, expected_sha25
             _version_notes_sidecar_path(file_path.name).unlink(missing_ok=True)
             shutil.rmtree(_notebook_versions_dir(file_path.name), ignore_errors=True)
             _remove_notebook_app(file_path.name)
+            _remove_companion_files(file_path.name)
 
         except Exception as e:
 
@@ -9244,6 +9382,7 @@ def _delete_notebooks_batch_locked(data: dict):
                 _version_notes_sidecar_path(file_path.name).unlink(missing_ok=True)
                 shutil.rmtree(_notebook_versions_dir(file_path.name), ignore_errors=True)
                 _remove_notebook_app(file_path.name)
+                _remove_companion_files(file_path.name)
 
             results.append({
                 "filename": filename,
@@ -9394,6 +9533,17 @@ def get_notebook(filename: str, request: Request):
             "Cache-Control": "no-cache",
         },
     )
+
+
+@router.get("/notebooks/{filename}/files")
+def list_notebook_companion_files(filename: str):
+    """The data and model files stored with a notebook (imported from a zip alongside it)."""
+    file_path = resolve_upload_path(filename)
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Notebook not found")
+    files = _list_companion_files(file_path.name)
+    return {"status": "success", "filename": file_path.name, "files": files, "total_count": len(files),
+            "total_bytes": sum(f["bytes"] for f in files)}
 
 
 @router.get("/notebooks/{filename}/info")
@@ -9857,6 +10007,11 @@ def _rename_notebook_to_locked(old_path: Path, new_filename, overwrite: bool, dr
         # notebook is recompiled (POST /api/compile) to get a fresh app.
         generated_app_removed = _remove_notebook_app(old_path.name)
 
+        # The companion files follow the notebook to its new name.
+        _remove_companion_files(new_path.name)
+        if _companion_dir(old_path.name).is_dir():
+            shutil.move(str(_companion_dir(old_path.name)), str(_companion_dir(new_path.name)))
+
         if was_currently_compiled:
 
             # Held for the same reason every other read/write of
@@ -10302,6 +10457,11 @@ def _copy_notebook_to(
 
         if dest_versions_dir.exists():
             shutil.rmtree(dest_versions_dir)
+
+        # A copy starts with its own copy of the source's companion files (never shared).
+        _remove_companion_files(dest_path.name)
+        if _companion_dir(source_path.name).is_dir():
+            shutil.copytree(_companion_dir(source_path.name), _companion_dir(dest_path.name), symlinks=False)
 
         _write_notebook_tags(
             dest_path.name,
@@ -14014,6 +14174,7 @@ def _verify_expected_notebook_sha256(content_path, expected_sha256):
 
 
 @router.post("/inspect")
+@_with_companion_files
 def inspect_notebook_endpoint(
     data: dict
 ):
@@ -14315,6 +14476,7 @@ def _resolve_preview_content_path(notebook_path, version_id=None):
 
 
 @router.post("/validate")
+@_with_companion_files
 def validate_notebook_endpoint(
     data: dict
 ):
@@ -16743,6 +16905,7 @@ def compile_notebook_endpoint(data: dict):
             raise
 
 
+@_with_companion_files
 def _compile_notebook_locked(
     data: dict
 ):
