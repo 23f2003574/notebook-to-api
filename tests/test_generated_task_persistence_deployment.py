@@ -56,8 +56,8 @@ def test_kubernetes_sets_the_task_store_and_mounts_an_emptydir(out):
     pod = next(d for d in yaml.safe_load_all(text) if d["kind"] == "Deployment")["spec"]["template"]["spec"]
     container = pod["containers"][0]
     assert {"name": "NOTEBOOK_API_TASK_STORE_PATH", "value": STORE} in container["env"]
-    assert container["volumeMounts"] == [{"name": "task-data", "mountPath": "/data"}]
-    assert pod["volumes"] == [{"name": "task-data", "emptyDir": {}}]
+    assert container["volumeMounts"] == [{"name": "tmp", "mountPath": "/tmp"}, {"name": "task-data", "mountPath": "/data"}]
+    assert pod["volumes"] == [{"name": "tmp", "emptyDir": {}}, {"name": "task-data", "emptyDir": {}}]
     # Honest about durability: emptyDir does not survive Pod replacement.
     assert "not Pod replacement" in text and "PersistentVolumeClaim" in text
     # Existing hardening and secret handling are intact.

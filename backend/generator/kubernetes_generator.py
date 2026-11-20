@@ -251,17 +251,28 @@ def kubernetes_manifest_content(
     # the same Pod, but NOT across Pod replacement (rollout, eviction, node loss). Swap it
     # for a PersistentVolumeClaim if tasks must survive that. It is world-writable, so the
     # runAsUser 1000 container can write it.
-    volume_mount_lines = volumes_lines = ""
+    volume_mount_lines = (
+        "          volumeMounts:\n"
+        "            - name: tmp\n"
+        "              mountPath: /tmp\n"
+    )
+    volumes_lines = (
+        "      volumes:\n"
+        "        - name: tmp\n"
+        "          emptyDir: {}\n"
+    )
     if any(entry["name"] == TASK_STORE_VAR for entry in env_entries):
-        volume_mount_lines = (
-            "          volumeMounts:\n"
+        volume_mount_lines += (
             "            - name: task-data\n"
             f"              mountPath: {TASK_STORE_DIR}\n"
         )
         volumes_lines = (
-            "      # emptyDir: survives container restarts in this Pod, not Pod replacement\n"
-            "      # (rollout, eviction, node loss). Use a PersistentVolumeClaim for that.\n"
+            "      # task-data (emptyDir): survives container restarts in this Pod, not Pod\n"
+            "      # replacement (rollout, eviction, node loss). Use a PersistentVolumeClaim for that.\n"
+            "      # tmp (emptyDir): the only other writable path, since the root filesystem is read-only.\n"
             "      volumes:\n"
+            "        - name: tmp\n"
+            "          emptyDir: {}\n"
             "        - name: task-data\n"
             "          emptyDir: {}\n"
         )
@@ -320,6 +331,8 @@ spec:
       # server that is already shutting down (connection resets). The grace
       # period must cover that pause plus the time to drain in-flight calls.
       terminationGracePeriodSeconds: 45
+      # The app never calls the Kubernetes API, so the pod gets no service-account token.
+      automountServiceAccountToken: false
       containers:
         - name: {package_name_scalar}
           image: {image_scalar}
@@ -336,6 +349,10 @@ spec:
             runAsNonRoot: true
             runAsUser: 1000
             allowPrivilegeEscalation: false
+            # The image writes only to /data (task store) and /tmp, both mounted
+            # below. Set this to false if the notebook itself writes elsewhere
+            # in the container (a model cache under the home directory, say).
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
           env:

@@ -549,6 +549,11 @@ def docker_compose_content(package_name="generated", env_vars=None, notebook_env
         # must not be able to gain privileges through a setuid binary.
         '    security_opt: ["no-new-privileges:true"]\n'
         '    cap_drop: ["ALL"]\n'
+        # The image writes only to /data (task store volume) and /tmp. Set
+        # NOTEBOOK_API_READ_ONLY_ROOTFS=false if the notebook itself writes
+        # elsewhere in the container (a model cache under the home directory, say).
+        "    read_only: ${NOTEBOOK_API_READ_ONLY_ROOTFS:-true}\n"
+        '    tmpfs: ["/tmp"]\n'
         "    ports:\n"
         # Published on loopback only by default: a quick-start `docker compose
         # up` runs with the public default API key and `*` CORS, so binding

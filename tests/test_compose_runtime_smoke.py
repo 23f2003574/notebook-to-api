@@ -106,7 +106,7 @@ def test_plain_docker_run_keeps_background_tasks_across_a_restart(tmp_path):
     try:
         subprocess.run(["docker", "build", "-t", image, str(out)], check=True, capture_output=True, timeout=900)
         subprocess.run(
-            ["docker", "run", "-d", "--name", name, "-v", f"{volume}:/data", "-e", f"NOTEBOOK_API_KEY={key}",
+            ["docker", "run", "-d", "--name", name, "--read-only", "--tmpfs", "/tmp", "-v", f"{volume}:/data", "-e", f"NOTEBOOK_API_KEY={key}",
              "-p", f"127.0.0.1:{port}:8000", image],
             check=True, capture_output=True, timeout=120,
         )

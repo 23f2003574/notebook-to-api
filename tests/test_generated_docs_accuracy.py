@@ -36,7 +36,7 @@ def test_every_documented_name_exists_in_the_runtime(project):
     for name in ("README.md", ".env.example"):
         for var in set(re.findall(r"NOTEBOOK_API_[A-Z_]+", text[name])):
             assert var in runtime, f"{name} documents {var}, which the app never reads"
-    compose_only = {"NOTEBOOK_API_BIND_ADDRESS"}  # read by docker compose itself, not the app
+    compose_only = {"NOTEBOOK_API_BIND_ADDRESS", "NOTEBOOK_API_READ_ONLY_ROOTFS"}  # read by docker compose itself, not the app
     for var in set(re.findall(r"NOTEBOOK_API_[A-Z_]+", text["docker-compose.yml"])) - compose_only:
         assert var in runtime
 
