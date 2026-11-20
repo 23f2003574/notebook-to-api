@@ -143,7 +143,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # subsystem every endpoint depends on" exposure, just one level
     # removed from _enforce_rate_limit's own name instead of the call
     # site.
-    "_enforce_rate_limit", "RATE_LIMIT_PER_MINUTE", "RATE_LIMIT_WINDOW_SECONDS",
+    "_enforce_rate_limit", "AUTH_FAILURE_LIMIT_PER_MINUTE", "AUTH_FAILURE_WINDOW_SECONDS", "_AUTH_FAILURE_MAX_CLIENTS", "_AUTH_FAILURES", "_AUTH_FAILURES_LOCK", "_auth_client_id", "_auth_throttle_check", "_auth_throttle_record_failure", "_Request", "RATE_LIMIT_PER_MINUTE", "RATE_LIMIT_WINDOW_SECONDS",
     "_RATE_LIMIT_WINDOWS", "_RATE_LIMIT_LOCK", "_TASKS_ADMISSION_LOCK",
     "verify_api_key", "custom_openapi",
     "root", "health_check", "readiness_check", "auth_status", "auth_info",
@@ -701,6 +701,19 @@ GENERATED_APP_ENV_VARS = [
             "hung tasks eventually starve the entire app, not just "
             "background ones. 0 (the default) disables this entirely, "
             "preserving the previous unbounded-execution-time behavior."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_AUTH_FAILURE_LIMIT_PER_MINUTE",
+        "default": "30",
+        "description": (
+            "Failed-authentication attempts one client (its peer address) "
+            "may make per minute. Beyond that, requests from that client "
+            "are answered 429 with Retry-After until the minute ends -- "
+            "before the key is even checked, so a correct key from the "
+            "same address is also refused meanwhile. Behind a reverse "
+            "proxy all callers share the proxy's address, so size this for "
+            "your traffic. 0 disables the throttle."
         ),
     },
     {
@@ -2070,6 +2083,7 @@ def generate_fastapi_code(
         "Depends, Query, Response"
     )
     lines.append("from fastapi import Body as _Body")
+    lines.append("from fastapi import Request as _Request")
     lines.append("from typing import Annotated as _Annotated")
     lines.append("from fastapi.middleware.cors import CORSMiddleware")
     lines.append("from fastapi.middleware.gzip import GZipMiddleware")
@@ -4311,7 +4325,60 @@ def generate_fastapi_code(
     lines.append("        if self.entry[1] == 0:")
     lines.append("            _CACHE_FLIGHTS.pop(self.key, None)")
     lines.append("")
-    lines.append("def verify_api_key(response: Response, x_api_key: str = Header(None)):")
+    # Failed-authentication throttle. The per-key limit above only counts
+    # requests that already authenticated, so nothing slowed down guessing
+    # keys. A client (its peer address -- never a forwarded header, which a
+    # caller could simply invent) that sends AUTH_FAILURE_LIMIT_PER_MINUTE bad
+    # keys within a window is answered 429 *before* its key is even checked
+    # until the window ends; behind a reverse proxy every caller shares the
+    # proxy's address, so size the limit for that or set it to 0 to disable.
+    lines.append(
+        'AUTH_FAILURE_LIMIT_PER_MINUTE = _env_number('
+        '"NOTEBOOK_API_AUTH_FAILURE_LIMIT_PER_MINUTE", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_AUTH_FAILURE_LIMIT_PER_MINUTE")}"'
+        ')'
+    )
+    lines.append("AUTH_FAILURE_WINDOW_SECONDS = 60")
+    lines.append("_AUTH_FAILURE_MAX_CLIENTS = 10000")
+    lines.append("_AUTH_FAILURES = {}")
+    lines.append("_AUTH_FAILURES_LOCK = threading.Lock()")
+    lines.append("")
+    lines.append("def _auth_client_id(request):")
+    lines.append("    return request.client.host if request.client else 'unknown'")
+    lines.append("")
+    lines.append("def _auth_throttle_check(client):")
+    lines.append("    if AUTH_FAILURE_LIMIT_PER_MINUTE <= 0:")
+    lines.append("        return")
+    lines.append("    now = time.time()")
+    lines.append("    with _AUTH_FAILURES_LOCK:")
+    lines.append("        window_start, count = _AUTH_FAILURES.get(client, (now, 0))")
+    lines.append("        if now - window_start >= AUTH_FAILURE_WINDOW_SECONDS:")
+    lines.append("            _AUTH_FAILURES.pop(client, None)")
+    lines.append("            return")
+    lines.append("    if count >= AUTH_FAILURE_LIMIT_PER_MINUTE:")
+    lines.append("        retry_after = max(1, int(AUTH_FAILURE_WINDOW_SECONDS - (now - window_start)))")
+    lines.append("        raise HTTPException(")
+    lines.append("            status_code=429,")
+    lines.append("            detail='Too many failed authentication attempts; try again later',")
+    lines.append("            headers={'Retry-After': str(retry_after)},")
+    lines.append("        )")
+    lines.append("")
+    lines.append("def _auth_throttle_record_failure(client):")
+    lines.append("    if AUTH_FAILURE_LIMIT_PER_MINUTE <= 0:")
+    lines.append("        return")
+    lines.append("    now = time.time()")
+    lines.append("    with _AUTH_FAILURES_LOCK:")
+    lines.append("        window_start, count = _AUTH_FAILURES.get(client, (now, 0))")
+    lines.append("        if now - window_start >= AUTH_FAILURE_WINDOW_SECONDS:")
+    lines.append("            window_start, count = now, 0")
+    lines.append("        if client not in _AUTH_FAILURES and len(_AUTH_FAILURES) >= _AUTH_FAILURE_MAX_CLIENTS:")
+    lines.append("            for key in [k for k, (started, _) in _AUTH_FAILURES.items() if now - started >= AUTH_FAILURE_WINDOW_SECONDS]:")
+    lines.append("                del _AUTH_FAILURES[key]")
+    lines.append("            while len(_AUTH_FAILURES) >= _AUTH_FAILURE_MAX_CLIENTS:")
+    lines.append("                _AUTH_FAILURES.pop(next(iter(_AUTH_FAILURES)))")
+    lines.append("        _AUTH_FAILURES[client] = (window_start, count + 1)")
+    lines.append("")
+    lines.append("def verify_api_key(request: _Request, response: Response, x_api_key: str = Header(None)):")
     lines.append("    # hmac.compare_digest instead of != : a plain string")
     lines.append("    # comparison short-circuits on the first differing byte, which")
     lines.append("    # makes response time leak how many leading characters of a")
@@ -4323,9 +4390,12 @@ def generate_fastapi_code(
     lines.append("    # Compared as bytes: compare_digest raises TypeError on a str")
     lines.append("    # with non-ASCII characters, which turned a wrong key such as")
     lines.append("    # 'clé' into a 500 instead of a 401.")
+    lines.append("    client = _auth_client_id(request)")
+    lines.append("    _auth_throttle_check(client)")
     lines.append("    if x_api_key is None or not any(")
     lines.append("        hmac.compare_digest(x_api_key.encode(), key.encode()) for key in API_KEYS")
     lines.append("    ):")
+    lines.append("        _auth_throttle_record_failure(client)")
     lines.append("        raise HTTPException(")
     lines.append("            status_code=401,")
     lines.append("            detail='Invalid API key'")

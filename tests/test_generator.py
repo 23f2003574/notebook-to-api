@@ -70,6 +70,7 @@ def test_generated_app_env_vars_default_matches_the_actual_generated_code():
         "NOTEBOOK_API_MAX_TASK_RESULT_BYTES",
         "NOTEBOOK_API_MAX_TASKS",
         "NOTEBOOK_API_TASK_EXECUTION_TIMEOUT_SECONDS",
+        "NOTEBOOK_API_AUTH_FAILURE_LIMIT_PER_MINUTE",
         "NOTEBOOK_API_RATE_LIMIT_PER_MINUTE",
         "NOTEBOOK_API_WEBHOOK_TIMEOUT_SECONDS",
         "NOTEBOOK_API_WEBHOOK_SECRET",
@@ -574,7 +575,7 @@ def test_rate_limit_dependency_injects_response_to_set_headers():
     assert "from fastapi import" in code.splitlines()[0]
     assert "Response" in code.splitlines()[0]
     assert (
-        "def verify_api_key(response: Response, x_api_key: str = Header(None)):"
+        "def verify_api_key(request: _Request, response: Response, x_api_key: str = Header(None)):"
         in code
     )
     assert "def _enforce_rate_limit(api_key, response):" in code
