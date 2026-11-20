@@ -1822,6 +1822,27 @@ def _per_notebook_image_tag(filename):
     return default_image_tag(slug)
 
 
+def _remove_notebook_app(notebook_filename):
+    """Delete the per-notebook compiled app that belongs to `notebook_filename`
+    (see _generated_root), if there is one. Returns whether a directory was
+    removed. Only ever touches the directory derived from that exact name
+    under GENERATED_APPS_DIR, and never raises: an app that cannot be
+    removed is logged and left for DELETE /api/generated, rather than
+    failing the notebook operation that triggered it."""
+    try:
+        root = Path(GENERATED_APPS_DIR).resolve()
+        target = (root / _notebook_app_id(notebook_filename)).resolve()
+        if target.parent != root or not target.is_dir():
+            return False
+        shutil.rmtree(target)
+        return True
+    except OSError as exc:
+        logging.getLogger(__name__).warning(
+            "could not remove the compiled app of %s: %s", notebook_filename, exc
+        )
+        return False
+
+
 def _generated_root(notebook=None, create=False):
     """GENERATED_DIR itself, or the notebook-specific compiled-app directory
     when `notebook` (an uploaded notebook's filename) is given."""
@@ -6936,6 +6957,7 @@ def resolve_duplicate_notebooks(data: dict = None):
                 _source_url_sidecar_path(file_path.name).unlink(missing_ok=True)
                 _version_notes_sidecar_path(file_path.name).unlink(missing_ok=True)
                 shutil.rmtree(_notebook_versions_dir(file_path.name), ignore_errors=True)
+                _remove_notebook_app(file_path.name)
 
             deleted_filenames.append({
                 "filename": filename,
@@ -8515,6 +8537,7 @@ def delete_all_notebooks(
             _source_url_sidecar_path(entry.name).unlink(missing_ok=True)
             _version_notes_sidecar_path(entry.name).unlink(missing_ok=True)
             shutil.rmtree(_notebook_versions_dir(entry.name), ignore_errors=True)
+            _remove_notebook_app(entry.name)
 
         deleted_filenames.append(entry.name)
 
@@ -8960,6 +8983,7 @@ def delete_notebook(filename: str, dry_run: bool = False, expected_sha256: str =
             _source_url_sidecar_path(file_path.name).unlink(missing_ok=True)
             _version_notes_sidecar_path(file_path.name).unlink(missing_ok=True)
             shutil.rmtree(_notebook_versions_dir(file_path.name), ignore_errors=True)
+            _remove_notebook_app(file_path.name)
 
         except Exception as e:
 
@@ -9080,6 +9104,7 @@ def delete_notebooks_batch(data: dict):
                 _source_url_sidecar_path(file_path.name).unlink(missing_ok=True)
                 _version_notes_sidecar_path(file_path.name).unlink(missing_ok=True)
                 shutil.rmtree(_notebook_versions_dir(file_path.name), ignore_errors=True)
+                _remove_notebook_app(file_path.name)
 
             results.append({
                 "filename": filename,
@@ -9528,6 +9553,7 @@ def rename_notebook(filename: str, data: dict):
         "filename": filename,
         "new_filename": result["new_filename"],
         "was_currently_compiled": result["was_currently_compiled"],
+        "generated_app_removed": result.get("generated_app_removed", False),
     }
 
 
@@ -9681,6 +9707,11 @@ def _rename_notebook_to(old_path: Path, new_filename, overwrite: bool, dry_run: 
         if old_versions_dir.is_dir():
             shutil.move(str(old_versions_dir), str(new_versions_dir))
 
+        # A compiled app embeds its own directory name as its package, so it
+        # cannot simply be moved: the old one is removed and the renamed
+        # notebook is recompiled (POST /api/compile) to get a fresh app.
+        generated_app_removed = _remove_notebook_app(old_path.name)
+
         if was_currently_compiled:
 
             # Held for the same reason every other read/write of
@@ -9699,6 +9730,7 @@ def _rename_notebook_to(old_path: Path, new_filename, overwrite: bool, dry_run: 
         return {
             "new_filename": new_filename,
             "was_currently_compiled": was_currently_compiled,
+            "generated_app_removed": generated_app_removed,
         }
 
 
@@ -9816,6 +9848,7 @@ def rename_notebooks_batch(data: dict):
                 "new_filename": result["new_filename"],
                 "status": "success",
                 "was_currently_compiled": result["was_currently_compiled"],
+                "generated_app_removed": result.get("generated_app_removed", False),
             })
             succeeded_count += 1
 
