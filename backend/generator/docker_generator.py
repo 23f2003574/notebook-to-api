@@ -319,6 +319,15 @@ COPY . {package_name}/
 RUN useradd --create-home --uid 1000 appuser \\
     && mkdir -p {TASK_STORE_DIR} \\
     && chown -R appuser:appuser /app {TASK_STORE_DIR}
+
+# Background tasks are saved here, so a plain `docker run` (no Compose, no
+# Kubernetes) keeps them across a container restart as long as {TASK_STORE_DIR}
+# is a volume -- declared below, anonymous by default; mount a named volume
+# or a host directory (`-v tasks:{TASK_STORE_DIR}`) to keep it across
+# `docker rm` too. Set {TASK_STORE_VAR} to another path, or to an empty
+# value, to move or turn off task persistence.
+ENV {TASK_STORE_VAR}={TASK_STORE_FILE}
+VOLUME {TASK_STORE_DIR}
 USER appuser
 
 # 8000 is this image's default listening port for a plain `docker run`

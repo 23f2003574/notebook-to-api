@@ -59,3 +59,67 @@ def test_generated_compose_project_serves_health(tmp_path):
         assert status == 200, subprocess.run(compose + ["logs"], cwd=out, env=env, capture_output=True, text=True).stdout
     finally:
         subprocess.run(compose + ["down", "--volumes", "--rmi", "local", "--remove-orphans"], cwd=out, env=env, capture_output=True, timeout=300)
+
+
+def _docker_available():
+    return bool(shutil.which("docker")) and subprocess.run(["docker", "info"], capture_output=True).returncode == 0
+
+
+@pytest.mark.skipif(not _docker_available(), reason="needs a running Docker daemon")
+def test_plain_docker_run_keeps_background_tasks_across_a_restart(tmp_path):
+    """No Compose, no Kubernetes: just the generated image and a volume."""
+    import json
+
+    import nbformat
+
+    nb = nbformat.v4.new_notebook()
+    nb.cells.append(nbformat.v4.new_code_cell("def train_model(n: int = 1):\n    return {'n': n}\n"))
+    nbformat.write(nb, tmp_path / "nb.ipynb")
+    out = tmp_path / "persist_api"
+    subprocess.run(
+        [sys.executable, "-m", "backend.cli", "compile", str(tmp_path / "nb.ipynb"), "--output", str(out)],
+        cwd=ROOT, check=True, capture_output=True, timeout=300,
+    )
+    suffix = uuid.uuid4().hex[:8]
+    image, name, volume = f"n2a-persist-{suffix}", f"n2a-persist-{suffix}", f"n2a-persist-vol-{suffix}"
+    key = "smoke-test-only-key-" + uuid.uuid4().hex
+    port = _free_port()
+
+    def call(path, method="GET", body=None):
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}{path}", method=method,
+            data=json.dumps(body).encode() if body is not None else None,
+            headers={"X-API-Key": key, "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return json.loads(response.read())
+
+    def wait_healthy():
+        deadline = time.monotonic() + HEALTH_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            try:
+                return call("/health")
+            except OSError:
+                time.sleep(1)
+        raise AssertionError(subprocess.run(["docker", "logs", name], capture_output=True, text=True).stdout)
+
+    try:
+        subprocess.run(["docker", "build", "-t", image, str(out)], check=True, capture_output=True, timeout=900)
+        subprocess.run(
+            ["docker", "run", "-d", "--name", name, "-v", f"{volume}:/data", "-e", f"NOTEBOOK_API_KEY={key}",
+             "-p", f"127.0.0.1:{port}:8000", image],
+            check=True, capture_output=True, timeout=120,
+        )
+        wait_healthy()
+        task_id = call("/train_model", "POST", {"n": 3})["task_id"]
+        deadline = time.monotonic() + 30
+        while call(f"/tasks/{task_id}")["status"] not in ("completed", "failed") and time.monotonic() < deadline:
+            time.sleep(0.5)
+        subprocess.run(["docker", "restart", name], check=True, capture_output=True, timeout=120)
+        wait_healthy()
+        restored = call(f"/tasks/{task_id}")
+        assert restored["status"] == "completed" and restored["result"] == {"n": 3}
+    finally:
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=120)
+        subprocess.run(["docker", "volume", "rm", "-f", volume], capture_output=True, timeout=120)
+        subprocess.run(["docker", "rmi", "-f", image], capture_output=True, timeout=120)
