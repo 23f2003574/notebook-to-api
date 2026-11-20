@@ -57,7 +57,8 @@ def built(tmp_path_factory):
     nb.cells.append(nbformat.v4.new_code_cell(CODE))
     nbformat.write(nb, tmp / "nb.ipynb")
     compile_notebook(str(tmp / "nb.ipynb"), str(tmp / "typedapp"))
-    os.environ["NOTEBOOK_API_KEY"] = "k"
+    patch = pytest.MonkeyPatch()
+    patch.setenv("NOTEBOOK_API_KEY", "k")  # restored when the module finishes, even on failure
     sys.path.insert(0, str(tmp))
     spec = importlib.util.spec_from_file_location("typedapp_app", tmp / "typedapp" / "app.py")
     module = importlib.util.module_from_spec(spec)
@@ -69,7 +70,7 @@ def built(tmp_path_factory):
     yield tmp, client, schema
     sys.modules.pop("typedapp_app", None)
     sys.path.remove(str(tmp))
-    os.environ.pop("NOTEBOOK_API_KEY", None)
+    patch.undo()
 
 
 def _result(schema, path):
