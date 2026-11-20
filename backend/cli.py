@@ -388,7 +388,7 @@ _CORE_COMMANDS = frozenset({
     "download", "export-notebooks", "generated", "delete", "delete-batch", "rename", "copy",
     "copy-batch", "copy-many", "rename-many", "tags", "prune-versions", "prune-temp-files", "description", "source-url", "deploy-history",
     "clear-deploy-history", "compile-history", "clear-compile-history",
-    "remote-compile", "remote-inspect", "remote-build",
+    "remote-compile", "remote-inspect", "remote-build", "apps",
     "versions", "remote-files", "remote-diff", "diff-notebooks", "remote-export", "remote-deploy",
     "status", "metrics", "remote-validate", "validate-all", "requirements-preview", "curl-preview",
     "remote-curl", "remote-postman", "app-preview", "readme-preview", "dockerfile-preview", "docker-compose-preview", "env-example-preview", "env-vars-preview",
@@ -1429,6 +1429,31 @@ def _print_notebook_info(data):
             "  changed since compile: "
             f"{data.get('notebook_changed_since_compile')}"
         )
+
+
+def _add_notebook_option(parser):
+    parser.add_argument(
+        "--notebook",
+        default=None,
+        help=(
+            "Act on this uploaded notebook's own app (compiled with `remote-compile "
+            "--per-notebook`), e.g. my_model.ipynb, instead of the shared one."
+        ),
+    )
+
+
+def _notebook_params(args, params=None):
+    """`params` plus the {"notebook": name} query parameter for --notebook, validated here so a
+    path or a non-notebook name fails with a clear message before any request is made."""
+    params = dict(params or {})
+    notebook = getattr(args, "notebook", None)
+    if notebook is not None:
+        if not notebook or "/" in notebook or "\\" in notebook or not notebook.lower().endswith(".ipynb"):
+            raise ValueError(
+                f"--notebook must be an uploaded notebook's file name such as my_model.ipynb, got {notebook!r}"
+            )
+        params["notebook"] = notebook
+    return params
 
 
 def _extract_dashboard_error_detail(response):
@@ -4378,6 +4403,7 @@ def _dispatch_core_command(args):
                 params["checksums"] = True
             if args.format == "csv":
                 params["format"] = "csv"
+            params = _notebook_params(args, params)
 
             try:
                 response = httpx.get(
@@ -4432,6 +4458,7 @@ def _dispatch_core_command(args):
             try:
                 response = httpx.get(
                     f"{dashboard_url}/api/generated/{args.filename}",
+                    params=_notebook_params(args),
                     timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
@@ -4461,7 +4488,7 @@ def _dispatch_core_command(args):
                     print("Aborted.")
                     return
 
-            params = {"dry_run": "true"} if args.dry_run else {}
+            params = _notebook_params(args, {"dry_run": "true"} if args.dry_run else {})
 
             try:
                 response = httpx.delete(
@@ -7006,6 +7033,34 @@ def _dispatch_core_command(args):
             for env_var in data.get("environment_variables", []):
                 print(f"{env_var['name']} (default: {env_var['default']!r})")
                 print(f"  {env_var['description']}\n")
+    elif args.command == "apps":
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+            response = httpx.get(f"{dashboard_url}/api/apps", timeout=args.timeout)
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        body = response.json()
+
+        if args.json_output:
+            print(json.dumps(body, indent=2))
+        elif not body.get("apps"):
+            print("No per-notebook apps compiled on this dashboard (compile one with `remote-compile --per-notebook`).")
+        else:
+            print(f"{body['total_count']} per-notebook app(s):")
+            for app_info in body["apps"]:
+                label = app_info.get("notebook") or f"(unknown notebook, {app_info['app_id']})"
+                gone = "" if app_info.get("notebook_exists", True) else "  [notebook no longer uploaded]"
+                print(f"  {label}  {app_info['status']}  compiled {app_info.get('compiled_at') or 'never'}{gone}")
     elif args.command == "remote-build":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -7015,7 +7070,7 @@ def _dispatch_core_command(args):
 
         try:
             response = httpx.get(
-                f"{dashboard_url}/api/download", timeout=args.timeout,
+                f"{dashboard_url}/api/download", params=_notebook_params(args), timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
             raise _dashboard_connection_error(exc, dashboard_url)
@@ -8131,7 +8186,7 @@ def _dispatch_core_command(args):
             try:
                 response = httpx.get(
                     f"{dashboard_url}/api/generated",
-                    params={"checksums": "true"} if args.checksums else {},
+                    params=_notebook_params(args, {"checksums": "true"} if args.checksums else {}),
                     timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
@@ -8194,6 +8249,7 @@ def _dispatch_core_command(args):
             try:
                 response = httpx.get(
                     f"{dashboard_url}/api/generated/{args.filename}",
+                    params=_notebook_params(args),
                     timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
@@ -8248,7 +8304,7 @@ def _dispatch_core_command(args):
 
             try:
                 response = httpx.delete(
-                    f"{dashboard_url}/api/generated", timeout=args.timeout,
+                    f"{dashboard_url}/api/generated", params=_notebook_params(args), timeout=args.timeout,
                 )
             except httpx.HTTPError as exc:
                 raise _dashboard_connection_error(exc, dashboard_url)
@@ -13080,6 +13136,7 @@ def main():
         "list", help="List the files currently compiled, via GET /api/generated."
     )
     _add_dashboard_url_and_timeout_arguments(generated_list_parser)
+    _add_notebook_option(generated_list_parser)
     generated_list_parser.add_argument(
         "--checksums",
         action="store_true",
@@ -13135,6 +13192,7 @@ def main():
         )
     )
     _add_dashboard_url_and_timeout_arguments(generated_show_parser)
+    _add_notebook_option(generated_show_parser)
     generated_show_parser.add_argument(
         "--json",
         action="store_true",
@@ -13156,6 +13214,7 @@ def main():
         )
     )
     _add_dashboard_url_and_timeout_arguments(generated_delete_parser)
+    _add_notebook_option(generated_delete_parser)
     generated_delete_parser.add_argument(
         "--yes",
         action="store_true",
@@ -15783,11 +15842,22 @@ def main():
 
     # remote-build command (download the app currently compiled on a
     # running dashboard, via its own GET /api/download)
+    apps_parser = subparsers.add_parser(
+        "apps",
+        help="List the per-notebook apps compiled on a running dashboard instance, via GET /api/apps."
+    )
+    _add_dashboard_url_and_timeout_arguments(apps_parser)
+    apps_parser.add_argument(
+        "--json", action="store_true", dest="json_output",
+        help="Print the dashboard's own JSON answer.",
+    )
+
     remote_build_parser = subparsers.add_parser(
         "remote-build",
         help="Download the app currently compiled on a running dashboard instance as a zip, via its GET /api/download."
     )
     _add_dashboard_url_and_timeout_arguments(remote_build_parser)
+    _add_notebook_option(remote_build_parser)
     remote_build_parser.add_argument(
         "--output",
         default=None,
@@ -17214,6 +17284,7 @@ def main():
         )
     )
     _add_dashboard_url_and_timeout_arguments(remote_files_list_parser)
+    _add_notebook_option(remote_files_list_parser)
     remote_files_list_parser.add_argument(
         "--json",
         action="store_true",
@@ -17242,6 +17313,7 @@ def main():
         )
     )
     _add_dashboard_url_and_timeout_arguments(remote_files_get_parser)
+    _add_notebook_option(remote_files_get_parser)
     remote_files_get_parser.add_argument(
         "--output",
         default=None,
@@ -17277,6 +17349,7 @@ def main():
         help="Delete the compiled app currently on a running dashboard instance via DELETE /api/generated."
     )
     _add_dashboard_url_and_timeout_arguments(remote_files_delete_parser)
+    _add_notebook_option(remote_files_delete_parser)
     remote_files_delete_parser.add_argument(
         "--yes",
         action="store_true",
