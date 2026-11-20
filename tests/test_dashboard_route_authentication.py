@@ -18,6 +18,13 @@ def _url(path):
     return path.replace("{", "x").replace("}", "")
 
 
+@pytest.fixture(autouse=True)
+def _no_failure_throttle(monkeypatch):
+    """These tests send hundreds of wrong keys on purpose (see test_dashboard_auth_throttle.py
+    for the throttle itself)."""
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_AUTH_FAILURE_LIMIT_PER_MINUTE", "0")
+
+
 def _client(peer=None):
     return TestClient(app, raise_server_exceptions=False, client=peer) if peer else TestClient(app, raise_server_exceptions=False)
 

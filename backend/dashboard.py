@@ -7,6 +7,7 @@ import hmac
 import json
 import os
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -468,6 +469,64 @@ def dashboard_api_key():
 _IN_PROCESS_TEST_PEER = "testclient"
 
 
+def dashboard_auth_failure_limit_per_minute():
+    """Failed-authentication attempts one client (its peer address) may make
+    per minute before further requests from it are answered 429 -- until the
+    minute ends and *before* the key is checked, so the right key from that
+    address is refused meanwhile. Default 30; 0 disables. Behind a reverse
+    proxy every caller shares the proxy's address, so size it for that.
+    NOTEBOOK_API_DASHBOARD_AUTH_FAILURE_LIMIT_PER_MINUTE."""
+    raw = os.getenv("NOTEBOOK_API_DASHBOARD_AUTH_FAILURE_LIMIT_PER_MINUTE", "30").strip() or "30"
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        raise RuntimeError(
+            f"NOTEBOOK_API_DASHBOARD_AUTH_FAILURE_LIMIT_PER_MINUTE must be a whole number, got {raw!r}"
+        ) from None
+
+
+_AUTH_FAILURE_WINDOW_SECONDS = 60
+_AUTH_FAILURE_MAX_CLIENTS = 10000
+_AUTH_FAILURES = {}
+_AUTH_FAILURES_LOCK = threading.Lock()
+
+
+def _auth_client(request):
+    return request.client.host if request.client else "unknown"
+
+
+def _auth_retry_after_if_blocked(client):
+    """Seconds until `client` may try again, or None when it is not blocked."""
+    limit = dashboard_auth_failure_limit_per_minute()
+    if limit <= 0:
+        return None
+    now = time.time()
+    with _AUTH_FAILURES_LOCK:
+        started, count = _AUTH_FAILURES.get(client, (now, 0))
+        if now - started >= _AUTH_FAILURE_WINDOW_SECONDS:
+            _AUTH_FAILURES.pop(client, None)
+            return None
+        if count >= limit:
+            return max(1, int(_AUTH_FAILURE_WINDOW_SECONDS - (now - started)))
+    return None
+
+
+def _auth_record_failure(client):
+    if dashboard_auth_failure_limit_per_minute() <= 0:
+        return
+    now = time.time()
+    with _AUTH_FAILURES_LOCK:
+        started, count = _AUTH_FAILURES.get(client, (now, 0))
+        if now - started >= _AUTH_FAILURE_WINDOW_SECONDS:
+            started, count = now, 0
+        if client not in _AUTH_FAILURES and len(_AUTH_FAILURES) >= _AUTH_FAILURE_MAX_CLIENTS:
+            for key in [k for k, (t, _) in _AUTH_FAILURES.items() if now - t >= _AUTH_FAILURE_WINDOW_SECONDS]:
+                del _AUTH_FAILURES[key]
+            while len(_AUTH_FAILURES) >= _AUTH_FAILURE_MAX_CLIENTS:
+                _AUTH_FAILURES.pop(next(iter(_AUTH_FAILURES)))
+        _AUTH_FAILURES[client] = (started, count + 1)
+
+
 def _peer_is_local(request):
     client = request.client
     return client is None or client.host == _IN_PROCESS_TEST_PEER or host_is_loopback(client.host)
@@ -520,8 +579,19 @@ async def _require_dashboard_api_key(request: Request, call_next):
 
     if expected and request.method != "OPTIONS" and not _is_frontend_shell_file(request):
         supplied = request.headers.get("X-API-Key", "")
+        client = _auth_client(request)
+
+        retry_after = _auth_retry_after_if_blocked(client)
+
+        if retry_after is not None:
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Too many failed authentication attempts; try again later"},
+                headers={"Retry-After": str(retry_after)},
+            )
 
         if not hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8")):
+            _auth_record_failure(client)
             return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
 
     return await call_next(request)
