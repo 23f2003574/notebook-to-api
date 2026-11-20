@@ -59,3 +59,26 @@ describe('GovernanceAudit', () => {
     expect(screen.queryByRole('alert')).toBeNull()
   })
 })
+
+describe('GovernanceAudit linked record', () => {
+  it('opens the record a compile result points to, even when it is not in the recent list', async () => {
+    const fetchMock = vi.fn((url) => {
+      const path = String(url)
+      if (/\/governance\/audit\/7$/.test(path)) return Promise.resolve({ ok: true, status: 200, json: async () => rec(7, 'notebook.compile', 'failure', { notebook: 'z.ipynb', error: 'bad' }) })
+      return Promise.resolve({ ok: true, status: 200, json: async () => [] })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<GovernanceAudit focusSequence={7} />)
+    const linked = await screen.findByTestId('linked-record')
+    expect(linked).toHaveTextContent('#7')
+    expect(linked).toHaveTextContent('✗ failure')
+    expect(linked).toHaveTextContent('bad')
+  })
+
+  it('says so when the linked record no longer exists', async () => {
+    vi.stubGlobal('fetch', vi.fn((url) => Promise.resolve(
+      /\/audit\/9$/.test(String(url)) ? { ok: false, status: 404, json: async () => ({}) } : { ok: true, status: 200, json: async () => [] })))
+    render(<GovernanceAudit focusSequence={9} />)
+    expect(await screen.findByText(/#9 was not found/)).toBeInTheDocument()
+  })
+})

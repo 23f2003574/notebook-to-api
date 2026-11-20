@@ -576,6 +576,20 @@ async def get_governance_audit_verify():
     return result.to_dict()
 
 
+@health_router.get("/audit/{sequence}")
+async def get_governance_audit_record(sequence: int):
+    """
+    Return one audit record by its stable sequence number (the reference compile and deploy
+    responses carry as governance_audit.sequence).
+    """
+
+    try:
+        return _build_audit_service().get(sequence).to_dict()
+
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 def _build_policy_engine():
     runtime = build_deployment_governance_persistence(
         deployment_governance_persistence_config_from_env()

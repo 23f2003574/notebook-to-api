@@ -16915,15 +16915,24 @@ def _record_governance(action, data, outcome, response=None, error=None):
 
 
 def _audited(action, data, run):
-    """Run `run()`, record its success or failure exactly once, and re-raise failures."""
+    """Run `run()`, record its success or failure exactly once, and re-raise failures.
+
+    The record's stable reference goes back to the caller: as "governance_audit" in a success
+    body, and as the X-Governance-Audit-Sequence header on an HTTP failure. If the audit store
+    itself failed, the operation's own result is returned unchanged plus "governance_audit_error"."""
     try:
         result = run()
     except BaseException as exc:
-        _record_governance(action, data, "failure", error=getattr(exc, "detail", exc))
+        recorded = _record_governance(action, data, "failure", error=getattr(exc, "detail", exc))
+        if isinstance(exc, HTTPException) and not isinstance(recorded, Exception):
+            exc.headers = {**(exc.headers or {}), "X-Governance-Audit-Sequence": str(recorded.sequence)}
         raise
     recorded = _record_governance(action, data, "success", response=result)
-    if isinstance(recorded, Exception) and isinstance(result, dict):
-        result = {**result, "governance_audit_error": "governance audit record could not be written"}
+    if isinstance(result, dict):
+        if isinstance(recorded, Exception):
+            result = {**result, "governance_audit_error": "governance audit record could not be written"}
+        else:
+            result = {**result, "governance_audit": {"sequence": recorded.sequence, "record_hash": recorded.record_hash}}
     return result
 
 

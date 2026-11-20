@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
-import { fetchOperationRecords, operationLabel } from '../governanceAudit'
+import { fetchOperationRecords, fetchRecord, operationLabel } from '../governanceAudit'
 
-function Record({ record }) {
+function Record({ record, linked }) {
   const ok = record.outcome === 'success'
   const meta = record.metadata || {}
   const { notebook, error, ...provenance } = meta
   return (
-    <li className="rounded border border-slate-700 p-3" data-testid={`audit-record-${record.sequence}`}>
+    <li className={`rounded border p-3 ${linked ? 'border-blue-400' : 'border-slate-700'}`}
+      data-testid={`audit-record-${record.sequence}`} aria-current={linked ? 'true' : undefined}>
       <div className="flex flex-wrap items-center gap-3">
         <span className="text-slate-400">#{record.sequence}</span>
         <span className="font-semibold text-white">{operationLabel(record.action)}</span>
@@ -33,17 +34,21 @@ function Record({ record }) {
   )
 }
 
-export default function GovernanceAudit({ refreshKey }) {
-  const [state, setState] = useState({ status: 'loading', records: [], error: '' })
+export default function GovernanceAudit({ refreshKey, focusSequence = null }) {
+  const [state, setState] = useState({ status: 'loading', records: [], error: '', linked: null, linkedMissing: false })
 
   const load = useCallback(async () => {
     setState((s) => ({ ...s, status: 'loading', error: '' }))
     try {
-      setState({ status: 'ready', records: await fetchOperationRecords(), error: '' })
+      const [records, linked] = await Promise.all([
+        fetchOperationRecords(),
+        focusSequence ? fetchRecord(focusSequence) : Promise.resolve(null),
+      ])
+      setState({ status: 'ready', records, error: '', linked, linkedMissing: Boolean(focusSequence) && !linked })
     } catch (err) {
-      setState({ status: 'error', records: [], error: err.message || 'Could not load the audit records' })
+      setState({ status: 'error', records: [], error: err.message || 'Could not load the audit records', linked: null, linkedMissing: false })
     }
-  }, [])
+  }, [focusSequence])
 
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load() }, [load, refreshKey])
@@ -57,11 +62,17 @@ export default function GovernanceAudit({ refreshKey }) {
           <button type="button" className="mt-2 underline" onClick={load}>Retry</button>
         </div>
       )}
+      {state.status === 'ready' && state.linked && (
+        <ul className="mb-3" data-testid="linked-record"><Record record={state.linked} linked /></ul>
+      )}
+      {state.status === 'ready' && state.linkedMissing && (
+        <p className="mb-3 text-amber-300">Audit record #{focusSequence} was not found (it may have been purged).</p>
+      )}
       {state.status === 'ready' && state.records.length === 0 && (
         <p className="text-slate-400">No compile or deploy operations have been recorded yet.</p>
       )}
       {state.status === 'ready' && state.records.length > 0 && (
-        <ul className="space-y-2">{state.records.map((r) => <Record key={r.sequence} record={r} />)}</ul>
+        <ul className="space-y-2">{state.records.map((r) => <Record key={r.sequence} record={r} linked={r.sequence === focusSequence} />)}</ul>
       )}
     </div>
   )

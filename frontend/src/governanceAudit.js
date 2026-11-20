@@ -19,3 +19,11 @@ export async function fetchOperationRecords(limit = 50) {
   )
   return lists.flat().sort((a, b) => b.sequence - a.sequence).slice(0, limit)
 }
+
+// One record by its stable sequence number: what a compile or deploy result links to.
+export async function fetchRecord(sequence) {
+  const response = await dashboardFetch(`/governance/audit/${encodeURIComponent(sequence)}`)
+  if (response.status === 404) return null
+  if (!response.ok) throw new Error(await errorFromResponse(response, 'Could not load the audit record'))
+  return response.json()
+}

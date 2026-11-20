@@ -964,6 +964,25 @@ describe('per-notebook compilation and its diagnostics in the dashboard', () => 
     expect(JSON.parse(compile[1].body)).toEqual({ notebook_path: 'n.ipynb', per_notebook: true })
   })
 
+  it('links a finished compile to its governance audit record', async () => {
+    const replies = [
+      ok({ filename: 'n.ipynb' }),
+      ok({ functions: [{ name: 'f' }], endpoints: [{ path: '/f' }], generated_files: [] }),
+      ok({ functions: [{ name: 'f' }], endpoints: [{ path: '/f' }], generated_files: ['app.py'], dependencies: [], governance_audit: { sequence: 42 } }),
+    ]
+    vi.stubGlobal('fetch', (url) => {
+      const path = String(url).replace(/^https?:\/\/[^/]+/, '')
+      if (path === '/api/health') return Promise.resolve(ok({ status: 'healthy' }))
+      if (path === '/api/notebooks') return Promise.resolve(ok({ notebooks: [] }))
+      if (path.startsWith('/governance/audit')) return Promise.resolve(ok([]))
+      return Promise.resolve(replies.shift())
+    })
+    const { container } = render(<Dashboard />)
+    fireEvent.change(container.querySelector('input[type=file]'), { target: { files: [new File(['{}'], 'n.ipynb')] } })
+    fireEvent.click(await screen.findByText(/Compile Now/))
+    expect(await screen.findByTestId('audit-link')).toHaveTextContent('#42')
+  })
+
   it('shows skipped functions, inferred background endpoints and warnings under the notebook that was compiled', async () => {
     stub([Promise.resolve(ok({
       skipped_functions: [{ name: 'bad', reason: 'requires a callable' }],

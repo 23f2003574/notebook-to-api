@@ -133,6 +133,7 @@ export default function Dashboard() {
   const [logs, setLogs] = useState([])
   const [isCompiling, setIsCompiling] = useState(false)
   const [lastCompiled, setLastCompiled] = useState(null)
+  const [auditSequence, setAuditSequence] = useState(null)
   const [endpoints, setEndpoints] = useState([]) // [{ path, method, ... }] as returned by the backend
   const [generatedFiles, setGeneratedFiles] = useState([])
   // Why the file list is what it is: null until known, then 'generated', 'none' (nothing
@@ -239,7 +240,9 @@ export default function Dashboard() {
           '📚 Dependencies: ' + (data.dependencies?.join(', ') || 'none')
         ])
         setLastCompiled(new Date().toLocaleTimeString())
+        setAuditSequence(data.governance_audit?.sequence ?? null)
       } else {
+        setAuditSequence(Number(response.headers?.get?.('X-Governance-Audit-Sequence')) || null)
         const detail = await errorFromResponse(response, 'Unknown error')
         if (!isCurrent(work)) return
         setGeneratedFiles([])
@@ -333,6 +336,10 @@ export default function Dashboard() {
               {lastCompiled && (
                 <p className="text-sm text-emerald-400 mt-3">⏱ Last compiled: {lastCompiled}</p>
               )}
+              {auditSequence && (
+                <a href="#governance-audit" className="block text-sm text-blue-300 underline mt-2"
+                  data-testid="audit-link">View audit record #{auditSequence}</a>
+              )}
             </div>
 
             {endpoints.length > 0 && (
@@ -414,8 +421,8 @@ export default function Dashboard() {
             </div>
 
             <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mt-6">
-              <h2 className="text-xl font-semibold text-white mb-4">🛡 Governance Audit</h2>
-              <GovernanceAudit refreshKey={lastCompiled} />
+              <h2 id="governance-audit" className="text-xl font-semibold text-white mb-4">🛡 Governance Audit</h2>
+              <GovernanceAudit refreshKey={`${lastCompiled}|${auditSequence}`} focusSequence={auditSequence} />
             </div>
           </div>
 
