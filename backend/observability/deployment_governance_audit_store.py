@@ -99,6 +99,36 @@ class SqliteAuditStore:
         except sqlite3.Error as exc:
             raise GovernanceAuditStorageError(f"governance audit read failed ({type(exc).__name__})") from None
 
+    def search(self, query) -> list[dict]:
+        """Newest-first rows matching an AuditQuery, filtered and limited inside SQLite."""
+        clauses, params = [], []
+        for column, value in (("action", query.action), ("actor", query.actor),
+                              ("resource", query.resource), ("outcome", query.outcome)):
+            if value is not None:
+                clauses.append(f"{column} = ?")
+                params.append(value)
+        if query.before_sequence is not None:
+            clauses.append("sequence < ?")
+            params.append(query.before_sequence)
+        if query.action_prefix is not None:
+            escaped = query.action_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            clauses.append("action LIKE ? ESCAPE '\\'")
+            params.append(escaped + "%")
+        sql = "SELECT * FROM audit_records"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY sequence DESC LIMIT ?"
+        try:
+            out = []
+            for row in self._connect().execute(sql, (*params, query.limit)).fetchall():
+                item = dict(row)
+                item["occurred_at"] = datetime.fromisoformat(item["occurred_at"])
+                item["metadata"] = json.loads(item["metadata"])
+                out.append(item)
+            return out
+        except sqlite3.Error as exc:
+            raise GovernanceAuditStorageError(f"governance audit read failed ({type(exc).__name__})") from None
+
     def clear(self) -> int:
         """Delete every row but keep the chain head, so a purge cannot restart the chain."""
         try:

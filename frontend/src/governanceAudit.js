@@ -7,17 +7,18 @@ export function operationLabel(action) {
   return action === 'notebook.compile' ? 'Compile' : action === 'notebook.deploy' ? 'Deploy' : action
 }
 
-// The governance API filters by one action at a time, so ask for each operation and merge.
-// Records stay on the server: this only holds the page currently shown.
-export async function fetchOperationRecords(limit = 50) {
-  const lists = await Promise.all(
-    AUDIT_OPERATIONS.map(async (action) => {
-      const response = await dashboardFetch(`/governance/audit?action=${encodeURIComponent(action)}&limit=${limit}`)
-      if (!response.ok) throw new Error(await errorFromResponse(response, 'Could not load the audit records'))
-      return response.json()
-    }),
-  )
-  return lists.flat().sort((a, b) => b.sequence - a.sequence).slice(0, limit)
+// One page of compile/deploy history, newest first, filtered on the server. Pass the previous
+// page's nextCursor to continue; nothing beyond the requested page is ever loaded.
+export async function fetchHistory({ notebook = '', action = '', outcome = '', cursor = '', limit = 25 } = {}) {
+  const params = new URLSearchParams({ scope: 'notebook', limit: String(limit) })
+  if (notebook.trim()) params.set('notebook', notebook.trim())
+  if (action) params.set('action', action)
+  if (outcome) params.set('outcome', outcome)
+  if (cursor) params.set('cursor', cursor)
+  const response = await dashboardFetch(`/governance/audit/history?${params}`)
+  if (!response.ok) throw new Error(await errorFromResponse(response, 'Could not load the audit records'))
+  const body = await response.json()
+  return { records: Array.isArray(body.records) ? body.records : [], hasMore: Boolean(body.has_more), nextCursor: body.next_cursor || '' }
 }
 
 // One record by its stable sequence number: what a compile or deploy result links to.

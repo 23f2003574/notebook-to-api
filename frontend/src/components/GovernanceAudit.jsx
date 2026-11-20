@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { fetchOperationRecords, fetchRecord, operationLabel, verifyChain } from '../governanceAudit'
+import { AUDIT_OPERATIONS, fetchHistory, fetchRecord, operationLabel, verifyChain } from '../governanceAudit'
 
 function Record({ record, linked }) {
   const ok = record.outcome === 'success'
@@ -59,22 +59,41 @@ function VerificationResult({ verification }) {
 }
 
 export default function GovernanceAudit({ refreshKey, focusSequence = null }) {
-  const [state, setState] = useState({ status: 'loading', records: [], error: '', linked: null, linkedMissing: false })
+  const [draft, setDraft] = useState({ notebook: '', action: '', outcome: '' })
+  const [filters, setFilters] = useState(draft)
+  const [state, setState] = useState({
+    status: 'loading', records: [], error: '', linked: null, linkedMissing: false, hasMore: false, nextCursor: '', loadingMore: false,
+  })
 
   const load = useCallback(async () => {
     setState((s) => ({ ...s, status: 'loading', error: '' }))
     try {
-      const [records, linked] = await Promise.all([
-        fetchOperationRecords(),
+      const [page, linked] = await Promise.all([
+        fetchHistory(filters),
         focusSequence ? fetchRecord(focusSequence) : Promise.resolve(null),
       ])
-      setState({ status: 'ready', records, error: '', linked, linkedMissing: Boolean(focusSequence) && !linked })
+      setState({
+        status: 'ready', records: page.records, error: '', linked, linkedMissing: Boolean(focusSequence) && !linked,
+        hasMore: page.hasMore, nextCursor: page.nextCursor, loadingMore: false,
+      })
     } catch (err) {
-      setState({ status: 'error', records: [], error: err.message || 'Could not load the audit records', linked: null, linkedMissing: false })
+      setState({
+        status: 'error', records: [], error: err.message || 'Could not load the audit records', linked: null,
+        linkedMissing: false, hasMore: false, nextCursor: '', loadingMore: false,
+      })
     }
-  }, [focusSequence])
+  }, [filters, focusSequence])
 
-  // eslint-disable-next-line react-hooks/set-state-in-effect
+  const loadMore = async () => {
+    setState((s) => ({ ...s, loadingMore: true }))
+    try {
+      const page = await fetchHistory({ ...filters, cursor: state.nextCursor })
+      setState((s) => ({ ...s, records: [...s.records, ...page.records], hasMore: page.hasMore, nextCursor: page.nextCursor, loadingMore: false }))
+    } catch (err) {
+      setState((s) => ({ ...s, loadingMore: false, error: err.message || 'Could not load more records' }))
+    }
+  }
+
   useEffect(() => { load() }, [load, refreshKey])
 
   const [verification, setVerification] = useState(null)
@@ -93,6 +112,28 @@ export default function GovernanceAudit({ refreshKey, focusSequence = null }) {
         </button>
         <VerificationResult verification={verification} />
       </div>
+      <form className="mb-3 flex flex-wrap items-end gap-3 text-sm" onSubmit={(e) => { e.preventDefault(); setFilters(draft) }}>
+        <label className="text-slate-300">Notebook
+          <input value={draft.notebook} onChange={(e) => setDraft({ ...draft, notebook: e.target.value })}
+            placeholder="all notebooks" className="ml-2 rounded bg-slate-900 px-2 py-1 text-white" />
+        </label>
+        <label className="text-slate-300">Operation
+          <select value={draft.action} onChange={(e) => setDraft({ ...draft, action: e.target.value })}
+            className="ml-2 rounded bg-slate-900 px-2 py-1 text-white">
+            <option value="">All</option>
+            {AUDIT_OPERATIONS.map((a) => <option key={a} value={a}>{operationLabel(a)}</option>)}
+          </select>
+        </label>
+        <label className="text-slate-300">Outcome
+          <select value={draft.outcome} onChange={(e) => setDraft({ ...draft, outcome: e.target.value })}
+            className="ml-2 rounded bg-slate-900 px-2 py-1 text-white">
+            <option value="">All</option>
+            <option value="success">Success</option>
+            <option value="failure">Failure</option>
+          </select>
+        </label>
+        <button type="submit" className="rounded bg-blue-600 px-3 py-1 text-white">Apply filters</button>
+      </form>
       {state.status === 'loading' && <p className="text-slate-400">Loading audit records…</p>}
       {state.status === 'error' && (
         <div role="alert" className="text-red-300">
@@ -107,10 +148,15 @@ export default function GovernanceAudit({ refreshKey, focusSequence = null }) {
         <p className="mb-3 text-amber-300">Audit record #{focusSequence} was not found (it may have been purged).</p>
       )}
       {state.status === 'ready' && state.records.length === 0 && (
-        <p className="text-slate-400">No compile or deploy operations have been recorded yet.</p>
+        <p className="text-slate-400">No compile or deploy records match.</p>
       )}
       {state.status === 'ready' && state.records.length > 0 && (
         <ul className="space-y-2">{state.records.map((r) => <Record key={r.sequence} record={r} linked={r.sequence === focusSequence} />)}</ul>
+      )}
+      {state.status === 'ready' && state.hasMore && (
+        <button type="button" onClick={loadMore} disabled={state.loadingMore} className="mt-3 underline text-blue-300">
+          {state.loadingMore ? 'Loading…' : 'Load older records'}
+        </button>
       )}
     </div>
   )

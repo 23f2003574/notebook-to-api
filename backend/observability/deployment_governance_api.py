@@ -520,11 +520,11 @@ async def delete_governance_route(name: str):
 
 
 def _build_audit_service():
-    runtime = build_deployment_governance_persistence(
-        deployment_governance_persistence_config_from_env()
-    )
+    # The audit trail is one process-wide service (durable when configured); rebuilding the whole
+    # persistence runtime per request would re-run SQLite migrations on every call.
+    from .deployment_governance_audit import get_audit_service
 
-    return runtime.build_governance_audit_trail_service()
+    return get_audit_service()
 
 
 @health_router.get("/audit")
@@ -548,6 +548,66 @@ async def get_governance_audit(
     records = _build_audit_service().query(query)
 
     return [record.to_dict() for record in records]
+
+
+def _encode_cursor(sequence: int) -> str:
+    import base64
+
+    return base64.urlsafe_b64encode(f"seq:{sequence}".encode()).decode().rstrip("=")
+
+
+def _decode_cursor(cursor: str) -> int:
+    import base64
+
+    try:
+        raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)).decode()
+        prefix, _, number = raw.partition(":")
+        value = int(number)
+
+        if prefix != "seq" or value < 1:
+            raise ValueError
+
+        return value
+
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid cursor") from None
+
+
+@health_router.get("/audit/history")
+async def get_governance_audit_history(
+    notebook: str | None = Query(default=None, max_length=255),
+    action: str | None = Query(default=None),
+    outcome: str | None = Query(default=None, pattern="^(success|failure)$"),
+    scope: str | None = Query(default=None, pattern="^notebook$"),
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=25, gt=0, le=200),
+):
+    """
+    Page through the audit trail newest first. Filters compose (all must match): notebook
+    (compile/deploy records of that notebook), action, outcome, scope=notebook (compile and
+    deploy operations only). Pass back next_cursor to get the following page; the cursor is the
+    last sequence seen, so records created meanwhile never shift or duplicate a page.
+    """
+
+    from .deployment_governance_audit import AuditQuery
+
+    query = AuditQuery(
+        action=action,
+        resource=f"notebook:{notebook}" if notebook else None,
+        outcome=outcome,
+        action_prefix="notebook." if scope == "notebook" else None,
+        before_sequence=_decode_cursor(cursor) if cursor else None,
+        limit=limit + 1,
+    )
+    records = _build_audit_service().query(query)
+    page = records[:limit]
+    has_more = len(records) > limit
+
+    return {
+        "records": [record.to_dict() for record in page],
+        "has_more": has_more,
+        "next_cursor": _encode_cursor(page[-1].sequence) if has_more and page else None,
+    }
 
 
 @health_router.get("/audit/latest")

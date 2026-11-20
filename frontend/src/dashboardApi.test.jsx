@@ -20,7 +20,7 @@ const stubFetch = (mock) =>
     /\/api\/health$/.test(String(url))
       ? Promise.resolve({ ok: true, json: async () => ({ status: 'healthy' }) })
       : /\/governance\/audit/.test(String(url))
-        ? Promise.resolve({ ok: true, json: async () => [] })
+        ? Promise.resolve({ ok: true, json: async () => ({ records: [], has_more: false, next_cursor: null }) })
         : /\/api\/notebooks$/.test(String(url))
         ? Promise.resolve({ ok: true, json: async () => ({ notebooks: [] }) })
         : mock(url, init))

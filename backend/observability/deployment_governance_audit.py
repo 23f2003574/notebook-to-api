@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -165,11 +166,28 @@ class AuditQuery:
 
     limit: int = 100
 
+    outcome: "str | None" = None
+
+    # Only records older than this sequence (a cursor for paging newest-first), and only actions
+    # starting with this prefix (e.g. "notebook." for compile and deploy).
+    before_sequence: "int | None" = None
+
+    action_prefix: "str | None" = None
+
     def __post_init__(self) -> None:
         if self.limit <= 0:
             raise ValueError("limit must be greater than zero")
 
     def matches(self, record: AuditRecord) -> bool:
+        if self.outcome is not None and record.outcome != self.outcome:
+            return False
+
+        if self.before_sequence is not None and record.sequence >= self.before_sequence:
+            return False
+
+        if self.action_prefix is not None and not record.action.startswith(self.action_prefix):
+            return False
+
         if self.action is not None and record.action != self.action:
             return False
 
@@ -246,6 +264,8 @@ class GovernanceAuditService:
         # so records survive restarts and concurrent processes cannot fork the chain.
         self._store = store
 
+        self._lock = threading.RLock()
+
         self._next_sequence = 1
 
         self._last_hash = GENESIS_HASH
@@ -305,19 +325,21 @@ class GovernanceAuditService:
                 lambda sequence, previous_hash: build(sequence, previous_hash)
             )
 
-        record = build(self._next_sequence, self._last_hash)
+        with self._lock:
+            record = build(self._next_sequence, self._last_hash)
 
-        self._records[record.sequence] = record
+            self._records[record.sequence] = record
 
-        self._next_sequence += 1
+            self._next_sequence += 1
 
-        self._last_hash = record.record_hash
+            self._last_hash = record.record_hash
 
         return record
 
     def _all_records(self, sequence: "int | None" = None) -> "dict[int, AuditRecord]":
         if self._store is None:
-            return self._records
+            with self._lock:
+                return dict(self._records)
 
         return {
             row["sequence"]: AuditRecord(**row)
@@ -351,6 +373,11 @@ class GovernanceAuditService:
         """
 
         query = query or AuditQuery()
+
+        if self._store is not None:
+            return tuple(
+                AuditRecord(**row) for row in self._store.search(query)
+            )
 
         matches = [
             record
@@ -504,9 +531,10 @@ class GovernanceAuditService:
             count = self._store.clear()
 
         else:
-            count = len(self._records)
+            with self._lock:
+                count = len(self._records)
 
-            self._records.clear()
+                self._records.clear()
 
         if decision is not None:
             record_policy_decision(self, "audit_purge", decision)
