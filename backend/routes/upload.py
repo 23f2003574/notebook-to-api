@@ -1918,6 +1918,32 @@ def _diagnostic_fields(inspection, endpoint_paths=None):
     }
 
 
+_LIFECYCLE_LOCKS = {}
+_LIFECYCLE_GUARD = threading.Lock()
+
+
+@contextlib.contextmanager
+def _notebook_lifecycle(*filenames):
+    """Hold the lifecycle lock of each named notebook (compile, delete and rename of one
+    notebook exclude each other; different notebooks never wait for each other).
+
+    Locks are re-entrant and always taken in sorted name order, so two operations that
+    each need several notebooks (a rename needs the old and the new name) cannot
+    deadlock. They are held for the process lifetime: one small lock per distinct name."""
+    names = sorted({os.path.basename(n) for n in filenames if isinstance(n, str) and n})
+    locks = []
+    with _LIFECYCLE_GUARD:
+        for name in names:
+            locks.append(_LIFECYCLE_LOCKS.setdefault(name, threading.RLock()))
+    for lock in locks:
+        lock.acquire()
+    try:
+        yield
+    finally:
+        for lock in reversed(locks):
+            lock.release()
+
+
 def _remove_notebook_app(notebook_filename):
     """Delete the per-notebook compiled app that belongs to `notebook_filename`
     (see _generated_root), if there is one. Returns whether a directory was
@@ -1930,7 +1956,8 @@ def _remove_notebook_app(notebook_filename):
         target = (root / _notebook_app_id(notebook_filename)).resolve()
         if target.parent != root or not target.is_dir():
             return False
-        shutil.rmtree(target)
+        with _notebook_lifecycle(notebook_filename):
+            shutil.rmtree(target)
         return True
     except OSError as exc:
         logging.getLogger(__name__).warning(
@@ -9001,6 +9028,13 @@ def prune_all_notebook_versions(
 
 @router.delete("/notebooks/{filename}")
 def delete_notebook(filename: str, dry_run: bool = False, expected_sha256: str = None):
+    """Delete a previously uploaded notebook (and its per-notebook app), excluding a
+    compile or rename of the same notebook while it happens."""
+    with _notebook_lifecycle(filename):
+        return _delete_notebook_locked(filename, dry_run, expected_sha256)
+
+
+def _delete_notebook_locked(filename: str, dry_run: bool = False, expected_sha256: str = None):
     """Delete a previously uploaded notebook.
 
     Reuses resolve_upload_path for the same traversal protection already
@@ -9099,6 +9133,14 @@ def delete_notebook(filename: str, dry_run: bool = False, expected_sha256: str =
 
 @router.post("/notebooks/delete-batch")
 def delete_notebooks_batch(data: dict):
+    """Delete several notebooks; each is excluded from its own compile and rename while the
+    batch runs (see _delete_notebooks_batch_locked for the request fields)."""
+    names = data.get("filenames") if isinstance(data, dict) else None
+    with _notebook_lifecycle(*(names if isinstance(names, list) else [])):
+        return _delete_notebooks_batch_locked(data)
+
+
+def _delete_notebooks_batch_locked(data: dict):
     """Delete a caller-chosen set of already-uploaded notebooks in one
     call.
 
@@ -9655,6 +9697,12 @@ def rename_notebook(filename: str, data: dict):
 
 
 def _rename_notebook_to(old_path: Path, new_filename, overwrite: bool, dry_run: bool = False) -> dict:
+    """Rename `old_path` to `new_filename`, excluding compiles and deletes of both names."""
+    with _notebook_lifecycle(old_path.name, new_filename):
+        return _rename_notebook_to_locked(old_path, new_filename, overwrite, dry_run)
+
+
+def _rename_notebook_to_locked(old_path: Path, new_filename, overwrite: bool, dry_run: bool = False) -> dict:
     """Rename `old_path` (an already-verified existing notebook file) to
     `new_filename` within UPLOAD_DIR, applying the exact same validation,
     overwrite semantics, sidecar/version-history moves, and
@@ -16673,7 +16721,29 @@ def openapi_preview_endpoint(data: dict):
 
 
 @router.post("/compile")
-def compile_notebook_endpoint(
+def compile_notebook_endpoint(data: dict):
+    """Compile an uploaded notebook (see _compile_notebook_locked for the request fields).
+
+    Serialized with that notebook's own delete and rename: a compile can no longer run
+    against a notebook that is being removed, publish an app for a notebook that was just
+    deleted, or leave behind an empty app directory when it fails."""
+    name = data.get("notebook_path") if isinstance(data, dict) else None
+    if not isinstance(name, str) or not name:
+        return _compile_notebook_locked(data)  # the usual validation error
+    base = os.path.basename(name)
+    per_notebook = bool(data.get("per_notebook"))
+    with _notebook_lifecycle(base):
+        app_dir = Path(GENERATED_APPS_DIR) / _notebook_app_id(base) if per_notebook else None
+        existed = app_dir is not None and app_dir.is_dir()
+        try:
+            return _compile_notebook_locked(data)
+        except BaseException:
+            if app_dir is not None and not existed:
+                shutil.rmtree(app_dir, ignore_errors=True)  # only what this failed compile created
+            raise
+
+
+def _compile_notebook_locked(
     data: dict
 ):
     """Compile notebook to API.
