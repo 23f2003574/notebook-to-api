@@ -917,3 +917,101 @@ describe('NotebookLibrary per-notebook app workflow', () => {
     expect(screen.getAllByRole('button', { name: 'Download app' })).toHaveLength(2)
   })
 })
+
+describe('per-notebook compilation and its diagnostics in the dashboard', () => {
+  const ok = (body) => ({ ok: true, json: async () => body })
+  const list = [
+    { filename: 'a.ipynb', size_bytes: 1, per_notebook_app: null },
+    { filename: 'b.ipynb', size_bytes: 2, per_notebook_app: null },
+  ]
+
+  const stub = (compileReplies) => {
+    const calls = []
+    vi.stubGlobal('fetch', (url, init) => {
+      const path = String(url).replace(/^https?:\/\/[^/]+/, '')
+      calls.push([path, init])
+      if (path === '/api/compile') return compileReplies.shift()
+      if (path === '/api/notebooks') return Promise.resolve(ok({ notebooks: list }))
+      if (path === '/api/health') return Promise.resolve(ok({ status: 'healthy' }))
+      return Promise.resolve(ok({}))
+    })
+    return calls
+  }
+
+  it('the main Compile Now button compiles into the notebook\'s own app', async () => {
+    const replies = [
+      ok({ filename: 'n.ipynb' }),
+      ok({ functions: [{ name: 'f' }], endpoints: [{ path: '/f' }], generated_files: [] }),
+      ok({ functions: [{ name: 'f' }], endpoints: [{ path: '/f' }], generated_files: ['app.py'], dependencies: [] }),
+    ]
+    const calls = []
+    vi.stubGlobal('fetch', (url, init) => {
+      const path = String(url).replace(/^https?:\/\/[^/]+/, '')
+      calls.push([path, init])
+      if (path === '/api/health') return Promise.resolve(ok({ status: 'healthy' }))
+      if (path === '/api/notebooks') return Promise.resolve(ok({ notebooks: [] }))
+      return Promise.resolve(replies.shift())
+    })
+    const { container } = render(<Dashboard />)
+    fireEvent.change(container.querySelector('input[type=file]'), { target: { files: [new File(['{}'], 'n.ipynb')] } })
+    fireEvent.click(await screen.findByText(/Compile Now/))
+    await screen.findByText(/Compilation successful/)
+    const compile = calls.find(([path]) => path === '/api/compile')
+    expect(JSON.parse(compile[1].body)).toEqual({ notebook_path: 'n.ipynb', per_notebook: true })
+  })
+
+  it('shows skipped functions, inferred background endpoints and warnings under the notebook that was compiled', async () => {
+    stub([Promise.resolve(ok({
+      skipped_functions: [{ name: 'bad', reason: 'requires a callable' }],
+      inferred_background: ['train_x'],
+      startup_warnings: ['Cell 1, line 2: input() blocks the app at startup'],
+    }))])
+    render(<NotebookLibrary onOpen={() => {}} refreshKey={null} />)
+    await screen.findByText('a.ipynb')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Compile app' })[0])
+    const panel = await screen.findByTestId('diagnostics-a.ipynb')
+    expect(panel).toHaveTextContent('bad')
+    expect(panel).toHaveTextContent('requires a callable')
+    expect(panel).toHaveTextContent('train_x')
+    expect(panel).toHaveTextContent('input() blocks the app at startup')
+    expect(screen.queryByTestId('diagnostics-b.ipynb')).toBeNull()
+  })
+
+  it('keeps each notebook\'s diagnostics separate and replaces them on its own recompile only', async () => {
+    stub([
+      Promise.resolve(ok({ skipped_functions: [{ name: 'only_a', reason: 'r1' }] })),
+      Promise.resolve(ok({ startup_warnings: ['only b warning'] })),
+      Promise.resolve(ok({ skipped_functions: [], inferred_background: [], startup_warnings: [] })),
+    ])
+    render(<NotebookLibrary onOpen={() => {}} refreshKey={null} />)
+    await screen.findByText('a.ipynb')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Compile app' })[0])
+    await screen.findByTestId('diagnostics-a.ipynb')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Compile app' })[1])
+    await screen.findByTestId('diagnostics-b.ipynb')
+    expect(screen.getByTestId('diagnostics-a.ipynb')).toHaveTextContent('only_a')
+    expect(screen.getByTestId('diagnostics-a.ipynb')).not.toHaveTextContent('only b warning')
+    expect(screen.getByTestId('diagnostics-b.ipynb')).not.toHaveTextContent('only_a')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Compile app' })[0])
+    await waitFor(() => expect(screen.queryByTestId('diagnostics-a.ipynb')).toBeNull())
+    expect(screen.getByTestId('diagnostics-b.ipynb')).toHaveTextContent('only b warning')
+  })
+
+  it('shows a loading state while compiling and an error, without stale diagnostics, when it fails', async () => {
+    let finish
+    stub([
+      new Promise((resolve) => { finish = resolve }),
+      Promise.resolve({ ok: false, status: 400, statusText: 'bad', json: async () => ({ detail: 'reserved name' }), text: async () => 'reserved name' }),
+    ])
+    render(<NotebookLibrary onOpen={() => {}} refreshKey={null} />)
+    await screen.findByText('a.ipynb')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Compile app' })[0])
+    const busy = await screen.findByRole('button', { name: 'Compiling...' })
+    expect(busy).toBeDisabled()
+    finish(ok({ skipped_functions: [{ name: 'stale', reason: 'x' }] }))
+    await screen.findByTestId('diagnostics-a.ipynb')
+    fireEvent.click(screen.getAllByRole('button', { name: /compile app/i })[0])
+    expect(await screen.findByText(/reserved name/)).toBeInTheDocument()
+    expect(screen.queryByTestId('diagnostics-a.ipynb')).toBeNull()
+  })
+})

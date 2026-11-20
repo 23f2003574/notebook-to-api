@@ -216,7 +216,7 @@ export default function Dashboard() {
       const response = await dashboardFetch('/api/compile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ notebook_path: uploadedNotebook }),
+        body: JSON.stringify({ notebook_path: uploadedNotebook, per_notebook: true }),
         signal: work.signal
       })
 
@@ -317,7 +317,7 @@ export default function Dashboard() {
 
             <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 hover:border-slate-600 transition">
               <h2 className="text-xl font-semibold text-white mb-4">📚 Your Notebooks</h2>
-              <NotebookLibrary onOpen={handleUploadSuccess} refreshKey={uploadedNotebook} />
+              <NotebookLibrary onOpen={handleUploadSuccess} refreshKey={`${uploadedNotebook}|${lastCompiled}`} />
             </div>
 
             <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 hover:border-slate-600 transition">

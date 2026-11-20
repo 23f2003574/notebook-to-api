@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { dashboardFetch } from '../dashboardApi'
 import { errorFromResponse } from '../errorMessage'
+import { diagnosticsFrom } from '../diagnostics'
+import Diagnostics from './Diagnostics'
 
 const formatSize = (bytes) => (bytes >= 1024 ? (bytes / 1024).toFixed(1) + ' KB' : bytes + ' B')
 
@@ -34,6 +36,7 @@ export default function NotebookLibrary({ onOpen, refreshKey }) {
   const [reload, setReload] = useState(0)
   const [busy, setBusy] = useState({}) // filename -> action name
   const [notes, setNotes] = useState({}) // filename -> { kind: 'ok' | 'error', text }
+  const [diagnostics, setDiagnostics] = useState({}) // filename -> what its last compile reported
 
   useEffect(() => {
     const controller = new AbortController()
@@ -78,7 +81,14 @@ export default function NotebookLibrary({ onOpen, refreshKey }) {
   }
 
   const compileApp = (filename) => run(filename, 'compile', async () => {
-    await check(await dashboardFetch('/api/compile', jsonInit({ notebook_path: filename, per_notebook: true })), 'Compilation failed')
+    setDiagnostics((current) => ({ ...current, [filename]: undefined })) // never show the last compile's findings for this one
+    const response = await check(
+      await dashboardFetch('/api/compile', jsonInit({ notebook_path: filename, per_notebook: true })),
+      'Compilation failed',
+    )
+    const data = await response.json()
+    // Kept per notebook: another notebook's compile never replaces or mixes into these.
+    setDiagnostics((current) => ({ ...current, [filename]: diagnosticsFrom(data) }))
     setReload((n) => n + 1)
     return 'Compiled its own app'
   })
@@ -177,6 +187,11 @@ export default function NotebookLibrary({ onOpen, refreshKey }) {
               <p className={'mt-1 text-xs ' + (note.kind === 'error' ? 'text-red-400' : 'text-emerald-400')}>
                 {note.kind === 'error' ? '❌ ' : '✅ '}{note.text}
               </p>
+            )}
+            {diagnostics[filename] && (
+              <div className="mt-2" data-testid={'diagnostics-' + filename}>
+                <Diagnostics diagnostics={diagnostics[filename]} />
+              </div>
             )}
           </li>
         )
