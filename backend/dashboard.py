@@ -18,7 +18,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -1047,6 +1047,21 @@ async def root():
 FRONTEND_DIST_DIR = PROJECT_ROOT / "frontend" / "dist"
 
 
+# URL prefixes owned by the API. Anything under them that no route matched is a 404 for every
+# method and every environment: the frontend files must never answer for the API namespace
+# (a DELETE would get 405 and a GET the SPA shell instead of "not found"), which is what made the
+# outcome for an absolute version id like %2Fetc%2Fpasswd depend on whether the frontend was built.
+_API_PREFIXES = ("api/", "governance/")
+
+
+class _FrontendFiles(StaticFiles):
+    async def get_response(self, path, scope):
+        if path.startswith(_API_PREFIXES) or path in ("api", "governance"):
+            raise HTTPException(status_code=404)
+
+        return await super().get_response(path, scope)
+
+
 def mount_frontend_static_files(app, dist_dir=FRONTEND_DIST_DIR):
     """Mount a built frontend as static files served from "/", so this
     dashboard can actually serve the React frontend its own module
@@ -1090,7 +1105,7 @@ def mount_frontend_static_files(app, dist_dir=FRONTEND_DIST_DIR):
         return
 
     app.state.frontend_dist = dist_dir
-    app.mount("/", StaticFiles(directory=str(dist_dir), html=True), name="frontend")
+    app.mount("/", _FrontendFiles(directory=str(dist_dir), html=True), name="frontend")
 
 
 mount_frontend_static_files(app)
