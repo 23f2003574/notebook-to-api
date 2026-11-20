@@ -1799,6 +1799,26 @@ GENERATED_APPS_DIR = os.getenv(
 )
 
 
+def validate_storage_layout(upload_dir, generated_dir, apps_dir):
+    """Raise ValueError when the per-notebook apps directory is, contains or lies
+    inside the uploads or the shared generated directory. Clearing apps removes
+    directories under GENERATED_APPS_DIR, so an overlap would reach uploaded
+    notebooks (or the shared compile output)."""
+    apps = Path(apps_dir).resolve()
+    for label, other in (("NOTEBOOK_API_UPLOAD_DIR", upload_dir), ("NOTEBOOK_API_GENERATED_DIR", generated_dir)):
+        resolved = Path(other).resolve()
+        if apps == resolved or apps in resolved.parents or resolved in apps.parents:
+            raise ValueError(
+                f"NOTEBOOK_API_GENERATED_APPS_DIR ({apps_dir!r}) must not be the same directory as, "
+                f"contain, or be nested inside {label} ({other!r}): clearing per-notebook apps "
+                "would then destroy files that are not generated apps. Configure three separate, "
+                "non-nested directories."
+            )
+
+
+validate_storage_layout(UPLOAD_DIR, GENERATED_DIR, GENERATED_APPS_DIR)
+
+
 def _notebook_app_id(filename):
     """A filesystem-safe Python-identifier directory name for `filename`.
     Never derived by trusting the filename as a path: only its sanitized
@@ -19599,7 +19619,16 @@ def delete_generated_app(dry_run: bool = False, notebook: str = None, all_apps: 
         apps = _list_per_notebook_apps()
         if not dry_run:
             with COMPILE_LOCK:
-                shutil.rmtree(GENERATED_APPS_DIR, ignore_errors=True)
+                # Only the app directories themselves, never the root wholesale:
+                # whatever else sits under GENERATED_APPS_DIR is not ours to delete.
+                for app_info in apps:
+                    app_dir = Path(GENERATED_APPS_DIR) / app_info["app_id"]
+                    if app_dir.is_dir() and not app_dir.is_symlink():
+                        shutil.rmtree(app_dir, ignore_errors=True)
+                try:
+                    Path(GENERATED_APPS_DIR).rmdir()  # only succeeds when empty
+                except OSError:
+                    pass
         return {"status": "success", "dry_run": dry_run, "removed_apps": [a["app_id"] for a in apps]}
 
 
