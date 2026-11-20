@@ -26370,6 +26370,24 @@ def test_app_status_command_json_flag_emits_the_combined_raw_response(
     }
 
 
+def _interrupt_watch_after(proc, handler, requests, timeout=120):
+    """Send Ctrl+C to a running `--watch` CLI once the fake server has received `requests`.
+
+    Waiting for an observable event (the polls have really happened) instead of sleeping a fixed
+    time keeps these tests independent of how long the interpreter takes to start on a loaded
+    machine. Fails fast, with the child's output, if it exits before polling enough."""
+    deadline = time.monotonic() + timeout
+    while len(handler.requests) < requests:
+        if proc.poll() is not None:
+            out, err = proc.communicate()
+            raise AssertionError(f"watch exited early with {proc.returncode} after {len(handler.requests)} requests: {out}{err}")
+        if time.monotonic() > deadline:
+            proc.kill()
+            raise AssertionError(f"watch made only {len(handler.requests)} of {requests} requests in {timeout}s")
+        time.sleep(0.01)
+    proc.send_signal(signal.SIGINT)
+
+
 def test_app_status_command_watch_flag_is_registered():
 
     proc = _run_cli(["app-status", "--help"], cwd=Path.cwd())
@@ -26436,10 +26454,7 @@ def test_app_status_command_watch_polls_repeatedly_and_stops_cleanly_on_interrup
     # least two reports are fully printed) instead of sleeping a fixed time: a
     # fixed sleep sent SIGINT before the CLI finished importing on a loaded
     # machine, which failed this test intermittently.
-    deadline = time.monotonic() + 60
-    while len(handler.requests) < 12 and time.monotonic() < deadline:
-        time.sleep(0.05)
-    proc.send_signal(signal.SIGINT)
+    _interrupt_watch_after(proc, handler, 12)
 
     stdout, stderr = proc.communicate(timeout=10)
 
@@ -26714,8 +26729,7 @@ def test_app_auth_command_watch_polls_repeatedly_and_stops_cleanly_on_interrupt(
         text=True,
     )
 
-    time.sleep(2.5)
-    proc.send_signal(signal.SIGINT)
+    _interrupt_watch_after(proc, handler, len(one_iteration) * 3)
 
     stdout, stderr = proc.communicate(timeout=10)
 
@@ -26887,8 +26901,7 @@ def test_app_metrics_command_watch_polls_repeatedly_and_stops_cleanly_on_interru
         text=True,
     )
 
-    time.sleep(2.5)
-    proc.send_signal(signal.SIGINT)
+    _interrupt_watch_after(proc, handler, 3)
 
     stdout, stderr = proc.communicate(timeout=10)
 
@@ -27519,8 +27532,7 @@ def test_app_tasks_list_command_watch_polls_repeatedly_and_stops_cleanly_on_inte
         text=True,
     )
 
-    time.sleep(2.5)
-    proc.send_signal(signal.SIGINT)
+    _interrupt_watch_after(proc, handler, 3)
 
     stdout, stderr = proc.communicate(timeout=10)
 
@@ -29124,8 +29136,7 @@ def _watch_app_deprecations(tmp_path, fake_dashboard, *extra):
         cwd=str(workdir), env=env,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
-    time.sleep(2.5)
-    proc.send_signal(signal.SIGINT)
+    _interrupt_watch_after(proc, handler, 3)
     stdout, stderr = proc.communicate(timeout=10)
     return proc, stdout, stderr
 
