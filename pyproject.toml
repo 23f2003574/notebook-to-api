@@ -8,6 +8,12 @@ version = "0.1.0"
 description = "Compile a Jupyter notebook into a FastAPI microservice"
 readme = "README.md"
 requires-python = ">=3.11"
+# The versions the CI matrix runs the complete suite on (see .github/workflows/tests.yml and
+# tests/test_python_version_gate.py, which keeps the two in step).
+classifiers = [
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.13",
+]
 dynamic = ["dependencies"]
 
 [project.scripts]

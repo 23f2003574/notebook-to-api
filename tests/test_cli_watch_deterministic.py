@@ -135,3 +135,11 @@ def test_watch_ends_with_a_clear_error_when_the_app_goes_away(server, tmp_path):
     out, err = proc.communicate(timeout=60)
     assert proc.returncode != 0
     assert "Could not reach the compiled app" in out + err and "Traceback" not in err
+
+
+def test_children_do_not_inherit_an_ignored_sigint():
+    """Regression: under `nohup pytest &` SIGINT was inherited as ignored, so interrupting a
+    watching child never stopped it."""
+    out = subprocess.run([sys.executable, "-c", "import signal; print(signal.getsignal(signal.SIGINT))"],
+                         capture_output=True, text=True, timeout=60).stdout
+    assert "default_int_handler" in out

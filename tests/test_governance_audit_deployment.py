@@ -1,6 +1,7 @@
 """Dashboard deployment files persist the governance audit trail, and startup refuses non-durable production storage."""
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 import yaml
@@ -80,7 +81,8 @@ def test_production_startup_refuses_ephemeral_or_unset_storage():
     with pytest.raises(GovernanceAuditStorageError, match="not durable"):
         validate_audit_storage_for_startup({"NOTEBOOK2API_ENVIRONMENT": "production",
                                             "NOTEBOOK2API_GOVERNANCE_PERSISTENCE_BACKEND": "sqlite",
-                                            "NOTEBOOK2API_GOVERNANCE_DATABASE_PATH": "/tmp/gov/audit.db"})
+                                            "NOTEBOOK2API_GOVERNANCE_DATABASE_PATH": "/tmp/n2a-never-created/gov/audit.db"})
+    assert not Path("/tmp/n2a-never-created").exists()  # refused before anything was created there
     with pytest.raises(GovernanceAuditStorageError, match="PERSISTENCE_BACKEND"):
         validate_audit_storage_for_startup({"NOTEBOOK2API_ENVIRONMENT": "production"})
 

@@ -49,6 +49,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -c constraints.txt -r requirements-dev.txt
 
+      # A matrix entry that silently ran on another interpreter would pass without testing the
+      # version it names.
+      - name: Check the interpreter is the matrix version
+        run: |
+          python -c "import sys; v='%d.%d' % sys.version_info[:2]; print('Python', sys.version); assert v == '${{ matrix.python-version }}', v"
+
       - name: Lint
         run: |
           ruff check backend tests

@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -49,18 +50,36 @@ class SqliteAuditStore:
         self._local = threading.local()
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
-            with self._connect() as conn:
-                conn.executescript(_SCHEMA)
-                conn.execute("INSERT OR IGNORE INTO audit_meta (id, last_sequence, last_hash) VALUES (1, 0, ?)", (GENESIS_HASH,))
-                if "purged_through" not in {r[1] for r in conn.execute("PRAGMA table_info(audit_meta)")}:
-                    # a database created before purges were tracked
-                    conn.execute("ALTER TABLE audit_meta ADD COLUMN purged_through INTEGER NOT NULL DEFAULT 0")
-                conn.execute("PRAGMA journal_mode=WAL")
+            self._initialize()
         except (OSError, sqlite3.Error) as exc:
             raise GovernanceAuditConfigurationError(
                 f"governance audit database could not be opened ({type(exc).__name__}); check that "
                 "NOTEBOOK2API_GOVERNANCE_DATABASE_PATH points to a writable location"
             ) from None
+
+    def _initialize(self) -> None:
+        """Create or upgrade the schema. Several processes may start against one new database at
+        the same moment (workers, replicas): switching the journal mode and creating tables can then
+        answer "locked" without waiting, so retry until the timeout instead of failing the start."""
+        deadline = time.monotonic() + self._timeout
+        while True:
+            try:
+                conn = self._connect()
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.executescript(_SCHEMA)
+                conn.execute("INSERT OR IGNORE INTO audit_meta (id, last_sequence, last_hash) VALUES (1, 0, ?)", (GENESIS_HASH,))
+                if "purged_through" not in {r[1] for r in conn.execute("PRAGMA table_info(audit_meta)")}:
+                    # a database created before purges were tracked
+                    try:
+                        conn.execute("ALTER TABLE audit_meta ADD COLUMN purged_through INTEGER NOT NULL DEFAULT 0")
+                    except sqlite3.OperationalError as exc:
+                        if "duplicate column" not in str(exc):  # another process added it first
+                            raise
+                return
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc) and "busy" not in str(exc) or time.monotonic() > deadline:
+                    raise
+                time.sleep(0.05)
 
     def _connect(self) -> sqlite3.Connection:
         conn = getattr(self._local, "conn", None)
@@ -237,9 +256,10 @@ def validate_audit_storage_for_startup(environ=None) -> dict:
     from .deployment_governance_audit import build_audit_service_from_env
 
     status = audit_storage_status(environ)
-    build_audit_service_from_env(environ)  # raises GovernanceAuditStorageError when misconfigured
+    # Refuse non-durable production storage before touching it: nothing should be created there.
     if status["production"] and status["backend"] == "sqlite" and not status["durable"]:
         raise GovernanceAuditConfigurationError(
             "production audit storage is not durable: " + "; ".join(status["issues"])
         )
+    build_audit_service_from_env(environ)  # raises GovernanceAuditStorageError when misconfigured
     return status

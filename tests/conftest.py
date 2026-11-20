@@ -1,9 +1,17 @@
 """Suite-wide guards against state leaking between tests."""
 import os
+import signal
 import sys
 import time
 
 import pytest
+
+# A suite started from a background job (`nohup pytest &`, some CI wrappers) inherits SIGINT as
+# ignored, and every Python subprocess it spawns would then ignore Ctrl+C too: the CLI `--watch`
+# tests, which interrupt a child with SIGINT, hung and failed only in that setup. Restore Python's
+# normal handler so children start with the default.
+if signal.getsignal(signal.SIGINT) == signal.SIG_IGN:
+    signal.signal(signal.SIGINT, signal.default_int_handler)
 
 _REAL_SLEEP = time.sleep
 
