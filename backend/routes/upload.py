@@ -1810,6 +1810,18 @@ def _notebook_app_id(filename):
     return f"{stem[:40]}_{digest}"
 
 
+def _per_notebook_image_tag(filename):
+    """Deterministic default image tag for a notebook's own app: its
+    sanitized stem when that is already a clean, unambiguous name, else the
+    stem plus a short hash of the exact filename so "a b.ipynb" and
+    "a_b.ipynb" can never share an image."""
+    stem = Path(filename).stem
+    slug = re.sub(r"[^a-z0-9_.-]+", "-", stem.lower()).strip("-._") or "notebook"
+    if slug != stem:
+        slug = f"{slug[:40]}-{hashlib.sha256(filename.encode('utf-8')).hexdigest()[:8]}"
+    return default_image_tag(slug)
+
+
 def _generated_root(notebook=None, create=False):
     """GENERATED_DIR itself, or the notebook-specific compiled-app directory
     when `notebook` (an uploaded notebook's filename) is given."""
@@ -3298,7 +3310,7 @@ async def import_notebook_urls_batch(data: dict):
     }
 
 
-def _currently_compiled_notebook_metadata():
+def _currently_compiled_notebook_metadata(generated_dir=None):
     """(resolved path, content sha256, compiled_at, compiled_version_id)
     of the notebook that produced the app currently in GENERATED_DIR, if
     any -- read from the .compile_metadata.json every successful compile
@@ -3317,7 +3329,7 @@ def _currently_compiled_notebook_metadata():
     docstring for why this is recorded at all).
     """
 
-    metadata_path = Path(GENERATED_DIR) / COMPILE_METADATA_FILENAME
+    metadata_path = Path(generated_dir or GENERATED_DIR) / COMPILE_METADATA_FILENAME
 
     if not metadata_path.is_file():
         return None, None, None, None
@@ -3395,7 +3407,7 @@ def _generated_files_modified_since_compile():
     return _generated_files_sha256(GENERATED_DIR) != recorded_sha256
 
 
-def _currently_compiled_notebook_is_stale():
+def _currently_compiled_notebook_is_stale(generated_dir=None):
     """Whether the notebook that produced the app currently in
     GENERATED_DIR has been edited since that compile -- the same
     comparison list_notebooks' notebook_changed_since_compile field
@@ -3411,7 +3423,7 @@ def _currently_compiled_notebook_is_stale():
     this check can meaningfully flag either way.
     """
 
-    compiled_path, compiled_sha256, _, _ = _currently_compiled_notebook_metadata()
+    compiled_path, compiled_sha256, _, _ = _currently_compiled_notebook_metadata(generated_dir)
 
     if compiled_path is None or compiled_sha256 is None:
         return False
@@ -17826,7 +17838,10 @@ def deploy_generated_app(data: dict = None):
             detail="tag must be a string"
         )
 
-    tag = tag or default_image_tag(generated_path.name)
+    tag = tag or (
+        _per_notebook_image_tag(data["notebook"]) if data.get("notebook")
+        else default_image_tag(generated_path.name)
+    )
     push = bool(data.get("push", False))
 
     platform = data.get("platform")
@@ -17888,7 +17903,7 @@ def deploy_generated_app(data: dict = None):
                 detail="No compiled app found. Run /api/compile first."
             )
 
-        if not force and _currently_compiled_notebook_is_stale():
+        if not force and _currently_compiled_notebook_is_stale(GENERATED_DIR):
 
             raise HTTPException(
                 status_code=409,
@@ -17952,7 +17967,7 @@ def deploy_generated_app(data: dict = None):
         )
         refresh_generated_files_sha256(str(generated_path))
 
-        compiled_path, compiled_sha256, _, _ = _currently_compiled_notebook_metadata()
+        compiled_path, compiled_sha256, _, _ = _currently_compiled_notebook_metadata(GENERATED_DIR)
 
     response = {
         "status": "success",
