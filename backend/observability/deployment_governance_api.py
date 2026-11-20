@@ -665,6 +665,35 @@ async def get_governance_audit_health():
     )
 
 
+AUDIT_RECOVERY_GUIDE = {
+    "guarantees": [
+        "Every compile and deploy request writes at most one audit record per outcome; sending the same Idempotency-Key header again returns the record already written (governance_audit.replayed) instead of adding a second.",
+        "With the sqlite backend, records are committed before the response is sent and survive a restart; sequence numbers continue where they left off and are never reused.",
+        "An audit-storage failure never changes what the compile or deploy itself reported: the response carries governance_audit_error and /governance/audit/health shows the storage state.",
+    ],
+    "if_unavailable": [
+        "GET /governance/audit/health shows state 'unavailable' or 'degraded' and a reason (storage_error or configuration); verification answers 503 because it could not run, which does not mean records were altered.",
+        "Fix the cause (writable volume, NOTEBOOK2API_GOVERNANCE_DATABASE_PATH, NOTEBOOK2API_GOVERNANCE_PERSISTENCE_BACKEND); the next successful write reports recovery and the counters keep the history of failures.",
+        "Operations that ran while storage was down have no audit record. Their responses carried governance_audit_error; re-run the operation with a new request if a record is required.",
+    ],
+    "if_broken": [
+        "Verification names the first record that fails (altered content, a broken link, or missing records). Records before it are intact; records from it on cannot be trusted.",
+        "Restore the audit database from a backup taken before that sequence number, then verify again. Do not edit or delete rows by hand: that is exactly what verification detects.",
+        "Deleting records from the start, middle or end of the chain is detected; an intended purge is recorded by the store and verifies as valid.",
+    ],
+}
+
+
+@health_router.get("/audit/recovery")
+async def get_governance_audit_recovery():
+    """
+    How audit recovery works: what is guaranteed, and what to do when storage is unavailable or
+    verification fails.
+    """
+
+    return AUDIT_RECOVERY_GUIDE
+
+
 @health_router.get("/audit/{sequence}")
 async def get_governance_audit_record(sequence: int):
     """

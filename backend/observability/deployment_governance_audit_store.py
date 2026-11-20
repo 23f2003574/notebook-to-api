@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS audit_records (
     previous_hash TEXT NOT NULL, record_hash TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS audit_meta (
-    id INTEGER PRIMARY KEY CHECK (id = 1), last_sequence INTEGER NOT NULL, last_hash TEXT NOT NULL
+    id INTEGER PRIMARY KEY CHECK (id = 1), last_sequence INTEGER NOT NULL, last_hash TEXT NOT NULL,
+    purged_through INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -50,7 +51,10 @@ class SqliteAuditStore:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             with self._connect() as conn:
                 conn.executescript(_SCHEMA)
-                conn.execute("INSERT OR IGNORE INTO audit_meta VALUES (1, 0, ?)", (GENESIS_HASH,))
+                conn.execute("INSERT OR IGNORE INTO audit_meta (id, last_sequence, last_hash) VALUES (1, 0, ?)", (GENESIS_HASH,))
+                if "purged_through" not in {r[1] for r in conn.execute("PRAGMA table_info(audit_meta)")}:
+                    # a database created before purges were tracked
+                    conn.execute("ALTER TABLE audit_meta ADD COLUMN purged_through INTEGER NOT NULL DEFAULT 0")
                 conn.execute("PRAGMA journal_mode=WAL")
         except (OSError, sqlite3.Error) as exc:
             raise GovernanceAuditConfigurationError(
@@ -68,10 +72,30 @@ class SqliteAuditStore:
 
     def append(self, build: Callable[[int, str], Any]) -> Any:
         """Run build(next_sequence, previous_hash) -> record, and store it atomically."""
+        return self._append(build, None)[0]
+
+    def append_once(self, build: Callable[[int, str], Any], action: str, key: str) -> tuple[Any, bool]:
+        """Like append, but when a record with this action and idempotency key already exists,
+        return (that stored row, False) and write nothing. Checked inside the same transaction, so
+        concurrent retries cannot both insert."""
+        return self._append(build, (action, key))
+
+    def _append(self, build, dedupe):
         conn = self._connect()
         try:
             conn.execute("BEGIN IMMEDIATE")
             try:
+                if dedupe is not None:
+                    found = conn.execute(
+                        "SELECT * FROM audit_records WHERE action = ? AND json_extract(metadata, '$.idempotency_key') = ? LIMIT 1",
+                        dedupe,
+                    ).fetchone()
+                    if found is not None:
+                        conn.execute("COMMIT")
+                        item = dict(found)
+                        item["occurred_at"] = datetime.fromisoformat(item["occurred_at"])
+                        item["metadata"] = json.loads(item["metadata"])
+                        return item, False
                 head = conn.execute("SELECT last_sequence, last_hash FROM audit_meta WHERE id = 1").fetchone()
                 record = build(head["last_sequence"] + 1, head["last_hash"])
                 conn.execute(
@@ -88,7 +112,15 @@ class SqliteAuditStore:
                 raise
         except sqlite3.Error as exc:
             raise GovernanceAuditStorageError(f"governance audit write failed ({type(exc).__name__})") from None
-        return record
+        return record, True
+
+    def head(self) -> dict:
+        """The chain head the store remembers independently of the rows (for detecting lost records)."""
+        try:
+            return dict(self._connect().execute(
+                "SELECT last_sequence, last_hash, purged_through FROM audit_meta WHERE id = 1").fetchone())
+        except sqlite3.Error as exc:
+            raise GovernanceAuditStorageError(f"governance audit read failed ({type(exc).__name__})") from None
 
     def rows(self, sequence: int | None = None) -> list[dict]:
         try:
@@ -141,7 +173,15 @@ class SqliteAuditStore:
         """Delete every row but keep the chain head, so a purge cannot restart the chain."""
         try:
             conn = self._connect()
-            return conn.execute("DELETE FROM audit_records").rowcount
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                removed = conn.execute("DELETE FROM audit_records").rowcount
+                conn.execute("UPDATE audit_meta SET purged_through = last_sequence WHERE id = 1")
+                conn.execute("COMMIT")
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
+            return removed
         except sqlite3.Error as exc:
             raise GovernanceAuditStorageError(f"governance audit purge failed ({type(exc).__name__})") from None
 

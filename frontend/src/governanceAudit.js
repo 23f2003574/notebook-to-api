@@ -46,3 +46,10 @@ export async function verifyChain() {
   // Verifying records its own audit_verification event, so a chain that was empty has 1 afterwards.
   return result.checked === 0 ? { kind: 'empty' } : { kind: 'valid', checked: result.checked }
 }
+
+// The server's own description of what is guaranteed and how to recover (GET /governance/audit/recovery).
+export async function fetchRecoveryGuide() {
+  const response = await dashboardFetch('/governance/audit/recovery')
+  if (!response.ok) throw new Error(await errorFromResponse(response, 'Could not load the recovery guide'))
+  return response.json()
+}

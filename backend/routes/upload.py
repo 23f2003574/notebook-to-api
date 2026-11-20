@@ -17,6 +17,7 @@ import json
 import os
 import logging
 import re
+import types
 import signal
 import posixpath
 import shutil
@@ -16892,7 +16893,7 @@ def _audit_health_prometheus():
         return ""
 
 
-def _record_governance(action, data, outcome, response=None, error=None):
+def _record_governance(action, data, outcome, response=None, error=None, idempotency_key=None):
     """Append one compile/deploy outcome to the governance audit chain.
 
     Uses the same audit service GET /governance/audit reads. A recording failure never
@@ -16911,12 +16912,21 @@ def _record_governance(action, data, outcome, response=None, error=None):
                 metadata[key] = resp[key]
         if error is not None:
             metadata["error"] = str(error)[:300]
-        return _build_audit_service().record(
+        service = _build_audit_service()
+        fields = dict(
             action=action,
             actor="dashboard",
             resource=f"notebook:{notebook}" if notebook else "generated",
             outcome=outcome,
             metadata=metadata,
+        )
+        if idempotency_key is None:
+            return service.record(**fields)
+        # One record per request id and outcome: a retry of the same request (a lost response, a
+        # restart in between) points at the record it already produced instead of adding a second.
+        record, created = service.record_once(idempotency_key=f"{idempotency_key}:{outcome}", **fields)
+        return types.SimpleNamespace(
+            sequence=record.sequence, record_hash=record.record_hash, replayed=not created
         )
     except Exception as exc:  # noqa: BLE001 - auditing must not break the operation
         if not getattr(exc, "audit_failure_counted", False):
@@ -16927,7 +16937,19 @@ def _record_governance(action, data, outcome, response=None, error=None):
         return exc
 
 
-def _audited(action, data, run):
+_IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+
+
+def _idempotency_key(request):
+    key = request.headers.get("Idempotency-Key")
+    if key is None:
+        return None
+    if not _IDEMPOTENCY_KEY.match(key):
+        raise HTTPException(status_code=400, detail="Idempotency-Key must be 1-128 characters of letters, digits and . _ : -")
+    return key
+
+
+def _audited(action, data, run, idempotency_key=None):
     """Run `run()`, record its success or failure exactly once, and re-raise failures.
 
     The record's stable reference goes back to the caller: as "governance_audit" in a success
@@ -16936,23 +16958,29 @@ def _audited(action, data, run):
     try:
         result = run()
     except BaseException as exc:
-        recorded = _record_governance(action, data, "failure", error=getattr(exc, "detail", exc))
+        recorded = _record_governance(
+            action, data, "failure", error=getattr(exc, "detail", exc), idempotency_key=idempotency_key
+        )
         if isinstance(exc, HTTPException) and not isinstance(recorded, Exception):
             exc.headers = {**(exc.headers or {}), "X-Governance-Audit-Sequence": str(recorded.sequence)}
         raise
-    recorded = _record_governance(action, data, "success", response=result)
+    recorded = _record_governance(action, data, "success", response=result, idempotency_key=idempotency_key)
     if isinstance(result, dict):
         if isinstance(recorded, Exception):
             result = {**result, "governance_audit_error": "governance audit record could not be written"}
         else:
-            result = {**result, "governance_audit": {"sequence": recorded.sequence, "record_hash": recorded.record_hash}}
+            result = {**result, "governance_audit": {
+                "sequence": recorded.sequence, "record_hash": recorded.record_hash,
+                **({"replayed": True} if getattr(recorded, "replayed", False) else {}),
+            }}
     return result
 
 
 @router.post("/compile")
-def compile_notebook_endpoint(data: dict):
-    """Compile an uploaded notebook; the outcome is recorded in the governance audit trail."""
-    return _audited("notebook.compile", data, lambda: _compile_with_lifecycle(data))
+def compile_notebook_endpoint(data: dict, request: Request):
+    """Compile an uploaded notebook; the outcome is recorded in the governance audit trail
+    (once per Idempotency-Key and outcome, when that header is sent)."""
+    return _audited("notebook.compile", data, lambda: _compile_with_lifecycle(data), _idempotency_key(request))
 
 
 def _compile_with_lifecycle(data: dict):
@@ -18169,9 +18197,10 @@ def _poll_deploy_smoke_test_container(container_id):
 
 
 @router.post("/deploy")
-def deploy_generated_app(data: dict = None):
-    """Build (and optionally push) a Docker image; the outcome is recorded in the governance audit trail."""
-    return _audited("notebook.deploy", data, lambda: _deploy_generated_app(data))
+def deploy_generated_app(request: Request, data: dict = None):
+    """Build (and optionally push) a Docker image; the outcome is recorded in the governance audit trail
+    (once per Idempotency-Key and outcome, when that header is sent)."""
+    return _audited("notebook.deploy", data, lambda: _deploy_generated_app(data), _idempotency_key(request))
 
 
 def _deploy_generated_app(data: dict = None):

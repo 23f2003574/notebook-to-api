@@ -128,3 +128,20 @@ describe('GovernanceAudit verification', () => {
     expect(el).toHaveTextContent('does not mean the chain is broken')
   })
 })
+
+describe('GovernanceAudit recovery guide', () => {
+  it('loads the server-provided recovery guidance only when opened', async () => {
+    const fetchMock = stub((url) => /\/audit\/recovery$/.test(url.pathname)
+      ? json({ guarantees: ['One record per request'], if_unavailable: ['Fix the volume'], if_broken: ['Restore a backup'] })
+      : page([]))
+    render(<GovernanceAudit />)
+    await screen.findByText(/No compile or deploy records match/)
+    expect(fetchMock).toHaveBeenCalledTimes(1) // only the history page so far
+    const details = screen.getByTestId('recovery-guide')
+    details.open = true
+    fireEvent(details, new Event('toggle'))
+    expect(await screen.findByText('Restore a backup')).toBeInTheDocument()
+    expect(screen.getByText('One record per request')).toBeInTheDocument()
+    expect(screen.getByText('Fix the volume')).toBeInTheDocument()
+  })
+})

@@ -292,6 +292,44 @@ class GovernanceAuditService:
         reused, even across purge() calls.
         """
 
+        return self._record_impl(
+            action=action, actor=actor, resource=resource, outcome=outcome,
+            metadata=metadata, idempotency_key=None,
+        )[0]
+
+    def record_once(
+        self,
+        *,
+        action: str,
+        actor: str,
+        resource: str,
+        outcome: str,
+        idempotency_key: str,
+        metadata: "dict[str, Any] | None" = None,
+    ) -> "tuple[AuditRecord, bool]":
+        """
+        Like record(), but at most one record exists per (action, idempotency_key): a retry of the
+        same request returns the record already written, with created=False, instead of a second
+        one. The key is part of the record's hashed metadata.
+        """
+
+        return self._record_impl(
+            action=action, actor=actor, resource=resource, outcome=outcome,
+            metadata={**(metadata or {}), "idempotency_key": idempotency_key},
+            idempotency_key=idempotency_key,
+        )
+
+    def _record_impl(
+        self,
+        *,
+        action: str,
+        actor: str,
+        resource: str,
+        outcome: str,
+        metadata: "dict[str, Any] | None",
+        idempotency_key: "str | None",
+    ) -> "tuple[AuditRecord, bool]":
+
         occurred_at = self._clock()
 
         metadata = metadata or {}
@@ -322,9 +360,12 @@ class GovernanceAuditService:
 
         if self._store is not None:
             try:
-                written = self._store.append(
-                    lambda sequence, previous_hash: build(sequence, previous_hash)
-                )
+                if idempotency_key is None:
+                    written, created = self._store.append(build), True
+                else:
+                    written, created = self._store.append_once(
+                        build, action, idempotency_key
+                    )
 
             except Exception as exc:
                 from .deployment_governance_audit_health import audit_health
@@ -339,9 +380,20 @@ class GovernanceAuditService:
 
             audit_health.record_success()
 
-            return written
+            if not created:
+                written = AuditRecord(**written)
+
+            return written, created
 
         with self._lock:
+            if idempotency_key is not None:
+                for existing in self._records.values():
+                    if (
+                        existing.action == action
+                        and existing.metadata.get("idempotency_key") == idempotency_key
+                    ):
+                        return existing, False
+
             record = build(self._next_sequence, self._last_hash)
 
             self._records[record.sequence] = record
@@ -354,7 +406,7 @@ class GovernanceAuditService:
 
         audit_health.record_success()
 
-        return record
+        return record, True
 
     def _all_records(self, sequence: "int | None" = None) -> "dict[int, AuditRecord]":
         if self._store is None:
@@ -494,6 +546,11 @@ class GovernanceAuditService:
 
             expected_previous = record.record_hash
 
+        if result is None and self._store is not None:
+            result = self._missing_records(
+                sorted(self._all_records().values(), key=lambda r: r.sequence), checked
+            )
+
         if result is None:
             result = AuditChainVerification(
                 valid=True,
@@ -511,6 +568,53 @@ class GovernanceAuditService:
         )
 
         return result
+
+    def _missing_records(
+        self, records: "list[AuditRecord]", checked: int
+    ) -> "AuditChainVerification | None":
+        """
+        Compare the stored rows with the chain head and purge point the store remembers outside
+        them: a deleted first, middle or last record changes neither a surviving record's own
+        hash nor (for the tail) its neighbour's link, so only this comparison can notice it.
+        """
+
+        head = self._store.head()
+
+        def broken(sequence: int, reason: str) -> AuditChainVerification:
+            return AuditChainVerification(
+                valid=False,
+                checked=checked,
+                first_broken_sequence=sequence,
+                reason=reason,
+            )
+
+        if not records:
+            if head["last_sequence"] != head["purged_through"]:
+                return broken(
+                    head["purged_through"] + 1,
+                    f"records {head['purged_through'] + 1} to "
+                    f"{head['last_sequence']} are missing",
+                )
+
+            return None
+
+        if records[0].sequence != head["purged_through"] + 1:
+            return broken(
+                head["purged_through"] + 1,
+                f"records {head['purged_through'] + 1} to "
+                f"{records[0].sequence - 1} are missing",
+            )
+
+        last = records[-1]
+
+        if last.sequence != head["last_sequence"] or last.record_hash != head["last_hash"]:
+            return broken(
+                last.sequence + 1,
+                f"records after {last.sequence} are missing "
+                f"(the chain should end at {head['last_sequence']})",
+            )
+
+        return None
 
     def purge(self) -> int:
         """

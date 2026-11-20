@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { AUDIT_OPERATIONS, fetchHistory, fetchRecord, operationLabel, verifyChain } from '../governanceAudit'
+import { AUDIT_OPERATIONS, fetchHistory, fetchRecord, fetchRecoveryGuide, operationLabel, verifyChain } from '../governanceAudit'
 
 function Record({ record, linked }) {
   const ok = record.outcome === 'success'
@@ -31,6 +31,32 @@ function Record({ record, linked }) {
         </dl>
       )}
     </li>
+  )
+}
+
+function RecoveryGuide() {
+  const [guide, setGuide] = useState(null)
+  const [error, setError] = useState('')
+  const onToggle = async (event) => {
+    if (!event.currentTarget.open || guide) return
+    try {
+      setGuide(await fetchRecoveryGuide())
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+  const sections = [['guarantees', 'What is guaranteed'], ['if_unavailable', 'If the storage is unavailable'], ['if_broken', 'If verification fails']]
+  return (
+    <details onToggle={onToggle} className="text-sm text-slate-300" data-testid="recovery-guide">
+      <summary className="cursor-pointer">How recovery works</summary>
+      {error && <p className="text-red-300">{error}</p>}
+      {guide && sections.map(([key, title]) => (
+        <div key={key} className="mt-2">
+          <p className="font-semibold text-slate-200">{title}</p>
+          <ul className="list-disc pl-5">{(guide[key] || []).map((line) => <li key={line}>{line}</li>)}</ul>
+        </div>
+      ))}
+    </details>
   )
 }
 
@@ -134,6 +160,7 @@ export default function GovernanceAudit({ refreshKey, focusSequence = null }) {
         </label>
         <button type="submit" className="rounded bg-blue-600 px-3 py-1 text-white">Apply filters</button>
       </form>
+      <div className="mb-3"><RecoveryGuide /></div>
       {state.status === 'loading' && <p className="text-slate-400">Loading audit records…</p>}
       {state.status === 'error' && (
         <div role="alert" className="text-red-300">
