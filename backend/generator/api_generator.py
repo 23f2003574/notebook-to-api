@@ -143,7 +143,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # subsystem every endpoint depends on" exposure, just one level
     # removed from _enforce_rate_limit's own name instead of the call
     # site.
-    "_enforce_rate_limit", "AUTH_FAILURE_LIMIT_PER_MINUTE", "AUTH_FAILURE_WINDOW_SECONDS", "_AUTH_FAILURE_MAX_CLIENTS", "_AUTH_FAILURES", "_AUTH_FAILURES_LOCK", "_auth_client_id", "_auth_throttle_check", "_auth_throttle_record_failure", "_Request", "RATE_LIMIT_PER_MINUTE", "RATE_LIMIT_WINDOW_SECONDS",
+    "_enforce_rate_limit", "_notebook_result_schema", "AUTH_FAILURE_LIMIT_PER_MINUTE", "AUTH_FAILURE_WINDOW_SECONDS", "_AUTH_FAILURE_MAX_CLIENTS", "_AUTH_FAILURES", "_AUTH_FAILURES_LOCK", "_auth_client_id", "_auth_throttle_check", "_auth_throttle_record_failure", "_Request", "RATE_LIMIT_PER_MINUTE", "RATE_LIMIT_WINDOW_SECONDS",
     "_RATE_LIMIT_WINDOWS", "_RATE_LIMIT_LOCK", "_TASKS_ADMISSION_LOCK",
     "verify_api_key", "custom_openapi",
     "root", "health_check", "readiness_check", "auth_status", "auth_info",
@@ -4469,6 +4469,34 @@ def generate_fastapi_code(
     lines.append("    return None")
     lines.append("")
     lines.append("")
+    lines.append("def _notebook_result_schema(func):")
+    lines.append("    # (schema, definitions) for a notebook function's return annotation when it")
+    lines.append("    # names a dataclass / pydantic model / TypedDict, else None (primitives,")
+    lines.append("    # DataFrames, arrays... keep their open schema, since they are coerced).")
+    lines.append("    if func is None:")
+    lines.append("        return None")
+    lines.append("    import dataclasses as _dc, typing as _typing")
+    lines.append("    try:")
+    lines.append("        annotation = _typing.get_type_hints(func).get('return')")
+    lines.append("    except Exception:")
+    lines.append("        return None")
+    lines.append("    def _structured(tp):")
+    lines.append("        if isinstance(tp, type) and (_dc.is_dataclass(tp) or issubclass(tp, BaseModel) or _typing.is_typeddict(tp)):")
+    lines.append("            return True")
+    lines.append("        return any(_structured(arg) for arg in _typing.get_args(tp) if arg is not type(None))")
+    lines.append("    if annotation is None or not _structured(annotation):")
+    lines.append("        return None")
+    lines.append("    try:")
+    lines.append("        from pydantic import TypeAdapter as _TypeAdapter")
+    lines.append("        schema = _TypeAdapter(annotation).json_schema(ref_template='#/components/schemas/{model}', mode='serialization')")
+    lines.append("    except Exception:")
+    lines.append("        return None")
+    lines.append("    defs = schema.pop('$defs', {})")
+    lines.append("    if schema.get('type') == 'object' and 'properties' in schema and isinstance(schema.get('title'), str):")
+    lines.append("        defs.setdefault(schema['title'], schema)")
+    lines.append("        schema = {'$ref': '#/components/schemas/' + schema['title']}")
+    lines.append("    return schema, defs")
+    lines.append("")
     lines.append("def custom_openapi():")
     lines.append("    if app.openapi_schema:")
     lines.append("        return app.openapi_schema")
@@ -4680,6 +4708,28 @@ def generate_fastapi_code(
         "'content', {}).setdefault('application/json', {})["
         "'example'] = _original_content['example']"
     )
+    lines.append("")
+    # Typed result schemas: a synchronous endpoint whose notebook function
+    # returns a dataclass, pydantic model or TypedDict (alone, or inside
+    # List/Dict/Optional/Union) publishes that model as its "result" schema
+    # instead of an open {}, so clients and SDKs get a real type.
+    lines.append("    for _op in list(openapi_schema.get('paths', {}).values()):")
+    lines.append("        _post = _op.get('post') or {}")
+    lines.append("        _name = _post.get('operationId')")
+    lines.append("        if _post.get('x-notebook-to-api-async') or not _name:")
+    lines.append("            continue")
+    lines.append("        _result = _notebook_result_schema(getattr(notebook_module, _name, None))")
+    lines.append("        if _result is None:")
+    lines.append("            continue")
+    lines.append("        _schema, _defs = _result")
+    lines.append("        try:")
+    lines.append("            _holder = _post['responses']['200']['content']['application/json']['schema']['properties']")
+    lines.append("        except (KeyError, TypeError):")
+    lines.append("            continue")
+    lines.append("        _holder['result'] = _schema")
+    lines.append("        _components = openapi_schema['components'].setdefault('schemas', {})")
+    lines.append("        for _def_name, _def in _defs.items():")
+    lines.append("            _components.setdefault(_def_name, _def)")
     lines.append("")
     lines.append("    openapi_schema = _openapi_json_safe(openapi_schema)")
     lines.append("    app.openapi_schema = openapi_schema")

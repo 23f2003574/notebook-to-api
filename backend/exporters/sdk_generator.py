@@ -615,7 +615,7 @@ def _typescript_request_interface(interface_name, request_schema):
     return lines
 
 
-def _typescript_response_interface(interface_name, return_type):
+def _typescript_response_interface(interface_name, return_type, result_schema=None, defs=None):
     """TypeScript source lines for a synchronous endpoint's own
     {Pascal}Response interface -- {"result": ...}, exactly the shape its
     own generated `return {"result": result}` (api_generator.py) always
@@ -624,7 +624,12 @@ def _typescript_response_interface(interface_name, return_type):
     """
     return [
         f"export interface {interface_name} {{",
-        f"  result: {_python_type_to_typescript(return_type)};",
+        "  result: "
+        + (
+            _json_schema_type_to_typescript(result_schema, defs)
+            if result_schema else _python_type_to_typescript(return_type)
+        )
+        + ";",
         "}",
     ]
 
@@ -986,6 +991,16 @@ def _python_typeddict_lines(class_name, required_fields, optional_fields):
         lines.append(f"    {name}: {ptype}")
     lines.append("")
     return lines
+
+
+def _result_schema(operation):
+    """The "result" schema of a synchronous operation's 200 response when the
+    app published a real one (a user-defined return type), else None."""
+    try:
+        result = operation["responses"]["200"]["content"]["application/json"]["schema"]["properties"]["result"]
+    except (KeyError, TypeError):
+        return None
+    return result if isinstance(result, dict) and result else None
 
 
 def _python_request_typeddict_lines(class_name, request_schema):
@@ -2280,6 +2295,13 @@ def generate_python_sdk(
             request_lines = _python_request_typeddict_lines(
                 request_class, _request_body_schema(schema, paths[path])
             )
+            result_schema = None if is_background else _result_schema(paths[path].get("post"))
+            result_type = (
+                _json_schema_type_to_python(
+                    result_schema, (schema.get("components") or {}).get("schemas") or {}
+                )
+                if result_schema else _python_type_to_safe_python_annotation(return_type)
+            )
             nested_lines = [
                 line for name, block in _NESTED_TYPEDICTS.items()
                 if block and name not in _emitted_nested for line in block
@@ -2302,7 +2324,7 @@ def generate_python_sdk(
             typeddict_lines.extend(
                 _python_typeddict_lines(
                     response_class,
-                    {"result": _python_type_to_safe_python_annotation(return_type)},
+                    {"result": result_type},
                     {},
                 )
             )
@@ -3383,7 +3405,11 @@ def generate_typescript_sdk(
             )
         else:
             interface_lines.extend(
-                _typescript_response_interface(response_interface, return_type)
+                _typescript_response_interface(
+                    response_interface, return_type,
+                    _result_schema(paths[path].get("post")),
+                    (schema.get("components") or {}).get("schemas") or {},
+                )
             )
         interface_lines.append("")
 
