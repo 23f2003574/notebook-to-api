@@ -410,7 +410,9 @@ def test_generate_typescript_sdk_constructor_accepts_a_configurable_timeout(
     # paths exist), plus the 10 hardcoded health/ready/info/config/
     # metrics/metricsPrometheus/uptime/authStatus/authInfo/authValidate
     # methods.
-    assert source.count("signal: AbortSignal.timeout(this.timeoutMs),") == 23
+    # getTask now combines the timeout with a caller-supplied signal on one line, so 22 plain ones remain.
+    assert source.count("signal: AbortSignal.timeout(this.timeoutMs),") == 22
+    assert "combineAbortSignals(AbortSignal.timeout(this.timeoutMs), callerSignal)" in source
 
 
 def test_generate_python_sdk_method_name_handles_multi_segment_paths(tmp_path):
@@ -2459,8 +2461,8 @@ def test_generate_typescript_sdk_produces_expected_structure(tmp_path):
     source = output_path.read_text(encoding="utf-8")
 
     assert "export class NotebookAPIClient {" in source
-    assert "async train_model(payload: TrainModelRequest): Promise<TrainModelResponse> {" in source
-    assert "async getTask(taskId: string): Promise<any> {" in source
+    assert "async train_model(payload: TrainModelRequest, options: RequestOptions = {}): Promise<TrainModelResponse> {" in source
+    assert "async getTask(taskId: string, callerSignal?: AbortSignal): Promise<any> {" in source
     assert "async waitForTask(taskId: string" in source
     # Braces must balance -- a mismatch is the most common way hand-built
     # string-concatenated codegen produces invalid syntax.
@@ -2498,7 +2500,7 @@ def test_generate_typescript_sdk_method_jsdoc_includes_the_operations_descriptio
     assert "/**" in source
     assert " * Train the classifier and return its accuracy." in source
     assert (
-        "async train_model(payload: TrainModelRequest): Promise<TrainModelResponse> {"
+        "async train_model(payload: TrainModelRequest, options: RequestOptions = {}): Promise<TrainModelResponse> {"
         in source
     )
     assert source.count("{") == source.count("}")
@@ -2552,7 +2554,7 @@ def test_generate_typescript_sdk_jsdoc_neutralizes_a_terminator_sequence_in_the_
 
     assert "Ends with a terminator * / right here." in source
     assert (
-        "async train_model(payload: TrainModelRequest): Promise<TrainModelResponse> {"
+        "async train_model(payload: TrainModelRequest, options: RequestOptions = {}): Promise<TrainModelResponse> {"
         in source
     )
     assert source.count("{") == source.count("}")
@@ -2764,7 +2766,7 @@ def test_generate_typescript_sdk_method_name_handles_multi_segment_paths(tmp_pat
     source = output_path.read_text(encoding="utf-8")
 
     assert (
-        "async tasks_cleanup(payload: TasksCleanupRequest): "
+        "async tasks_cleanup(payload: TasksCleanupRequest, options: RequestOptions = {}): "
         "Promise<TasksCleanupResponse> {"
     ) in source
 
@@ -2791,11 +2793,11 @@ def test_generate_typescript_sdk_disambiguates_paths_that_collide_on_method_name
     source = output_path.read_text(encoding="utf-8")
 
     assert source.count(
-        "async tasks_cleanup(payload: TasksCleanupRequest): "
+        "async tasks_cleanup(payload: TasksCleanupRequest, options: RequestOptions = {}): "
         "Promise<TasksCleanupResponse> {"
     ) == 1
     assert source.count(
-        "async tasks_cleanup_2(payload: TasksCleanup2Request): "
+        "async tasks_cleanup_2(payload: TasksCleanup2Request, options: RequestOptions = {}): "
         "Promise<TasksCleanup2Response> {"
     ) == 1
 
@@ -2835,7 +2837,7 @@ def test_generate_typescript_sdk_disambiguates_a_path_colliding_with_a_hardcoded
 
     assert source.count(f"async {colliding_name}(") == 1
     assert (
-        f"async {colliding_name}_2(payload: {pascal}Request): "
+        f"async {colliding_name}_2(payload: {pascal}Request, options: RequestOptions = {{}}): "
         f"Promise<{pascal}Response> {{"
         in source
     )
@@ -3437,7 +3439,7 @@ def test_generate_typescript_sdk_background_endpoint_gets_an_and_wait_companion(
     assert (
         "async train_model_and_wait(payload: TrainModelRequest, "
         "callbackUrl?: string, "
-        "options: { pollIntervalMs?: number; timeoutMs?: number } = {}): "
+        "options: { pollIntervalMs?: number; timeoutMs?: number; signal?: AbortSignal } = {}): "
         "Promise<TrainModelTaskResult> {" in source
     )
 
@@ -5131,7 +5133,7 @@ def test_generate_typescript_sdk_types_request_fields_from_the_real_json_schema(
     assert "export interface TrainModelResponse {" in source
     assert "result: Record<string, unknown>;" in source
     assert (
-        "async train_model(payload: TrainModelRequest): "
+        "async train_model(payload: TrainModelRequest, options: RequestOptions = {}): "
         "Promise<TrainModelResponse> {" in source
     )
 
@@ -5213,13 +5215,13 @@ def test_generate_typescript_sdk_background_endpoint_gets_typed_submission_and_r
     ):
         assert field in source
     assert (
-        "async train_model(payload: TrainModelRequest, callbackUrl?: string): "
+        "async train_model(payload: TrainModelRequest, callbackUrl?: string, options: RequestOptions = {}): "
         "Promise<TrainModelResponse> {" in source
     )
     assert (
         "async train_model_and_wait(payload: TrainModelRequest, "
         "callbackUrl?: string, "
-        "options: { pollIntervalMs?: number; timeoutMs?: number } = {}): "
+        "options: { pollIntervalMs?: number; timeoutMs?: number; signal?: AbortSignal } = {}): "
         "Promise<TrainModelTaskResult> {" in source
     )
 
@@ -6094,7 +6096,7 @@ def test_generate_typescript_sdk_background_method_appends_callback_url_query_pa
 
     source = client_path.read_text(encoding="utf-8")
     assert (
-        "async train_model(payload: TrainModelRequest, callbackUrl?: string): "
+        "async train_model(payload: TrainModelRequest, callbackUrl?: string, options: RequestOptions = {}): "
         "Promise<TrainModelResponse> {" in source
     )
 
@@ -6148,7 +6150,7 @@ def test_generate_typescript_sdk_synchronous_endpoint_has_no_callback_url_parame
 
     source = client_path.read_text(encoding="utf-8")
 
-    assert "async add(payload: AddRequest): Promise<AddResponse> {" in source
+    assert "async add(payload: AddRequest, options: RequestOptions = {}): Promise<AddResponse> {" in source
     assert "callbackUrl" not in source.split("async add(")[1].split("\n  }")[0]
 
 
@@ -7211,8 +7213,8 @@ def test_sdks_wait_at_least_an_endpoints_own_server_timeout(tmp_path):
     ast.parse(py_source)
     assert "timeout=max(self.timeout, 125)," in py_source
     ts_source = ts_path.read_text(encoding="utf-8")
-    assert 'return this.request("/report", payload, undefined, 125000);' in ts_source
-    assert 'return this.request("/add", payload);' in ts_source
+    assert 'return this.request("/report", payload, undefined, 125000, undefined, options.signal);' in ts_source
+    assert 'return this.request("/add", payload, undefined, undefined, undefined, options.signal);' in ts_source
 
 
 @pytest.mark.parametrize("value", [0, -5, "120", True, None])
@@ -7228,7 +7230,7 @@ def test_sdks_ignore_an_invalid_or_zero_server_timeout(tmp_path, value):
     generate_typescript_sdk(str(schema_path), str(ts_path))
 
     assert "max(self.timeout" not in py_path.read_text(encoding="utf-8")
-    assert "undefined, " not in ts_path.read_text(encoding="utf-8")
+    assert "undefined, " not in ts_path.read_text(encoding="utf-8").replace("undefined, undefined, undefined, options.signal", "")
 
 
 @_needs_node
@@ -7743,7 +7745,7 @@ def test_generate_typescript_sdk_no_cache_bypasses_a_cached_endpoint(tmp_path):
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert json.loads(proc.stdout.strip().splitlines()[-1]) == [None, "no-cache", None]
-    assert "async plain(payload: PlainRequest): " in client_path.read_text(encoding="utf-8")
+    assert "async plain(payload: PlainRequest, options: RequestOptions = {}): " in client_path.read_text(encoding="utf-8")
 
 
 def test_python_sdk_list_tasks_can_filter_by_endpoint(tmp_path, monkeypatch):
@@ -7853,7 +7855,7 @@ def test_typescript_sdk_never_posts_to_a_literal_templated_path(tmp_path):
     assert 'this.request("/tasks/{task_id}' not in source
     assert "async retryTask(taskId: string" in source
     assert "async redeliverTaskWebhook(taskId: string" in source
-    assert "async add(payload: AddRequest)" in source
+    assert "async add(payload: AddRequest, options: RequestOptions = {})" in source
 
 
 @pytest.mark.skipif(

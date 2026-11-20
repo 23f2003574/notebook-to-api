@@ -2696,6 +2696,27 @@ def generate_typescript_sdk(
     # compiled app's brownout or enforced sunset), so a caller can
     # `instanceof`-check for a retired endpoint and read why/when. Keeps
     # the same `.status` every other thrown request error already carries.
+    lines.append("/** Per-call options. `signal` cancels the request (and any retries or polling) when aborted. */")
+    lines.append("export interface RequestOptions {")
+    lines.append("  signal?: AbortSignal;")
+    lines.append("}")
+    lines.append("")
+    lines.append("function combineAbortSignals(...signals: AbortSignal[]): AbortSignal {")
+    lines.append("  const anyOf = (AbortSignal as any).any;")
+    lines.append("  if (typeof anyOf === \"function\") {")
+    lines.append("    return anyOf.call(AbortSignal, signals) as AbortSignal;")
+    lines.append("  }")
+    lines.append("  const controller = new AbortController();")
+    lines.append("  for (const signal of signals) {")
+    lines.append("    if (signal.aborted) {")
+    lines.append("      controller.abort((signal as any).reason);")
+    lines.append("      break;")
+    lines.append("    }")
+    lines.append("    signal.addEventListener(\"abort\", () => controller.abort((signal as any).reason), { once: true });")
+    lines.append("  }")
+    lines.append("  return controller.signal;")
+    lines.append("}")
+    lines.append("")
     lines.append("export class EndpointRemovedError extends Error {")
     # Explicit fields rather than constructor parameter properties
     # (`public path: string`) -- Node's own type-stripping, which runs
@@ -2799,8 +2820,8 @@ def generate_typescript_sdk(
     lines.append("")
     lines.append(
         "  private async requestWithRetry(path: string, "
-        "fn: () => Promise<Response>, parseJson: boolean = true): "
-        "Promise<any> {"
+        "fn: () => Promise<Response>, parseJson: boolean = true, "
+        "callerSignal?: AbortSignal): Promise<any> {"
     )
     lines.append("    let attempt = 0;")
     lines.append("    while (true) {")
@@ -2808,7 +2829,7 @@ def generate_typescript_sdk(
     lines.append("      try {")
     lines.append("        response = await fn();")
     lines.append("      } catch (err) {")
-    lines.append("        if (attempt >= this.maxRetries) {")
+    lines.append("        if (callerSignal?.aborted || attempt >= this.maxRetries) {")
     lines.append("          throw err;")
     lines.append("        }")
     lines.append(
@@ -2926,7 +2947,7 @@ def generate_typescript_sdk(
     lines.append(
         "  private async request(path: string, payload: unknown, "
         "callbackUrl?: string, minTimeoutMs?: number, "
-        "extraHeaders?: Record<string, string>): Promise<any> {"
+        "extraHeaders?: Record<string, string>, callerSignal?: AbortSignal): Promise<any> {"
     )
     lines.append("    let url = path;")
     lines.append("    if (callbackUrl) {")
@@ -2968,19 +2989,19 @@ def generate_typescript_sdk(
     lines.append("      body: JSON.stringify(payload),")
     # minTimeoutMs: see the Python client's identical server-timeout wait.
     lines.append(
-        "      signal: AbortSignal.timeout(Math.max(this.timeoutMs, minTimeoutMs ?? 0)),"
+        "      signal: callerSignal ? combineAbortSignals(AbortSignal.timeout(Math.max(this.timeoutMs, minTimeoutMs ?? 0)), callerSignal) : AbortSignal.timeout(Math.max(this.timeoutMs, minTimeoutMs ?? 0)),"
     )
-    lines.append("    }));")
+    lines.append("    }), true, callerSignal);")
     lines.append("  }")
     lines.append("")
-    lines.append("  async getTask(taskId: string): Promise<any> {")
+    lines.append("  async getTask(taskId: string, callerSignal?: AbortSignal): Promise<any> {")
     lines.append(
         "    const response = await fetch(`${this.baseUrl}/tasks/${taskId}`, {"
     )
     lines.append("      headers: {")
     lines.append('        "X-API-Key": this.apiKey,')
     lines.append("      },")
-    lines.append("      signal: AbortSignal.timeout(this.timeoutMs),")
+    lines.append("      signal: callerSignal ? combineAbortSignals(AbortSignal.timeout(this.timeoutMs), callerSignal) : AbortSignal.timeout(this.timeoutMs),")
     lines.append("    });")
     lines.append("    if (!response.ok) {")
     # `.status` attached to the thrown Error (not just embedded in its
@@ -2995,7 +3016,7 @@ def generate_typescript_sdk(
     lines.append("")
     lines.append(
         "  async waitForTask(taskId: string, options: { pollIntervalMs?: "
-        "number; timeoutMs?: number } = {}): Promise<any> {"
+        "number; timeoutMs?: number; signal?: AbortSignal } = {}): Promise<any> {"
     )
     # A transient failure while polling -- a network-level error (fetch
     # itself throwing, e.g. a connection reset, or AbortSignal.timeout
@@ -3013,8 +3034,14 @@ def generate_typescript_sdk(
     lines.append("    while (true) {")
     lines.append("      let task: any;")
     lines.append("      try {")
-    lines.append("        task = await this.getTask(taskId);")
+    lines.append("        if (options.signal?.aborted) {")
+    lines.append("          throw (options.signal as any).reason ?? new Error(\"waitForTask was aborted\");")
+    lines.append("        }")
+    lines.append("        task = await this.getTask(taskId, options.signal);")
     lines.append("      } catch (err: any) {")
+    lines.append("        if (options.signal?.aborted) {")
+    lines.append("          throw err;")
+    lines.append("        }")
     lines.append(
         "        if (err.status !== undefined && "
         "!transientStatuses.has(err.status)) {"
@@ -3438,7 +3465,7 @@ def generate_typescript_sdk(
         if is_background:
             lines.append(
                 f"  async {method_name}(payload: {request_interface}, "
-                f"callbackUrl?: string): Promise<{response_interface}> {{"
+                f"callbackUrl?: string, options: RequestOptions = {{}}): Promise<{response_interface}> {{"
             )
         else:
             # See generate_python_sdk's identical no_cache.
@@ -3446,7 +3473,7 @@ def generate_typescript_sdk(
             lines.append(
                 f"  async {method_name}(payload: {request_interface}"
                 + (", noCache: boolean = false" if is_cached else "")
-                + f"): Promise<{response_interface}> {{"
+                + f", options: RequestOptions = {{}}): Promise<{response_interface}> {{"
             )
         if is_deprecated:
             # The compiled operation's own OpenAPI "deprecated" field --
@@ -3465,7 +3492,7 @@ def generate_typescript_sdk(
             )
         if is_background:
             lines.append(
-                f'    return this.request("{path}", payload, callbackUrl);'
+                f'    return this.request("{path}", payload, callbackUrl, undefined, undefined, options.signal);'
             )
         else:
             server_timeout = _server_timeout_seconds(paths[path].get("post"))
@@ -3476,17 +3503,17 @@ def generate_typescript_sdk(
                 )
                 lines.append(
                     f'    return this.request("{path}", payload, undefined, {timeout_arg}, '
-                    'noCache ? { "Cache-Control": "no-cache" } : undefined);'
+                    'noCache ? { "Cache-Control": "no-cache" } : undefined, options.signal);'
                 )
             elif server_timeout:
                 timeout_ms = (
                     server_timeout + _SERVER_TIMEOUT_CLIENT_MARGIN_SECONDS
                 ) * 1000
                 lines.append(
-                    f'    return this.request("{path}", payload, undefined, {timeout_ms});'
+                    f'    return this.request("{path}", payload, undefined, {timeout_ms}, undefined, options.signal);'
                 )
             else:
-                lines.append(f'    return this.request("{path}", payload);')
+                lines.append(f'    return this.request("{path}", payload, undefined, undefined, undefined, options.signal);')
         lines.append("  }")
 
         if is_background:
@@ -3511,11 +3538,11 @@ def generate_typescript_sdk(
             lines.append(
                 f"  async {wait_name}(payload: {request_interface}, "
                 "callbackUrl?: string, "
-                "options: { pollIntervalMs?: number; timeoutMs?: number } = "
+                "options: { pollIntervalMs?: number; timeoutMs?: number; signal?: AbortSignal } = "
                 f"{{}}): Promise<{task_result_interface}> {{"
             )
             lines.append(
-                f"    const submitted = await this.{method_name}(payload, callbackUrl);"
+                f"    const submitted = await this.{method_name}(payload, callbackUrl, {{ signal: options.signal }});"
             )
             # See the Python client's identical task-timeout wait default.
             task_timeout = _server_timeout_seconds(paths[path].get("post"))
@@ -3589,13 +3616,15 @@ def generate_sdk_package(openapi_path, output_dir, language="python", package_na
         generate_python_sdk(openapi_path, str(client_path))
         written.append(f"{module}/client.py")
         write(f"{module}/__init__.py", "from .client import *  # noqa: F401,F403\nfrom .client import NotebookAPIClient  # noqa: F401\n")
+        write(f"{module}/py.typed", "")  # PEP 561: type checkers use the TypedDicts and annotations
         write("pyproject.toml", (
             "[build-system]\nrequires = [\"setuptools>=61\"]\nbuild-backend = \"setuptools.build_meta\"\n\n"
             f"[project]\nname = \"{name}\"\nversion = \"{version}\"\n"
             f"description = \"Python client for the {name} API, generated by notebook-to-api.\"\n"
             "readme = \"README.md\"\nrequires-python = \">=3.9\"\n"
             "dependencies = [\"requests>=2.28\"]\n\n"
-            f"[tool.setuptools]\npackages = [\"{module}\"]\n"
+            f"[tool.setuptools]\npackages = [\"{module}\"]\n\n"
+            f"[tool.setuptools.package-data]\n{module} = [\"py.typed\"]\n"
         ))
         write("README.md", (
             f"# {name}\n\nPython client generated by notebook-to-api.\n\n"

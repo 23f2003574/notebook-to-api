@@ -33,7 +33,7 @@ def openapi(tmp_path_factory):
 
 def test_python_package_layout_and_declared_dependency(openapi, tmp_path):
     files = generate_sdk_package(str(openapi), str(tmp_path / "py"), "python", package_name="My Client")
-    assert set(files) == {"my_client/client.py", "my_client/__init__.py", "pyproject.toml", "README.md"}
+    assert set(files) == {"my_client/client.py", "my_client/__init__.py", "my_client/py.typed", "pyproject.toml", "README.md"}
     pyproject = (tmp_path / "py" / "pyproject.toml").read_text()
     assert 'name = "my-client"' in pyproject and '"requests>=2.28"' in pyproject
 
