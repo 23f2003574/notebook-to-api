@@ -238,8 +238,13 @@ class GovernanceAuditService:
         *,
         clock: "Callable[[], datetime] | None" = None,
         policy_engine: "GovernancePolicyEngine | None" = None,
+        store: "Any | None" = None,
     ) -> None:
         self._records: "dict[int, AuditRecord]" = {}
+
+        # A durable store (SqliteAuditStore) makes every read and write go to the shared database,
+        # so records survive restarts and concurrent processes cannot fork the chain.
+        self._store = store
 
         self._next_sequence = 1
 
@@ -267,44 +272,57 @@ class GovernanceAuditService:
         reused, even across purge() calls.
         """
 
-        sequence = self._next_sequence
-
         occurred_at = self._clock()
 
         metadata = metadata or {}
 
-        previous_hash = self._last_hash
+        def build(sequence: int, previous_hash: str) -> AuditRecord:
+            record_hash = _compute_record_hash(
+                sequence=sequence,
+                action=action,
+                actor=actor,
+                resource=resource,
+                outcome=outcome,
+                occurred_at=occurred_at,
+                metadata=metadata,
+                previous_hash=previous_hash,
+            )
 
-        record_hash = _compute_record_hash(
-            sequence=sequence,
-            action=action,
-            actor=actor,
-            resource=resource,
-            outcome=outcome,
-            occurred_at=occurred_at,
-            metadata=metadata,
-            previous_hash=previous_hash,
-        )
+            return AuditRecord(
+                sequence=sequence,
+                action=action,
+                actor=actor,
+                resource=resource,
+                outcome=outcome,
+                occurred_at=occurred_at,
+                metadata=metadata,
+                previous_hash=previous_hash,
+                record_hash=record_hash,
+            )
 
-        record = AuditRecord(
-            sequence=sequence,
-            action=action,
-            actor=actor,
-            resource=resource,
-            outcome=outcome,
-            occurred_at=occurred_at,
-            metadata=metadata,
-            previous_hash=previous_hash,
-            record_hash=record_hash,
-        )
+        if self._store is not None:
+            return self._store.append(
+                lambda sequence, previous_hash: build(sequence, previous_hash)
+            )
 
-        self._records[sequence] = record
+        record = build(self._next_sequence, self._last_hash)
+
+        self._records[record.sequence] = record
 
         self._next_sequence += 1
 
-        self._last_hash = record_hash
+        self._last_hash = record.record_hash
 
         return record
+
+    def _all_records(self, sequence: "int | None" = None) -> "dict[int, AuditRecord]":
+        if self._store is None:
+            return self._records
+
+        return {
+            row["sequence"]: AuditRecord(**row)
+            for row in self._store.rows(sequence)
+        }
 
     def get(self, sequence: int) -> AuditRecord:
         """
@@ -315,7 +333,7 @@ class GovernanceAuditService:
         """
 
         try:
-            return self._records[sequence]
+            return self._all_records(sequence)[sequence]
 
         except KeyError:
             raise LookupError(
@@ -336,7 +354,7 @@ class GovernanceAuditService:
 
         matches = [
             record
-            for record in self._records.values()
+            for record in self._all_records().values()
             if query.matches(record)
         ]
 
@@ -382,7 +400,7 @@ class GovernanceAuditService:
         result: "AuditChainVerification | None" = None
 
         for index, record in enumerate(
-            sorted(self._records.values(), key=lambda r: r.sequence)
+            sorted(self._all_records().values(), key=lambda r: r.sequence)
         ):
             checked += 1
 
@@ -482,9 +500,13 @@ class GovernanceAuditService:
 
                 raise GovernancePolicyViolation(decision)
 
-        count = len(self._records)
+        if self._store is not None:
+            count = self._store.clear()
 
-        self._records.clear()
+        else:
+            count = len(self._records)
+
+            self._records.clear()
 
         if decision is not None:
             record_policy_decision(self, "audit_purge", decision)
@@ -495,6 +517,9 @@ class GovernanceAuditService:
         """
         Return the number of currently stored audit records.
         """
+
+        if self._store is not None:
+            return self._store.count()
 
         return len(self._records)
 
@@ -592,12 +617,67 @@ def record_recovery_result(
 # policy-protected.
 from .deployment_governance_policy import get_policy_engine  # noqa: E402
 
-_audit_service = GovernanceAuditService(policy_engine=get_policy_engine())
+_audit_service: "GovernanceAuditService | None" = None
+
+
+def _production_environment(environ) -> bool:
+    return environ.get("NOTEBOOK2API_ENVIRONMENT", "").strip().lower() in {"production", "prod"}
+
+
+def build_audit_service_from_env(environ=None) -> "GovernanceAuditService":
+    """Build the audit service the environment asks for.
+
+    In production the backend must be chosen explicitly: an unset backend is a startup error rather
+    than a silent fall back to process-local memory. "memory" stays available when it is set on
+    purpose (development and tests); "sqlite" gives a durable, multi-process-safe chain."""
+
+    import os
+
+    from .deployment_governance_audit_store import (
+        GovernanceAuditStorageError,
+        SqliteAuditStore,
+    )
+
+    environ = os.environ if environ is None else environ
+    backend = environ.get("NOTEBOOK2API_GOVERNANCE_PERSISTENCE_BACKEND", "").strip().lower()
+
+    if not backend and _production_environment(environ):
+        raise GovernanceAuditStorageError(
+            "NOTEBOOK2API_ENVIRONMENT=production requires NOTEBOOK2API_GOVERNANCE_PERSISTENCE_BACKEND "
+            "to be set explicitly: use 'sqlite' (with NOTEBOOK2API_GOVERNANCE_DATABASE_PATH on a "
+            "persistent volume), or 'memory' to knowingly accept that audit records are lost on restart"
+        )
+
+    if backend not in ("", "memory", "sqlite"):
+        raise GovernanceAuditStorageError(
+            f"unsupported NOTEBOOK2API_GOVERNANCE_PERSISTENCE_BACKEND {backend!r}; expected 'memory' or 'sqlite'"
+        )
+
+    if backend == "sqlite":
+        path = environ.get("NOTEBOOK2API_GOVERNANCE_DATABASE_PATH", "data/notebook2api.db")
+        return GovernanceAuditService(
+            policy_engine=get_policy_engine(), store=SqliteAuditStore(path)
+        )
+
+    return GovernanceAuditService(policy_engine=get_policy_engine())
 
 
 def get_audit_service() -> GovernanceAuditService:
     """
-    Return the process-wide governance audit service.
+    Return the process-wide governance audit service (created on first use from the environment).
     """
 
+    global _audit_service
+
+    if _audit_service is None:
+        _audit_service = build_audit_service_from_env()
+
     return _audit_service
+
+
+def reset_audit_service() -> None:
+    """Forget the process-wide service so the next get_audit_service() re-reads the environment."""
+
+    global _audit_service
+
+    _audit_service = None
