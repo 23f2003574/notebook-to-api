@@ -22,6 +22,7 @@ export default defineConfig(({ mode }) => {
       environment: 'jsdom',
       globals: true,
       setupFiles: './src/setupTests.js',
+      include: ['src/**/*.{test,spec}.{js,jsx}'], // e2e/ belongs to Playwright
     },
   }
 })
