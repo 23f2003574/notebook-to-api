@@ -46,30 +46,83 @@ def _context() -> mp.context.BaseContext:
     return mp.get_context("fork" if "fork" in methods else "spawn")
 
 
-def scrub_service_secrets(environ: Any = None) -> list[str]:
-    """Remove the service's own credentials from `environ` (default
-    os.environ) and return the removed names.
-
-    The service's credentials are NOTEBOOK_API_* variables whose name says
-    they are secret (KEY, SECRET, TOKEN, PASSWORD, CREDENTIAL); notebook code
-    in an isolated child has no business reading them. Every other variable
-    (including the author's own keys, e.g. OPENAI_API_KEY) is untouched, and
-    names listed (comma separated) in NOTEBOOK_API_ISOLATE_ALLOW_ENV are kept.
-    """
+def _is_service_secret(name: str, allowed: Any = ()) -> bool:
+    """Whether `name` is one of the service's own credentials: a NOTEBOOK_API_*
+    variable whose name contains KEY, SECRET, TOKEN, PASSWORD or CREDENTIAL and
+    that NOTEBOOK_API_ISOLATE_ALLOW_ENV does not list."""
     import re  # local: this module's source is embedded in generated apps
 
+    prefix = "NOTEBOOK_API_"
+    return (
+        name.startswith(prefix) and name != "NOTEBOOK_API_ISOLATE_ALLOW_ENV"
+        and name not in allowed
+        and re.search(r"(KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL)", name[len(prefix):], re.IGNORECASE) is not None
+    )
+
+
+def _allowed_names(env: Any) -> set:
+    return {n.strip() for n in env.get("NOTEBOOK_API_ISOLATE_ALLOW_ENV", "").split(",") if n.strip()}
+
+
+def scrub_service_secrets(environ: Any = None) -> list[str]:
+    """Remove the service's own credentials from `environ` (default
+    os.environ) and return the removed names. Names listed (comma
+    separated) in NOTEBOOK_API_ISOLATE_ALLOW_ENV are kept."""
     env = os.environ if environ is None else environ
-    allow_name = "NOTEBOOK_API_ISOLATE_ALLOW_ENV"
-    allowed = {n.strip() for n in env.get(allow_name, "").split(",") if n.strip()}
-    secret = re.compile(r"(KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL)", re.IGNORECASE)
-    removed = [
-        name for name in list(env)
-        if name.startswith("NOTEBOOK_API_") and name != allow_name
-        and secret.search(name[len("NOTEBOOK_API_"):]) and name not in allowed
-    ]
+    allowed = _allowed_names(env)
+    removed = [name for name in list(env) if _is_service_secret(name, allowed)]
     for name in removed:
         del env[name]
     return removed
+
+
+def hide_service_secrets_in_proc_environ() -> list[str]:
+    """Blank the service's credentials in this process's own initial
+    environment block, which Linux exposes as /proc/<pid>/environ.
+
+    Removing a variable from os.environ does not touch that block, so a child
+    (or any same-user process) could still read the key from
+    /proc/self/environ and from its parent's /proc/<ppid>/environ. The block
+    is overwritten in place with NULs, keeping its length; os.environ is not
+    changed (the app already holds its settings in memory). Returns the names
+    blanked. A no-op where /proc is unavailable. Raises IsolatedExecutionError
+    when a credential is still readable afterwards, so isolation fails closed.
+
+    What this does NOT cover: values the app keeps in memory (a forked child
+    shares a copy of them) -- see the isolated execution notes in the README.
+    """
+    import ctypes
+
+    try:
+        with open("/proc/self/stat", "rb") as handle:
+            fields = handle.read().rsplit(b")", 1)[1].split()
+        env_start, env_end = int(fields[47]), int(fields[48])  # stat fields 50 and 51
+        with open("/proc/self/environ", "rb") as handle:
+            visible = handle.read()
+    except (OSError, ValueError, IndexError):
+        return []
+    if env_end <= env_start or env_end - env_start != len(visible):
+        return []
+
+    allowed = _allowed_names(os.environ)
+    blanked = []
+    offset = 0
+    for entry in visible.split(b"\0"):
+        name, _, value = entry.partition(b"=")
+        if value and _is_service_secret(name.decode("utf-8", "replace"), allowed):
+            ctypes.memset(env_start + offset, 0, len(entry))
+            blanked.append(name.decode("utf-8", "replace"))
+        offset += len(entry) + 1
+    if blanked:
+        with open("/proc/self/environ", "rb") as handle:
+            remaining = handle.read()
+        for entry in remaining.split(b"\0"):
+            name, _, value = entry.partition(b"=")
+            if value and _is_service_secret(name.decode("utf-8", "replace"), allowed):
+                raise IsolatedExecutionError(
+                    "could not hide the service credentials from /proc/self/environ; refusing to run isolated code"
+                )
+    return blanked
 
 
 def _apply_memory_limit(limit_mb: float) -> None:
@@ -254,6 +307,7 @@ def run_isolated(
         raise IsolatedExecutionError(
             'isolated execution is not supported on this platform (no "fork" process start method)'
         )
+    hide_service_secrets_in_proc_environ()
     execution_id = uuid.uuid4().hex[:12]
     started = time.monotonic()
     outcome = "error"
@@ -425,6 +479,7 @@ class IsolatedWorker:
     def _start(self) -> None:
         if "fork" not in mp.get_all_start_methods():
             raise IsolatedExecutionError('isolated workers are not supported on this platform (no "fork" start method)')
+        hide_service_secrets_in_proc_environ()
         ctx = _context()
         parent_conn, child_conn = ctx.Pipe(duplex=True)
         proc = ctx.Process(target=_worker_main, daemon=True,
