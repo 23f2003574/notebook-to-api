@@ -80,7 +80,7 @@ def test_python_package_installs_and_calls_an_api(openapi, tmp_path):
 
 def test_typescript_package_layout(openapi, tmp_path):
     files = generate_sdk_package(str(openapi), str(tmp_path / "ts"), "typescript", package_name="demo-sdk")
-    assert set(files) == {"src/index.ts", "package.json", "tsconfig.json", "README.md"}
+    assert set(files) == {"src/index.ts", "package.json", "tsconfig.json", "README.md", ".gitignore"}
     manifest = json.loads((tmp_path / "ts" / "package.json").read_text())
     assert manifest["name"] == "demo-sdk" and manifest["types"] == "dist/index.d.ts"
     assert manifest["dependencies"] == {} and manifest["scripts"]["build"]
