@@ -1822,6 +1822,56 @@ def _per_notebook_image_tag(filename):
     return default_image_tag(slug)
 
 
+def _read_app_metadata(app_dir):
+    try:
+        with open(Path(app_dir) / COMPILE_METADATA_FILENAME, "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+        return metadata if isinstance(metadata, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _per_notebook_app_info(notebook_filename, notebook_path=None):
+    """Status of the per-notebook compiled app of `notebook_filename`, or None
+    when it has none. `notebook_path` (the file in UPLOAD_DIR) enables the
+    "notebook_changed_since_compile" check. Never reveals filesystem paths."""
+    app_dir = Path(GENERATED_APPS_DIR) / _notebook_app_id(notebook_filename)
+    if not app_dir.is_dir():
+        return None
+    metadata = _read_app_metadata(app_dir)
+    if metadata is None:
+        return {"status": "incomplete", "compiled_at": None, "compiled_version_id": None,
+                "notebook_changed_since_compile": None}
+    recorded = metadata.get("source_notebook_sha256")
+    changed = None
+    if recorded and notebook_path is not None and Path(notebook_path).is_file():
+        changed = hash_notebook_file(notebook_path) != recorded
+    return {
+        "status": "compiled",
+        "compiled_at": metadata.get("compiled_at"),
+        "compiled_version_id": metadata.get("compiled_version_id"),
+        "notebook_changed_since_compile": changed,
+    }
+
+
+def _list_per_notebook_apps():
+    """One entry per app directory under GENERATED_APPS_DIR."""
+    root = Path(GENERATED_APPS_DIR)
+    if not root.is_dir():
+        return []
+    apps = []
+    for app_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+        metadata = _read_app_metadata(app_dir)
+        source = (metadata or {}).get("source_notebook")
+        notebook = Path(source).name if source else None
+        info = {"app_id": app_dir.name, "notebook": notebook, "status": "compiled" if metadata else "incomplete",
+                "compiled_at": (metadata or {}).get("compiled_at"),
+                "compiled_version_id": (metadata or {}).get("compiled_version_id"),
+                "notebook_exists": bool(notebook) and (Path(UPLOAD_DIR) / notebook).is_file()}
+        apps.append(info)
+    return apps
+
+
 def _remove_notebook_app(notebook_filename):
     """Delete the per-notebook compiled app that belongs to `notebook_filename`
     (see _generated_root), if there is one. Returns whether a directory was
@@ -5350,6 +5400,7 @@ def _notebook_metadata_entry(
         "tags": _read_notebook_tags(entry.name),
         "description": _read_notebook_description(entry.name),
         "source_url": _read_notebook_source_url(entry.name),
+        "per_notebook_app": _per_notebook_app_info(entry.name, entry),
     }
 
     if is_currently_compiled:
@@ -14040,6 +14091,18 @@ def inspect_notebook_endpoint(
                 "generated" if inspection["generated_files"] else "none"
             )
 
+        # The notebook's own per-notebook app (POST /api/compile with
+        # per_notebook) is reported when the shared directory holds nothing of it.
+        inspection["per_notebook_app"] = _per_notebook_app_info(full_path.name, full_path)
+        if inspection["per_notebook_app"] and inspection["generated_files_status"] != "generated":
+            with COMPILE_LOCK:
+                own = inspect_notebook_data(
+                    str(full_path), _generated_root(full_path.name)
+                )["generated_files"]
+            if own:
+                inspection["generated_files"] = own
+                inspection["generated_files_status"] = "generated"
+
     except Exception as e:
 
         raise HTTPException(
@@ -19229,6 +19292,15 @@ def _bundle_sha256(file_details_with_sha256):
     return hasher.hexdigest()
 
 
+@router.get("/apps")
+def list_generated_apps():
+    """List every per-notebook compiled app (see POST /api/compile with
+    "per_notebook"): its notebook, status, compile time, and whether that
+    notebook is still uploaded. Legacy shared-directory output is not listed."""
+    apps = _list_per_notebook_apps()
+    return {"status": "success", "apps": apps, "total_count": len(apps)}
+
+
 @router.get("/generated")
 def list_generated_files_endpoint(checksums: bool = False, format: str = "json", notebook: str = None):
     """List the files currently sitting in GENERATED_DIR, without requiring
@@ -19455,7 +19527,7 @@ def list_generated_files_endpoint(checksums: bool = False, format: str = "json",
 
 
 @router.delete("/generated")
-def delete_generated_app(dry_run: bool = False, notebook: str = None):
+def delete_generated_app(dry_run: bool = False, notebook: str = None, all_apps: bool = False):
     """Remove GENERATED_DIR and everything compiled into it, resetting the
     dashboard's compiled-app state back to "nothing compiled yet".
 
@@ -19498,6 +19570,15 @@ def delete_generated_app(dry_run: bool = False, notebook: str = None):
     files, real disk space) actually amounted to before wiping it
     irreversibly.
     """
+
+    if all_apps:
+        # Clears every per-notebook app (never the shared GENERATED_DIR).
+        apps = _list_per_notebook_apps()
+        if not dry_run:
+            with COMPILE_LOCK:
+                shutil.rmtree(GENERATED_APPS_DIR, ignore_errors=True)
+        return {"status": "success", "dry_run": dry_run, "removed_apps": [a["app_id"] for a in apps]}
+
 
     GENERATED_DIR = _generated_root(notebook)
 
@@ -19838,6 +19919,7 @@ def health_check(check_writable: bool = False):
         "service": "notebook-to-api",
         "version": NOTEBOOK_TO_API_VERSION,
         "compiled_app_present": compiled_app_present,
+        "per_notebook_apps_count": len(_list_per_notebook_apps()),
         "compiled_at": compiled_at if compiled_app_present else None,
         "compiled_version_id": compiled_version_id if compiled_app_present else None,
         "generated_files_modified_since_compile": (
