@@ -88,4 +88,4 @@ def test_audit_failure_does_not_change_the_operation_outcome_and_is_surfaced(env
     assert ok.status_code == 200 and "governance_audit_error" in ok.json()
     bad = client.post("/api/compile", json={"notebook_path": "none_audit.ipynb"})
     assert bad.status_code >= 400  # the real failure is not masked
-    assert "audit store down" in caplog.text
+    assert "governance audit record failed (RuntimeError)" in caplog.text  # type only: messages may carry paths
