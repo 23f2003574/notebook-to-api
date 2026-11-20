@@ -650,7 +650,7 @@ def _typescript_task_submission_interface(interface_name):
     ]
 
 
-def _typescript_task_result_interface(interface_name, return_type):
+def _typescript_task_result_interface(interface_name, return_type, result_schema=None, defs=None):
     """TypeScript source lines for a background endpoint's own
     {Pascal}TaskResult interface -- the finished task record its own
     *_and_wait companion (via waitForTask) eventually resolves to: either
@@ -667,7 +667,9 @@ def _typescript_task_result_interface(interface_name, return_type):
         f"export interface {interface_name} {{",
         "  task_id?: string;",
         "  status: string;",
-        f"  result?: {_python_type_to_typescript(return_type)};",
+        "  result?: "
+        + (_json_schema_type_to_typescript(result_schema, defs) if result_schema else _python_type_to_typescript(return_type))
+        + ";",
         "  error?: string;",
         "  created_at?: number;",
         "  finished_at?: number;",
@@ -991,6 +993,13 @@ def _python_typeddict_lines(class_name, required_fields, optional_fields):
         lines.append(f"    {name}: {ptype}")
     lines.append("")
     return lines
+
+
+def _task_result_schema(operation):
+    """The schema of a background endpoint's eventual task result ("x-notebook-to-api-result-schema",
+    published by the generated app for user-defined return types), else None."""
+    schema = (operation or {}).get("x-notebook-to-api-result-schema")
+    return schema if isinstance(schema, dict) and schema else None
 
 
 def _result_schema(operation):
@@ -2458,6 +2467,21 @@ def generate_python_sdk(
         if is_background:
             wait_name = wait_method_names[path]
             task_result_class = f"{pascal_name}TaskResult"
+            _NESTED_TYPEDICTS = {}
+            try:
+                task_schema = _task_result_schema(paths[path].get("post"))
+                task_result_type = (
+                    _json_schema_type_to_python(task_schema, (schema.get("components") or {}).get("schemas") or {})
+                    if task_schema else _python_type_to_safe_python_annotation(return_type)
+                )
+                task_nested_lines = [
+                    line for name, block in _NESTED_TYPEDICTS.items()
+                    if block and name not in _emitted_nested for line in block
+                ]
+                _emitted_nested.update(_NESTED_TYPEDICTS)
+            finally:
+                _NESTED_TYPEDICTS = None
+            typeddict_lines.extend(task_nested_lines)
             typeddict_lines.extend(
                 _python_typeddict_lines(
                     task_result_class,
@@ -2465,9 +2489,7 @@ def generate_python_sdk(
                     {
                         "task_id": "str",
                         "status": "str",
-                        "result": _python_type_to_safe_python_annotation(
-                            return_type
-                        ),
+                        "result": task_result_type,
                         "error": "str",
                         # The rest of what GET /tasks/{id} actually returns.
                         "created_at": "float",
@@ -3520,7 +3542,11 @@ def generate_typescript_sdk(
             wait_name = wait_method_names[path]
             task_result_interface = f"{pascal_name}TaskResult"
             interface_lines.extend(
-                _typescript_task_result_interface(task_result_interface, return_type)
+                _typescript_task_result_interface(
+                    task_result_interface, return_type,
+                    _task_result_schema(paths[path].get("post")),
+                    (schema.get("components") or {}).get("schemas") or {},
+                )
             )
             interface_lines.append("")
             lines.append("")
