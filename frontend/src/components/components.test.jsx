@@ -817,3 +817,103 @@ describe('Diagnostics', () => {
     await waitFor(() => expect(screen.queryByText(/needs a callable/)).toBeNull())
   })
 })
+
+describe('NotebookLibrary per-notebook app workflow', () => {
+  const notebooks = [
+    { filename: 'a.ipynb', size_bytes: 10, per_notebook_app: { status: 'compiled', notebook_changed_since_compile: false } },
+    { filename: 'b.ipynb', size_bytes: 20, per_notebook_app: null },
+    { filename: 'c.ipynb', size_bytes: 30, per_notebook_app: { status: 'compiled', notebook_changed_since_compile: true } },
+  ]
+  const ok = (body) => ({ ok: true, json: async () => body, blob: async () => new Blob(['zip']) })
+  let saved
+
+  const setup = (handler) => {
+    saved = []
+    vi.stubGlobal('URL', { createObjectURL: () => 'blob:x', revokeObjectURL: () => {} })
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function click() { saved.push(this.download) })
+    const calls = []
+    vi.stubGlobal('fetch', (url, init) => {
+      const path = String(url).replace(/^https?:\/\/[^/]+/, '')
+      calls.push([path, init])
+      return handler(path, init) ?? Promise.resolve(ok({ notebooks }))
+    })
+    return calls
+  }
+
+  afterEach(() => vi.restoreAllMocks())
+
+  it('shows each notebook\'s own app state and only offers app actions where an app exists', async () => {
+    setup(() => null)
+    render(<NotebookLibrary onOpen={() => {}} refreshKey={null} />)
+    expect(await screen.findByText('a.ipynb')).toBeInTheDocument()
+    expect(screen.getByText('app ready')).toBeInTheDocument()
+    expect(screen.getByText('app out of date')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Download app' })).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: 'Compile app' })).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: 'Recompile app' })).toHaveLength(2)
+  })
+
+  it('compiles with per_notebook for the chosen notebook only and refreshes the list', async () => {
+    const calls = setup((path) => (path === '/api/compile' ? Promise.resolve(ok({ status: 'success' })) : null))
+    render(<NotebookLibrary onOpen={() => {}} refreshKey={null} />)
+    await screen.findByText('b.ipynb')
+    fireEvent.click(screen.getByRole('button', { name: 'Compile app' }))
+    expect(await screen.findByText(/Compiled its own app/)).toBeInTheDocument()
+    const compile = calls.find(([path]) => path === '/api/compile')
+    expect(JSON.parse(compile[1].body)).toEqual({ notebook_path: 'b.ipynb', per_notebook: true })
+    expect(calls.filter(([path]) => path === '/api/notebooks').length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('downloads and exports through authenticated requests naming the notebook', async () => {
+    const calls = setup((path) => {
+      if (path.startsWith('/api/download')) return Promise.resolve(ok({}))
+      if (path === '/api/export-openapi') return Promise.resolve(ok({ schema: { openapi: '3.1.0' } }))
+      if (path === '/api/export-sdk') return Promise.resolve(ok({ code: 'class Client: ...' }))
+      return null
+    })
+    render(<NotebookLibrary onOpen={() => {}} refreshKey={null} />)
+    await screen.findByText('a.ipynb')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Download app' })[0])
+    await screen.findByText(/Downloaded the app/)
+    fireEvent.click(screen.getAllByRole('button', { name: 'OpenAPI' })[0])
+    await screen.findByText(/Exported the OpenAPI schema/)
+    fireEvent.click(screen.getAllByRole('button', { name: 'TypeScript SDK' })[0])
+    await screen.findByText(/Exported the typescript client/)
+    expect(saved).toEqual(['a-app.zip', 'a-openapi.json', 'a-client.ts'])
+    expect(calls.some(([path]) => path === '/api/download?notebook=a.ipynb')).toBe(true)
+    expect(JSON.parse(calls.find(([path]) => path === '/api/export-sdk')[1].body)).toEqual({ notebook: 'a.ipynb', language: 'typescript' })
+  })
+
+  it('deploys only after confirmation and reports success and failure per notebook', async () => {
+    const calls = setup((path) => (path === '/api/deploy'
+      ? Promise.resolve(calls_deploy.shift())
+      : null))
+    const calls_deploy = [
+      ok({ status: 'success', tag: 'a:latest' }),
+      { ok: false, status: 500, statusText: 'x', json: async () => ({ detail: 'Docker build failed: no daemon' }), text: async () => 'Docker build failed: no daemon' },
+    ]
+    vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValue(true)
+    render(<NotebookLibrary onOpen={() => {}} refreshKey={null} />)
+    await screen.findByText('a.ipynb')
+    const deploy = screen.getAllByRole('button', { name: 'Deploy' })
+    fireEvent.click(deploy[0])
+    expect(calls.some(([path]) => path === '/api/deploy')).toBe(false) // declined
+    fireEvent.click(deploy[0])
+    expect(await screen.findByText(/Built image a:latest/)).toBeInTheDocument()
+    fireEvent.click(screen.getAllByRole('button', { name: 'Deploy' })[1])
+    expect(await screen.findByText(/Docker build failed: no daemon/)).toBeInTheDocument()
+    expect(screen.getByText(/Built image a:latest/)).toBeInTheDocument() // the first row keeps its own result
+    expect(JSON.parse(calls.filter(([path]) => path === '/api/deploy')[1][1].body)).toEqual({ notebook: 'c.ipynb' })
+  })
+
+  it('shows a compile error on that notebook without disturbing the others', async () => {
+    setup((path) => (path === '/api/compile'
+      ? Promise.resolve({ ok: false, status: 400, statusText: 'bad', json: async () => ({ detail: 'not a valid notebook' }), text: async () => 'not a valid notebook' })
+      : null))
+    render(<NotebookLibrary onOpen={() => {}} refreshKey={null} />)
+    await screen.findByText('b.ipynb')
+    fireEvent.click(screen.getByRole('button', { name: 'Compile app' }))
+    expect(await screen.findByText(/not a valid notebook/)).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Download app' })).toHaveLength(2)
+  })
+})
