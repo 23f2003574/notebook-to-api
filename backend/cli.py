@@ -2322,6 +2322,10 @@ def _dispatch_core_command(args):
         # --drop-past-sunset: see _apply_drop_past_sunset.
         if args.drop_past_sunset:
             only, exclude = apply_drop_past_sunset(args.notebook, only, exclude)
+        if args.resolve_versions:
+            from backend.compiler import begin_version_resolution
+
+            begin_version_resolution()  # this process compiles once; pip answers for this interpreter
         if args.json_output:
             # compile_notebook (backend/compiler.py) unconditionally prints
             # its own progress lines ("Starting compilation for: ...",
@@ -10753,6 +10757,18 @@ def main():
 
     # compile command
     compile_parser = subparsers.add_parser("compile", help="Compile a notebook to FastAPI app.")
+    compile_parser.add_argument(
+        "--resolve-versions",
+        action="store_true",
+        dest="resolve_versions",
+        help=(
+            "Pin every library the notebook imports that is not installed here: resolve its version "
+            "now with pip's own resolver (`pip install --dry-run --report`, nothing is installed, "
+            "network needed) and write name==version to requirements.txt, so every image build "
+            "installs the same versions. Offline or unresolvable names stay unpinned, with a "
+            "warning. The resolver and time are recorded in .compile_metadata.json."
+        ),
+    )
     compile_parser.add_argument("notebook", help="Path to the notebook file.")
     compile_parser.add_argument(
         "--require-pinned",

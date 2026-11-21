@@ -93,6 +93,20 @@ jobs:
       - name: Build the sample notebook's image and smoke-test it
         run: python -m backend.cli deploy notebooks/sample.ipynb --output smoke_app --smoke-test
 
+      # --resolve-versions pins what is not installed here with pip's resolver; building the
+      # image then proves the resolved requirements.txt really installs.
+      - name: Resolve, pin and build a notebook whose library is not installed
+        run: |
+          python - <<'PY'
+          import nbformat
+          nb = nbformat.v4.new_notebook()
+          nb.cells.append(nbformat.v4.new_code_cell("import tabulate\ndef table(a: int) -> str:\n    return tabulate.tabulate([[a]])\n"))
+          nbformat.write(nb, "pinned.ipynb")
+          PY
+          python -m backend.cli compile pinned.ipynb --output pinned_app --resolve-versions --require-pinned
+          grep -E '^tabulate==' pinned_app/requirements.txt
+          docker build -t n2a-pinned pinned_app
+
       - name: Start the sample's generated compose project and check /health
         run: |
           pip install pytest

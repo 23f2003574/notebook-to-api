@@ -1333,6 +1333,13 @@ def print_compile_summary(notebook_path, output_dir="generated", only=None, excl
         # that is usually the notebook's own module whose .py file is not next
         # to the notebook -- the app would silently get an unrelated package.
         unpinned = [name for name in data["dependencies"] if _pinned_requirement(name) == name]
+        # `compile --resolve-versions` may have pinned them in the written file already.
+        written = os.path.join(str(output_dir), "requirements.txt") if output_dir else None
+        if unpinned and written and os.path.isfile(written):
+            from backend.compiler import unpinned_requirements
+
+            still = {line.split("[")[0].strip().lower() for line in unpinned_requirements(written)}
+            unpinned = [name for name in unpinned if name.lower() in still]
         if unpinned:
             print(
                 f"\n⚠ Not installed here, so requirements.txt lists them unpinned: "

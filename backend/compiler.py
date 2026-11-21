@@ -5154,6 +5154,126 @@ def unpinned_requirements(requirements_path):
     ]
 
 
+# --- Reproducible requirements: opt-in version resolution --------------------------------------
+# A library the notebook imports that is not installed where it is compiled is listed in
+# requirements.txt without a version, so every image build installs whatever PyPI publishes that
+# day. With resolution enabled (`compile --resolve-versions`) those names are resolved once, at
+# compile time, with pip's own resolver (`pip install --dry-run --report`, nothing is installed)
+# for the interpreter running the compile -- the one the generated Dockerfile's image matches --
+# and written as name==version. The same resolver answers always give the same file.
+
+_RESOLUTION = contextvars.ContextVar("notebook_to_api_version_resolution", default=None)
+_PINNABLE_REQUIREMENT = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)(\[[A-Za-z0-9._,-]*\])?$")
+
+
+class VersionResolutionError(RuntimeError):
+    """Versions could not be resolved (offline, unknown package, no matching distribution)."""
+
+
+def _normalized_distribution_name(name):
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def pip_dry_run_resolver(requirements, python_executable=None, timeout=300):
+    """{normalized name: version} for the given requirement strings, as pip would install them
+    for `python_executable` (default: this interpreter). Uses `pip install --dry-run --report`."""
+    import json
+    import subprocess
+    import sys
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as scratch:
+        report = os.path.join(scratch, "report.json")
+        command = [
+            python_executable or sys.executable, "-m", "pip", "install", "--dry-run", "--ignore-installed",
+            "--quiet", "--disable-pip-version-check", "--no-input", "--report", report, *requirements,
+        ]
+        try:
+            completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise VersionResolutionError(f"pip could not be run ({type(exc).__name__})") from None
+        if completed.returncode != 0:
+            lines = [line for line in (completed.stderr or "").splitlines() if line.strip()]
+            raise VersionResolutionError(lines[-1][:200] if lines else "pip failed")
+        try:
+            with open(report, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            raise VersionResolutionError("pip produced no readable report") from None
+    return {
+        _normalized_distribution_name(item["metadata"]["name"]): item["metadata"]["version"]
+        for item in data.get("install", [])
+        if item.get("requested") and "metadata" in item
+    }
+
+
+def begin_version_resolution(resolver=None):
+    """Turn version resolution on for the compiles that follow in this context. Returns the state
+    dict (its "result" is filled in by the compile). `resolver(requirements) -> {name: version}`
+    is injectable for tests; the default asks pip."""
+    state = {"resolver": resolver or pip_dry_run_resolver, "result": None}
+    _RESOLUTION.set(state)
+    return state
+
+
+@contextlib.contextmanager
+def resolving_versions(resolver=None):
+    """`with resolving_versions(resolver) as state:` -- begin_version_resolution for a block."""
+    token = None
+    try:
+        state = {"resolver": resolver or pip_dry_run_resolver, "result": None}
+        token = _RESOLUTION.set(state)
+        yield state
+    finally:
+        if token is not None:
+            _RESOLUTION.reset(token)
+
+
+def _pin_resolved_versions(all_deps):
+    """Apply version resolution (when enabled) to resolve_requirements' lines, keeping their
+    order. Unresolvable libraries stay unpinned with a warning; nothing here fails a compile."""
+    state = _RESOLUTION.get()
+    if state is None:
+        return all_deps
+    from datetime import datetime, timezone
+
+    unpinned = [dep for dep in all_deps if not _REQUIREMENT_HAS_VERSION.search(dep)]
+    pinnable = [dep for dep in unpinned if _PINNABLE_REQUIREMENT.match(dep)]
+    stamp = datetime.now(timezone.utc).isoformat()
+    if not pinnable:
+        state["result"] = {"status": "nothing_to_resolve", "resolved_at": stamp, "pinned": {}}
+        return all_deps
+    try:
+        resolved = state["resolver"](pinnable)
+    except Exception as exc:  # noqa: BLE001 - offline or unresolvable must not break the compile
+        reason = str(exc)[:200] or type(exc).__name__
+        state["result"] = {"status": "unresolved", "reason": reason, "resolved_at": stamp, "pinned": {}}
+        print(
+            f"\n⚠ Could not resolve versions ({reason}); requirements.txt keeps "
+            f"{', '.join(pinnable)} unpinned. Check the network or pip configuration and recompile.\n"
+        )
+        return all_deps
+    pinned, lines = {}, []
+    for dep in all_deps:
+        if dep in pinnable:
+            match = _PINNABLE_REQUIREMENT.match(dep)
+            version = resolved.get(_normalized_distribution_name(match.group(1)))
+            if version:
+                pinned[dep] = version
+                dep = f"{dep}=={version}"
+        lines.append(dep)
+    missing = [dep for dep in pinnable if dep not in pinned]
+    state["result"] = {
+        "status": "resolved" if not missing else "partial", "resolver": "pip install --dry-run --report",
+        "resolved_at": stamp, "pinned": dict(sorted(pinned.items())), "unresolved": missing,
+    }
+    if pinned:
+        print("Pinned versions resolved at compile time: " + ", ".join(f"{k}=={v}" for k, v in sorted(pinned.items())))
+    if missing:
+        print(f"\n⚠ No version found for {', '.join(missing)}; left unpinned.\n")
+    return lines
+
+
 def write_requirements(
     imports, output_dir, explicit_requirements=None, excluded_imports=None
 ):
@@ -5163,7 +5283,9 @@ def write_requirements(
         "requirements.txt"
     )
 
-    all_deps = resolve_requirements(imports, explicit_requirements, excluded_imports)
+    all_deps = _pin_resolved_versions(
+        resolve_requirements(imports, explicit_requirements, excluded_imports)
+    )
 
     with open(requirements_path, "w", encoding="utf-8") as f:
         for dep in all_deps:
@@ -5424,6 +5546,8 @@ def write_compile_metadata(
     """
     metadata_path = os.path.join(output_dir, COMPILE_METADATA_FILENAME)
 
+    resolution = _RESOLUTION.get()
+
     metadata = {
         "source_notebook": os.path.abspath(notebook_path),
         "source_notebook_sha256": hash_notebook_file(content_path or notebook_path),
@@ -5433,6 +5557,11 @@ def write_compile_metadata(
         "compiled_version_id": version_id,
         "generated_files_sha256": _generated_files_sha256(output_dir, app_filename),
     }
+
+    if resolution is not None and resolution.get("result"):
+        metadata["requirements_resolution"] = {
+            **resolution["result"], "python": ".".join(map(str, sys.version_info[:2])),
+        }
 
     with open(metadata_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)
