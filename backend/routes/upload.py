@@ -17079,7 +17079,7 @@ def _audit_health_prometheus():
         return ""
 
 
-def _record_governance(action, data, outcome, response=None, error=None, idempotency_key=None):
+def _record_governance(action, data, outcome, response=None, error=None, idempotency_key=None, actor="dashboard"):
     """Append one compile/deploy outcome to the governance audit chain.
 
     Uses the same audit service GET /governance/audit reads. A recording failure never
@@ -17101,7 +17101,7 @@ def _record_governance(action, data, outcome, response=None, error=None, idempot
         service = _build_audit_service()
         fields = dict(
             action=action,
-            actor="dashboard",
+            actor=actor,
             resource=f"notebook:{notebook}" if notebook else "generated",
             outcome=outcome,
             metadata=metadata,
@@ -17135,7 +17135,12 @@ def _idempotency_key(request):
     return key
 
 
-def _audited(action, data, run, idempotency_key=None):
+def _request_actor(request):
+    """The authenticated dashboard key's name (see NOTEBOOK_API_DASHBOARD_KEYS), else "dashboard"."""
+    return getattr(getattr(request, "state", None), "dashboard_actor", None) or "dashboard"
+
+
+def _audited(action, data, run, idempotency_key=None, actor="dashboard"):
     """Run `run()`, record its success or failure exactly once, and re-raise failures.
 
     The record's stable reference goes back to the caller: as "governance_audit" in a success
@@ -17145,12 +17150,12 @@ def _audited(action, data, run, idempotency_key=None):
         result = run()
     except BaseException as exc:
         recorded = _record_governance(
-            action, data, "failure", error=getattr(exc, "detail", exc), idempotency_key=idempotency_key
+            action, data, "failure", error=getattr(exc, "detail", exc), idempotency_key=idempotency_key, actor=actor
         )
         if isinstance(exc, HTTPException) and not isinstance(recorded, Exception):
             exc.headers = {**(exc.headers or {}), "X-Governance-Audit-Sequence": str(recorded.sequence)}
         raise
-    recorded = _record_governance(action, data, "success", response=result, idempotency_key=idempotency_key)
+    recorded = _record_governance(action, data, "success", response=result, idempotency_key=idempotency_key, actor=actor)
     if isinstance(result, dict):
         if isinstance(recorded, Exception):
             result = {**result, "governance_audit_error": "governance audit record could not be written"}
@@ -17166,7 +17171,7 @@ def _audited(action, data, run, idempotency_key=None):
 def compile_notebook_endpoint(data: dict, request: Request):
     """Compile an uploaded notebook; the outcome is recorded in the governance audit trail
     (once per Idempotency-Key and outcome, when that header is sent)."""
-    return _audited("notebook.compile", data, lambda: _compile_with_lifecycle(data), _idempotency_key(request))
+    return _audited("notebook.compile", data, lambda: _compile_with_lifecycle(data), _idempotency_key(request), _request_actor(request))
 
 
 def _compile_with_lifecycle(data: dict):
@@ -18386,7 +18391,7 @@ def _poll_deploy_smoke_test_container(container_id):
 def deploy_generated_app(request: Request, data: dict = None):
     """Build (and optionally push) a Docker image; the outcome is recorded in the governance audit trail
     (once per Idempotency-Key and outcome, when that header is sent)."""
-    return _audited("notebook.deploy", data, lambda: _deploy_generated_app(data), _idempotency_key(request))
+    return _audited("notebook.deploy", data, lambda: _deploy_generated_app(data), _idempotency_key(request), _request_actor(request))
 
 
 def _deploy_generated_app(data: dict = None):

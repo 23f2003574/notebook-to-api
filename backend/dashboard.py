@@ -6,6 +6,8 @@ Serves the React dashboard frontend and provides API endpoints for compilation
 import hmac
 import json
 import contextlib
+import hashlib
+import re
 import os
 import logging
 import sys
@@ -124,6 +126,12 @@ async def _dashboard_lifespan(_app):
         GovernanceAuditStorageError,
         validate_audit_storage_for_startup,
     )
+
+    try:
+        validate_dashboard_auth_config(dashboard_host())
+    except ValueError as exc:
+        logging.getLogger("uvicorn.error").error("%s", exc)
+        raise
 
     try:
         status = validate_audit_storage_for_startup()
@@ -482,11 +490,97 @@ async def _enforce_dashboard_max_request_body_bytes(request: Request, call_next)
 
 
 def dashboard_api_key():
-    """The key every dashboard request must send, from
-    NOTEBOOK_API_DASHBOARD_KEY. Unset or empty keeps the existing
-    behavior: no authentication, for local development."""
+    """The legacy single key, from NOTEBOOK_API_DASHBOARD_KEY (unset or empty: not configured).
+    It stays valid, under the name "default", next to any NOTEBOOK_API_DASHBOARD_KEYS."""
 
     return os.getenv("NOTEBOOK_API_DASHBOARD_KEY", "")
+
+
+_KEY_NAME = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_MIN_PRODUCTION_KEY_LENGTH = 16
+
+
+def _key_digest(value):
+    return hashlib.sha256(value.encode("utf-8")).digest()
+
+
+def _parse_named_keys(text, source):
+    """Parse `name:key` entries separated by commas or newlines (`#` starts a comment line).
+    `key` is either the secret itself or `sha256:<64 hex digits>`, so a deployment can keep only
+    digests on disk. Returns [(name, digest, plaintext_length_or_None)]. Messages never contain a
+    key."""
+    entries = []
+    for raw in re.split(r"[,\n]", text):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        name, separator, secret = line.partition(":")
+        name, secret = name.strip(), secret.strip()
+        if not separator or not _KEY_NAME.match(name) or not secret:
+            raise ValueError(f"{source} entries must look like name:key (name: letters, digits, . _ -)")
+        if any(existing[0] == name for existing in entries):
+            raise ValueError(f"{source} names the key {name!r} twice")
+        if secret.lower().startswith("sha256:"):
+            digest_hex = secret[7:].strip().lower()
+            if not re.fullmatch(r"[0-9a-f]{64}", digest_hex):
+                raise ValueError(f"{source}: the sha256 digest of key {name!r} must be 64 hexadecimal digits")
+            entries.append((name, bytes.fromhex(digest_hex), None))
+        else:
+            entries.append((name, _key_digest(secret), len(secret)))
+    return entries
+
+
+def dashboard_api_keys():
+    """Every configured dashboard credential as [(name, sha256 digest, plaintext length or None)]:
+    NOTEBOOK_API_DASHBOARD_KEYS and/or the file NOTEBOOK_API_DASHBOARD_KEYS_FILE, plus the legacy
+    NOTEBOOK_API_DASHBOARD_KEY as "default". Raises ValueError for a malformed configuration."""
+    entries = []
+    inline = os.getenv("NOTEBOOK_API_DASHBOARD_KEYS", "")
+    if inline.strip():
+        entries += _parse_named_keys(inline, "NOTEBOOK_API_DASHBOARD_KEYS")
+    path = os.getenv("NOTEBOOK_API_DASHBOARD_KEYS_FILE", "").strip()
+    if path:
+        try:
+            text = Path(path).read_text()
+        except OSError:
+            raise ValueError("NOTEBOOK_API_DASHBOARD_KEYS_FILE could not be read") from None
+        entries += _parse_named_keys(text, "NOTEBOOK_API_DASHBOARD_KEYS_FILE")
+    legacy = dashboard_api_key()
+    if legacy:
+        entries.append(("default", _key_digest(legacy), len(legacy)))
+    names = [entry[0] for entry in entries]
+    if len(names) != len(set(names)):
+        raise ValueError("dashboard key names must be unique (\"default\" is the legacy NOTEBOOK_API_DASHBOARD_KEY)")
+    return entries
+
+
+def authenticate_dashboard_key(supplied, entries):
+    """The name of the key `supplied` matches, or None. Every entry is compared, in constant time,
+    so neither the response time nor an early exit reveals which keys exist."""
+    digest = _key_digest(supplied)
+    matched = None
+    for name, expected, _length in entries:
+        if hmac.compare_digest(digest, expected):
+            matched = name
+    return matched
+
+
+def validate_dashboard_auth_config(host, environ=None):
+    """Startup check: the key configuration parses, and a production deployment reachable from the
+    network uses only strong keys (at least 16 characters; digest entries are trusted). Raises
+    ValueError; the message never contains a key."""
+    entries = dashboard_api_keys()
+    environ = os.environ if environ is None else environ
+    production = environ.get("NOTEBOOK2API_ENVIRONMENT", "").strip().lower() in {"production", "prod"}
+    if production and not host_is_loopback(host):
+        weak = [name for name, _d, length in entries if length is not None and length < _MIN_PRODUCTION_KEY_LENGTH]
+        if weak:
+            raise ValueError(
+                f"Refusing to start: dashboard key(s) {', '.join(sorted(weak))} are shorter than "
+                f"{_MIN_PRODUCTION_KEY_LENGTH} characters, which is too weak for a production deployment "
+                "reachable from the network"
+            )
+    return entries
 
 
 # Starlette's TestClient reports this literal as the peer; a real socket peer is an IP
@@ -639,9 +733,13 @@ async def _require_dashboard_api_key(request: Request, call_next):
     CORS headers. The key is never logged or echoed.
     """
 
-    expected = dashboard_api_key()
+    try:
+        entries = dashboard_api_keys()
+    except ValueError:
+        # Fail closed without saying what is wrong (startup validation reports the details).
+        return JSONResponse(status_code=503, content={"detail": "Dashboard authentication is misconfigured"})
 
-    if not expected and request.method != "OPTIONS" and not _peer_is_local(request):
+    if not entries and request.method != "OPTIONS" and not _peer_is_local(request):
         # No key configured: only this machine may use the dashboard. This holds for
         # every launch path (`uvicorn backend.dashboard:app --host 0.0.0.0`,
         # backend.app:app, a container CMD), not just `python -m backend.dashboard`,
@@ -650,7 +748,7 @@ async def _require_dashboard_api_key(request: Request, call_next):
             "Remote access is refused until NOTEBOOK_API_DASHBOARD_KEY is set"
         )})
 
-    if expected and request.method != "OPTIONS" and not _is_frontend_shell_file(request):
+    if entries and request.method != "OPTIONS" and not _is_frontend_shell_file(request):
         supplied = request.headers.get("X-API-Key", "")
         client = _auth_client(request)
 
@@ -664,7 +762,12 @@ async def _require_dashboard_api_key(request: Request, call_next):
                 headers={"Retry-After": str(retry_after)},
             )
 
-        if not hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8")):
+        key_name = authenticate_dashboard_key(supplied, entries)
+
+        if key_name is not None:
+            request.state.dashboard_actor = key_name
+
+        if key_name is None:
             window_count = _auth_record_failure(client)
             auth_metrics.record_failure(
                 client, "missing_key" if not supplied else "invalid_key",
@@ -1172,7 +1275,7 @@ def validate_dashboard_exposure(host, key):
     authentication. Raises ValueError, before uvicorn starts, when `host`
     is not loopback and `key` (NOTEBOOK_API_DASHBOARD_KEY) is empty. The
     key itself is never included in the message."""
-    if host_is_loopback(host) or key:
+    if host_is_loopback(host) or key or dashboard_api_keys():
         return
 
     raise ValueError(
@@ -1180,7 +1283,7 @@ def validate_dashboard_exposure(host, key):
         "dashboard on a network interface, but NOTEBOOK_API_DASHBOARD_KEY is "
         "not set, so every request (including secrets, API keys, upload, "
         "delete and compile) would be unauthenticated. Set "
-        "NOTEBOOK_API_DASHBOARD_KEY to a secret value (clients send it as the "
+        "NOTEBOOK_API_DASHBOARD_KEY (or NOTEBOOK_API_DASHBOARD_KEYS) to a secret value (clients send it as the "
         "X-API-Key header), or bind to 127.0.0.1."
     )
 
@@ -1301,6 +1404,7 @@ if __name__ == "__main__":
     ssl_keyfile, ssl_certfile = dashboard_ssl_config()
 
     try:
+        validate_dashboard_auth_config(dashboard_host())
         validate_dashboard_exposure(dashboard_host(), dashboard_api_key())
     except ValueError as exc:
         sys.exit(f"error: {exc}")
