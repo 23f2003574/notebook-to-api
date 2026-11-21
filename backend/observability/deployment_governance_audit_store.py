@@ -8,6 +8,8 @@ purge (which deletes rows) cannot restart the chain.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import sqlite3
 import threading
@@ -22,7 +24,8 @@ CREATE TABLE IF NOT EXISTS audit_records (
     sequence INTEGER PRIMARY KEY,
     action TEXT NOT NULL, actor TEXT NOT NULL, resource TEXT NOT NULL, outcome TEXT NOT NULL,
     occurred_at TEXT NOT NULL, metadata TEXT NOT NULL,
-    previous_hash TEXT NOT NULL, record_hash TEXT NOT NULL
+    previous_hash TEXT NOT NULL, record_hash TEXT NOT NULL,
+    mac TEXT NOT NULL DEFAULT ''
 );
 -- Filters (notebook history, action, outcome) page newest-first by sequence: these indexes let
 -- SQLite walk only the matching rows instead of scanning the whole history. IF NOT EXISTS makes
@@ -32,7 +35,9 @@ CREATE INDEX IF NOT EXISTS idx_audit_action_sequence ON audit_records (action, s
 CREATE INDEX IF NOT EXISTS idx_audit_outcome_sequence ON audit_records (outcome, sequence);
 CREATE TABLE IF NOT EXISTS audit_meta (
     id INTEGER PRIMARY KEY CHECK (id = 1), last_sequence INTEGER NOT NULL, last_hash TEXT NOT NULL,
-    purged_through INTEGER NOT NULL DEFAULT 0
+    purged_through INTEGER NOT NULL DEFAULT 0,
+    keyed_from INTEGER NOT NULL DEFAULT 0,
+    head_mac TEXT NOT NULL DEFAULT ''
 );
 """
 
@@ -49,8 +54,68 @@ class GovernanceAuditConfigurationError(GovernanceAuditStorageError):
     configuration = True
 
 
+class AuditKeyring:
+    """Keyed integrity (HMAC-SHA256) for the audit chain.
+
+    A plain SHA-256 chain proves records were not changed by accident or in part; anyone who can
+    write the database can still rewrite every record and the head and recompute every hash. A
+    keyed chain adds a tag only the key holder can compute: each record's `mac` covers its
+    record_hash (which covers all its fields and the previous record), and the chain head (last
+    sequence and hash, purge point, first keyed sequence) carries its own tag. Rewriting history
+    without the key is detected by verification.
+
+    Tags look like "v1:<epoch>:<hex>". The epoch names the key that made the tag: rotate by giving
+    the new key a new epoch and listing earlier ones as previous keys, so old records still verify.
+    The key itself is never returned, logged or stored."""
+
+    FORMAT = "v1"
+
+    def __init__(self, key: str, epoch: str = "1", previous: "dict[str, str] | None" = None) -> None:
+        if len(key) < 16:
+            raise GovernanceAuditConfigurationError(
+                "NOTEBOOK2API_GOVERNANCE_AUDIT_HMAC_KEY must be at least 16 characters"
+            )
+        if not epoch or ":" in epoch or len(epoch) > 32:
+            raise GovernanceAuditConfigurationError("the audit HMAC key epoch must be 1-32 characters without ':'")
+        self._keys = {str(k): v for k, v in (previous or {}).items()}
+        self._keys[epoch] = key
+        self.epoch = epoch
+
+    def _tag(self, epoch: str, message: str) -> str:
+        digest = hmac.new(self._keys[epoch].encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
+        return f"{self.FORMAT}:{epoch}:{digest}"
+
+    def record_mac(self, record_hash: str) -> str:
+        return self._tag(self.epoch, f"record|{record_hash}")
+
+    @staticmethod
+    def _head_message(last_sequence, last_hash, purged_through, keyed_from) -> str:
+        return f"head|{last_sequence}|{last_hash}|{purged_through}|{keyed_from}"
+
+    def head_mac(self, last_sequence, last_hash, purged_through, keyed_from) -> str:
+        return self._tag(self.epoch, self._head_message(last_sequence, last_hash, purged_through, keyed_from))
+
+    def _check(self, stored: str, message: str):
+        """True (valid), False (invalid) or None (made with a key this keyring does not have)."""
+        parts = stored.split(":", 2)
+        if len(parts) != 3 or parts[0] != self.FORMAT:
+            return False
+        if parts[1] not in self._keys:
+            return None
+        return hmac.compare_digest(stored, self._tag(parts[1], message))
+
+    def check_record(self, stored: str, record_hash: str):
+        return self._check(stored, f"record|{record_hash}")
+
+    def check_head(self, stored: str, last_sequence, last_hash, purged_through, keyed_from):
+        return self._check(stored, self._head_message(last_sequence, last_hash, purged_through, keyed_from))
+
+
 class SqliteAuditStore:
-    def __init__(self, path: str | Path, *, timeout_seconds: float = 30.0) -> None:
+    def __init__(self, path: str | Path, *, timeout_seconds: float = 30.0,
+                 keyring: "AuditKeyring | None" = None, allow_key_loss: bool = False) -> None:
+        self.keyring = keyring
+        self._allow_key_loss = allow_key_loss
         self._path = Path(path)
         self._timeout = timeout_seconds
         self._local = threading.local()
@@ -74,18 +139,44 @@ class SqliteAuditStore:
                 conn.execute("PRAGMA journal_mode=WAL")
                 conn.executescript(_SCHEMA)
                 conn.execute("INSERT OR IGNORE INTO audit_meta (id, last_sequence, last_hash) VALUES (1, 0, ?)", (GENESIS_HASH,))
-                if "purged_through" not in {r[1] for r in conn.execute("PRAGMA table_info(audit_meta)")}:
-                    # a database created before purges were tracked
-                    try:
-                        conn.execute("ALTER TABLE audit_meta ADD COLUMN purged_through INTEGER NOT NULL DEFAULT 0")
-                    except sqlite3.OperationalError as exc:
-                        if "duplicate column" not in str(exc):  # another process added it first
-                            raise
+                self._ensure_columns(conn)
+                self._check_key_continuity(conn)
                 return
             except sqlite3.OperationalError as exc:
                 if "locked" not in str(exc) and "busy" not in str(exc) or time.monotonic() > deadline:
                     raise
                 time.sleep(0.05)
+
+    @staticmethod
+    def _ensure_columns(conn) -> None:
+        """Upgrade a database created by an earlier version (each column is added once, whichever
+        process gets there first)."""
+        wanted = {
+            "audit_meta": {"purged_through": "INTEGER NOT NULL DEFAULT 0", "keyed_from": "INTEGER NOT NULL DEFAULT 0",
+                           "head_mac": "TEXT NOT NULL DEFAULT ''"},
+            "audit_records": {"mac": "TEXT NOT NULL DEFAULT ''"},
+        }
+        for table, columns in wanted.items():
+            present = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+            for column, definition in columns.items():
+                if column in present:
+                    continue
+                try:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column" not in str(exc):  # another process added it first
+                        raise
+
+    def _check_key_continuity(self, conn) -> None:
+        """A database that holds keyed records must not silently continue without the key."""
+        keyed_from = conn.execute("SELECT keyed_from FROM audit_meta WHERE id = 1").fetchone()[0]
+        if keyed_from and self.keyring is None and not self._allow_key_loss:
+            raise GovernanceAuditConfigurationError(
+                "this audit database is protected by keyed integrity: set "
+                "NOTEBOOK2API_GOVERNANCE_AUDIT_HMAC_KEY to the key it was written with (or, if that "
+                "key is lost, NOTEBOOK2API_GOVERNANCE_AUDIT_ALLOW_KEY_LOSS=1 to continue without it; "
+                "the earlier records can then no longer be verified)"
+            )
 
     def _connect(self) -> sqlite3.Connection:
         conn = getattr(self._local, "conn", None)
@@ -118,19 +209,30 @@ class SqliteAuditStore:
                     if found is not None:
                         conn.execute("COMMIT")
                         item = dict(found)
+                        item.pop("mac", None)
                         item["occurred_at"] = datetime.fromisoformat(item["occurred_at"])
                         item["metadata"] = json.loads(item["metadata"])
                         return item, False
-                head = conn.execute("SELECT last_sequence, last_hash FROM audit_meta WHERE id = 1").fetchone()
+                head = conn.execute(
+                    "SELECT last_sequence, last_hash, purged_through, keyed_from FROM audit_meta WHERE id = 1").fetchone()
+                if head["keyed_from"] and self.keyring is None and not self._allow_key_loss:
+                    raise GovernanceAuditConfigurationError(
+                        "this audit database requires its integrity key (NOTEBOOK2API_GOVERNANCE_AUDIT_HMAC_KEY)")
                 record = build(head["last_sequence"] + 1, head["last_hash"])
+                mac, head_mac, keyed_from = "", "", head["keyed_from"]
+                if self.keyring is not None:
+                    keyed_from = keyed_from or record.sequence
+                    mac = self.keyring.record_mac(record.record_hash)
+                    head_mac = self.keyring.head_mac(record.sequence, record.record_hash, head["purged_through"], keyed_from)
                 conn.execute(
-                    "INSERT INTO audit_records VALUES (?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO audit_records (sequence, action, actor, resource, outcome, occurred_at, metadata,"
+                    " previous_hash, record_hash, mac) VALUES (?,?,?,?,?,?,?,?,?,?)",
                     (record.sequence, record.action, record.actor, record.resource, record.outcome,
                      record.occurred_at.isoformat(), json.dumps(dict(record.metadata)),
-                     record.previous_hash, record.record_hash),
+                     record.previous_hash, record.record_hash, mac),
                 )
-                conn.execute("UPDATE audit_meta SET last_sequence = ?, last_hash = ? WHERE id = 1",
-                             (record.sequence, record.record_hash))
+                conn.execute("UPDATE audit_meta SET last_sequence = ?, last_hash = ?, keyed_from = ?, head_mac = ? WHERE id = 1",
+                             (record.sequence, record.record_hash, keyed_from, head_mac))
                 conn.execute("COMMIT")
             except BaseException:
                 conn.execute("ROLLBACK")
@@ -143,7 +245,7 @@ class SqliteAuditStore:
         """The chain head the store remembers independently of the rows (for detecting lost records)."""
         try:
             return dict(self._connect().execute(
-                "SELECT last_sequence, last_hash, purged_through FROM audit_meta WHERE id = 1").fetchone())
+                "SELECT last_sequence, last_hash, purged_through, keyed_from, head_mac FROM audit_meta WHERE id = 1").fetchone())
         except sqlite3.Error as exc:
             raise GovernanceAuditStorageError(f"governance audit read failed ({type(exc).__name__})") from None
 
@@ -157,6 +259,7 @@ class SqliteAuditStore:
             out = []
             for row in cur.fetchall():
                 item = dict(row)
+                item.pop("mac", None)
                 item["occurred_at"] = datetime.fromisoformat(item["occurred_at"])
                 item["metadata"] = json.loads(item["metadata"])
                 out.append(item)
@@ -164,7 +267,7 @@ class SqliteAuditStore:
         except sqlite3.Error as exc:
             raise GovernanceAuditStorageError(f"governance audit read failed ({type(exc).__name__})") from None
 
-    def iter_rows(self, batch_size: int = 1000):
+    def iter_rows(self, batch_size: int = 1000, with_mac: bool = False):
         """Yield every row in ascending sequence order, one keyset batch at a time, so a caller can
         walk an arbitrarily long history with memory bounded by the batch size."""
         after = 0
@@ -180,6 +283,8 @@ class SqliteAuditStore:
                 return
             for row in batch:
                 item = dict(row)
+                if not with_mac:
+                    item.pop("mac", None)
                 item["occurred_at"] = datetime.fromisoformat(item["occurred_at"])
                 item["metadata"] = json.loads(item["metadata"])
                 yield item
@@ -211,6 +316,7 @@ class SqliteAuditStore:
             out = []
             for row in self._connect().execute(sql, (*params, query.limit)).fetchall():
                 item = dict(row)
+                item.pop("mac", None)
                 item["occurred_at"] = datetime.fromisoformat(item["occurred_at"])
                 item["metadata"] = json.loads(item["metadata"])
                 out.append(item)
@@ -226,6 +332,11 @@ class SqliteAuditStore:
             try:
                 removed = conn.execute("DELETE FROM audit_records").rowcount
                 conn.execute("UPDATE audit_meta SET purged_through = last_sequence WHERE id = 1")
+                if self.keyring is not None:
+                    meta = conn.execute("SELECT last_sequence, last_hash, purged_through, keyed_from FROM audit_meta WHERE id = 1").fetchone()
+                    if meta["keyed_from"]:
+                        conn.execute("UPDATE audit_meta SET head_mac = ? WHERE id = 1", (self.keyring.head_mac(
+                            meta["last_sequence"], meta["last_hash"], meta["purged_through"], meta["keyed_from"]),))
                 conn.execute("COMMIT")
             except BaseException:
                 conn.execute("ROLLBACK")
@@ -259,7 +370,7 @@ def audit_storage_status(environ=None) -> dict:
     issues: list[str] = []
     if backend != "sqlite":
         issues.append("audit records are process-local and are lost on restart")
-        return {"backend": backend, "durable": False, "production": production, "issues": issues}
+        return {"backend": backend, "durable": False, "production": production, "issues": issues, "keyed": False}
     path = Path(environ.get("NOTEBOOK2API_GOVERNANCE_DATABASE_PATH", "data/notebook2api.db")).resolve()
     asserted = environ.get("NOTEBOOK2API_GOVERNANCE_VOLUME_PERSISTENT", "").strip().lower() in {"1", "true", "yes"}
     if not asserted:
@@ -278,7 +389,8 @@ def audit_storage_status(environ=None) -> dict:
                     )
             except OSError:
                 pass
-    return {"backend": backend, "durable": not issues, "production": production, "issues": issues}
+    keyed = bool(environ.get("NOTEBOOK2API_GOVERNANCE_AUDIT_HMAC_KEY", "").strip())
+    return {"backend": backend, "durable": not issues, "production": production, "issues": issues, "keyed": keyed}
 
 
 def validate_audit_storage_for_startup(environ=None) -> dict:

@@ -220,6 +220,12 @@ class AuditChainVerification:
 
     reason: "str | None"
 
+    # "unkeyed": SHA-256 chain only. It detects accidental and partial tampering but NOT a rewrite
+    # by someone who can write the database (they can recompute every hash). "keyed": every
+    # record and the head were checked against HMAC tags only the key holder can make.
+    # "keyed_unverified": the database is keyed but this process has no matching key.
+    integrity: str = "unkeyed"
+
     def __post_init__(self) -> None:
         if self.valid:
             if self.first_broken_sequence is not None or self.reason is not None:
@@ -500,8 +506,11 @@ class GovernanceAuditService:
         checked = 0
         first = last = None
         result: "AuditChainVerification | None" = None
+        keyring = self._store.keyring if self._store is not None else None
+        keyed_from = self._store.head()["keyed_from"] if self._store is not None else 0
+        unverifiable = False
 
-        for current in self._iter_records():
+        for current, mac in self._iter_records(with_mac=True):
             checked += 1
             first = first or current
             last = current
@@ -544,10 +553,46 @@ class GovernanceAuditService:
                 )
                 break
 
+            if keyed_from and current.sequence >= keyed_from:
+                tag = None if keyring is None else (keyring.check_record(mac, current.record_hash) if mac else False)
+
+                if tag is False:
+                    result = AuditChainVerification(
+                        valid=False,
+                        checked=checked,
+                        first_broken_sequence=current.sequence,
+                        reason=(
+                            f"record {current.sequence} failed keyed integrity (rewritten, missing its "
+                            "tag, or written with a different key)"
+                        ),
+                        integrity="keyed",
+                    )
+                    break
+
+                if tag is None:
+                    unverifiable = True
+
             expected_previous = current.record_hash
 
         if result is None and self._store is not None:
             result = self._missing_records(first, last, checked)
+
+        if result is None and keyed_from and not unverifiable:
+            head = self._store.head()
+            tag = head["keyed_from"] == keyed_from and keyring.check_head(
+                head["head_mac"], head["last_sequence"], head["last_hash"], head["purged_through"], keyed_from
+            ) if head["head_mac"] else False
+
+            if tag is False:
+                result = AuditChainVerification(
+                    valid=False,
+                    checked=checked,
+                    first_broken_sequence=head["last_sequence"],
+                    reason="the chain head failed keyed integrity (the head or purge point was rewritten)",
+                    integrity="keyed",
+                )
+            elif tag is None:
+                unverifiable = True
 
         if result is None:
             result = AuditChainVerification(
@@ -555,6 +600,7 @@ class GovernanceAuditService:
                 checked=checked,
                 first_broken_sequence=None,
                 reason=None,
+                integrity=("keyed_unverified" if unverifiable else "keyed") if keyed_from else "unkeyed",
             )
 
         if record:
@@ -573,18 +619,22 @@ class GovernanceAuditService:
 
         return result
 
-    def _iter_records(self):
-        """Every record in ascending sequence order, without materializing the history."""
+    def _iter_records(self, with_mac: bool = False):
+        """Every record in ascending sequence order, without materializing the history. With
+        with_mac the stored integrity tag comes along as (record, tag); otherwise just records."""
 
         if self._store is None:
             with self._lock:
                 snapshot = sorted(self._records.values(), key=lambda r: r.sequence)
 
-            yield from snapshot
+            for record in snapshot:
+                yield (record, "") if with_mac else record
             return
 
-        for row in self._store.iter_rows():
-            yield AuditRecord(**row)
+        for row in self._store.iter_rows(with_mac=with_mac):
+            mac = row.pop("mac", "")
+            record = AuditRecord(**row)
+            yield (record, mac) if with_mac else record
 
     def _missing_records(
         self, first: "AuditRecord | None", last: "AuditRecord | None", checked: int
@@ -631,6 +681,27 @@ class GovernanceAuditService:
             )
 
         return None
+
+    def head(self) -> dict:
+        """The chain head, for anchoring outside this database (a log, a ticket, a signed
+        timestamp): record that last_sequence has last_hash, and compare later. It carries the
+        keyed tag when the chain is keyed, never the key."""
+
+        if self._store is None:
+            with self._lock:
+                return {"last_sequence": self._next_sequence - 1, "last_hash": self._last_hash,
+                        "purged_through": 0, "integrity": "unkeyed", "keyed_from": None, "head_mac": None}
+
+        head = self._store.head()
+
+        return {
+            "last_sequence": head["last_sequence"],
+            "last_hash": head["last_hash"],
+            "purged_through": head["purged_through"],
+            "integrity": "keyed" if head["keyed_from"] else "unkeyed",
+            "keyed_from": head["keyed_from"] or None,
+            "head_mac": head["head_mac"] or None,
+        }
 
     def purge(self) -> int:
         """
@@ -821,10 +892,32 @@ def build_audit_service_from_env(environ=None) -> "GovernanceAuditService":
             f"unsupported NOTEBOOK2API_GOVERNANCE_PERSISTENCE_BACKEND {backend!r}; expected 'memory' or 'sqlite'"
         )
 
+    key = environ.get("NOTEBOOK2API_GOVERNANCE_AUDIT_HMAC_KEY", "").strip()
+
+    if key and backend != "sqlite":
+        raise GovernanceAuditStorageError(
+            "NOTEBOOK2API_GOVERNANCE_AUDIT_HMAC_KEY needs NOTEBOOK2API_GOVERNANCE_PERSISTENCE_BACKEND=sqlite: "
+            "keyed integrity protects a stored chain, and a process-local one has nothing to protect"
+        )
+
     if backend == "sqlite":
+        from .deployment_governance_audit_store import AuditKeyring
+
         path = environ.get("NOTEBOOK2API_GOVERNANCE_DATABASE_PATH", "data/notebook2api.db")
+        keyring = None
+        if key:
+            previous = {}
+            for entry in environ.get("NOTEBOOK2API_GOVERNANCE_AUDIT_HMAC_PREVIOUS_KEYS", "").split(","):
+                if entry.strip():
+                    epoch, _, old_key = entry.strip().partition(":")
+                    previous[epoch] = old_key
+            keyring = AuditKeyring(
+                key, environ.get("NOTEBOOK2API_GOVERNANCE_AUDIT_HMAC_KEY_EPOCH", "").strip() or "1", previous
+            )
+        allow_loss = environ.get("NOTEBOOK2API_GOVERNANCE_AUDIT_ALLOW_KEY_LOSS", "").strip().lower() in {"1", "true", "yes"}
         return GovernanceAuditService(
-            policy_engine=get_policy_engine(), store=SqliteAuditStore(path)
+            policy_engine=get_policy_engine(),
+            store=SqliteAuditStore(path, keyring=keyring, allow_key_loss=allow_loss),
         )
 
     return GovernanceAuditService(policy_engine=get_policy_engine())

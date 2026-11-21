@@ -64,7 +64,17 @@ function VerificationResult({ verification }) {
   if (!verification || verification.kind === 'running') return null
   const common = { 'data-testid': 'verification', role: 'status' }
   if (verification.kind === 'valid') {
-    return <p {...common} className="text-green-400">✓ Chain intact: {verification.checked} records checked, none altered or missing.</p>
+    const note = verification.integrity === 'keyed'
+      ? 'Keyed integrity: protected against a rewrite of the database.'
+      : verification.integrity === 'keyed_unverified'
+        ? 'Keyed records could not be checked: this server has no matching key.'
+        : 'Unkeyed (SHA-256 only): detects accidental changes, but not a rewrite by someone who can write the database.'
+    return (
+      <div {...common}>
+        <p className="text-green-400">✓ Chain intact: {verification.checked} records checked, none altered or missing.</p>
+        <p className="text-slate-400 text-sm" data-testid="integrity-mode">{note}</p>
+      </div>
+    )
   }
   if (verification.kind === 'empty') {
     return <p {...common} className="text-slate-300">The chain is valid but empty: nothing has been recorded yet.</p>

@@ -81,6 +81,7 @@ class AuditHealth:
             data = {
                 "backend": status["backend"],
                 "durable": status["durable"],
+                "keyed_integrity": status["keyed"],
                 "issues": list(status["issues"]),
                 "writes_total": self.writes,
                 "write_failures_total": dict(self.failures),

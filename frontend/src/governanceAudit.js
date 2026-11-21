@@ -53,7 +53,7 @@ export async function verifyChain() {
   }
   const result = await response.json()
   if (!result.valid) return { kind: 'broken', checked: result.checked, sequence: result.first_broken_sequence, reason: result.reason }
-  return result.checked === 0 ? { kind: 'empty' } : { kind: 'valid', checked: result.checked }
+  return result.checked === 0 ? { kind: 'empty' } : { kind: 'valid', checked: result.checked, integrity: result.integrity || 'unkeyed' }
 }
 
 // The server's own description of what is guaranteed and how to recover (GET /governance/audit/recovery).

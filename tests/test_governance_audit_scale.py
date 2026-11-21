@@ -36,7 +36,7 @@ def test_get_verify_is_read_only_and_post_records_once_per_key(durable):
     db, client, service = durable
     _fill(service, 5)
     for _ in range(3):
-        assert client.get("/governance/audit/verify").json() == {
+        assert client.get("/governance/audit/verify").json() == {"integrity": "unkeyed",
             "valid": True, "checked": 5, "first_broken_sequence": None, "reason": None}
     assert service.size() == 5
 

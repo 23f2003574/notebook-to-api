@@ -658,7 +658,7 @@ def _verify_audit_chain(*, record: bool, idempotency_key: "str | None" = None):
             status_code=503, detail=f"audit chain unavailable: {exc}"
         ) from exc
 
-    return result.to_dict()
+    return {**result.to_dict(), "integrity": result.integrity}
 
 
 @health_router.get("/audit/verify")
@@ -682,6 +682,22 @@ def post_governance_audit_verify(
     """
 
     return _verify_audit_chain(record=True, idempotency_key=idempotency_key)
+
+
+@health_router.get("/audit/head")
+def get_governance_audit_head():
+    """
+    The chain head (last sequence and hash, purge point, integrity mode and keyed tag) for
+    external anchoring. Contains no key and no record content.
+    """
+
+    from .deployment_governance_audit_store import GovernanceAuditStorageError
+
+    try:
+        return _build_audit_service().head()
+
+    except GovernanceAuditStorageError as exc:
+        raise HTTPException(status_code=503, detail=f"audit chain unavailable: {exc}") from exc
 
 
 @health_router.get("/audit/health")
@@ -719,6 +735,8 @@ AUDIT_RECOVERY_GUIDE = {
         "Verification names the first record that fails (altered content, a broken link, or missing records). Records before it are intact; records from it on cannot be trusted.",
         "Restore the audit database from a backup taken before that sequence number, then verify again. Do not edit or delete rows by hand: that is exactly what verification detects.",
         "Deleting records from the start, middle or end of the chain is detected; an intended purge is recorded by the store and verifies as valid.",
+        "Without NOTEBOOK2API_GOVERNANCE_AUDIT_HMAC_KEY the chain is SHA-256 only: it does not protect against someone who can write the database, because they can recompute every hash. With the key set, verification reports integrity 'keyed' and detects such a rewrite. Keep the key outside the database host's data volume, and anchor GET /governance/audit/head externally.",
+        "Rotating the key: set the new key with a new NOTEBOOK2API_GOVERNANCE_AUDIT_HMAC_KEY_EPOCH and list the old one as NOTEBOOK2API_GOVERNANCE_AUDIT_HMAC_PREVIOUS_KEYS=<epoch>:<key>; earlier records keep verifying. Losing a key makes the records it signed unverifiable (integrity 'keyed_unverified'); the dashboard refuses to continue without the key unless NOTEBOOK2API_GOVERNANCE_AUDIT_ALLOW_KEY_LOSS=1 is set.",
     ],
 }
 
