@@ -193,6 +193,9 @@ class SqliteAuditStore:
             if value is not None:
                 clauses.append(f"{column} = ?")
                 params.append(value)
+        if query.resources is not None:
+            clauses.append("resource IN (" + ",".join("?" * len(query.resources)) + ")")
+            params.extend(query.resources)
         if query.before_sequence is not None:
             clauses.append("sequence < ?")
             params.append(query.before_sequence)

@@ -2120,7 +2120,185 @@ def _generated_root(notebook=None, create=False):
 
 
 
+# --- Governance audit for notebook lifecycle operations -------------------------------------
+# Compile and deploy are audited by _audited below; destructive and state-changing notebook
+# operations are recorded here by decorating their routes. One record per affected notebook
+# (a batch yields one per entry), written after the operation so a failed or refused operation
+# is represented as a failure, and an audit-storage failure never changes the operation's own
+# response. Dry runs change nothing and record nothing.
+
+
+def _notebook_uid_path(filename):
+    return Path(UPLOAD_DIR) / f".{filename}.uid"
+
+
+def _notebook_uid(filename, create=False):
+    """The notebook's stable identity: it survives renames, so history can follow the notebook
+    rather than its current filename. Created lazily the first time the notebook is audited."""
+    path = _notebook_uid_path(filename)
+    try:
+        value = path.read_text().strip()
+        if re.fullmatch(r"[0-9a-f]{32}", value):
+            return value
+    except OSError:
+        pass
+    if not create or not (Path(UPLOAD_DIR) / filename).is_file():
+        return None
+    value = uuid.uuid4().hex
+    try:
+        path.write_text(value)
+    except OSError:
+        return None
+    return value
+
+
+def _move_notebook_uid(old, new, uid):
+    if uid is None:
+        return
+    try:
+        _notebook_uid_path(new).write_text(uid)
+        _notebook_uid_path(old).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _lifecycle_event(request, action, notebook, outcome, metadata=None, resource=None):
+    """Append one lifecycle record; returns nothing and never raises."""
+    try:
+        from backend.observability.deployment_governance_api import _build_audit_service
+
+        meta = {"notebook": notebook, **(metadata or {})}
+        key = request.headers.get("Idempotency-Key") if request is not None else None
+        if key is not None and not _IDEMPOTENCY_KEY.match(key):
+            key = None
+        fields = dict(
+            action=action,
+            actor=getattr(getattr(request, "state", None), "dashboard_actor", None) or "dashboard",
+            resource=resource or (f"notebook:{notebook}" if notebook else "generated"),
+            outcome=outcome,
+            metadata=meta,
+        )
+        service = _build_audit_service()
+        if key is None:
+            service.record(**fields)
+        else:
+            subject = notebook or resource or ""
+            service.record_once(idempotency_key=f"{key}:{subject}:{outcome}", **fields)
+    except Exception as exc:  # noqa: BLE001 - auditing must not break the operation
+        if not getattr(exc, "audit_failure_counted", False):
+            from backend.observability.deployment_governance_audit_health import audit_health
+
+            audit_health.record_failure(exc)
+        logging.getLogger("uvicorn.error").warning("governance audit record failed (%s)", type(exc).__name__)
+
+
+def _lifecycle_audited(action, *, name=None, batch=False, resource=None, extra=None, when=None):
+    """Decorate a route so its outcome is recorded in the governance audit trail.
+
+    name(kwargs, result) -> the notebook the record is about (None for non-notebook resources);
+    batch=True records one entry per item of result["results"]; extra(kwargs, result) adds
+    provenance; when(kwargs, result) -> False skips recording (e.g. an upload that overwrote
+    nothing). Dry runs are never recorded."""
+    import inspect
+
+    def decorate(func):
+        signature = inspect.signature(func)
+
+        def dry(kwargs):
+            data = kwargs.get("data")
+            return bool(kwargs.get("dry_run") or (isinstance(data, dict) and data.get("dry_run")))
+
+        def record(request, kwargs, result, error):
+            if dry(kwargs):
+                return
+            try:
+                if error is not None:
+                    notebook = name(kwargs, None) if name else None
+                    _lifecycle_event(request, action, notebook, "failure",
+                                     {"error": str(getattr(error, "detail", error))[:300],
+                                      **(extra(kwargs, None) if extra else {})}, resource)
+                    return
+                if when is not None and not when(kwargs, result):
+                    return
+                if batch and isinstance(result, dict) and isinstance(result.get("deleted_filenames"), list):
+                    for deleted in result["deleted_filenames"]:
+                        if isinstance(deleted, str):
+                            _lifecycle_event(request, action, deleted, "success", None, resource)
+                    return
+                if batch:
+                    for entry in (result or {}).get("results", []) if isinstance(result, dict) else []:
+                        if isinstance(entry, dict) and isinstance(entry.get("filename"), str):
+                            ok = entry.get("status") == "success"
+                            meta = {k: entry[k] for k in ("new_filename", "version_id") if isinstance(entry.get(k), str)}
+                            if not ok:
+                                meta["error"] = str(entry.get("error") or entry.get("detail") or entry.get("status"))[:300]
+                            notebook = entry["filename"]
+                            if "new_filename" in meta and ok:
+                                meta["from"], notebook = notebook, meta["new_filename"]
+                            _lifecycle_event(request, action, notebook, "success" if ok else "failure", meta, resource)
+                    return
+                _lifecycle_event(request, action, name(kwargs, result) if name else None, "success",
+                                 extra(kwargs, result) if extra else None, resource)
+            except Exception:  # noqa: BLE001
+                logging.getLogger("uvicorn.error").warning("governance audit record failed")
+
+        def prepare(kwargs):
+            """Remember the identity of the notebooks about to be renamed so it can follow them."""
+            if action != "notebook.rename":
+                return {}
+            data = kwargs.get("data") or {}
+            olds = [e.get("filename") for e in data.get("entries", []) if isinstance(e, dict)] if batch else [kwargs.get("filename")]
+            return {o: _notebook_uid(o, create=True) for o in olds if isinstance(o, str)}
+
+        def finish(uids, kwargs, result):
+            if action != "notebook.rename" or dry(kwargs) or not isinstance(result, dict):
+                return
+            if batch:
+                for entry in result.get("results", []):
+                    if isinstance(entry, dict) and entry.get("status") == "success" and isinstance(entry.get("new_filename"), str):
+                        _move_notebook_uid(entry["filename"], entry["new_filename"], uids.get(entry["filename"]))
+            elif isinstance(result.get("new_filename"), str):
+                _move_notebook_uid(kwargs.get("filename"), result["new_filename"], uids.get(kwargs.get("filename")))
+
+        if inspect.iscoroutinefunction(func):
+            @functools.wraps(func)
+            async def wrapper(*args, request: Request = None, **kwargs):
+                uids = prepare(kwargs)
+                try:
+                    result = await func(*args, **kwargs)
+                except BaseException as exc:
+                    record(request, kwargs, None, exc)
+                    raise
+                finish(uids, kwargs, result)
+                record(request, kwargs, result, None)
+                return result
+        else:
+            @functools.wraps(func)
+            def wrapper(*args, request: Request = None, **kwargs):
+                uids = prepare(kwargs)
+                try:
+                    result = func(*args, **kwargs)
+                except BaseException as exc:
+                    record(request, kwargs, None, exc)
+                    raise
+                finish(uids, kwargs, result)
+                record(request, kwargs, result, None)
+                return result
+
+        params = list(signature.parameters.values())
+        params.append(inspect.Parameter("request", inspect.Parameter.KEYWORD_ONLY, annotation=Request))
+        wrapper.__signature__ = signature.replace(parameters=params)
+        return wrapper
+
+    return decorate
+
+
+def _uploaded_name(kwargs, result):
+    return (result or {}).get("filename") if isinstance(result, dict) else None
+
+
 @router.post("/upload")
+@_lifecycle_audited("notebook.overwrite", name=_uploaded_name, when=lambda k, r: isinstance(r, dict) and r.get("overwritten") is True)
 async def upload_notebook(
     file: UploadFile = File(...),
     overwrite: bool = False,
@@ -8580,6 +8758,7 @@ def notebook_storage_usage(
 
 
 @router.delete("/notebooks")
+@_lifecycle_audited("notebook.delete", batch=True)
 def delete_all_notebooks(
     confirm: bool = False, tag: str = None, sha256: str = None, dry_run: bool = False,
     modified_after: str = None, modified_before: str = None,
@@ -9166,6 +9345,7 @@ def prune_all_notebook_versions(
 
 
 @router.delete("/notebooks/{filename}")
+@_lifecycle_audited("notebook.delete", name=lambda k, r: k.get("filename"))
 def delete_notebook(filename: str, dry_run: bool = False, expected_sha256: str = None):
     """Delete a previously uploaded notebook (and its per-notebook app), excluding a
     compile or rename of the same notebook while it happens."""
@@ -9272,6 +9452,7 @@ def _delete_notebook_locked(filename: str, dry_run: bool = False, expected_sha25
 
 
 @router.post("/notebooks/delete-batch")
+@_lifecycle_audited("notebook.delete", batch=True)
 def delete_notebooks_batch(data: dict):
     """Delete several notebooks; each is excluded from its own compile and rename while the
     batch runs (see _delete_notebooks_batch_locked for the request fields)."""
@@ -9762,6 +9943,7 @@ def _rename_lock_for(filename: str) -> threading.Lock:
 
 
 @router.patch("/notebooks/{filename}")
+@_lifecycle_audited("notebook.rename", name=lambda k, r: (r or {}).get("new_filename") or k.get("filename"), extra=lambda k, r: {"from": k.get("filename"), "to": (r or {}).get("new_filename")})
 def rename_notebook(filename: str, data: dict):
     """Rename a previously uploaded notebook in place, keeping its bytes
     untouched.
@@ -10037,6 +10219,7 @@ def _rename_notebook_to_locked(old_path: Path, new_filename, overwrite: bool, dr
 
 
 @router.post("/notebooks/rename-batch")
+@_lifecycle_audited("notebook.rename", batch=True)
 def rename_notebooks_batch(data: dict):
     """Rename a caller-chosen set of *different* notebooks in one call,
     each to its own new filename.
@@ -13765,6 +13948,7 @@ def copy_notebook_versions_batch(filename: str, data: dict):
 
 
 @router.post("/notebooks/{filename}/versions/{version_id}/restore")
+@_lifecycle_audited("notebook.restore", name=lambda k, r: k.get("filename"), extra=lambda k, r: {"version_id": k.get("version_id")})
 def restore_notebook_version(
     filename: str, version_id: str, dry_run: bool = False, expected_sha256: str = None,
 ):
@@ -13884,6 +14068,7 @@ def restore_notebook_version(
 
 
 @router.post("/notebooks/versions/restore-batch")
+@_lifecycle_audited("notebook.restore", batch=True)
 def restore_notebook_versions_batch(data: dict):
     """Roll back a caller-chosen set of *different* notebooks, each to its
     own specified snapshotted version, in one call.
@@ -14062,6 +14247,7 @@ def restore_notebook_versions_batch(data: dict):
 
 
 @router.delete("/notebooks/{filename}/versions/{version_id}")
+@_lifecycle_audited("notebook.version_delete", name=lambda k, r: k.get("filename"), extra=lambda k, r: {"version_id": k.get("version_id")})
 def delete_notebook_version(filename: str, version_id: str, dry_run: bool = False):
     """Permanently discard one of a notebook's snapshotted previous
     versions, by the "version_id" GET
@@ -18803,6 +18989,7 @@ def _deploy_history_entry_is_within_date_range(entry, after_dt, before_dt):
 
 
 @router.delete("/deploy/history")
+@_lifecycle_audited("history.purge", resource="deploy_history", name=lambda k, r: k.get("source_notebook_filename"))
 def clear_deploy_history(
     source_notebook_filename: str = None,
     source_notebook_sha256: str = None,
@@ -19319,6 +19506,7 @@ def _compile_history_entry_is_within_date_range(entry, after_dt, before_dt):
 
 
 @router.delete("/compile/history")
+@_lifecycle_audited("history.purge", resource="compile_history", name=lambda k, r: k.get("notebook_filename"))
 def clear_compile_history(
     notebook_filename: str = None,
     source_notebook_sha256: str = None,
@@ -19918,6 +20106,7 @@ def list_generated_files_endpoint(checksums: bool = False, format: str = "json",
 
 
 @router.delete("/generated")
+@_lifecycle_audited("generated.delete", name=lambda k, r: k.get("notebook"), extra=lambda k, r: {"all_apps": bool(k.get("all_apps"))})
 def delete_generated_app(dry_run: bool = False, notebook: str = None, all_apps: bool = False):
     """Remove GENERATED_DIR and everything compiled into it, resetting the
     dashboard's compiled-app state back to "nothing compiled yet".

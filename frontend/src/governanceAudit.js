@@ -1,10 +1,20 @@
 import { dashboardFetch } from './dashboardApi'
 import { errorFromResponse } from './errorMessage'
 
-export const AUDIT_OPERATIONS = ['notebook.compile', 'notebook.deploy']
+export const AUDIT_OPERATIONS = ['notebook.compile', 'notebook.deploy', 'notebook.delete', 'notebook.rename', 'notebook.restore', 'notebook.overwrite', 'notebook.version_delete']
+
+const OPERATION_LABELS = {
+  'notebook.compile': 'Compile',
+  'notebook.deploy': 'Deploy',
+  'notebook.delete': 'Delete',
+  'notebook.rename': 'Rename',
+  'notebook.restore': 'Restore version',
+  'notebook.overwrite': 'Overwrite',
+  'notebook.version_delete': 'Delete version',
+}
 
 export function operationLabel(action) {
-  return action === 'notebook.compile' ? 'Compile' : action === 'notebook.deploy' ? 'Deploy' : action
+  return OPERATION_LABELS[action] || action
 }
 
 // One page of compile/deploy history, newest first, filtered on the server. Pass the previous

@@ -174,6 +174,9 @@ class AuditQuery:
 
     action_prefix: "str | None" = None
 
+    # Match any of these resources (a notebook's current and former names); combines with resource.
+    resources: "tuple[str, ...] | None" = None
+
     def __post_init__(self) -> None:
         if self.limit <= 0:
             raise ValueError("limit must be greater than zero")
@@ -195,6 +198,9 @@ class AuditQuery:
             return False
 
         if self.resource is not None and record.resource != self.resource:
+            return False
+
+        if self.resources is not None and record.resource not in self.resources:
             return False
 
         return True

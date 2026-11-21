@@ -573,6 +573,27 @@ def _decode_cursor(cursor: str) -> int:
         raise HTTPException(status_code=400, detail="invalid cursor") from None
 
 
+def _notebook_resources(service, notebook: str) -> tuple:
+    """The audit resources that make up a notebook's history: its current name plus every earlier
+    name it was renamed from (rename records carry the old name), so renaming does not orphan
+    what was recorded before."""
+    from .deployment_governance_audit import AuditQuery
+
+    names = [notebook]
+    seen = {notebook}
+    index = 0
+    while index < len(names) and len(names) < 50:
+        renames = service.query(AuditQuery(
+            action="notebook.rename", resource=f"notebook:{names[index]}", limit=200))
+        for record in renames:
+            former = record.metadata.get("from")
+            if isinstance(former, str) and former not in seen:
+                seen.add(former)
+                names.append(former)
+        index += 1
+    return tuple(f"notebook:{name}" for name in names)
+
+
 @health_router.get("/audit/history")
 def get_governance_audit_history(
     notebook: str | None = Query(default=None, max_length=255),
@@ -591,15 +612,16 @@ def get_governance_audit_history(
 
     from .deployment_governance_audit import AuditQuery
 
+    service = _build_audit_service()
     query = AuditQuery(
         action=action,
-        resource=f"notebook:{notebook}" if notebook else None,
+        resources=_notebook_resources(service, notebook) if notebook else None,
         outcome=outcome,
         action_prefix="notebook." if scope == "notebook" else None,
         before_sequence=_decode_cursor(cursor) if cursor else None,
         limit=limit + 1,
     )
-    records = _build_audit_service().query(query)
+    records = service.query(query)
     page = records[:limit]
     has_more = len(records) > limit
 
