@@ -4,7 +4,7 @@ import json
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 
 from .deployment_governance_metrics_api import (
     GovernanceIntegrityMetricsApi,
@@ -528,11 +528,11 @@ def _build_audit_service():
 
 
 @health_router.get("/audit")
-async def get_governance_audit(
+def get_governance_audit(
     action: str | None = Query(default=None),
     actor: str | None = Query(default=None),
     resource: str | None = Query(default=None),
-    limit: int = Query(default=100, gt=0),
+    limit: int = Query(default=100, gt=0, le=200),
 ):
     """
     Return governance audit trail records, newest first, filtered by
@@ -574,7 +574,7 @@ def _decode_cursor(cursor: str) -> int:
 
 
 @health_router.get("/audit/history")
-async def get_governance_audit_history(
+def get_governance_audit_history(
     notebook: str | None = Query(default=None, max_length=255),
     action: str | None = Query(default=None),
     outcome: str | None = Query(default=None, pattern="^(success|failure)$"),
@@ -611,8 +611,8 @@ async def get_governance_audit_history(
 
 
 @health_router.get("/audit/latest")
-async def get_governance_audit_latest(
-    limit: int = Query(default=10, gt=0),
+def get_governance_audit_latest(
+    limit: int = Query(default=10, gt=0, le=200),
 ):
     """
     Return the most recent governance audit trail records, newest
@@ -624,17 +624,11 @@ async def get_governance_audit_latest(
     return [record.to_dict() for record in records]
 
 
-@health_router.get("/audit/verify")
-async def get_governance_audit_verify():
-    """
-    Verify the governance audit trail's hash chain, returning whether
-    it is intact and, if not, the first broken record.
-    """
-
+def _verify_audit_chain(*, record: bool, idempotency_key: "str | None" = None):
     from .deployment_governance_audit_store import GovernanceAuditStorageError
 
     try:
-        result = _build_audit_service().verify_chain()
+        result = _build_audit_service().verify_chain(record=record, idempotency_key=idempotency_key)
 
     except GovernanceAuditStorageError as exc:
         # Not "the chain is broken": the chain could not be read at all. The message is path-free.
@@ -645,8 +639,31 @@ async def get_governance_audit_verify():
     return result.to_dict()
 
 
+@health_router.get("/audit/verify")
+def get_governance_audit_verify():
+    """
+    Verify the governance audit trail's hash chain, returning whether it is intact and, if not,
+    the first broken record. Strictly read-only: it writes nothing, however often it is called.
+    """
+
+    return _verify_audit_chain(record=False)
+
+
+@health_router.post("/audit/verify")
+def post_governance_audit_verify(
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", max_length=128),
+):
+    """
+    Verify the chain and append an "audit_verification" record documenting the check. With an
+    Idempotency-Key header a retry of the same request returns the same result without a second
+    record.
+    """
+
+    return _verify_audit_chain(record=True, idempotency_key=idempotency_key)
+
+
 @health_router.get("/audit/health")
-async def get_governance_audit_health():
+def get_governance_audit_health():
     """
     Audit-storage health, separate from compile/deploy outcomes: backend, durability, write and
     failure counters by reason, and whether the storage is usable right now. 503 when unavailable,
@@ -695,7 +712,7 @@ async def get_governance_audit_recovery():
 
 
 @health_router.get("/audit/{sequence}")
-async def get_governance_audit_record(sequence: int):
+def get_governance_audit_record(sequence: int):
     """
     Return one audit record by its stable sequence number (the reference compile and deploy
     responses carry as governance_audit.sequence).

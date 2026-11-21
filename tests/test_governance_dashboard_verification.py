@@ -41,7 +41,7 @@ def test_a_tampered_record_is_located(durable):
 
 def test_an_unreadable_store_is_unavailable_not_broken_and_leaks_no_path(durable):
     _write(1)
-    audit.get_audit_service()._store.rows = lambda *a, **k: (_ for _ in ()).throw(
+    audit.get_audit_service()._store.iter_rows = lambda *a, **k: (_ for _ in ()).throw(
         __import__("backend.observability.deployment_governance_audit_store", fromlist=["x"]).GovernanceAuditStorageError("governance audit read failed (OperationalError)"))
     resp = client.get("/governance/audit/verify")
     assert resp.status_code == 503 and "unavailable" in resp.json()["detail"]

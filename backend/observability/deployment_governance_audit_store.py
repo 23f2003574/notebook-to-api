@@ -24,6 +24,12 @@ CREATE TABLE IF NOT EXISTS audit_records (
     occurred_at TEXT NOT NULL, metadata TEXT NOT NULL,
     previous_hash TEXT NOT NULL, record_hash TEXT NOT NULL
 );
+-- Filters (notebook history, action, outcome) page newest-first by sequence: these indexes let
+-- SQLite walk only the matching rows instead of scanning the whole history. IF NOT EXISTS makes
+-- this also the migration for databases created before the indexes existed.
+CREATE INDEX IF NOT EXISTS idx_audit_resource_sequence ON audit_records (resource, sequence);
+CREATE INDEX IF NOT EXISTS idx_audit_action_sequence ON audit_records (action, sequence);
+CREATE INDEX IF NOT EXISTS idx_audit_outcome_sequence ON audit_records (outcome, sequence);
 CREATE TABLE IF NOT EXISTS audit_meta (
     id INTEGER PRIMARY KEY CHECK (id = 1), last_sequence INTEGER NOT NULL, last_hash TEXT NOT NULL,
     purged_through INTEGER NOT NULL DEFAULT 0
@@ -157,6 +163,27 @@ class SqliteAuditStore:
             return out
         except sqlite3.Error as exc:
             raise GovernanceAuditStorageError(f"governance audit read failed ({type(exc).__name__})") from None
+
+    def iter_rows(self, batch_size: int = 1000):
+        """Yield every row in ascending sequence order, one keyset batch at a time, so a caller can
+        walk an arbitrarily long history with memory bounded by the batch size."""
+        after = 0
+        while True:
+            try:
+                batch = self._connect().execute(
+                    "SELECT * FROM audit_records WHERE sequence > ? ORDER BY sequence LIMIT ?",
+                    (after, batch_size),
+                ).fetchall()
+            except sqlite3.Error as exc:
+                raise GovernanceAuditStorageError(f"governance audit read failed ({type(exc).__name__})") from None
+            if not batch:
+                return
+            for row in batch:
+                item = dict(row)
+                item["occurred_at"] = datetime.fromisoformat(item["occurred_at"])
+                item["metadata"] = json.loads(item["metadata"])
+                yield item
+            after = batch[-1]["sequence"]
 
     def search(self, query) -> list[dict]:
         """Newest-first rows matching an AuditQuery, filtered and limited inside SQLite."""

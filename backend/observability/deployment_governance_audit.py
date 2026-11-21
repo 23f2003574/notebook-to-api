@@ -469,87 +469,79 @@ class GovernanceAuditService:
 
         return self.query(AuditQuery(limit=limit))
 
-    def verify_chain(self) -> AuditChainVerification:
+    def verify_chain(
+        self,
+        *,
+        record: bool = True,
+        idempotency_key: "str | None" = None,
+    ) -> AuditChainVerification:
         """
-        Walk every audit record in ascending sequence order,
-        recomputing each one's expected hash from its own stored
-        fields plus the actual preceding record's record_hash (not
-        the tampered record's own claimed previous_hash — a rewritten
-        previous_hash is exactly what tampering would try, and this
-        still catches it), and stop at the first mismatch.
+        Walk every audit record in ascending sequence order, recomputing each one's expected hash
+        from its own stored fields plus the actual preceding record's record_hash (not the
+        claimed previous_hash: a rewritten previous_hash is exactly what tampering would try),
+        and stop at the first mismatch. Records are streamed in batches, so memory stays bounded
+        however long the history is.
 
-        The oldest currently stored record is a special case: if it
-        is sequence 1, its previous_hash must be GENESIS_HASH like
-        any other fresh chain's first record; otherwise, purge() has
-        removed everything before it, and there is no surviving data
-        to check its previous_hash against, so it is trusted as the
-        anchor for the rest of the chain rather than reported broken
-        for a linkage this service can no longer verify one way or
-        the other.
+        The oldest stored record is a special case: if it is sequence 1, its previous_hash must be
+        GENESIS_HASH; otherwise purge() removed everything before it and it anchors the rest.
 
-        Records an "audit_verification" record of its own once
-        finished, documenting that a verification was performed and
-        what it found — this call is not read-only.
+        With record=True (the default for library callers) an "audit_verification" record
+        documenting the check is appended, once per idempotency_key when one is given. Pass
+        record=False for a strictly read-only check.
         """
 
         expected_previous = None
-
         checked = 0
-
+        first = last = None
         result: "AuditChainVerification | None" = None
 
-        for index, record in enumerate(
-            sorted(self._all_records().values(), key=lambda r: r.sequence)
-        ):
+        for current in self._iter_records():
             checked += 1
+            first = first or current
+            last = current
 
-            if index == 0 and record.sequence == 1:
+            if checked == 1 and current.sequence == 1:
                 expected_previous = GENESIS_HASH
 
-            if (
-                expected_previous is not None
-                and record.previous_hash != expected_previous
-            ):
+            if expected_previous is not None and current.previous_hash != expected_previous:
                 result = AuditChainVerification(
                     valid=False,
                     checked=checked,
-                    first_broken_sequence=record.sequence,
+                    first_broken_sequence=current.sequence,
                     reason=(
-                        f"record {record.sequence}'s previous_hash "
+                        f"record {current.sequence}'s previous_hash "
                         "does not match the preceding record's hash"
                     ),
                 )
                 break
 
             expected_hash = _compute_record_hash(
-                sequence=record.sequence,
-                action=record.action,
-                actor=record.actor,
-                resource=record.resource,
-                outcome=record.outcome,
-                occurred_at=record.occurred_at,
-                metadata=record.metadata,
-                previous_hash=record.previous_hash,
+                sequence=current.sequence,
+                action=current.action,
+                actor=current.actor,
+                resource=current.resource,
+                outcome=current.outcome,
+                occurred_at=current.occurred_at,
+                metadata=current.metadata,
+                previous_hash=current.previous_hash,
             )
 
-            if expected_hash != record.record_hash:
+            if expected_hash != current.record_hash:
                 result = AuditChainVerification(
                     valid=False,
                     checked=checked,
-                    first_broken_sequence=record.sequence,
+                    first_broken_sequence=current.sequence,
                     reason=(
-                        f"record {record.sequence}'s hash does not "
+                        f"record {current.sequence}'s hash does not "
                         "match its recorded fields"
                     ),
                 )
                 break
 
-            expected_previous = record.record_hash
+            expected_previous = current.record_hash
 
         if result is None and self._store is not None:
-            result = self._missing_records(
-                sorted(self._all_records().values(), key=lambda r: r.sequence), checked
-            )
+            result = self._missing_records(first, last, checked)
 
         if result is None:
             result = AuditChainVerification(
@@ -559,23 +551,43 @@ class GovernanceAuditService:
                 reason=None,
             )
 
-        self.record(
-            action="audit_verification",
-            actor="system",
-            resource="audit_chain",
-            outcome="success" if result.valid else "failure",
-            metadata={"checked": result.checked, "valid": result.valid},
-        )
+        if record:
+            fields = dict(
+                action="audit_verification",
+                actor="system",
+                resource="audit_chain",
+                outcome="success" if result.valid else "failure",
+                metadata={"checked": result.checked, "valid": result.valid},
+            )
+
+            if idempotency_key is None:
+                self.record(**fields)
+            else:
+                self.record_once(idempotency_key=idempotency_key, **fields)
 
         return result
 
+    def _iter_records(self):
+        """Every record in ascending sequence order, without materializing the history."""
+
+        if self._store is None:
+            with self._lock:
+                snapshot = sorted(self._records.values(), key=lambda r: r.sequence)
+
+            yield from snapshot
+            return
+
+        for row in self._store.iter_rows():
+            yield AuditRecord(**row)
+
     def _missing_records(
-        self, records: "list[AuditRecord]", checked: int
+        self, first: "AuditRecord | None", last: "AuditRecord | None", checked: int
     ) -> "AuditChainVerification | None":
         """
-        Compare the stored rows with the chain head and purge point the store remembers outside
-        them: a deleted first, middle or last record changes neither a surviving record's own
-        hash nor (for the tail) its neighbour's link, so only this comparison can notice it.
+        Compare the first and last stored rows with the chain head and purge point the store
+        remembers outside them: a deleted first, middle or last record changes neither a surviving
+        record's own hash nor (for the tail) its neighbour's link, so only this comparison can
+        notice it.
         """
 
         head = self._store.head()
@@ -588,7 +600,7 @@ class GovernanceAuditService:
                 reason=reason,
             )
 
-        if not records:
+        if first is None:
             if head["last_sequence"] != head["purged_through"]:
                 return broken(
                     head["purged_through"] + 1,
@@ -598,14 +610,12 @@ class GovernanceAuditService:
 
             return None
 
-        if records[0].sequence != head["purged_through"] + 1:
+        if first.sequence != head["purged_through"] + 1:
             return broken(
                 head["purged_through"] + 1,
                 f"records {head['purged_through'] + 1} to "
-                f"{records[0].sequence - 1} are missing",
+                f"{first.sequence - 1} are missing",
             )
-
-        last = records[-1]
 
         if last.sequence != head["last_sequence"] or last.record_hash != head["last_hash"]:
             return broken(
