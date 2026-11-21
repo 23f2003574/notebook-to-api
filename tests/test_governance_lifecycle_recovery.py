@@ -44,7 +44,7 @@ class Dashboard:
             "NOTEBOOK_API_DASHBOARD_HOST": "127.0.0.1", "NOTEBOOK_API_DASHBOARD_PORT": str(self.port),
             "NOTEBOOK_API_UPLOAD_DIR": str(self.work / "uploads"), "NOTEBOOK_API_GENERATED_DIR": str(self.work / "generated"),
             "NOTEBOOK_API_GENERATED_APPS_DIR": str(self.work / "apps"),
-            "NOTEBOOK2API_GOVERNANCE_PERSISTENCE_BACKEND": "sqlite",
+            "NOTEBOOK2API_GOVERNANCE_PERSISTENCE_BACKEND": "sqlite", "NOTEBOOK2API_GOVERNANCE_VOLUME_PERSISTENT": "1",
             "NOTEBOOK2API_GOVERNANCE_DATABASE_PATH": str(self.work / "audit.db"), "PYTHONPATH": str(ROOT),
         }
         env.pop("NOTEBOOK2API_ENVIRONMENT", None)
@@ -115,6 +115,7 @@ def env(tmp_path, monkeypatch):
     (tmp_path / "uploads").mkdir()
     monkeypatch.setenv("NOTEBOOK2API_GOVERNANCE_PERSISTENCE_BACKEND", "sqlite")
     monkeypatch.setenv("NOTEBOOK2API_GOVERNANCE_DATABASE_PATH", str(tmp_path / "audit.db"))
+    monkeypatch.setenv("NOTEBOOK2API_GOVERNANCE_VOLUME_PERSISTENT", "1")  # tmp_path stands in for a mounted volume
     audit.reset_audit_service()
     yield tmp_path
     audit.reset_audit_service()

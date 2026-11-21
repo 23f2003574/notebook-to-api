@@ -40,7 +40,7 @@ describe('GovernanceAudit records', () => {
     stub(() => page([]))
     render(<GovernanceAudit />)
     expect(screen.getByText(/Loading audit records/)).toBeInTheDocument()
-    expect(await screen.findByText(/No compile or deploy records match/)).toBeInTheDocument()
+    expect(await screen.findByText(/No notebook operation records match/)).toBeInTheDocument()
   })
 
   it('shows an error and retries', async () => {
@@ -60,7 +60,7 @@ describe('GovernanceAudit navigation', () => {
   it('sends composed filters to the server', async () => {
     const fetchMock = stub(() => page([]))
     render(<GovernanceAudit />)
-    await screen.findByText(/No compile or deploy records match/)
+    await screen.findByText(/No notebook operation records match/)
     fireEvent.change(screen.getByLabelText('Notebook'), { target: { value: ' a.ipynb ' } })
     fireEvent.change(screen.getByLabelText('Operation'), { target: { value: 'notebook.deploy' } })
     fireEvent.change(screen.getByLabelText('Outcome'), { target: { value: 'failure' } })
@@ -106,7 +106,7 @@ describe('GovernanceAudit verification', () => {
   const run = async (verifyReply) => {
     stub((url) => /\/audit\/verify$/.test(url.pathname) ? verifyReply : page([]))
     render(<GovernanceAudit />)
-    await screen.findByText(/No compile or deploy records match/)
+    await screen.findByText(/No notebook operation records match/)
     fireEvent.click(screen.getByText('Verify audit chain'))
     return screen.findByTestId('verification')
   }
@@ -135,7 +135,7 @@ describe('GovernanceAudit recovery guide', () => {
       ? json({ guarantees: ['One record per request'], if_unavailable: ['Fix the volume'], if_broken: ['Restore a backup'] })
       : page([]))
     render(<GovernanceAudit />)
-    await screen.findByText(/No compile or deploy records match/)
+    await screen.findByText(/No notebook operation records match/)
     expect(fetchMock).toHaveBeenCalledTimes(1) // only the history page so far
     const details = screen.getByTestId('recovery-guide')
     details.open = true

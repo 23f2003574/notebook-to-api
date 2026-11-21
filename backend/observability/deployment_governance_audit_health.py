@@ -93,6 +93,10 @@ class AuditHealth:
             data["state"], data["reason"] = "unavailable", probe_reason
         elif consecutive:
             data["state"], data["reason"] = "degraded", self.last_failure_reason
+        elif not status["durable"] and (status["production"] or status["backend"] == "sqlite"):
+            # Records are being written, but they would not survive a restart. In-memory auditing
+            # chosen on purpose for development is not reported as a fault.
+            data["state"], data["reason"] = "degraded", "not_durable"
         else:
             data["state"], data["reason"] = "healthy", None
         return data

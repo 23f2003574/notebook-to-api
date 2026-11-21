@@ -175,7 +175,7 @@ export default function GovernanceAudit({ refreshKey, focusSequence = null }) {
         <p className="mb-3 text-amber-300">Audit record #{focusSequence} was not found (it may have been purged).</p>
       )}
       {state.status === 'ready' && state.records.length === 0 && (
-        <p className="text-slate-400">No compile or deploy records match.</p>
+        <p className="text-slate-400">No notebook operation records match.</p>
       )}
       {state.status === 'ready' && state.records.length > 0 && (
         <ul className="space-y-2">{state.records.map((r) => <Record key={r.sequence} record={r} linked={r.sequence === focusSequence} />)}</ul>

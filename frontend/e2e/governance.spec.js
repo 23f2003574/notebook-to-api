@@ -49,8 +49,10 @@ test('a failed compile is recorded as a failure and linked', async ({ page, requ
   await expect(page.getByTestId('governance-audit').getByText('e2e_gone.ipynb').first()).toBeVisible()
   await page.getByTestId('governance-audit').getByLabel('Notebook').fill('e2e_gone.ipynb')
   await page.getByTestId('governance-audit').getByLabel('Outcome').selectOption('success')
+  // (the notebook's own removal above is a successful "Delete" record, so narrow to compiles)
+  await page.getByTestId('governance-audit').getByLabel('Operation').selectOption('notebook.compile')
   await page.getByText('Apply filters').click()
-  await expect(page.getByText(/No compile or deploy records match/)).toBeVisible()
+  await expect(page.getByText(/No notebook operation records match/)).toBeVisible()
 })
 
 test('audit records survive a page reload and verification still passes', async ({ page }) => {

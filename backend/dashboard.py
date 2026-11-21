@@ -5,6 +5,7 @@ Serves the React dashboard frontend and provides API endpoints for compilation
 
 import hmac
 import json
+import contextlib
 import os
 import logging
 import sys
@@ -113,7 +114,29 @@ from backend.cluster.dashboard import router as cluster_dashboard_router
 from backend.cluster.export_service import router as cluster_export_router
 from backend.cluster.bootstrap import bootstrap_cluster_subsystem
 
+@contextlib.asynccontextmanager
+async def _dashboard_lifespan(_app):
+    """Validate audit storage whichever way the app is launched (`python -m backend.dashboard`,
+    `uvicorn backend.dashboard:app`, a container CMD, a process manager): production storage that
+    would lose audit records stops the application from starting. Clients that never run the
+    lifespan (TestClient without a `with` block) are unaffected."""
+    from backend.observability.deployment_governance_audit_store import (
+        GovernanceAuditStorageError,
+        validate_audit_storage_for_startup,
+    )
+
+    try:
+        status = validate_audit_storage_for_startup()
+    except GovernanceAuditStorageError as exc:
+        logging.getLogger("uvicorn.error").error("governance audit storage: %s", exc)
+        raise
+    for issue in status["issues"]:
+        logging.getLogger("uvicorn.error").warning("governance audit storage: %s", issue)
+    yield
+
+
 app = FastAPI(
+    lifespan=_dashboard_lifespan,
     title="notebook-to-api Dashboard",
     description="Transform Jupyter notebooks into production APIs",
     version=NOTEBOOK_TO_API_VERSION

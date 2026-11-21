@@ -22,6 +22,7 @@ def env(tmp_path, monkeypatch):
     (tmp_path / "uploads").mkdir()
     monkeypatch.setenv("NOTEBOOK2API_GOVERNANCE_PERSISTENCE_BACKEND", "sqlite")
     monkeypatch.setenv("NOTEBOOK2API_GOVERNANCE_DATABASE_PATH", str(tmp_path / "audit.db"))
+    monkeypatch.setenv("NOTEBOOK2API_GOVERNANCE_VOLUME_PERSISTENT", "1")  # tmp_path stands in for a mounted volume
     audit.reset_audit_service()
     nb = nbformat.v4.new_notebook()
     nb.cells.append(nbformat.v4.new_code_cell("def f(x: int) -> int:\n    return x\n"))
