@@ -1068,3 +1068,60 @@ describe('per-notebook compilation and its diagnostics in the dashboard', () => 
     expect(screen.queryByTestId('diagnostics-a.ipynb')).toBeNull()
   })
 })
+
+describe('NotebookLibrary lifecycle actions', () => {
+  const json = (body, status = 200, extra = {}) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...extra } })
+  const click = (name) => fireEvent.click(screen.getByRole('button', { name }))
+
+  const setup = async (handler) => {
+    const calls = []
+    vi.stubGlobal('fetch', vi.fn(async (url, init = {}) => {
+      const path = new URL(url, 'http://t').pathname
+      calls.push({ path, method: init.method || 'GET' })
+      if (path === '/api/notebooks' && (init.method || 'GET') === 'GET') return json({ notebooks: [{ filename: 'a.ipynb', size_bytes: 10 }] })
+      return handler(path, init) ?? json({}, 404)
+    }))
+    const onAudit = vi.fn()
+    render(<NotebookLibrary onOpen={() => {}} refreshKey="x" onAudit={onAudit} />)
+    await screen.findByText('a.ipynb')
+    return { calls, onAudit }
+  }
+
+  it('asks before deleting, then deletes and links the audit record', async () => {
+    const { calls, onAudit } = await setup((path, init) => (init.method === 'DELETE' ? json({ status: 'success' }, 200, { 'X-Governance-Audit-Sequence': '7' }) : null))
+    click('Delete a.ipynb')
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false)
+    click('Yes, delete a.ipynb')
+    expect(await screen.findByTestId('library-event')).toHaveTextContent('Deleted a.ipynb')
+    fireEvent.click(screen.getByTestId('lifecycle-audit-link'))
+    expect(onAudit).toHaveBeenCalledWith(7)
+  })
+
+  it('shows the server message for a rename conflict', async () => {
+    await setup((path, init) => (init.method === 'PATCH' ? json({ detail: 'b.ipynb already exists' }, 409) : null))
+    click('Rename a.ipynb')
+    click('Rename')
+    expect(await screen.findByRole('alert')).toHaveTextContent('already exists')
+  })
+
+  it('lists versions with data-file counts and restores only after confirmation', async () => {
+    const versions = { versions: [{ version_id: 'v1.ipynb', size_bytes: 5, saved_at: '2026-01-01T00:00:00+00:00', companion_files: 2 }] }
+    const { calls } = await setup((path, init) => {
+      if (path.endsWith('/versions')) return json(versions)
+      if (path.endsWith('/restore') && init.method === 'POST') return json({ status: 'success' }, 200, { 'X-Governance-Audit-Sequence': '9' })
+      return null
+    })
+    click('Versions a.ipynb')
+    expect(await screen.findByText('2 data files')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /^Restore the version of a.ipynb/ }))
+    expect(calls.some((c) => c.path.endsWith('/restore'))).toBe(false)
+    click('Confirm restore')
+    expect(await screen.findByText(/Restored the version saved/)).toHaveTextContent('2 data files')
+  })
+
+  it('says so when there are no earlier versions', async () => {
+    await setup((path) => (path.endsWith('/versions') ? json({ versions: [] }) : null))
+    click('Versions a.ipynb')
+    expect(await screen.findByText(/No earlier versions/)).toBeInTheDocument()
+  })
+})

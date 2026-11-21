@@ -132,3 +132,16 @@ def test_an_audit_storage_failure_does_not_change_the_operation(monkeypatch):
     monkeypatch.setattr("backend.observability.deployment_governance_audit.GovernanceAuditService.record", broken)
     assert client.delete("/api/notebooks/s.ipynb").status_code == 200
     assert client.get("/api/notebooks").json()["notebooks"] == [] if "notebooks" in client.get("/api/notebooks").json() else True
+
+
+def test_single_operations_return_their_audit_reference_and_failures_carry_the_header():
+    _upload("ref.ipynb")
+    renamed = client.patch("/api/notebooks/ref.ipynb", json={"new_filename": "ref2.ipynb"})
+    assert "governance_audit" not in renamed.json()  # the body keeps its shape
+    sequence = renamed.headers["X-Governance-Audit-Sequence"]
+    assert client.get(f"/governance/audit/{sequence}").json()["action"] == "notebook.rename"
+    missing = client.delete("/api/notebooks/ghost.ipynb")
+    assert missing.status_code == 404
+    failed = client.get(f"/governance/audit/{missing.headers['X-Governance-Audit-Sequence']}").json()
+    assert failed["outcome"] == "failure" and failed["resource"] == "notebook:ghost.ipynb"
+    assert "X-Governance-Audit-Sequence" not in client.delete("/api/notebooks/ref2.ipynb?dry_run=true").headers

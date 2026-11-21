@@ -2267,7 +2267,8 @@ def _move_notebook_uid(old, new, uid):
 
 
 def _lifecycle_event(request, action, notebook, outcome, metadata=None, resource=None):
-    """Append one lifecycle record; returns nothing and never raises."""
+    """Append one lifecycle record; returns {"sequence", "record_hash"} (None if it could not be
+    written). Never raises."""
     try:
         from backend.observability.deployment_governance_api import _build_audit_service
 
@@ -2284,16 +2285,18 @@ def _lifecycle_event(request, action, notebook, outcome, metadata=None, resource
         )
         service = _build_audit_service()
         if key is None:
-            service.record(**fields)
+            written = service.record(**fields)
         else:
             subject = notebook or resource or ""
-            service.record_once(idempotency_key=f"{key}:{subject}:{outcome}", **fields)
+            written, _created = service.record_once(idempotency_key=f"{key}:{subject}:{outcome}", **fields)
+        return {"sequence": written.sequence, "record_hash": written.record_hash}
     except Exception as exc:  # noqa: BLE001 - auditing must not break the operation
         if not getattr(exc, "audit_failure_counted", False):
             from backend.observability.deployment_governance_audit_health import audit_health
 
             audit_health.record_failure(exc)
         logging.getLogger("uvicorn.error").warning("governance audit record failed (%s)", type(exc).__name__)
+        return None
 
 
 def _lifecycle_audited(action, *, name=None, batch=False, resource=None, extra=None, when=None):
@@ -2313,22 +2316,23 @@ def _lifecycle_audited(action, *, name=None, batch=False, resource=None, extra=N
             return bool(kwargs.get("dry_run") or (isinstance(data, dict) and data.get("dry_run")))
 
         def record(request, kwargs, result, error):
+            """Write the record(s); returns the reference of the single record (None for a batch,
+            a dry run, or when nothing could be written)."""
             if dry(kwargs):
-                return
+                return None
             try:
                 if error is not None:
                     notebook = name(kwargs, None) if name else None
-                    _lifecycle_event(request, action, notebook, "failure",
-                                     {"error": str(getattr(error, "detail", error))[:300],
-                                      **(extra(kwargs, None) if extra else {})}, resource)
-                    return
+                    return _lifecycle_event(request, action, notebook, "failure",
+                                            {"error": str(getattr(error, "detail", error))[:300],
+                                             **(extra(kwargs, None) if extra else {})}, resource)
                 if when is not None and not when(kwargs, result):
-                    return
+                    return None
                 if batch and isinstance(result, dict) and isinstance(result.get("deleted_filenames"), list):
                     for deleted in result["deleted_filenames"]:
                         if isinstance(deleted, str):
                             _lifecycle_event(request, action, deleted, "success", None, resource)
-                    return
+                    return None
                 if batch:
                     for entry in (result or {}).get("results", []) if isinstance(result, dict) else []:
                         if isinstance(entry, dict) and isinstance(entry.get("filename"), str):
@@ -2340,11 +2344,19 @@ def _lifecycle_audited(action, *, name=None, batch=False, resource=None, extra=N
                             if "new_filename" in meta and ok:
                                 meta["from"], notebook = notebook, meta["new_filename"]
                             _lifecycle_event(request, action, notebook, "success" if ok else "failure", meta, resource)
-                    return
-                _lifecycle_event(request, action, name(kwargs, result) if name else None, "success",
-                                 extra(kwargs, result) if extra else None, resource)
+                    return None
+                return _lifecycle_event(request, action, name(kwargs, result) if name else None, "success",
+                                        extra(kwargs, result) if extra else None, resource)
             except Exception:  # noqa: BLE001
                 logging.getLogger("uvicorn.error").warning("governance audit record failed")
+                return None
+
+        def attach(result, ref, response):
+            """A single operation's record reference travels in the X-Governance-Audit-Sequence
+            header (failures carry it too), so the response body keeps its existing shape."""
+            if ref is not None and response is not None and not batch:
+                response.headers["X-Governance-Audit-Sequence"] = str(ref["sequence"])
+            return result
 
         def prepare(kwargs):
             """Remember the identity of the notebooks about to be renamed so it can follow them."""
@@ -2366,31 +2378,34 @@ def _lifecycle_audited(action, *, name=None, batch=False, resource=None, extra=N
 
         if inspect.iscoroutinefunction(func):
             @functools.wraps(func)
-            async def wrapper(*args, request: Request = None, **kwargs):
+            async def wrapper(*args, request: Request = None, response: Response = None, **kwargs):
                 uids = prepare(kwargs)
                 try:
                     result = await func(*args, **kwargs)
                 except BaseException as exc:
-                    record(request, kwargs, None, exc)
+                    ref = record(request, kwargs, None, exc)
+                    if ref is not None and isinstance(exc, HTTPException):
+                        exc.headers = {**(exc.headers or {}), "X-Governance-Audit-Sequence": str(ref["sequence"])}
                     raise
                 finish(uids, kwargs, result)
-                record(request, kwargs, result, None)
-                return result
+                return attach(result, record(request, kwargs, result, None), response)
         else:
             @functools.wraps(func)
-            def wrapper(*args, request: Request = None, **kwargs):
+            def wrapper(*args, request: Request = None, response: Response = None, **kwargs):
                 uids = prepare(kwargs)
                 try:
                     result = func(*args, **kwargs)
                 except BaseException as exc:
-                    record(request, kwargs, None, exc)
+                    ref = record(request, kwargs, None, exc)
+                    if ref is not None and isinstance(exc, HTTPException):
+                        exc.headers = {**(exc.headers or {}), "X-Governance-Audit-Sequence": str(ref["sequence"])}
                     raise
                 finish(uids, kwargs, result)
-                record(request, kwargs, result, None)
-                return result
+                return attach(result, record(request, kwargs, result, None), response)
 
         params = list(signature.parameters.values())
         params.append(inspect.Parameter("request", inspect.Parameter.KEYWORD_ONLY, annotation=Request))
+        params.append(inspect.Parameter("response", inspect.Parameter.KEYWORD_ONLY, annotation=Response))
         wrapper.__signature__ = signature.replace(parameters=params)
         return wrapper
 
