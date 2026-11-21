@@ -112,6 +112,65 @@ jobs:
           pip install pytest
           pytest tests/test_compose_runtime_smoke.py
 
+  # The dashboard's own image: built with the documented command from the generated files, then
+  # run for real -- health with and without the key, the built UI, a non-root user, the container
+  # health check, and a production start that must refuse non-durable audit storage.
+  dashboard-image:
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -c constraints.txt -r requirements.txt
+
+      - name: Generate the dashboard deployment files
+        run: python -m backend.cli dashboard-deployment --output dashboard-deployment
+
+      - name: Build the image with the documented command
+        run: docker build -f dashboard-deployment/Dockerfile -t notebook2api-dashboard .
+
+      - name: Run it with a volume and check /api/health, the UI and the user
+        env:
+          KEY: ci-dashboard-key-0123456789abcdef
+        run: |
+          docker volume create n2a-data
+          docker run -d --name dash -p 8001:8001 -v n2a-data:/data -e NOTEBOOK_API_DASHBOARD_KEY=$KEY notebook2api-dashboard
+          for i in $(seq 1 60); do curl -fsS -H "X-API-Key: $KEY" localhost:8001/api/health >/dev/null && break; sleep 1; done
+          curl -fsS -H "X-API-Key: $KEY" localhost:8001/api/health
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8001/api/health)" = 401
+          curl -fsS localhost:8001/ | grep -q 'id="root"'
+          test "$(docker exec dash id -u)" = 1000
+          for i in $(seq 1 40); do [ "$(docker inspect -f '{{.State.Health.Status}}' dash)" = healthy ] && break; sleep 3; done
+          test "$(docker inspect -f '{{.State.Health.Status}}' dash)" = healthy
+
+      - name: Production start refuses non-durable audit storage
+        env:
+          KEY: ci-dashboard-key-0123456789abcdef
+        run: |
+          docker rm -f dash
+          set +e
+          timeout 90 docker run --rm -e NOTEBOOK_API_DASHBOARD_KEY=$KEY -e NOTEBOOK2API_GOVERNANCE_DATABASE_PATH=/tmp/audit.db notebook2api-dashboard 2>&1 | tee start.log
+          code=${PIPESTATUS[0]}
+          set -e
+          test "$code" -ne 0 -a "$code" -ne 124
+          grep -qi "not durable" start.log
+
+      - name: Container logs
+        if: failure()
+        run: docker logs dash || true
+
   frontend:
 
     runs-on: ubuntu-latest

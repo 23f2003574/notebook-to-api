@@ -59,7 +59,8 @@ def test_the_cli_writes_the_files(tmp_path):
     r = subprocess.run([sys.executable, "-m", "backend.cli", "dashboard-deployment", "--output", str(out)],
                        capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stderr
-    assert {p.name for p in out.iterdir()} == {"Dockerfile", "docker-compose.yml", "kubernetes.yaml", ".env.example"}
+    assert {p.name for p in out.iterdir()} == {
+        "Dockerfile", "Dockerfile.dockerignore", "docker-compose.yml", "kubernetes.yaml", ".env.example", "README.md"}
 
 
 def test_status_never_claims_durability_for_memory_or_temp_storage(tmp_path):

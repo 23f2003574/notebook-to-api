@@ -7054,6 +7054,8 @@ def _dispatch_core_command(args):
 
         written = generate_dashboard_deployment(args.output)
         print(f"Wrote {', '.join(written)} to {args.output}")
+        print(f"Build it from the repository root: docker build -f {Path(args.output).as_posix()}/Dockerfile -t notebook2api-dashboard .")
+        print(f"(see {Path(args.output).as_posix()}/README.md for running it, durable audit storage and Docker access)")
     elif args.command == "apps":
         import httpx
 
