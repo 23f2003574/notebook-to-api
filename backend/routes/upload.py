@@ -17194,6 +17194,27 @@ def openapi_preview_endpoint(data: dict):
     return response
 
 
+def _notebook_storage_status():
+    """Whether notebooks, versions and generated apps survive a restart (no paths in the answer)."""
+    from backend.dashboard_storage import notebook_storage_status
+
+    return notebook_storage_status({
+        "uploads": UPLOAD_DIR, "generated": GENERATED_DIR, "generated_apps": GENERATED_APPS_DIR,
+    })
+
+
+def _notebook_storage_prometheus():
+    try:
+        durable = 1 if _notebook_storage_status()["durable"] else 0
+    except Exception:  # noqa: BLE001 - metrics must never break the scrape
+        return ""
+    return (
+        "# HELP notebook_to_api_notebook_storage_durable 1 when uploaded notebooks, versions and generated apps survive a restart.\n"
+        "# TYPE notebook_to_api_notebook_storage_durable gauge\n"
+        f"notebook_to_api_notebook_storage_durable {durable}\n"
+    )
+
+
 def _audit_health_prometheus():
     from backend.observability.deployment_governance_audit_health import audit_health
 
@@ -20645,6 +20666,8 @@ def health_check(check_writable: bool = False):
         ),
     }
 
+    response["notebook_storage"] = _notebook_storage_status()
+
     if check_writable:
 
         response["upload_dir_writable"] = _directory_is_writable(UPLOAD_DIR)
@@ -20761,7 +20784,7 @@ def dashboard_metrics_prometheus():
         "this dashboard process started.\n"
         "# TYPE notebook_to_api_dashboard_uptime_seconds counter\n"
         f"notebook_to_api_dashboard_uptime_seconds {uptime_seconds}\n"
-    ) + auth_metrics.prometheus_text() + _audit_health_prometheus()
+    ) + auth_metrics.prometheus_text() + _audit_health_prometheus() + _notebook_storage_prometheus()
 
     return Response(
         content=body, media_type="text/plain; version=0.0.4; charset=utf-8"

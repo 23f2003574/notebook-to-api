@@ -140,6 +140,12 @@ async def _dashboard_lifespan(_app):
         raise
     for issue in status["issues"]:
         logging.getLogger("uvicorn.error").warning("governance audit storage: %s", issue)
+
+    from backend.routes.upload import _notebook_storage_status
+
+    notebook_storage = _notebook_storage_status()
+    for issue in notebook_storage["issues"]:
+        logging.getLogger("uvicorn.error").warning("notebook storage: %s", issue)
     yield
 
 

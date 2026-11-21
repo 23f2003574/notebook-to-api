@@ -31,7 +31,7 @@ def test_dockerfile_declares_the_audit_volume_and_production_sqlite(files):
 def test_compose_mounts_a_named_volume_over_the_database_directory(files):
     doc = yaml.safe_load((files / "docker-compose.yml").read_text())
     svc = doc["services"]["dashboard"]
-    assert "governance-data:/data" in svc["volumes"] and "governance-data" in doc["volumes"]
+    assert "dashboard-data:/data" in svc["volumes"] and "dashboard-data" in doc["volumes"]
     env = svc["environment"]
     assert env["NOTEBOOK2API_GOVERNANCE_DATABASE_PATH"].startswith("/data/") and env["NOTEBOOK2API_GOVERNANCE_VOLUME_PERSISTENT"] == "1"
 
@@ -43,7 +43,10 @@ def test_kubernetes_uses_a_pvc_not_emptydir_and_never_two_writers(files):
     assert dep["spec"]["replicas"] == 1 and dep["spec"]["strategy"]["type"] == "Recreate"
     volumes = dep["spec"]["template"]["spec"]["volumes"]
     assert volumes[0]["persistentVolumeClaim"]["claimName"] == pvc["metadata"]["name"]
-    assert "emptyDir" not in (files / "kubernetes.yaml").read_text()
+    # the only emptyDir is /tmp scratch space: nothing durable (the /data mount) is backed by one
+    mounts = {m["mountPath"]: m["name"] for m in dep["spec"]["template"]["spec"]["containers"][0]["volumeMounts"]}
+    by_name = {v["name"]: v for v in volumes}
+    assert "emptyDir" not in by_name[mounts["/data"]] and "persistentVolumeClaim" in by_name[mounts["/data"]]
 
 
 def test_no_credentials_are_written_to_any_generated_file(files):

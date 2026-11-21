@@ -12,6 +12,12 @@ import os
 from pathlib import Path
 
 AUDIT_DB = "/data/governance/audit.db"
+# Everything the dashboard keeps lives under /data, so one mounted volume makes a restart or a
+# replaced container lose nothing: uploaded notebooks (with their versions, data files and history)
+# and the compiled apps, besides the audit database.
+UPLOAD_DIR = "/data/uploads"
+GENERATED_DIR = "/data/generated"
+GENERATED_APPS_DIR = "/data/generated_apps"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 DOCKERFILE = f"""# Build from the repository root (the build context):
@@ -36,14 +42,20 @@ RUN pip install --no-cache-dir -c constraints.txt -r requirements.txt
 COPY backend ./backend
 COPY --from=frontend /build/frontend/dist ./frontend/dist
 RUN useradd --create-home --uid 1000 appuser \\
-    && mkdir -p /data/governance \\
+    && mkdir -p /data/governance {UPLOAD_DIR} {GENERATED_DIR} {GENERATED_APPS_DIR} \\
     && chown -R appuser:appuser /app /data
 ENV NOTEBOOK2API_ENVIRONMENT=production \\
     NOTEBOOK2API_GOVERNANCE_PERSISTENCE_BACKEND=sqlite \\
     NOTEBOOK2API_GOVERNANCE_DATABASE_PATH={AUDIT_DB} \\
-    NOTEBOOK_API_DASHBOARD_HOST=0.0.0.0
-# The audit database lives here: mount a volume (the compose and Kubernetes files do). In
-# production the dashboard refuses to start when this directory is not on durable storage.
+    NOTEBOOK_API_UPLOAD_DIR={UPLOAD_DIR} \\
+    NOTEBOOK_API_GENERATED_DIR={GENERATED_DIR} \\
+    NOTEBOOK_API_GENERATED_APPS_DIR={GENERATED_APPS_DIR} \\
+    NOTEBOOK_API_DASHBOARD_HOST=0.0.0.0 \\
+    XDG_CACHE_HOME=/tmp/cache MPLCONFIGDIR=/tmp/matplotlib
+# Notebooks, versions, generated apps and the audit database all live here: mount a volume (the
+# compose and Kubernetes files do). In production the dashboard refuses to start when the audit
+# database is not on durable storage, and /api/health reports whether the notebook storage is.
+# The root filesystem can be read-only: only /data and /tmp are written.
 VOLUME /data
 USER appuser
 EXPOSE 8001
@@ -87,11 +99,18 @@ COMPOSE = f"""services:
       NOTEBOOK2API_GOVERNANCE_PERSISTENCE_BACKEND: sqlite
       NOTEBOOK2API_GOVERNANCE_DATABASE_PATH: {AUDIT_DB}
       NOTEBOOK2API_GOVERNANCE_VOLUME_PERSISTENT: "1"
+      NOTEBOOK_API_STORAGE_VOLUME_PERSISTENT: "1"
     volumes:
-      - governance-data:/data
+      - dashboard-data:/data
+    read_only: true          # only the /data volume and /tmp are writable
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 volumes:
-  governance-data:
+  dashboard-data:
 """
 
 KUBERNETES = f"""apiVersion: v1
@@ -102,7 +121,7 @@ spec:
   accessModes: ["ReadWriteOnce"]
   resources:
     requests:
-      storage: 1Gi
+      storage: 5Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -118,6 +137,12 @@ spec:
     metadata:
       labels: {{app: notebook2api-dashboard}}
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000          # makes the mounted volume writable for the non-root user
+        seccompProfile: {{type: RuntimeDefault}}
       containers:
         - name: dashboard
           image: notebook2api-dashboard:latest
@@ -135,13 +160,47 @@ spec:
               value: {AUDIT_DB}
             - name: NOTEBOOK2API_GOVERNANCE_VOLUME_PERSISTENT
               value: "1"
+            - name: NOTEBOOK_API_UPLOAD_DIR
+              value: {UPLOAD_DIR}
+            - name: NOTEBOOK_API_GENERATED_DIR
+              value: {GENERATED_DIR}
+            - name: NOTEBOOK_API_GENERATED_APPS_DIR
+              value: {GENERATED_APPS_DIR}
+            - name: NOTEBOOK_API_STORAGE_VOLUME_PERSISTENT
+              value: "1"
+          # The probes run the image's own health check, which sends the dashboard key from the
+          # container's environment (an httpGet probe cannot carry a Secret value).
+          startupProbe:
+            exec: {{command: ["python", "-m", "backend.dashboard_healthcheck"]}}
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            exec: {{command: ["python", "-m", "backend.dashboard_healthcheck"]}}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec: {{command: ["python", "-m", "backend.dashboard_healthcheck"]}}
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests: {{cpu: 250m, memory: 512Mi}}
+            limits: {{memory: 2Gi}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true      # only /data (the volume) and /tmp are writable
+            capabilities: {{drop: ["ALL"]}}
           volumeMounts:
             - name: data
               mountPath: /data
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: notebook2api-dashboard-data
+        - name: tmp
+          emptyDir: {{sizeLimit: 1Gi}}   # scratch space only: nothing durable lives here
 """
 
 ENV_EXAMPLE = """# Required: the dashboard refuses to listen on a non-loopback address without a key. Use at least
@@ -162,6 +221,11 @@ or `cp .env.example .env`, set the key, and `docker compose -f {compose} up --bu
 
 - The image serves the dashboard UI and API on port 8001 as a non-root user, and reports health through
   `python -m backend.dashboard_healthcheck` (GET /api/health).
+- **Everything lives under `/data`**: uploaded notebooks with their versions and data files, the
+  compiled apps and the audit database. Replacing the container (a rebuild, an upgrade, `docker compose up
+  --build`) loses nothing as long as the same volume is mounted. `GET /api/health` reports
+  `notebook_storage.durable`, and the Prometheus gauge `notebook_to_api_notebook_storage_durable` mirrors it.
+  The root filesystem is read-only in the compose and Kubernetes files; only `/data` and `/tmp` are writable.
 - **Audit storage must be durable.** The image runs with `NOTEBOOK2API_ENVIRONMENT=production`, so the
   dashboard refuses to start when the governance audit database is on the container's disposable layer.
   Mount a volume at `/data` (the compose and Kubernetes files do) and assert it with

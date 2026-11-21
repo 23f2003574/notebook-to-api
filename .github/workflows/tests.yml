@@ -146,7 +146,9 @@ jobs:
           KEY: ci-dashboard-key-0123456789abcdef
         run: |
           docker volume create n2a-data
-          docker run -d --name dash -p 8001:8001 -v n2a-data:/data -e NOTEBOOK_API_DASHBOARD_KEY=$KEY notebook2api-dashboard
+          # read-only root filesystem and no capabilities, as the generated compose and Kubernetes files run it
+          docker run -d --name dash -p 8001:8001 -v n2a-data:/data --read-only --tmpfs /tmp --cap-drop ALL \
+            --security-opt no-new-privileges:true -e NOTEBOOK_API_DASHBOARD_KEY=$KEY notebook2api-dashboard
           for i in $(seq 1 60); do curl -fsS -H "X-API-Key: $KEY" localhost:8001/api/health >/dev/null && break; sleep 1; done
           curl -fsS -H "X-API-Key: $KEY" localhost:8001/api/health
           test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8001/api/health)" = 401
@@ -154,6 +156,37 @@ jobs:
           test "$(docker exec dash id -u)" = 1000
           for i in $(seq 1 40); do [ "$(docker inspect -f '{{.State.Health.Status}}' dash)" = healthy ] && break; sleep 3; done
           test "$(docker inspect -f '{{.State.Health.Status}}' dash)" = healthy
+          curl -fsS -H "X-API-Key: $KEY" localhost:8001/api/health | python -c "import json,sys; d=json.load(sys.stdin)['notebook_storage']; assert d['durable'], d"
+
+      - name: State survives replacing the container
+        env:
+          KEY: ci-dashboard-key-0123456789abcdef
+        run: |
+          api() { curl -fsS -H "X-API-Key: $KEY" "$@"; }
+          python - <<'PY'
+          import nbformat
+          nb = nbformat.v4.new_notebook()
+          nb.cells.append(nbformat.v4.new_code_cell("def add(a: int, b: int) -> int:\n    return a + b\n"))
+          nbformat.write(nb, "keep.ipynb")
+          nb.cells[0].source += "\n# second version\n"
+          nbformat.write(nb, "keep2.ipynb")
+          PY
+          api -F "file=@keep.ipynb;filename=keep.ipynb" localhost:8001/api/upload >/dev/null
+          api -F "file=@keep2.ipynb;filename=keep.ipynb" "localhost:8001/api/upload?overwrite=true" >/dev/null
+          api -H 'Content-Type: application/json' -d '{"notebook_path":"keep.ipynb","per_notebook":true}' localhost:8001/api/compile >/dev/null
+          docker rm -f dash
+          docker run -d --name dash -p 8001:8001 -v n2a-data:/data --read-only --tmpfs /tmp --cap-drop ALL \
+            --security-opt no-new-privileges:true -e NOTEBOOK_API_DASHBOARD_KEY=$KEY notebook2api-dashboard
+          for i in $(seq 1 60); do api localhost:8001/api/health >/dev/null && break; sleep 1; done
+          api localhost:8001/api/notebooks | python -c "import json,sys; n=json.load(sys.stdin)['notebooks']; assert [x['filename'] for x in n]==['keep.ipynb'], n; assert n[0]['per_notebook_app']['status']=='compiled', n"
+          api localhost:8001/api/notebooks/keep.ipynb/versions | python -c "import json,sys; v=json.load(sys.stdin)['versions']; assert len(v)==1, v"
+          api "localhost:8001/governance/audit/history?notebook=keep.ipynb" | python -c "import json,sys; r=json.load(sys.stdin)['records']; assert any(x['action']=='notebook.compile' for x in r), r"
+          api localhost:8001/governance/audit/verify | python -c "import json,sys; assert json.load(sys.stdin)['valid']"
+
+      - name: Validate the generated Kubernetes manifests against the Kubernetes schemas
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
+          ./kubeconform -strict -summary -kubernetes-version 1.30.0 dashboard-deployment/kubernetes.yaml
 
       - name: Production start refuses non-durable audit storage
         env:
