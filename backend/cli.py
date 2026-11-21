@@ -6,6 +6,9 @@ import io
 import base64
 import binascii
 import json
+import uuid
+
+from backend.cli_remote_audit import audit_summary_lines
 import re
 import os
 import shutil
@@ -5955,6 +5958,7 @@ def _dispatch_core_command(args):
             response = httpx.post(
                 f"{dashboard_url}/api/compile",
                 json=request_body,
+                headers={"Idempotency-Key": uuid.uuid4().hex},
                 timeout=args.timeout,
             )
         except httpx.HTTPError as exc:
@@ -5962,9 +5966,11 @@ def _dispatch_core_command(args):
 
         if response.status_code >= 400:
 
+            audit_ref = response.headers.get("X-Governance-Audit-Sequence")
             raise RuntimeError(
                 f"Dashboard rejected the compile ({response.status_code}): "
                 f"{_extract_dashboard_error_detail(response)}"
+                + (f" (governance audit record #{audit_ref})" if audit_ref else "")
             )
 
         data = response.json()
@@ -5979,6 +5985,8 @@ def _dispatch_core_command(args):
                 else f"'{data.get('notebook', args.filename)}'"
             )
             print(f"Compiled {target} on {dashboard_url}")
+            for audit_line in audit_summary_lines(data):
+                print(audit_line)
             dropped = data.get("dropped_past_sunset") or []
             if dropped:
                 print(
@@ -8864,15 +8872,18 @@ def _dispatch_core_command(args):
         try:
             response = httpx.post(
                 f"{dashboard_url}/api/deploy", json=body, timeout=args.timeout,
+                headers={"Idempotency-Key": uuid.uuid4().hex},
             )
         except httpx.HTTPError as exc:
             raise _dashboard_connection_error(exc, dashboard_url)
 
         if response.status_code >= 400:
 
+            audit_ref = response.headers.get("X-Governance-Audit-Sequence")
             raise RuntimeError(
                 f"Dashboard rejected the deploy ({response.status_code}): "
                 f"{_extract_dashboard_error_detail(response)}"
+                + (f" (governance audit record #{audit_ref})" if audit_ref else "")
             )
 
         data = response.json()
@@ -8883,6 +8894,8 @@ def _dispatch_core_command(args):
 
             verb = "Would build" if data.get("dry_run") else "Built"
             print(f"{verb} image '{data.get('tag')}' on {dashboard_url}")
+            for audit_line in audit_summary_lines(data):
+                print(audit_line)
 
             if data.get("pushed"):
                 print(
@@ -15866,6 +15879,33 @@ def main():
         help="Write Dockerfile, docker-compose.yml and kubernetes.yaml for the dashboard itself, with a persistent governance audit volume."
     )
     dashboard_deployment_parser.add_argument("--output", default="dashboard-deployment", help="Directory to write the files to.")
+
+    remote_audit_parser = subparsers.add_parser(
+        "remote-audit",
+        help="List, show and verify the governance audit trail of a running dashboard (GET /governance/audit/*).",
+        description=(
+            "Read the dashboard's hash-chained audit trail of compile, deploy and notebook lifecycle "
+            "operations. Credentials: $NOTEBOOK_API_DASHBOARD_KEY or the file $NOTEBOOK_API_DASHBOARD_KEY_FILE. "
+            "`verify` exits 0 when the chain is intact, 3 when it is broken and 4 when the audit "
+            "service is unavailable (not evidence of tampering). The separate `governance audits` "
+            "group works on local tables and is unrelated."
+        ),
+    )
+    remote_audit_sub = remote_audit_parser.add_subparsers(dest="remote_audit_command", required=True)
+    _audit_list = remote_audit_sub.add_parser("list", help="List audit records, newest first, one page at a time.")
+    _audit_list.add_argument("--notebook", help="Only records about this notebook, including under its earlier names.")
+    _audit_list.add_argument("--action", help="Only this action, e.g. notebook.compile, notebook.rename.")
+    _audit_list.add_argument("--outcome", choices=["success", "failure"], help="Only this outcome.")
+    _audit_list.add_argument("--scope", choices=["all", "notebook"], default="all",
+                             help="notebook: only notebook.* operations (default: all records).")
+    _audit_list.add_argument("--cursor", help="The next_cursor of the previous page.")
+    _audit_list.add_argument("--limit", type=int, default=25, help="Records per page, 1-200 (default 25).")
+    _audit_show = remote_audit_sub.add_parser("show", help="Show one record by its sequence number.")
+    _audit_show.add_argument("sequence", type=int, help="The sequence number, e.g. from `remote-compile`.")
+    _audit_verify = remote_audit_sub.add_parser("verify", help="Verify the audit chain (read-only).")
+    for _p in (_audit_list, _audit_show, _audit_verify):
+        _p.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON.")
+        _add_dashboard_url_and_timeout_arguments(_p)
 
     audit_db_parser = subparsers.add_parser(
         "audit-db",
@@ -24434,7 +24474,22 @@ def main():
             print(_generate_fish_completion(parser), end="")
         return
 
-    if args.command in _CORE_COMMANDS:
+    if getattr(args, "dashboard_url", None):
+        from backend.cli_remote_audit import install_dashboard_credentials
+
+        import httpx as _httpx
+
+        try:
+            install_dashboard_credentials(_httpx, args.dashboard_url)
+        except RuntimeError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+
+    if args.command == "remote-audit":
+        from backend.cli_remote_audit import run as run_remote_audit
+
+        sys.exit(run_remote_audit(args))
+    elif args.command in _CORE_COMMANDS:
         try:
             _dispatch_core_command(args)
         except CLI_USER_FACING_ERRORS as exc:
