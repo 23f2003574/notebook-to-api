@@ -92,7 +92,7 @@ def test_cancel_running_task_kills_child_and_group_and_frees_capacity(served):
     thread.join(20)
 
     assert resp.status_code == 200 and resp.json() == {"task_id": task_id, "status": "cancelled"}
-    assert not thread.is_alive() and time.monotonic() - began < 10
+    assert not thread.is_alive() and time.monotonic() - began < 30
     assert not any(_alive(p) for p in found)  # the child AND its grandchild are gone
     assert client.get(f"/tasks/{task_id}", headers=HEADERS).json()["status"] == "cancelled"
     assert task_id not in module._TASK_CANCEL

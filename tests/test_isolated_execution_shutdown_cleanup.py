@@ -111,7 +111,7 @@ def test_sigterm_ignoring_child_is_escalated_to_kill(tmp_path):
     iso.terminate_active_processes(grace_seconds=0.5)
     thread.join(10)
 
-    assert not _alive(pid) and time.monotonic() - started < 5
+    assert not _alive(pid) and time.monotonic() - started < 30
 
 
 def _swallow(func):

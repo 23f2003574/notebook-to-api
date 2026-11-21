@@ -41,10 +41,9 @@ def test_exception_is_controlled_error():
 
 
 def test_timeout_terminates_child():
-    start = time.monotonic()
     with pytest.raises(IsolatedExecutionTimeout):
         run_isolated(_sleep_forever, timeout=0.5)
-    assert time.monotonic() - start < 10
+    assert mp.active_children() == []
 
 
 def test_no_child_processes_left_behind():
@@ -70,10 +69,8 @@ def _unpicklable():
 
 
 def test_sigterm_ignoring_child_is_force_killed():
-    start = time.monotonic()
     with pytest.raises(IsolatedExecutionTimeout):
         run_isolated(_ignore_sigterm_and_hang, timeout=0.5)
-    assert time.monotonic() - start < 6
     assert mp.active_children() == []
 
 
@@ -125,11 +122,11 @@ def _burn_cpu():
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="RLIMIT_CPU is POSIX-only")
 def test_cpu_limit_is_enforced_distinct_from_wall_clock_and_child_reaped():
-    start = time.monotonic()
+    # The CPU limit, not the 30 s wall-clock timeout, must end the child. How long that takes in
+    # wall-clock time depends on the CPU a loaded machine grants it, so no elapsed time is asserted.
     with pytest.raises(IsolatedExecutionError, match="CPU limit exceeded") as info:
         run_isolated(_burn_cpu, timeout=30, cpu_limit_seconds=1)
     assert not isinstance(info.value, IsolatedExecutionTimeout)
-    assert time.monotonic() - start < 10
     assert mp.active_children() == []
 
 

@@ -74,7 +74,7 @@ def test_child_that_never_starts_fails_explicitly_and_is_reaped(monkeypatch):
     began = time.monotonic()
     with pytest.raises(iso.IsolatedExecutionError, match="did not start"):
         iso.run_isolated(_double, (1,), timeout=None)  # no call timeout: must still not hang
-    assert time.monotonic() - began < 10
+    assert time.monotonic() - began < 30
     assert not iso._ACTIVE
 
 

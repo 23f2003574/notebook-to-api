@@ -2,3 +2,4 @@
 pytest
 PyYAML
 ruff
+pytest-timeout

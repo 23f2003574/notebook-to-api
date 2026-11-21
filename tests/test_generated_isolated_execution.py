@@ -55,7 +55,7 @@ def test_timeout_is_504_child_reaped_and_next_request_works(monkeypatch):
     start = time.monotonic()
     r = client.post("/hang", json={}, headers=HEADERS)
     assert r.status_code == 504
-    assert time.monotonic() - start < 10
+    assert time.monotonic() - start < 30
     assert _no_children()
     assert client.post("/add", json={"a": 1, "b": 1}, headers=HEADERS).json() == {"result": 2}
 

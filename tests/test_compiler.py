@@ -19286,12 +19286,16 @@ def test_concurrent_identical_cached_requests_run_the_notebook_function_once(tmp
     notebook = nbformat.v4.new_notebook()
     notebook.cells.append(
         nbformat.v4.new_code_cell(
-            "import time\n"
+            "import time, threading\n"
             "CALLS = 0\n"
+            "RENDEZVOUS = threading.Barrier(2)\n"
             "# notebook-to-api: cache 60\n"
             "def slow(k: int = 0):\n"
             "    global CALLS\n"
-            "    time.sleep(0.3)\n"
+            "    if k > 1:\n"
+            "        RENDEZVOUS.wait(timeout=30)  # returns only when both keys run at the same time\n"
+            "    else:\n"
+            "        time.sleep(0.3)\n"
             "    CALLS += 1\n"
             "    return {'k': k}\n"
             "# notebook-to-api: cache 60\n"
@@ -19336,10 +19340,10 @@ async def main():
         assert sorted(r.headers["x-cache"] for r in same) == ["HIT"] * 9 + ["MISS"]
         assert (await client.post("/calls")).json() == {{"result": 1}}
 
-        start = time.monotonic()
+        # Both calls wait for each other at a barrier: this passes only if they really run
+        # concurrently (a serialized pair breaks the barrier), with no timing assumption.
         other = await asyncio.gather(client.post("/slow", json={{"k": 2}}), client.post("/slow", json={{"k": 3}}))
-        assert all(r.status_code == 200 for r in other)
-        assert time.monotonic() - start < 0.55, "different keys must not serialize"
+        assert all(r.status_code == 200 for r in other), [r.text for r in other]
 
         # A failing leader answers its own error and leaves the key usable.
         first = await client.post("/flaky", json={{"k": 1}})
