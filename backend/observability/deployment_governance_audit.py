@@ -863,6 +863,30 @@ def _production_environment(environ) -> bool:
     return environ.get("NOTEBOOK2API_ENVIRONMENT", "").strip().lower() in {"production", "prod"}
 
 
+def audit_keyring_from_env(environ=None):
+    """The AuditKeyring the environment asks for (NOTEBOOK2API_GOVERNANCE_AUDIT_HMAC_KEY, its
+    _EPOCH and _PREVIOUS_KEYS), or None when keyed integrity is not enabled."""
+
+    import os
+
+    from .deployment_governance_audit_store import AuditKeyring
+
+    environ = os.environ if environ is None else environ
+    key = environ.get("NOTEBOOK2API_GOVERNANCE_AUDIT_HMAC_KEY", "").strip()
+
+    if not key:
+        return None
+
+    previous = {}
+
+    for entry in environ.get("NOTEBOOK2API_GOVERNANCE_AUDIT_HMAC_PREVIOUS_KEYS", "").split(","):
+        if entry.strip():
+            epoch, _, old_key = entry.strip().partition(":")
+            previous[epoch] = old_key
+
+    return AuditKeyring(key, environ.get("NOTEBOOK2API_GOVERNANCE_AUDIT_HMAC_KEY_EPOCH", "").strip() or "1", previous)
+
+
 def build_audit_service_from_env(environ=None) -> "GovernanceAuditService":
     """Build the audit service the environment asks for.
 
@@ -904,16 +928,7 @@ def build_audit_service_from_env(environ=None) -> "GovernanceAuditService":
         from .deployment_governance_audit_store import AuditKeyring
 
         path = environ.get("NOTEBOOK2API_GOVERNANCE_DATABASE_PATH", "data/notebook2api.db")
-        keyring = None
-        if key:
-            previous = {}
-            for entry in environ.get("NOTEBOOK2API_GOVERNANCE_AUDIT_HMAC_PREVIOUS_KEYS", "").split(","):
-                if entry.strip():
-                    epoch, _, old_key = entry.strip().partition(":")
-                    previous[epoch] = old_key
-            keyring = AuditKeyring(
-                key, environ.get("NOTEBOOK2API_GOVERNANCE_AUDIT_HMAC_KEY_EPOCH", "").strip() or "1", previous
-            )
+        keyring = audit_keyring_from_env(environ)
         allow_loss = environ.get("NOTEBOOK2API_GOVERNANCE_AUDIT_ALLOW_KEY_LOSS", "").strip().lower() in {"1", "true", "yes"}
         return GovernanceAuditService(
             policy_engine=get_policy_engine(),

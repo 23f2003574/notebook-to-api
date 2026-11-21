@@ -388,7 +388,7 @@ _CORE_COMMANDS = frozenset({
     "download", "export-notebooks", "generated", "delete", "delete-batch", "rename", "copy",
     "copy-batch", "copy-many", "rename-many", "tags", "prune-versions", "prune-temp-files", "description", "source-url", "deploy-history",
     "clear-deploy-history", "compile-history", "clear-compile-history",
-    "remote-compile", "remote-inspect", "remote-build", "apps", "dashboard-deployment",
+    "remote-compile", "remote-inspect", "remote-build", "apps", "dashboard-deployment", "audit-db",
     "versions", "remote-files", "remote-diff", "diff-notebooks", "remote-export", "remote-deploy",
     "status", "metrics", "remote-validate", "validate-all", "requirements-preview", "curl-preview",
     "remote-curl", "remote-postman", "app-preview", "readme-preview", "dockerfile-preview", "docker-compose-preview", "env-example-preview", "env-vars-preview",
@@ -7033,6 +7033,10 @@ def _dispatch_core_command(args):
             for env_var in data.get("environment_variables", []):
                 print(f"{env_var['name']} (default: {env_var['default']!r})")
                 print(f"  {env_var['description']}\n")
+    elif args.command == "audit-db":
+        from backend.observability.deployment_governance_audit_backup import run_cli as run_audit_db
+
+        sys.exit(run_audit_db(args))
     elif args.command == "dashboard-deployment":
         from backend.generator.dashboard_deployment import generate_dashboard_deployment
 
@@ -15862,6 +15866,34 @@ def main():
         help="Write Dockerfile, docker-compose.yml and kubernetes.yaml for the dashboard itself, with a persistent governance audit volume."
     )
     dashboard_deployment_parser.add_argument("--output", default="dashboard-deployment", help="Directory to write the files to.")
+
+    audit_db_parser = subparsers.add_parser(
+        "audit-db",
+        help="Back up, verify and restore the governance audit database (the hash-chained compile/deploy trail).",
+        description=(
+            "Operate on the dashboard's governance audit database. Backups use SQLite's online "
+            "backup API and are safe while the dashboard is writing. Exit codes: 0 ok, 1 error, "
+            "2 refused (would overwrite newer or different records), 3 the chain failed verification."
+        ),
+    )
+    audit_db_sub = audit_db_parser.add_subparsers(dest="audit_db_command", required=True)
+    for _name, _help in (("backup", "Write a verified, consistent copy of the database."),
+                         ("restore", "Replace the database with a verified backup (stop the dashboard first)."),
+                         ("verify-file", "Verify the hash chain of a database file without modifying it.")):
+        _sub = audit_db_sub.add_parser(_name, help=_help)
+        _sub.add_argument("--json", action="store_true", help="Print the result as JSON.")
+        if _name != "verify-file":
+            _sub.add_argument("--database", default=None,
+                              help="The live audit database (default: $NOTEBOOK2API_GOVERNANCE_DATABASE_PATH or data/notebook2api.db).")
+            _sub.add_argument("--force", action="store_true",
+                              help="backup: replace an existing output file. restore: replace a database holding newer or different records.")
+        if _name == "backup":
+            _sub.add_argument("--output", required=True, help="Where to write the backup file.")
+        elif _name == "restore":
+            _sub.add_argument("--input", required=True, help="The backup file to restore from.")
+        else:
+            _sub.add_argument("file", help="The audit database (or backup) file to verify.")
+    # Keyed integrity uses NOTEBOOK2API_GOVERNANCE_AUDIT_HMAC_KEY (and _PREVIOUS_KEYS) from the environment.
 
     remote_build_parser = subparsers.add_parser(
         "remote-build",
