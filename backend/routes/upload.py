@@ -768,6 +768,11 @@ def _current_total_storage_bytes():
                 f.stat().st_size for f in versions_dir.iterdir()
                 if f.is_file()
             )
+            # the data files kept with each version count too
+            total_bytes += sum(
+                p.stat().st_size for d in versions_dir.iterdir() if d.is_dir()
+                for p in d.rglob("*") if p.is_file() and not p.is_symlink()
+            )
 
     return total_bytes
 
@@ -914,6 +919,8 @@ def _remove_version_note(notebook_filename: str, version_id: str) -> None:
     version_id GET .../versions can no longer even list.
     """
     _write_version_note(notebook_filename, version_id, "")
+    # the data files saved with the version go with it
+    shutil.rmtree(_version_companion_dir(notebook_filename, version_id), ignore_errors=True)
 
 
 def _validate_and_normalize_version_note(note) -> str:
@@ -982,6 +989,89 @@ def _prune_notebook_versions(versions_dir: Path) -> None:
         _remove_version_note(versions_dir.name, stale.name)
 
 
+def _clone_companion_tree(source: Path, destination: Path) -> int:
+    """Copy a companion folder (hardlinks where possible: companion files are only ever replaced,
+    never edited in place). Symbolic links and anything that is not a regular file are skipped.
+    Returns the number of files."""
+    destination.mkdir(parents=True)
+    count = 0
+    for path in sorted(source.rglob("*")):
+        if path.is_symlink():
+            continue
+        target = destination / path.relative_to(source)
+        if path.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+        elif path.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.link(path, target)
+            except OSError:
+                shutil.copy2(path, target)
+            count += 1
+    return count
+
+
+def _version_companion_dir(notebook_filename: str, version_id: str) -> Path:
+    """Where a version's companion data files are kept: beside the version's notebook file."""
+    return _notebook_versions_dir(notebook_filename) / f"{version_id}.files"
+
+
+def _count_version_companions(notebook_filename: str, version_id: str):
+    """How many data files the version carries; None for a version saved before companion files
+    were versioned (restoring it leaves the current data files alone)."""
+    directory = _version_companion_dir(notebook_filename, version_id)
+    if not directory.is_dir():
+        return None
+    return sum(1 for path in directory.rglob("*") if path.is_file() and not path.is_symlink())
+
+
+def _snapshot_version_companions(notebook_filename: str, version_id: str) -> None:
+    """Keep the notebook's current data files with the version just saved. An empty folder records
+    "this version had no data files", so restoring it removes later ones. Best effort: a failure
+    leaves the version without companions (treated as an older version), never loses the notebook."""
+    target = _version_companion_dir(notebook_filename, version_id)
+    try:
+        shutil.rmtree(target, ignore_errors=True)
+        source = _companion_dir(notebook_filename)
+        if source.is_dir():
+            _clone_companion_tree(source, target)
+        else:
+            target.mkdir(parents=True)
+    except OSError:
+        shutil.rmtree(target, ignore_errors=True)
+
+
+def _swap_companion_dir(final: Path, staged: "Path | None") -> None:
+    """Install `staged` as `final` (or remove `final` when staged is None) without ever having
+    neither: the previous set is only deleted once the new one is in place, and put back if the
+    swap fails."""
+    previous = None
+    if final.exists():
+        previous = final.with_name(f"{final.name}.{uuid.uuid4().hex}.old")
+        os.replace(final, previous)
+    try:
+        if staged is not None:
+            os.replace(staged, final)
+    except BaseException:
+        if previous is not None:
+            os.replace(previous, final)
+        raise
+    if previous is not None:
+        shutil.rmtree(previous, ignore_errors=True)
+
+
+def _stage_version_companions(notebook_filename: str, version_path: Path):
+    """Prepare a restore: (staged copy or None, whether the version carries data files at all)."""
+    source = _version_companion_dir(notebook_filename, version_path.name)
+    if not source.is_dir():
+        return None, False
+    if not any(path.is_file() for path in source.rglob("*")):
+        return None, True
+    staged = Path(UPLOAD_DIR) / f".{notebook_filename}.files.{uuid.uuid4().hex}.tmp"
+    _clone_companion_tree(source, staged)
+    return staged, True
+
+
 def _snapshot_current_notebook_version(file_path: Path) -> None:
     """Copy `file_path`'s current on-disk bytes into its version history
     before they're about to be overwritten.
@@ -1013,6 +1103,8 @@ def _snapshot_current_notebook_version(file_path: Path) -> None:
     version_id = f"{timestamp}_{uuid.uuid4().hex[:8]}.ipynb"
 
     shutil.copy2(file_path, versions_dir / version_id)
+
+    _snapshot_version_companions(file_path.name, version_id)
 
     _prune_notebook_versions(versions_dir)
 
@@ -1069,7 +1161,20 @@ def _restore_notebook_version_onto(file_path: Path, version_path: Path) -> None:
 
     _snapshot_current_notebook_version(file_path)
 
-    shutil.copy2(version_path, file_path)
+    # The data files that went with that version come back together with its notebook, so a
+    # restore never pairs an old notebook with newer data. A version saved before data files
+    # were versioned has none recorded: the current ones are left alone.
+    staged, versioned = _stage_version_companions(file_path.name, version_path)
+
+    try:
+        shutil.copy2(version_path, file_path)
+
+        if versioned:
+            _swap_companion_dir(_companion_dir(file_path.name), staged)
+            staged = None
+    finally:
+        if staged is not None:
+            shutil.rmtree(staged, ignore_errors=True)
 
 
 _version_locks_by_filename = {}
@@ -2022,9 +2127,8 @@ def _store_companion_files(archive, entry_name, filename, dry_run):
             total += info.file_size if data is None else len(data)
             stored.append({"path": relative, "bytes": info.file_size if data is None else len(data)})
         if not dry_run and stored:
-            final = _companion_dir(filename)
-            shutil.rmtree(final, ignore_errors=True)  # a re-import replaces the previous set
-            os.replace(staging, final)
+            # A re-import replaces the previous set; the old one stays until the new one is in place.
+            _swap_companion_dir(_companion_dir(filename), staging)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
     return stored, skipped
@@ -11468,6 +11572,7 @@ def list_notebook_versions(
     filename: str, limit: int = None, offset: int = 0, format: str = "json",
     saved_after: str = None, saved_before: str = None, checksums: bool = False,
     notes: bool = False, note_search: str = None, content_search: str = None,
+    companions: bool = False,
     regex: bool = False, sort: str = "saved", order: str = "desc",
 ):
     """List a previously uploaded notebook's snapshotted previous
@@ -11723,6 +11828,10 @@ def list_notebook_versions(
                 "version_id": entry.name,
                 "size_bytes": entry_stat.st_size,
                 "saved_at": entry_saved_at.isoformat(),
+                **(
+                    {"companion_files": _count_version_companions(file_path.name, entry.name)}
+                    if companions else {}
+                ),
             })
 
     # Read once, shared by "note_search" (to filter, below) and "notes"
