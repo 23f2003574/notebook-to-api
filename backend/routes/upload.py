@@ -598,6 +598,59 @@ def resolve_upload_path(name: str) -> Path:
     return _resolve_path_within(UPLOAD_DIR, name, "uploads")
 
 
+_WINDOWS_RESERVED_NAMES = frozenset(
+    {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
+)
+_WINDOWS_INVALID_CHARACTERS = '<>:"|?*'
+
+
+def validate_new_notebook_filename(name):
+    """Reject a name that must never be *created*: backslashes (a path separator on Windows hosts),
+    control characters, characters Windows forbids, Windows device names, dot-only or space/dot-
+    terminated stems, and anything but a .ipynb extension. Names already stored are still readable,
+    renamable and deletable -- only creating one (upload, import, rename, copy) is checked."""
+    if not isinstance(name, str) or not name:
+        raise HTTPException(status_code=400, detail="Invalid filename: a notebook name is required")
+    problems = []
+    if "\\" in name:
+        problems.append("a backslash")
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in name):
+        problems.append("a control character")
+    bad = sorted({ch for ch in name if ch in _WINDOWS_INVALID_CHARACTERS})
+    if bad:
+        problems.append("the character(s) " + " ".join(bad))
+    stem = name[:-len(".ipynb")] if name.endswith(".ipynb") else name
+    if not name.endswith(".ipynb"):
+        problems.append("an extension other than .ipynb")
+    if not stem or set(stem) <= {"."} or stem != stem.rstrip(" ."):
+        problems.append("an empty stem, or one that is only dots or ends with a space or dot")
+    if stem.split(".")[0].strip().lower() in _WINDOWS_RESERVED_NAMES:
+        problems.append("a reserved Windows device name")
+    if problems:
+        raise HTTPException(status_code=400, detail="Invalid filename: it contains " + "; ".join(problems))
+
+
+def resolve_new_notebook_path(name, exclude=None) -> Path:
+    """resolve_upload_path for a name about to be created: validated by validate_new_notebook_filename
+    and refused with 409 when another stored notebook differs from it only by letter case (they would
+    collide on a case-insensitive volume). `exclude` is the notebook being renamed. The same name
+    again is not a collision here: overwrite semantics stay with the callers."""
+    validate_new_notebook_filename(name)
+    path = resolve_upload_path(name)
+    folded = name.casefold()
+    try:
+        existing = [entry.name for entry in Path(UPLOAD_DIR).iterdir()]
+    except OSError:
+        existing = []
+    for other in existing:
+        if other != name and other.casefold() == folded and (exclude is None or other != Path(exclude).name):
+            raise HTTPException(
+                status_code=409,
+                detail=f"A notebook named {other!r} already exists and differs from {name!r} only by letter case",
+            )
+    return path
+
+
 def resolve_generated_path(name: str, root: str = None) -> Path:
     """Resolve `name` against GENERATED_DIR, rejecting anything that
     would escape it -- same protection as resolve_upload_path, applied to
@@ -1654,7 +1707,7 @@ async def _save_uploaded_notebook(
     # touches anything from this request.
     _cleanup_stale_upload_temp_files()
 
-    file_path = resolve_upload_path(file.filename)
+    file_path = resolve_new_notebook_path(file.filename)
 
     # See _upload_lock_for's own docstring for exactly what this closes:
     # without it, two truly concurrent uploads of the same, brand-new
@@ -10209,7 +10262,7 @@ def _rename_notebook_to_locked(old_path: Path, new_filename, overwrite: bool, dr
             detail="new_filename must be a .ipynb notebook"
         )
 
-    new_path = resolve_upload_path(new_filename)
+    new_path = resolve_new_notebook_path(new_filename, exclude=old_path)
 
     if new_path == old_path:
 
@@ -10691,7 +10744,7 @@ def _copy_notebook_to(
             detail="new_filename must be a .ipynb notebook"
         )
 
-    dest_path = resolve_upload_path(new_filename)
+    dest_path = resolve_new_notebook_path(new_filename)
 
     if dest_path == source_path:
 
@@ -13817,7 +13870,7 @@ def _copy_notebook_version_to(
             detail="new_filename must be a .ipynb notebook"
         )
 
-    dest_path = resolve_upload_path(new_filename)
+    dest_path = resolve_new_notebook_path(new_filename)
 
     if dest_path == file_path:
 
