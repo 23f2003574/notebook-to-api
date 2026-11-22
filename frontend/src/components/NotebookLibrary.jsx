@@ -34,6 +34,8 @@ export default function NotebookLibrary({ onOpen, refreshKey, onAudit }) {
   const [notebooks, setNotebooks] = useState(null)
   const [error, setError] = useState(null)
   const [reload, setReload] = useState(0)
+  const [trash, setTrash] = useState(null) // soft-deleted notebooks (loaded when the Trash is opened)
+  const [trashCount, setTrashCount] = useState(0)
   const [busy, setBusy] = useState({}) // filename -> action name
   const [notes, setNotes] = useState({}) // filename -> { kind: 'ok' | 'error', text }
   const [diagnostics, setDiagnostics] = useState({}) // filename -> what its last compile reported
@@ -57,6 +59,7 @@ export default function NotebookLibrary({ onOpen, refreshKey, onAudit }) {
           setNotebooks(list)
           setError(null)
         }
+        if (!controller.signal.aborted) setTrashCount(Number.isInteger(data.trash_count) ? data.trash_count : 0)
       } catch (err) {
         if (!controller.signal.aborted) setError(err.message)
       }
@@ -161,12 +164,36 @@ export default function NotebookLibrary({ onOpen, refreshKey, onAudit }) {
 
   const deleteNotebook = (filename) => run(filename, 'delete', async () => {
     try {
-      const response = await check(await dashboardFetch('/api/notebooks/' + encodeURIComponent(filename), { method: 'DELETE' }), 'Delete failed')
+      const response = await check(await dashboardFetch('/api/notebooks/' + encodeURIComponent(filename) + '?soft=true', { method: 'DELETE' }), 'Delete failed')
       closePanel(filename, 'delete')
       setReload((n) => n + 1)
-      return { text: `Deleted ${filename}`, audit: sequenceOf(response), global: true }
+      return { text: `Moved ${filename} to the trash`, audit: sequenceOf(response), global: true }
     } catch (err) {
       return explain(err, filename)
+    }
+  })
+
+  const toggleTrash = async () => {
+    if (trash !== null) {
+      setTrash(null)
+      return
+    }
+    try {
+      const body = await (await check(await dashboardFetch('/api/notebooks/trash'), 'Could not load the trash')).json()
+      setTrash(Array.isArray(body.items) ? body.items : [])
+    } catch (err) {
+      setEvent({ text: err.message })
+    }
+  }
+
+  const restoreFromTrash = (item) => run(item.filename, 'untrash', async () => {
+    try {
+      const response = await check(await dashboardFetch('/api/notebooks/trash/' + encodeURIComponent(item.trash_id) + '/restore', { method: 'POST' }), 'Restore failed')
+      setReload((n) => n + 1)
+      setTrash(null)
+      return { text: `Restored ${item.filename} from the trash`, audit: sequenceOf(response), global: true }
+    } catch (err) {
+      return { text: err.status === 409 ? `Cannot restore ${item.filename}: ${err.message}` : err.message, global: true }
     }
   })
 
@@ -342,7 +369,7 @@ export default function NotebookLibrary({ onOpen, refreshKey, onAudit }) {
             {panel[filename] === 'delete' && (
               <div role="alertdialog" aria-label={'Delete ' + filename} className="mt-2 text-xs text-slate-200"
                 onKeyDown={(event) => { if (event.key === 'Escape') closePanel(filename, 'delete') }}>
-                <p>Delete <code>{filename}</code>? This also removes its saved versions, data files and compiled app. It cannot be undone.</p>
+                <p>Delete <code>{filename}</code>? It moves to the trash with its saved versions, data files and compiled app, and can be restored from Trash until it expires.</p>
                 <div className="mt-1 flex gap-3">
                   <button type="button" id={'delete-first-' + filename} className="text-xs text-slate-300 hover:text-white" onClick={() => closePanel(filename, 'delete')}>Cancel</button>
                   <button type="button" className="text-xs text-red-400 hover:text-red-300" disabled={Boolean(working)} onClick={() => deleteNotebook(filename)}>
@@ -399,6 +426,27 @@ export default function NotebookLibrary({ onOpen, refreshKey, onAudit }) {
         )
       })}
     </ul>
+    {(trashCount > 0 || trash !== null) && (
+      <button type="button" className={button + ' mt-3'} aria-expanded={trash !== null} onClick={toggleTrash}>
+        {trash !== null ? 'Hide trash' : `Trash (${trashCount})`}
+      </button>
+    )}
+    {trash !== null && (
+      <section aria-label="Trash" className="mt-2" data-testid="trash">
+        {trash.length === 0 && <p className="text-xs text-slate-400">The trash is empty.</p>}
+        <ul className="space-y-1">
+          {trash.map((item) => (
+            <li key={item.trash_id} className="bg-slate-900 rounded px-3 py-1 flex items-center justify-between text-xs text-slate-300">
+              <span><code>{item.filename}</code> <span className="text-slate-500">expires {new Date(item.expires_at).toLocaleDateString()}</span></span>
+              <button type="button" className={button} disabled={Boolean(busy[item.filename])}
+                aria-label={'Restore ' + item.filename + ' from the trash'} onClick={() => restoreFromTrash(item)}>
+                {busy[item.filename] === 'untrash' ? 'Restoring...' : 'Restore'}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </section>
+    )}
     </>
   )
 }

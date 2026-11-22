@@ -1,7 +1,7 @@
 import { dashboardFetch } from './dashboardApi'
 import { errorFromResponse } from './errorMessage'
 
-export const AUDIT_OPERATIONS = ['notebook.compile', 'notebook.deploy', 'notebook.delete', 'notebook.rename', 'notebook.restore', 'notebook.overwrite', 'notebook.version_delete']
+export const AUDIT_OPERATIONS = ['notebook.compile', 'notebook.deploy', 'notebook.delete', 'notebook.rename', 'notebook.restore', 'notebook.overwrite', 'notebook.version_delete', 'notebook.undelete', 'notebook.trash_purge']
 
 const OPERATION_LABELS = {
   'notebook.compile': 'Compile',
@@ -11,6 +11,8 @@ const OPERATION_LABELS = {
   'notebook.restore': 'Restore version',
   'notebook.overwrite': 'Overwrite',
   'notebook.version_delete': 'Delete version',
+  'notebook.undelete': 'Restore from trash',
+  'notebook.trash_purge': 'Purge trash',
 }
 
 export function operationLabel(action) {

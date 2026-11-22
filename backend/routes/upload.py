@@ -6527,6 +6527,7 @@ def list_notebooks(
     return {
         "status": "success",
         "notebooks": notebooks,
+        "trash_count": _trash_count(),
         "total_count": total_count,
         "limit": limit,
         "offset": offset,
@@ -9518,16 +9519,116 @@ def prune_all_notebook_versions(
     }
 
 
+def _soft_delete_default():
+    return os.getenv("NOTEBOOK_API_SOFT_DELETE", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _trash_retention_days():
+    try:
+        return max(float(os.getenv("NOTEBOOK_API_TRASH_RETENTION_DAYS", "30")), 0.0)
+    except ValueError:
+        return 30.0
+
+
+def _trash_root():
+    return Path(UPLOAD_DIR) / ".trash"
+
+
+def _trash_roots():
+    return {"uploads": Path(UPLOAD_DIR), "apps": Path(GENERATED_APPS_DIR)}
+
+
+def _notebook_trash_entries(name):
+    """What belongs to the notebook `name`: [(root kind, path relative to that root)]."""
+    root = Path(UPLOAD_DIR)
+    paths = [
+        Path(UPLOAD_DIR) / name, _tags_sidecar_path(name), _description_sidecar_path(name),
+        _source_url_sidecar_path(name), _version_notes_sidecar_path(name), _notebook_versions_dir(name),
+        _companion_dir(name), _notebook_uid_path(name),
+    ]
+    entries = [("uploads", Path(os.path.relpath(path, root)).as_posix()) for path in paths]
+    return entries + [("apps", _notebook_app_id(name))]
+
+
+def _trash_count():
+    from backend import notebook_trash
+
+    return len(notebook_trash.list_entries(_trash_root()))
+
+
+def _soft_delete_notebook(file_path, was_compiled):
+    from backend import notebook_trash
+
+    name = file_path.name
+    try:
+        record = notebook_trash.soft_delete(
+            _trash_root(), _trash_roots(), _notebook_trash_entries(name),
+            {"filename": name, "sha256": hash_notebook_file(str(file_path)), "was_currently_compiled": was_compiled},
+            _trash_retention_days(),
+        )
+    except notebook_trash.TrashError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {"soft": True, "trash_id": record["trash_id"], "expires_at": record["expires_at"]}
+
+
+@router.get("/notebooks/trash")
+def list_trashed_notebooks():
+    """Soft-deleted notebooks still inside their retention window, newest first. Expired entries are
+    purged first."""
+    from backend import notebook_trash
+
+    notebook_trash.purge_expired(_trash_root())
+    return {"status": "success", "retention_days": _trash_retention_days(),
+            "items": [{k: m[k] for k in ("trash_id", "filename", "deleted_at", "expires_at", "sha256")} for m in notebook_trash.list_entries(_trash_root())]}
+
+
+@router.post("/notebooks/trash/purge")
+@_lifecycle_audited("notebook.trash_purge", resource="trash", name=lambda k, r: None,
+                    extra=lambda k, r: {"purged": len((r or {}).get("purged", [])), "everything": bool(k.get("everything"))})
+def purge_trashed_notebooks(everything: bool = False):
+    """Permanently remove expired trash entries (all of them with ?everything=true)."""
+    from backend import notebook_trash
+
+    return {"status": "success", "purged": notebook_trash.purge_expired(_trash_root(), everything=everything)}
+
+
+@router.post("/notebooks/trash/{trash_id}/restore")
+@_lifecycle_audited("notebook.undelete", name=lambda k, r: (r or {}).get("filename") or None,
+                    extra=lambda k, r: {"trash_id": k.get("trash_id")})
+def restore_trashed_notebook(trash_id: str):
+    """Put a soft-deleted notebook back with its versions, data files, sidecars and compiled app.
+    409 when its name is taken (or differs from a stored name only by case): nothing is changed."""
+    from backend import notebook_trash
+
+    notebook_trash.purge_expired(_trash_root())
+    meta = notebook_trash.get_entry(_trash_root(), trash_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="No such trashed notebook (it may have expired)")
+    name = meta["filename"]
+    with _notebook_lifecycle(name):
+        target = resolve_new_notebook_path(name)
+        if target.exists():
+            raise HTTPException(status_code=409, detail=f"A notebook named {name!r} already exists; rename or delete it first")
+        try:
+            notebook_trash.restore(_trash_root(), _trash_roots(), trash_id)
+        except notebook_trash.TrashError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+    return {"status": "success", "filename": name, "trash_id": trash_id, "sha256": meta.get("sha256")}
+
+
 @router.delete("/notebooks/{filename}")
-@_lifecycle_audited("notebook.delete", name=lambda k, r: k.get("filename"))
-def delete_notebook(filename: str, dry_run: bool = False, expected_sha256: str = None):
+@_lifecycle_audited("notebook.delete", name=lambda k, r: k.get("filename"),
+                    extra=lambda k, r: {"soft": True, "trash_id": r.get("trash_id")} if isinstance(r, dict) and r.get("soft") else {})
+def delete_notebook(filename: str, dry_run: bool = False, expected_sha256: str = None, soft: bool = None):
     """Delete a previously uploaded notebook (and its per-notebook app), excluding a
     compile or rename of the same notebook while it happens."""
     with _notebook_lifecycle(filename):
-        return _delete_notebook_locked(filename, dry_run, expected_sha256)
+        return _delete_notebook_locked(
+            filename, dry_run, expected_sha256, _soft_delete_default() if soft is None else soft,
+        )
 
 
-def _delete_notebook_locked(filename: str, dry_run: bool = False, expected_sha256: str = None):
+def _delete_notebook_locked(filename: str, dry_run: bool = False, expected_sha256: str = None, soft: bool = False):
     """Delete a previously uploaded notebook.
 
     Reuses resolve_upload_path for the same traversal protection already
@@ -9597,7 +9698,14 @@ def _delete_notebook_locked(filename: str, dry_run: bool = False, expected_sha25
         compiled_path is not None and file_path.resolve() == compiled_path
     )
 
-    if not dry_run:
+    trashed = {}
+
+    if not dry_run and soft:
+
+        # Everything that belongs to the notebook moves into the trash together (or nothing does).
+        trashed = _soft_delete_notebook(file_path, was_currently_compiled)
+
+    elif not dry_run:
 
         try:
 
@@ -9622,6 +9730,7 @@ def _delete_notebook_locked(filename: str, dry_run: bool = False, expected_sha25
         "dry_run": dry_run,
         "filename": filename,
         "was_currently_compiled": was_currently_compiled,
+        **trashed,
     }
 
 

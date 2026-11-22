@@ -48,7 +48,7 @@ test('delete asks for confirmation, can be cancelled, and then removes the noteb
   await uploadNotebook(page, 'life_del.ipynb')
   const trigger = button(page, 'Delete', 'life_del.ipynb')
   await trigger.click()
-  await expect(page.getByRole('alertdialog')).toContainText('cannot be undone')
+  await expect(page.getByRole('alertdialog')).toContainText('restored from Trash')
   await expect(page.getByRole('button', { name: 'Cancel' })).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(page.getByRole('alertdialog')).toHaveCount(0)
@@ -57,10 +57,24 @@ test('delete asks for confirmation, can be cancelled, and then removes the noteb
 
   await trigger.click()
   await page.getByRole('button', { name: 'Yes, delete life_del.ipynb' }).click()
-  await expect(page.getByTestId('library-event')).toContainText('Deleted life_del.ipynb')
+  await expect(page.getByTestId('library-event')).toContainText('Moved life_del.ipynb to the trash')
   await expect(button(page, 'Delete', 'life_del.ipynb')).toHaveCount(0)
   await page.getByTestId('lifecycle-audit-link').click()
   await expect(page.getByTestId('linked-record')).toContainText('Delete')
+})
+
+test('a trashed notebook comes back from the Trash with its data files', async ({ page, request }) => {
+  await importBundle(request, 'life_trash.ipynb', '{"w": 7}')
+  await page.goto('/')
+  await button(page, 'Delete', 'life_trash.ipynb').click()
+  await page.getByRole('button', { name: 'Yes, delete life_trash.ipynb' }).click()
+  await expect(page.getByTestId('library-event')).toContainText('Moved life_trash.ipynb to the trash')
+  await expect(button(page, 'Delete', 'life_trash.ipynb')).toHaveCount(0)
+  await page.getByRole('button', { name: /^Trash \(\d+\)$/ }).click()
+  await page.getByRole('button', { name: 'Restore life_trash.ipynb from the trash' }).click()
+  await expect(page.getByTestId('library-event')).toContainText('Restored life_trash.ipynb from the trash')
+  await expect(button(page, 'Delete', 'life_trash.ipynb')).toBeVisible()
+  expect(dataFile('life_trash.ipynb')).toBe('{"w": 7}')
 })
 
 test('deleting a notebook that vanished meanwhile reports 404 and refreshes the list', async ({ page, request }) => {

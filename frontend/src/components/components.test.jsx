@@ -1078,7 +1078,7 @@ describe('NotebookLibrary lifecycle actions', () => {
     vi.stubGlobal('fetch', vi.fn(async (url, init = {}) => {
       const path = new URL(url, 'http://t').pathname
       calls.push({ path, method: init.method || 'GET' })
-      if (path === '/api/notebooks' && (init.method || 'GET') === 'GET') return json({ notebooks: [{ filename: 'a.ipynb', size_bytes: 10 }] })
+      if (path === '/api/notebooks' && (init.method || 'GET') === 'GET') return json({ notebooks: [{ filename: 'a.ipynb', size_bytes: 10 }], trash_count: 1 })
       return handler(path, init) ?? json({}, 404)
     }))
     const onAudit = vi.fn()
@@ -1092,9 +1092,34 @@ describe('NotebookLibrary lifecycle actions', () => {
     click('Delete a.ipynb')
     expect(calls.some((c) => c.method === 'DELETE')).toBe(false)
     click('Yes, delete a.ipynb')
-    expect(await screen.findByTestId('library-event')).toHaveTextContent('Deleted a.ipynb')
+    expect(await screen.findByTestId('library-event')).toHaveTextContent('Moved a.ipynb to the trash')
     fireEvent.click(screen.getByTestId('lifecycle-audit-link'))
     expect(onAudit).toHaveBeenCalledWith(7)
+  })
+
+  it('deletes into the trash and restores from it, explaining a name conflict', async () => {
+    const item = { trash_id: 't1', filename: 'old.ipynb', deleted_at: '2026-01-01T00:00:00+00:00', expires_at: '2026-02-01T00:00:00+00:00' }
+    let conflict = true
+    const { calls } = await setup((path, init) => {
+      if (path === '/api/notebooks/a.ipynb' && init.method === 'DELETE') return json({ status: 'success' })
+      if (path === '/api/notebooks/trash') return json({ items: [item] })
+      if (path === '/api/notebooks/trash/t1/restore') {
+        if (conflict) return json({ detail: "A notebook named 'old.ipynb' already exists" }, 409)
+        return json({ status: 'success' }, 200, { 'X-Governance-Audit-Sequence': '9' })
+      }
+      return null
+    })
+    click('Delete a.ipynb')
+    click('Yes, delete a.ipynb')
+    await screen.findByTestId('library-event')
+    expect(calls.find((c) => c.method === 'DELETE').path).toBe('/api/notebooks/a.ipynb')
+    click('Trash (1)')
+    expect(await screen.findByText('old.ipynb')).toBeInTheDocument()
+    click('Restore old.ipynb from the trash')
+    expect(await screen.findByText(/Cannot restore old.ipynb: A notebook named/)).toBeInTheDocument()
+    conflict = false
+    click('Restore old.ipynb from the trash')
+    expect(await screen.findByText(/Restored old.ipynb from the trash/)).toBeInTheDocument()
   })
 
   it('shows the server message for a rename conflict', async () => {
