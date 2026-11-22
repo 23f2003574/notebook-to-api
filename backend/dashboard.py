@@ -510,8 +510,11 @@ def _key_digest(value):
     return hashlib.sha256(value.encode("utf-8")).digest()
 
 
-def _parse_named_keys(text, source):
-    """Parse `name:key` entries separated by commas or newlines (`#` starts a comment line).
+KEY_SCOPES = ("read", "compile", "admin")
+
+
+def _parse_named_keys(text, source, scopes=None):
+    """Parse `name:key[:scope]` entries separated by commas or newlines (`#` starts a comment line).
     `key` is either the secret itself or `sha256:<64 hex digits>`, so a deployment can keep only
     digests on disk. Returns [(name, digest, plaintext_length_or_None)]. Messages never contain a
     key."""
@@ -523,7 +526,17 @@ def _parse_named_keys(text, source):
         name, separator, secret = line.partition(":")
         name, secret = name.strip(), secret.strip()
         if not separator or not _KEY_NAME.match(name) or not secret:
-            raise ValueError(f"{source} entries must look like name:key (name: letters, digits, . _ -)")
+            raise ValueError(f"{source} entries must look like name:key[:scope] (name: letters, digits, . _ -)")
+        scope = "admin"
+        head, colon, tail = secret.rpartition(":")
+        if colon and head and re.fullmatch(r"[A-Za-z]+", tail) and head.strip().lower() != "sha256":
+            # A trailing alphabetic segment after the key is its scope; unknown scopes are refused
+            # (a typo must never silently widen or narrow a credential).
+            if tail.lower() not in KEY_SCOPES:
+                raise ValueError(f"{source}: key {name!r} has an unknown scope (use one of: {', '.join(KEY_SCOPES)})")
+            scope, secret = tail.lower(), head.strip()
+        if scopes is not None:
+            scopes[name] = scope
         if any(existing[0] == name for existing in entries):
             raise ValueError(f"{source} names the key {name!r} twice")
         if secret.lower().startswith("sha256:"):
@@ -540,24 +553,58 @@ def dashboard_api_keys():
     """Every configured dashboard credential as [(name, sha256 digest, plaintext length or None)]:
     NOTEBOOK_API_DASHBOARD_KEYS and/or the file NOTEBOOK_API_DASHBOARD_KEYS_FILE, plus the legacy
     NOTEBOOK_API_DASHBOARD_KEY as "default". Raises ValueError for a malformed configuration."""
+    return dashboard_api_keys_and_scopes()[0]
+
+
+def dashboard_api_keys_and_scopes():
+    """(entries, {name: scope}). A key's scope is "read", "compile" or "admin" (`name:key:scope`);
+    a key with none, and the legacy NOTEBOOK_API_DASHBOARD_KEY, is "admin", as before."""
+    scopes = {}
     entries = []
     inline = os.getenv("NOTEBOOK_API_DASHBOARD_KEYS", "")
     if inline.strip():
-        entries += _parse_named_keys(inline, "NOTEBOOK_API_DASHBOARD_KEYS")
+        entries += _parse_named_keys(inline, "NOTEBOOK_API_DASHBOARD_KEYS", scopes)
     path = os.getenv("NOTEBOOK_API_DASHBOARD_KEYS_FILE", "").strip()
     if path:
         try:
             text = Path(path).read_text()
         except OSError:
             raise ValueError("NOTEBOOK_API_DASHBOARD_KEYS_FILE could not be read") from None
-        entries += _parse_named_keys(text, "NOTEBOOK_API_DASHBOARD_KEYS_FILE")
+        entries += _parse_named_keys(text, "NOTEBOOK_API_DASHBOARD_KEYS_FILE", scopes)
     legacy = dashboard_api_key()
     if legacy:
         entries.append(("default", _key_digest(legacy), len(legacy)))
+        scopes["default"] = "admin"
     names = [entry[0] for entry in entries]
     if len(names) != len(set(names)):
         raise ValueError("dashboard key names must be unique (\"default\" is the legacy NOTEBOOK_API_DASHBOARD_KEY)")
-    return entries
+    return entries, scopes
+
+
+# Scope authorization. Anything not listed below needs "admin", so a new mutating route is
+# admin-only until it is deliberately classified.
+_SCOPE_RANK = {"read": 0, "compile": 1, "admin": 2}
+_COMPILE_POSTS = frozenset({
+    "/api/upload", "/api/upload/batch", "/api/notebooks/import", "/api/compile", "/api/inspect",
+    "/api/validate", "/api/export-openapi", "/api/export-sdk",
+})
+
+
+def required_scope(method, path):
+    """The least scope that may call `method path`: read for safe methods; compile for uploading and
+    compiling a notebook and the non-mutating previews/exports; admin for everything else
+    (delete, rename, restore, tags, deploy, history, governance and experimental routes)."""
+    method = method.upper()
+    if method in ("GET", "HEAD", "OPTIONS"):
+        return "read"
+    path = path.rstrip("/") or "/"
+    if method == "POST" and (path in _COMPILE_POSTS or (path.startswith("/api/") and path.endswith("-preview"))):
+        return "compile"
+    return "admin"
+
+
+def scope_allows(scope, method, path):
+    return _SCOPE_RANK.get(scope, 2) >= _SCOPE_RANK[required_scope(method, path)]
 
 
 def authenticate_dashboard_key(supplied, entries):
@@ -730,6 +777,22 @@ def _is_frontend_shell_file(request):
     return candidate.is_file() and root in candidate.parents
 
 
+def _record_denied_scope(key_name, key_scope, needed, request):
+    """One governance audit record per authorization denial (the key's name, never its value)."""
+    try:
+        from backend.routes.upload import _record_governance
+
+        _record_governance(
+            "dashboard.authorization_denied",
+            {"notebook": None},
+            "failure",
+            error=f"{request.method} {request.url.path[:120]}: scope {key_scope} < required {needed}",
+            actor=key_name,
+        )
+    except Exception:  # noqa: BLE001 - auditing must not turn a 403 into a 500
+        logging.getLogger("uvicorn.error").warning("could not audit a denied dashboard request")
+
+
 @app.middleware("http")
 async def _require_dashboard_api_key(request: Request, call_next):
     """Answer 401 unless the X-API-Key header matches
@@ -740,7 +803,7 @@ async def _require_dashboard_api_key(request: Request, call_next):
     """
 
     try:
-        entries = dashboard_api_keys()
+        entries, key_scopes = dashboard_api_keys_and_scopes()
     except ValueError:
         # Fail closed without saying what is wrong (startup validation reports the details).
         return JSONResponse(status_code=503, content={"detail": "Dashboard authentication is misconfigured"})
@@ -772,6 +835,14 @@ async def _require_dashboard_api_key(request: Request, call_next):
 
         if key_name is not None:
             request.state.dashboard_actor = key_name
+            key_scope = key_scopes.get(key_name, "admin")
+            if not scope_allows(key_scope, request.method, request.url.path):
+                needed = required_scope(request.method, request.url.path)
+                auth_metrics.record_denied(client, key_name, key_scope, needed)
+                _record_denied_scope(key_name, key_scope, needed, request)
+                return JSONResponse(status_code=403, content={
+                    "detail": f"This key's scope ({key_scope}) does not allow {request.method} requests here; the {needed} scope is required"
+                })
 
         if key_name is None:
             window_count = _auth_record_failure(client)

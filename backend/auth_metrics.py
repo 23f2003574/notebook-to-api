@@ -8,7 +8,7 @@ import logging
 import threading
 
 _LOCK = threading.Lock()
-_TOTALS = {"failures": 0, "throttled": 0, "lockouts": 0}
+_TOTALS = {"failures": 0, "throttled": 0, "lockouts": 0, "denied": 0}
 
 
 def reset():
@@ -42,6 +42,13 @@ def record_failure(client, reason, window_count, limit):
         _log("auth_lockout", client, limit_per_minute=limit)
 
 
+def record_denied(client, key_name, key_scope, needed):
+    """An authenticated request refused because the key's scope is too narrow (names, never values)."""
+    with _LOCK:
+        _TOTALS["denied"] += 1
+    _log("auth_denied", client, key=key_name, scope=key_scope, required=needed)
+
+
 def record_throttled():
     with _LOCK:
         _TOTALS["throttled"] += 1
@@ -54,6 +61,7 @@ def prometheus_text():
         ("notebook_to_api_dashboard_auth_failures_total", "Requests rejected for a missing or invalid dashboard key.", "failures"),
         ("notebook_to_api_dashboard_auth_throttled_total", "Requests refused with 429 because their client had too many failed attempts.", "throttled"),
         ("notebook_to_api_dashboard_auth_lockouts_total", "Times a client reached the failed-authentication limit.", "lockouts"),
+        ("notebook_to_api_dashboard_auth_denied_total", "Authenticated requests refused with 403 because the key's scope was too narrow.", "denied"),
     ):
         text += f"# HELP {metric} {help_text}\n# TYPE {metric} counter\n{metric} {totals_now[key]}\n"
     return text
