@@ -32,3 +32,7 @@ test_generated/
 # OS
 .DS_Store
 Thumbs.db
+
+# Dashboard test runs write here (compile history, scratch notebooks); only the sample is tracked.
+uploads/*
+!uploads/sample.ipynb
