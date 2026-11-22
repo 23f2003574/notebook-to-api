@@ -45,6 +45,8 @@ from nbformat import ValidationError as NotebookValidationError
 from backend.runtime.destination_guard import ip_is_unsafe as _import_ip_is_unsafe
 from backend import auth_metrics
 from backend.compiler import (
+    resolving_versions,
+    unpinned_requirements,
     notebook_failure_location,
     _extract_rate_limit_overrides,
     _extract_timeout_overrides,
@@ -17312,6 +17314,38 @@ def _audited(action, data, run, idempotency_key=None, actor="dashboard"):
     return result
 
 
+def _boolean_option(data, name):
+    value = data.get(name, False)
+    if not isinstance(value, bool):
+        raise HTTPException(status_code=400, detail=f"{name} must be a boolean")
+    return value
+
+
+def _dependency_pin_summary(output_dir, resolution=None):
+    """{"pinned": [...], "unpinned": [...]} for the requirements.txt in `output_dir`, plus the
+    resolver's own outcome ("resolution") when version resolution ran for this request."""
+    path = Path(output_dir) / "requirements.txt"
+    lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines()] if path.is_file() else []
+    lines = [line for line in lines if line and not line.startswith("#")]
+    unpinned = set(unpinned_requirements(str(path))) if path.is_file() else set()
+    summary = {"pinned": [l for l in lines if l not in unpinned], "unpinned": [l for l in lines if l in unpinned]}
+    if resolution is not None:
+        summary["resolution"] = resolution.get("result") or {"status": "nothing_to_resolve"}
+    return summary
+
+
+def _unpinned_detail(summary):
+    detail = "requirements.txt is not reproducible: " + ", ".join(summary["unpinned"]) + " are not version-pinned."
+    result = summary.get("resolution") or {}
+    if result.get("status") == "unresolved":
+        detail += f" Version resolution failed ({result.get('reason')}); check the network and recompile."
+    elif summary.get("resolution") is None:
+        detail += " Set resolve_versions or install the libraries where the dashboard runs, then recompile."
+    return detail + " The compiled files were written."
+
+
+
+
 @router.post("/compile")
 def compile_notebook_endpoint(data: dict, request: Request):
     """Compile an uploaded notebook; the outcome is recorded in the governance audit trail
@@ -17468,6 +17502,9 @@ def _compile_notebook_locked(
             detail="tags must be a list of non-empty strings"
         )
 
+    resolve_versions = _boolean_option(data, "resolve_versions")
+    require_pinned = _boolean_option(data, "require_pinned")
+
     if only and exclude:
 
         raise HTTPException(
@@ -17545,14 +17582,23 @@ def _compile_notebook_locked(
             else:
                 exclude = sorted(set(exclude or []) | set(dropped_past_sunset))
 
-        compile_notebook(
-            str(content_path),
-            GENERATED_DIR,
-            only=only,
-            exclude=exclude,
-            source_notebook_path=str(full_path),
-            version_id=version_id,
-        )
+        # Request-scoped: resolving_versions sets a ContextVar for this call only, so concurrent
+        # compiles (each in its own worker thread) can neither inherit nor leak resolver state.
+        with (resolving_versions() if resolve_versions else contextlib.nullcontext()) as resolution:
+            compile_notebook(
+                str(content_path),
+                GENERATED_DIR,
+                only=only,
+                exclude=exclude,
+                source_notebook_path=str(full_path),
+                version_id=version_id,
+            )
+        dependency_pins = _dependency_pin_summary(GENERATED_DIR, resolution)
+        if require_pinned and dependency_pins["unpinned"]:
+            raise HTTPException(
+                status_code=422,
+                detail=_unpinned_detail(dependency_pins),
+            )
 
         # inspect_notebook_data (backend/inspector.py) already computes
         # everything this response needs -- functions, endpoints,
@@ -17638,6 +17684,7 @@ def _compile_notebook_locked(
             "endpoints": data["endpoints"],
             "skipped_functions": data["skipped_functions"],
             "dependencies": data["dependencies"],
+            "dependency_pins": dependency_pins,
             "generated_files": data["generated_files"],
             # Things that compile fine but will break or be ignored when the
             # compiled app starts -- see POST /api/validate for each.
@@ -17714,6 +17761,10 @@ def _compile_notebook_locked(
             status_code=400,
             detail=str(e)
         )
+
+    except HTTPException:
+
+        raise
 
     except Exception as e:
 
@@ -18681,6 +18732,7 @@ def _deploy_generated_app(data: dict = None):
 
     no_cache = bool(data.get("no_cache", False))
     smoke_test = bool(data.get("smoke_test", False))
+    require_pinned = _boolean_option(data, "require_pinned")
 
     # `docker build`'s own default target platform is whatever the local
     # Docker daemon's host architecture is -- correct for a plain `docker
@@ -18725,6 +18777,14 @@ def _deploy_generated_app(data: dict = None):
                 status_code=404,
                 detail="No compiled app found. Run /api/compile first."
             )
+
+        if require_pinned:
+            pins = _dependency_pin_summary(GENERATED_DIR)
+            if pins["unpinned"]:
+                raise HTTPException(
+                    status_code=422,
+                    detail=_unpinned_detail(pins).replace(" The compiled files were written.", " Nothing was built."),
+                )
 
         if not force and _currently_compiled_notebook_is_stale(GENERATED_DIR):
 

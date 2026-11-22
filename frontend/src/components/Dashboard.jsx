@@ -128,6 +128,8 @@ export default function Dashboard() {
   const health = HEALTH_DISPLAY[backendStatus]
   const settingsError = configError()
   const [uploadedNotebook, setUploadedNotebook] = useState(null)
+  const [pinVersions, setPinVersions] = useState(false)
+  const [requirePinned, setRequirePinned] = useState(false)
   const [functions, setFunctions] = useState([])
   const [diagnostics, setDiagnostics] = useState(emptyDiagnostics)
   const [logs, setLogs] = useState([])
@@ -218,7 +220,11 @@ export default function Dashboard() {
       const response = await dashboardFetch('/api/compile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ notebook_path: uploadedNotebook, per_notebook: true }),
+        body: JSON.stringify({
+          notebook_path: uploadedNotebook, per_notebook: true,
+          ...(pinVersions ? { resolve_versions: true } : {}),
+          ...(requirePinned ? { require_pinned: true } : {})
+        }),
         signal: work.signal
       })
 
@@ -237,7 +243,10 @@ export default function Dashboard() {
         setLogs([
           '✅ Compilation successful',
           '📦 Generated ' + (data.functions?.length || 0) + ' functions',
-          '📚 Dependencies: ' + (data.dependencies?.join(', ') || 'none')
+          '📚 Dependencies: ' + (data.dependencies?.join(', ') || 'none'),
+          ...(data.dependency_pins
+            ? ['📌 Pinned: ' + data.dependency_pins.pinned.length + ', unpinned: ' + (data.dependency_pins.unpinned.join(', ') || 'none')]
+            : [])
         ])
         setLastCompiled(new Date().toLocaleTimeString())
         setAuditSequence(data.governance_audit?.sequence ?? null)
@@ -326,6 +335,14 @@ export default function Dashboard() {
 
             <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 hover:border-slate-600 transition">
               <h2 className="text-xl font-semibold text-white mb-4">⚙️ Compile</h2>
+              <label className="flex items-center gap-2 text-sm text-slate-300 mb-2">
+                <input type="checkbox" checked={pinVersions} onChange={(e) => setPinVersions(e.target.checked)} />
+                Pin dependency versions (needs network)
+              </label>
+              <label className="flex items-center gap-2 text-sm text-slate-300 mb-3">
+                <input type="checkbox" checked={requirePinned} onChange={(e) => setRequirePinned(e.target.checked)} />
+                Fail if any dependency is unpinned
+              </label>
               <button
                 onClick={handleCompile}
                 disabled={!uploadedNotebook || isCompiling}
