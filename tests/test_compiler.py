@@ -13107,7 +13107,7 @@ from fastapi.testclient import TestClient
 
 content = app.openapi()["paths"]["/add"]["post"]["responses"]["200"]["content"]["application/json"]
 assert content["schema"] == {{
-    "type": "object", "properties": {{"result": {{}}}}, "required": ["result"],
+    "type": "object", "properties": {{"result": {{"type": "integer"}}}}, "required": ["result"],
 }}, content
 assert content["example"] == {{"result": 0}}, content
 

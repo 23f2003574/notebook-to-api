@@ -22,7 +22,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "GENERATED_AT", "PYTHON_VERSION", "NOTEBOOK_TO_API_VERSION", "ALLOWED_ORIGINS",
     "PUBLIC_URL", "DISABLE_DOCS",
     "MAX_REQUEST_BODY_BYTES", "MaxRequestBodySizeMiddleware",
-    "MAX_PENDING_TASKS", "MAX_TASK_RESULT_BYTES", "MAX_RESULT_ITEMS", "MAX_RESPONSE_BYTES", "ResultLimitExceeded", "_ResultBudget", "_collect_limited", "_json_size_exceeds", "WEBHOOK_TIMEOUT_SECONDS", "WEBHOOK_SECRET",
+    "MAX_PENDING_TASKS", "MAX_TASK_RESULT_BYTES", "MAX_RESULT_ITEMS", "MAX_RESPONSE_BYTES", "DECIMAL_AS_STRING", "ResultLimitExceeded", "_ResultBudget", "_collect_limited", "_json_size_exceeds", "WEBHOOK_TIMEOUT_SECONDS", "WEBHOOK_SECRET",
     "WEBHOOK_MAX_RETRIES", "WEBHOOK_RETRY_BACKOFF_SECONDS",
     "TASK_EXECUTION_TIMEOUT_SECONDS",
     "REQUEST_TIMEOUT_SECONDS", "_call_notebook_function", "_log_notebook_error", "_request_id_var",
@@ -577,6 +577,17 @@ GENERATED_APP_ENV_VARS = [
             "task's result. A larger result is never stored: the task is "
             "marked failed with an error naming this limit. 0 disables "
             "the limit."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_DECIMAL_AS_STRING",
+        "default": "false",
+        "description": (
+            "Send every decimal.Decimal in a result as a JSON string. By "
+            "default a Decimal a float holds exactly (19.99, 3) is sent as "
+            "a number and any other as a string, so a client cannot rely on "
+            "one type; true makes it always a string, which is also what "
+            "the published OpenAPI schema then declares."
         ),
     },
     {
@@ -3199,6 +3210,7 @@ def generate_fastapi_code(
         f'"{_generated_app_env_var_default("NOTEBOOK_API_MAX_RESPONSE_BYTES")}"'
         ')'
     )
+    lines.append('DECIMAL_AS_STRING = _env_flag("NOTEBOOK_API_DECIMAL_AS_STRING", "' + _generated_app_env_var_default("NOTEBOOK_API_DECIMAL_AS_STRING") + '")')
     lines.append("class ResultLimitExceeded(RuntimeError):")
     lines.append("    pass")
     lines.append("class _ResultBudget:")
@@ -4366,7 +4378,7 @@ def generate_fastapi_code(
     # unaffected.
     lines.append("    if type(value).__name__ == 'Decimal' and hasattr(value, 'as_tuple'):")
     lines.append("        try:")
-    lines.append("            if type(value)(repr(float(value))) != value:")
+    lines.append("            if DECIMAL_AS_STRING or type(value)(repr(float(value))) != value:")
     lines.append("                return str(value)")
     lines.append("        except Exception:")
     lines.append("            return str(value)")
@@ -4783,7 +4795,33 @@ def generate_fastapi_code(
     lines.append("        if isinstance(tp, type) and (_dc.is_dataclass(tp) or issubclass(tp, BaseModel) or _typing.is_typeddict(tp)):")
     lines.append("            return True")
     lines.append("        return any(_structured(arg) for arg in _typing.get_args(tp) if arg is not type(None))")
-    lines.append("    if annotation is None or not _structured(annotation):")
+    # Plain return types (int, str, list[int], Optional[Decimal], dict[str, float], ...) get their
+    # schema too. DataFrames, arrays and other coerced types stay open, since what a client receives
+    # for them is the coerced JSON, not the annotation.
+    lines.append("    def _plain(tp):")
+    lines.append("        if tp in (int, float, str, bool, type(None), _decimal.Decimal, list, dict, tuple, set, frozenset):")
+    lines.append("            return True")
+    lines.append("        args = [arg for arg in _typing.get_args(tp) if arg is not Ellipsis]")
+    lines.append("        return bool(args) and _typing.get_origin(tp) in (list, dict, tuple, set, frozenset, _typing.Union) and all(_plain(arg) for arg in args)")
+    lines.append("    def _swap_decimal(tp, replacement):")
+    lines.append("        if tp is _decimal.Decimal:")
+    lines.append("            return replacement")
+    lines.append("        args = _typing.get_args(tp)")
+    lines.append("        if not args:")
+    lines.append("            return tp")
+    lines.append("        new_args = tuple(arg if arg is Ellipsis else _swap_decimal(arg, replacement) for arg in args)")
+    lines.append("        if _typing.get_origin(tp) is _typing.Union:")
+    lines.append("            return _typing.Union[new_args]")
+    lines.append("        if new_args == args:")
+    lines.append("            return tp")
+    lines.append("        return tp.copy_with(new_args) if hasattr(tp, 'copy_with') else _typing.get_origin(tp)[new_args]")
+    lines.append("    import decimal as _decimal")
+    lines.append("    plain = annotation is not None and not _structured(annotation) and _plain(annotation)")
+    lines.append("    if plain:")
+    # A Decimal a float holds exactly is sent as a JSON number, any other as a string (see _json_safe);
+    # NOTEBOOK_API_DECIMAL_AS_STRING sends every Decimal as a string so clients see one type.
+    lines.append("        annotation = _swap_decimal(annotation, str if DECIMAL_AS_STRING else _typing.Union[float, str])")
+    lines.append("    if annotation is None or not (plain or _structured(annotation)):")
     lines.append("        return None")
     # pydantic refuses typing.TypedDict before Python 3.12 (it needs typing_extensions'
     # own); rebuild any TypedDict in the annotation so Python 3.11 apps get typed results too.
