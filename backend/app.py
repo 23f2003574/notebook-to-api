@@ -12,7 +12,7 @@ the v2 stack at the legacy paths would silently shadow it. "/v2" keeps both
 stacks live and reachable with no shadowing.
 """
 
-from backend.dashboard import app
+from backend.dashboard import app, keep_frontend_mount_last
 
 from backend.security.identity_registry import router as identity_registry_router
 from backend.security.auth_service import router as auth_service_router
@@ -42,5 +42,6 @@ app.include_router(security_metrics_router, prefix="/v2")
 app.include_router(ops_dashboard_router, prefix="/v2")
 app.include_router(security_export_router, prefix="/v2")
 bootstrap_security_subsystem()
+keep_frontend_mount_last(app)  # the /v2 routers above were added after the frontend's catch-all mount
 
 __all__ = ["app"]

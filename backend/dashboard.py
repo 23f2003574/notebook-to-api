@@ -1324,6 +1324,17 @@ def mount_frontend_static_files(app, dist_dir=FRONTEND_DIST_DIR):
     app.mount("/", _FrontendFiles(directory=str(dist_dir), html=True), name="frontend")
 
 
+def keep_frontend_mount_last(app):
+    """Move the frontend's catch-all mount behind every other route. Routers included after the
+    import-time mount (backend.app adds the /v2 security stack that way) would otherwise be shadowed
+    by it: their paths answered 404/405 whenever the frontend was built."""
+    routes = app.router.routes
+    mounts = [r for r in routes if getattr(r, "name", None) == "frontend"]
+    for mount in mounts:
+        routes.remove(mount)
+    routes.extend(mounts)
+
+
 mount_frontend_static_files(app)
 
 
