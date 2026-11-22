@@ -77,6 +77,22 @@ test('a trashed notebook comes back from the Trash with its data files', async (
   expect(dataFile('life_trash.ipynb')).toBe('{"w": 7}')
 })
 
+test('two versions can be compared and the data files listed from the dashboard', async ({ page, request }) => {
+  await importBundle(request, 'life_cmp.ipynb', 'ONE')
+  const second = zip([{ name: 'life_cmp.ipynb', data: notebook(READER + '\ndef extra() -> int:\n    return 1\n') }, { name: 'weights.json', data: 'TWO' }])
+  const response = await request.post('/api/notebooks/import?overwrite=true', {
+    multipart: { file: { name: 'bundle.zip', mimeType: 'application/zip', buffer: second } },
+  })
+  expect(response.ok()).toBeTruthy()
+  await page.goto('/')
+  await button(page, 'Versions', 'life_cmp.ipynb').click()
+  const panel = page.getByTestId('compare-life_cmp.ipynb')
+  await panel.getByRole('button', { name: 'Compare versions' }).click()
+  await expect(page.getByRole('region', { name: 'Added functions' })).toContainText('extra() -> int')
+  await panel.getByRole('button', { name: 'Show data files' }).click()
+  await expect(page.getByRole('list', { name: 'Data files' })).toContainText('weights.json')
+})
+
 test('deleting a notebook that vanished meanwhile reports 404 and refreshes the list', async ({ page, request }) => {
   await uploadNotebook(page, 'life_gone.ipynb')
   await button(page, 'Delete', 'life_gone.ipynb').click()

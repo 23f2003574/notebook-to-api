@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { dashboardFetch } from '../dashboardApi'
 import { errorFromResponse } from '../errorMessage'
+import VersionCompare from './VersionCompare'
 import { diagnosticsFrom } from '../diagnostics'
 import Diagnostics from './Diagnostics'
 
@@ -414,6 +415,9 @@ export default function NotebookLibrary({ onOpen, refreshKey, onAudit }) {
                       </li>
                     ))}
                   </ul>
+                )}
+                {versions[filename]?.status === 'ready' && versions[filename].items.length > 0 && (
+                  <VersionCompare filename={filename} versions={versions[filename].items} />
                 )}
               </div>
             )}
