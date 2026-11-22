@@ -22,7 +22,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "GENERATED_AT", "PYTHON_VERSION", "NOTEBOOK_TO_API_VERSION", "ALLOWED_ORIGINS",
     "PUBLIC_URL", "DISABLE_DOCS",
     "MAX_REQUEST_BODY_BYTES", "MaxRequestBodySizeMiddleware",
-    "MAX_PENDING_TASKS", "MAX_TASK_RESULT_BYTES", "_json_size_exceeds", "WEBHOOK_TIMEOUT_SECONDS", "WEBHOOK_SECRET",
+    "MAX_PENDING_TASKS", "MAX_TASK_RESULT_BYTES", "MAX_RESULT_ITEMS", "MAX_RESPONSE_BYTES", "ResultLimitExceeded", "_ResultBudget", "_collect_limited", "_json_size_exceeds", "WEBHOOK_TIMEOUT_SECONDS", "WEBHOOK_SECRET",
     "WEBHOOK_MAX_RETRIES", "WEBHOOK_RETRY_BACKOFF_SECONDS",
     "TASK_EXECUTION_TIMEOUT_SECONDS",
     "REQUEST_TIMEOUT_SECONDS", "_call_notebook_function", "_log_notebook_error", "_request_id_var",
@@ -577,6 +577,28 @@ GENERATED_APP_ENV_VARS = [
             "task's result. A larger result is never stored: the task is "
             "marked failed with an error naming this limit. 0 disables "
             "the limit."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_MAX_RESULT_ITEMS",
+        "default": "1000000",
+        "description": (
+            "Maximum number of items a generator (sync or async) notebook "
+            "function may yield into one result. Items are counted as they "
+            "are produced, so an endless generator is stopped at the limit "
+            "instead of growing memory; the call then fails with a 500 "
+            "naming this limit. 0 disables the limit."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_MAX_RESPONSE_BYTES",
+        "default": str(10 * 1024 * 1024),
+        "description": (
+            "Maximum size, in bytes of its JSON form, of a synchronous "
+            "endpoint's result. A generator's output is measured as it is "
+            "produced and stopped at the limit; any other result larger "
+            "than this is not returned and the call fails with a 500 "
+            "naming this limit. 0 disables the limit."
         ),
     },
     {
@@ -3165,6 +3187,48 @@ def generate_fastapi_code(
         f'"{_generated_app_env_var_default("NOTEBOOK_API_MAX_TASK_RESULT_BYTES")}"'
         ')'
     )
+    lines.append(
+        'MAX_RESULT_ITEMS = _env_number('
+        '"NOTEBOOK_API_MAX_RESULT_ITEMS", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_MAX_RESULT_ITEMS")}"'
+        ')'
+    )
+    lines.append(
+        'MAX_RESPONSE_BYTES = _env_number('
+        '"NOTEBOOK_API_MAX_RESPONSE_BYTES", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_MAX_RESPONSE_BYTES")}"'
+        ')'
+    )
+    lines.append("class ResultLimitExceeded(RuntimeError):")
+    lines.append("    pass")
+    lines.append("class _ResultBudget:")
+    lines.append("    # Counts a generator's items and their approximate JSON size as they are produced.")
+    lines.append("    def __init__(self):")
+    lines.append("        self.items = 0")
+    lines.append("        self.size = 0")
+    lines.append("    def take(self, item):")
+    lines.append("        if MAX_RESULT_ITEMS > 0 and self.items >= MAX_RESULT_ITEMS:")
+    lines.append("            raise ResultLimitExceeded(f'produced more than NOTEBOOK_API_MAX_RESULT_ITEMS={MAX_RESULT_ITEMS:g} items and was stopped')")
+    lines.append("        self.items += 1")
+    lines.append("        if MAX_RESPONSE_BYTES > 0:")
+    lines.append("            try:")
+    lines.append("                self.size += len(json.dumps(item, default=str, ensure_ascii=False).encode('utf-8', 'replace')) + 1")
+    lines.append("            except Exception:")
+    lines.append("                self.size += 64")
+    lines.append("            if self.size > MAX_RESPONSE_BYTES:")
+    lines.append("                raise ResultLimitExceeded(f'produced more than NOTEBOOK_API_MAX_RESPONSE_BYTES={MAX_RESPONSE_BYTES:g} bytes and was stopped')")
+    lines.append("def _collect_limited(iterable):")
+    lines.append("    budget = _ResultBudget()")
+    lines.append("    items = []")
+    lines.append("    try:")
+    lines.append("        for item in iterable:")
+    lines.append("            budget.take(item)")
+    lines.append("            items.append(item)")
+    lines.append("    finally:")
+    lines.append("        close = getattr(iterable, 'close', None)")
+    lines.append("        if close is not None:")
+    lines.append("            close()")
+    lines.append("    return items")
     lines.append("def _json_size_exceeds(value, limit):")
     lines.append("    # Streams the encoding (the form the API returns) and stops as soon as")
     lines.append("    # it passes the limit, so an oversized result is never copied whole.")
@@ -3504,7 +3568,7 @@ def generate_fastapi_code(
     # NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS and an endless one froze the whole
     # server. Draining it here keeps the work in the worker thread, under the
     # timeout, with its exceptions reported like any other notebook failure.
-    lines.append("                return list(result) if inspect.isgenerator(result) else result")
+    lines.append("                return _collect_limited(result) if inspect.isgenerator(result) else result")
     # A sync function runs in a worker thread, where a real cancellation never
     # surfaces as CancelledError -- one raised here is the notebook's own
     # (e.g. task.result() on a cancelled asyncio task) and would otherwise
@@ -3515,7 +3579,12 @@ def generate_fastapi_code(
     lines.append("")
     lines.append("async def _drain_async_gen(agen):")
     lines.append("    try:")
-    lines.append("        return [item async for item in agen]")
+    lines.append("        budget = _ResultBudget()")
+    lines.append("        items = []")
+    lines.append("        async for item in agen:")
+    lines.append("            budget.take(item)")
+    lines.append("            items.append(item)")
+    lines.append("        return items")
     lines.append("    except (SystemExit, KeyboardInterrupt) as e:")
     lines.append("        raise RuntimeError(f'notebook function raised {type(e).__name__}') from None")
     lines.append("")
@@ -8014,7 +8083,7 @@ def generate_fastapi_code(
             # notebook exception.
             lines.append("    if inspect.isgenerator(result):")
             lines.append("        try:")
-            lines.append("            result = list(result)")
+            lines.append("            result = _collect_limited(result)")
             lines.append("        except Exception as e:")
             lines.append(f"            _log_notebook_error('{func_name}', e)")
             lines.append("            raise HTTPException(")
@@ -8033,6 +8102,14 @@ def generate_fastapi_code(
                 f"            detail=f\"'{func_name}' returned a value that "
                 "is not JSON-serializable: "
                 "{_unserializable_reason(result, e)}\","
+            )
+            lines.append("        )")
+            lines.append("    if MAX_RESPONSE_BYTES > 0 and _json_size_exceeds(result, MAX_RESPONSE_BYTES):")
+            lines.append("        raise HTTPException(")
+            lines.append("            status_code=500,")
+            lines.append(
+                f"            detail=\"'{func_name}' returned a response larger than "
+                "NOTEBOOK_API_MAX_RESPONSE_BYTES=\" + f\"{MAX_RESPONSE_BYTES:g} bytes and it was not sent\","
             )
             lines.append("        )")
             if endpoint_cache_ttl:
