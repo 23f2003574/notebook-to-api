@@ -204,3 +204,27 @@ def test_concurrent_compile_and_soft_delete_leave_consistent_state(env):
     tid = client.get("/api/notebooks/trash").json()["items"][0]["trash_id"]
     assert client.post(f"/api/notebooks/trash/{tid}/restore").status_code == 200
     assert (tmp / "up" / "a.ipynb").exists()
+
+
+def test_batch_delete_can_soft_delete_and_each_entry_restores(env):
+    client, tmp = env
+    for name in ("a.ipynb", "b.ipynb"):
+        client.post("/api/upload", files={"file": (name, NB.encode())})
+    r = client.post("/api/notebooks/delete-batch", json={"filenames": ["a.ipynb", "b.ipynb", "nope.ipynb"], "soft": True}).json()
+    assert r["succeeded_count"] == 2 and r["failed_count"] == 1
+    assert all(e.get("soft") and e.get("trash_id") for e in r["results"] if e["status"] == "success")
+    assert sorted(i["filename"] for i in client.get("/api/notebooks/trash").json()["items"]) == ["a.ipynb", "b.ipynb"]
+    for item in client.get("/api/notebooks/trash").json()["items"]:
+        assert client.post(f"/api/notebooks/trash/{item['trash_id']}/restore").status_code == 200
+    records = client.get("/governance/audit/history?limit=50").json()["records"]
+    assert any(x["action"] == "notebook.delete" and x["metadata"].get("trash_id") for x in records)
+
+
+def test_batch_delete_is_hard_by_default_dry_run_moves_nothing_and_validates(env):
+    client, tmp = env
+    client.post("/api/upload", files={"file": ("a.ipynb", NB.encode())})
+    dry = client.post("/api/notebooks/delete-batch", json={"filenames": ["a.ipynb"], "soft": True, "dry_run": True}).json()
+    assert dry["succeeded_count"] == 1 and (tmp / "up" / "a.ipynb").exists() and not (tmp / "up" / ".trash").exists()
+    assert client.post("/api/notebooks/delete-batch", json={"filenames": ["a.ipynb"], "soft": "yes"}).status_code == 400
+    client.post("/api/notebooks/delete-batch", json={"filenames": ["a.ipynb"]})
+    assert not (tmp / "up" / "a.ipynb").exists() and not (tmp / "up" / ".trash").exists()

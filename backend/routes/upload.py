@@ -2392,7 +2392,7 @@ def _lifecycle_audited(action, *, name=None, batch=False, resource=None, extra=N
                     for entry in (result or {}).get("results", []) if isinstance(result, dict) else []:
                         if isinstance(entry, dict) and isinstance(entry.get("filename"), str):
                             ok = entry.get("status") == "success"
-                            meta = {k: entry[k] for k in ("new_filename", "version_id") if isinstance(entry.get(k), str)}
+                            meta = {k: entry[k] for k in ("new_filename", "version_id", "trash_id") if isinstance(entry.get(k), str)}
                             if not ok:
                                 meta["error"] = str(entry.get("error") or entry.get("detail") or entry.get("status"))[:300]
                             notebook = entry["filename"]
@@ -9816,6 +9816,11 @@ def _delete_notebooks_batch_locked(data: dict):
     _validate_batch_entry_count(filenames, noun="filenames")
 
     dry_run = bool(data.get("dry_run", False))
+    soft = data.get("soft", _soft_delete_default())
+
+    if not isinstance(soft, bool):
+
+        raise HTTPException(status_code=400, detail="soft must be a boolean")
 
     compiled_path, _, _, _ = _currently_compiled_notebook_metadata()
 
@@ -9840,7 +9845,10 @@ def _delete_notebooks_batch_locked(data: dict):
                 compiled_path is not None and file_path.resolve() == compiled_path
             )
 
-            if not dry_run:
+            trashed = {}
+            if not dry_run and soft:
+                trashed = _soft_delete_notebook(file_path, was_currently_compiled)
+            elif not dry_run:
                 os.remove(file_path)
                 _tags_sidecar_path(file_path.name).unlink(missing_ok=True)
                 _description_sidecar_path(file_path.name).unlink(missing_ok=True)
@@ -9854,6 +9862,7 @@ def _delete_notebooks_batch_locked(data: dict):
                 "filename": filename,
                 "status": "success",
                 "was_currently_compiled": was_currently_compiled,
+                **trashed,
             })
             succeeded_count += 1
 
