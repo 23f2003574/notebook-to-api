@@ -165,7 +165,9 @@ def test_api_legacy_and_v2_security_routes_both_live(client: TestClient):
     legacy_response = client.get("/security/dashboard")
     v2_response = client.get("/v2/security/dashboard")
 
-    assert legacy_response.status_code == 200
+    # backend.app is itself the opt-in entry point for the v2 stack; the legacy routers stay behind
+    # NOTEBOOK2API_EXPERIMENTAL_ROUTERS on the dashboard.
+    assert legacy_response.status_code == 404
     assert v2_response.status_code == 200
     assert set(v2_response.json().keys()) == {"identities", "audit", "analytics"}
 

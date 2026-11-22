@@ -980,172 +980,185 @@ app.include_router(upload_router)
 app.include_router(governance_metrics_router)
 app.include_router(governance_health_router)
 
-# Security, Authentication & Access Control subsystem
-app.include_router(security_authentication_router)
-app.include_router(security_api_keys_router)
-app.include_router(security_jwt_router)
-app.include_router(security_rbac_router)
-app.include_router(security_permissions_router)
-app.include_router(security_session_router)
-app.include_router(security_audit_router)
-app.include_router(security_policy_router)
-app.include_router(security_secrets_router)
-app.include_router(security_analytics_router)
-app.include_router(security_dashboard_router)
-app.include_router(security_export_router)
-bootstrap_security_subsystem()
+def experimental_routers_enabled(environ=None):
+    """The cluster, plugins, AI, security (v1/v2), pipelines and performance routers are unused by the
+    dashboard UI and include operations that read server directories and import modules, so they are
+    mounted only on explicit opt-in (NOTEBOOK2API_EXPERIMENTAL_ROUTERS=1)."""
+    environ = os.environ if environ is None else environ
+    return str(environ.get("NOTEBOOK2API_EXPERIMENTAL_ROUTERS", "")).strip().lower() in {"1", "true", "yes"}
 
-# Plugin subsystem
-# Route ordering matters here: plugin_registry_router's catch-all
-# "/plugins/{name}" route must be included LAST, since any other router
-# adding a static second-segment path under "/plugins/" (e.g. "/loaded",
-# "/extensions") would otherwise be shadowed by it.
-#   - loader's static "/plugins/loaded" would otherwise be shadowed by the
-#     registry's "/plugins/{name}" route.
-#   - lifecycle's "DELETE /plugins/{plugin}" (uninstall) intentionally takes
-#     over that path from the registry's plain "DELETE /plugins/{name}"
-#     (unregister), since uninstall unloads the plugin and unregisters it
-#     from the catalog as part of the same transition.
-#   - extension_api's static "/plugins/extensions" would otherwise be
-#     shadowed by the registry's "/plugins/{name}" route.
-#   - event_system's static "/plugins/events" would otherwise be shadowed
-#     by the registry's "/plugins/{name}" route (its "/plugins/hooks" and
-#     "/plugins/hooks/{hook}" paths don't collide with anything).
-#   - plugin_dependencies's static "/plugins/load-order" would otherwise be
-#     shadowed by the registry's "/plugins/{name}" route (its
-#     "/plugins/dependencies" and "/plugins/dependencies/{plugin}" paths
-#     don't collide with anything).
-app.include_router(plugin_loader_router)
-app.include_router(plugin_lifecycle_router)
-app.include_router(extension_api_router)
-app.include_router(event_system_router)
-app.include_router(plugin_dependencies_router)
-# plugin_config's routes are all 3+ segments ("/plugins/{plugin}/config",
-# "/plugins/{plugin}/config/validate"), so unlike the routers above it
-# doesn't collide with the registry's "/plugins/{name}" and can be included
-# in any order relative to it.
-app.include_router(plugin_config_router)
-# plugin_sandbox's routes are all under "/plugins/sandbox" (2+ segments,
-# with "sandbox" as a static literal), and the registry has no POST route
-# at "/plugins/{name}" for it to collide with, so this is order-independent
-# relative to plugin_registry_router too.
-app.include_router(plugin_sandbox_router)
-# plugin_packaging's routes are "POST /plugins/package", "GET
-# /plugins/package/{plugin}", and "POST /plugins/import" - the registry has
-# no POST route at "/plugins/{name}" and its GET route is 2 segments (not 3),
-# so this is order-independent relative to plugin_registry_router too.
-app.include_router(plugin_packaging_router)
-# plugin_marketplace's bare "GET /plugins/marketplace" would otherwise be
-# shadowed by the registry's "/plugins/{name}" route (its "/search",
-# "/install", and "/update/{plugin}" sub-paths don't collide with anything).
-app.include_router(plugin_marketplace_router)
-# plugin_analytics's bare "GET /plugins/analytics" would otherwise be
-# shadowed by the registry's "/plugins/{name}" route (its "/summary" and
-# "/trends" sub-paths don't collide with anything).
-app.include_router(plugin_analytics_router)
-# plugin_dashboard's bare "GET /plugins/dashboard" would otherwise be
-# shadowed by the registry's "/plugins/{name}" route (its "/registry",
-# "/runtime", "/marketplace", and "/analytics" sub-paths don't collide with
-# anything).
-app.include_router(plugin_dashboard_router)
-app.include_router(plugin_registry_router)
-bootstrap_plugin_framework()
 
-# Caching & Performance Optimization subsystem
-app.include_router(performance_cache_router)
-app.include_router(performance_profile_router)
-app.include_router(performance_pool_router)
-app.include_router(performance_dashboard_router)
-app.include_router(performance_export_router)
-bootstrap_performance_subsystem()
+def _mount_experimental_routers():
+    # Security, Authentication & Access Control subsystem
+    app.include_router(security_authentication_router)
+    app.include_router(security_api_keys_router)
+    app.include_router(security_jwt_router)
+    app.include_router(security_rbac_router)
+    app.include_router(security_permissions_router)
+    app.include_router(security_session_router)
+    app.include_router(security_audit_router)
+    app.include_router(security_policy_router)
+    app.include_router(security_secrets_router)
+    app.include_router(security_analytics_router)
+    app.include_router(security_dashboard_router)
+    app.include_router(security_export_router)
+    bootstrap_security_subsystem()
 
-# Data Pipeline & ETL Framework subsystem
-# Route ordering matters here for the same reason as the plugin subsystem
-# above: pipeline_registry_router's catch-all "/pipelines/{name}" route must
-# be included LAST, since any other router adding a static second-segment
-# path under "/pipelines/" (e.g. "/sources", "/schemas", "/schedules")
-# would otherwise be shadowed by it.
-#   - data_sources's bare "GET /pipelines/sources" would otherwise be
-#     shadowed by the registry's "/pipelines/{name}" route.
-#   - schema_registry's bare "GET /pipelines/schemas" would otherwise be
-#     shadowed by the registry's "/pipelines/{name}" route.
-#   - pipeline_scheduler's bare "GET /pipelines/schedules" would otherwise
-#     be shadowed by the registry's "/pipelines/{name}" route.
-#   - pipeline_executor's "GET /pipelines/runs" would otherwise be shadowed
-#     by the registry's "/pipelines/{name}" route (its "POST /execute" and
-#     "/runs/{run}" sub-paths don't collide with anything).
-#   - checkpoint_manager's bare "GET /pipelines/checkpoints" would otherwise
-#     be shadowed by the registry's "/pipelines/{name}" route.
-#   - pipeline_analytics's bare "GET /pipelines/analytics" would otherwise
-#     be shadowed by the registry's "/pipelines/{name}" route.
-#   - dashboard's bare "GET /pipelines/dashboard" would otherwise be
-#     shadowed by the registry's "/pipelines/{name}" route.
-# transformation_engine, data_validation, etl_engine, and export are
-# order-independent relative to the registry: none of them define a bare
-# 2-segment GET under "/pipelines/", so they never collide with "/{name}".
-app.include_router(pipeline_data_sources_router)
-app.include_router(pipeline_transformation_router)
-app.include_router(pipeline_validation_router)
-app.include_router(pipeline_etl_router)
-app.include_router(pipeline_schema_registry_router)
-app.include_router(pipeline_scheduler_router)
-app.include_router(pipeline_executor_router)
-app.include_router(pipeline_checkpoint_router)
-app.include_router(pipeline_analytics_router)
-app.include_router(pipeline_dashboard_router)
-app.include_router(pipeline_export_router)
-app.include_router(pipeline_registry_router)
-bootstrap_pipeline_subsystem()
+    # Plugin subsystem
+    # Route ordering matters here: plugin_registry_router's catch-all
+    # "/plugins/{name}" route must be included LAST, since any other router
+    # adding a static second-segment path under "/plugins/" (e.g. "/loaded",
+    # "/extensions") would otherwise be shadowed by it.
+    #   - loader's static "/plugins/loaded" would otherwise be shadowed by the
+    #     registry's "/plugins/{name}" route.
+    #   - lifecycle's "DELETE /plugins/{plugin}" (uninstall) intentionally takes
+    #     over that path from the registry's plain "DELETE /plugins/{name}"
+    #     (unregister), since uninstall unloads the plugin and unregisters it
+    #     from the catalog as part of the same transition.
+    #   - extension_api's static "/plugins/extensions" would otherwise be
+    #     shadowed by the registry's "/plugins/{name}" route.
+    #   - event_system's static "/plugins/events" would otherwise be shadowed
+    #     by the registry's "/plugins/{name}" route (its "/plugins/hooks" and
+    #     "/plugins/hooks/{hook}" paths don't collide with anything).
+    #   - plugin_dependencies's static "/plugins/load-order" would otherwise be
+    #     shadowed by the registry's "/plugins/{name}" route (its
+    #     "/plugins/dependencies" and "/plugins/dependencies/{plugin}" paths
+    #     don't collide with anything).
+    app.include_router(plugin_loader_router)
+    app.include_router(plugin_lifecycle_router)
+    app.include_router(extension_api_router)
+    app.include_router(event_system_router)
+    app.include_router(plugin_dependencies_router)
+    # plugin_config's routes are all 3+ segments ("/plugins/{plugin}/config",
+    # "/plugins/{plugin}/config/validate"), so unlike the routers above it
+    # doesn't collide with the registry's "/plugins/{name}" and can be included
+    # in any order relative to it.
+    app.include_router(plugin_config_router)
+    # plugin_sandbox's routes are all under "/plugins/sandbox" (2+ segments,
+    # with "sandbox" as a static literal), and the registry has no POST route
+    # at "/plugins/{name}" for it to collide with, so this is order-independent
+    # relative to plugin_registry_router too.
+    app.include_router(plugin_sandbox_router)
+    # plugin_packaging's routes are "POST /plugins/package", "GET
+    # /plugins/package/{plugin}", and "POST /plugins/import" - the registry has
+    # no POST route at "/plugins/{name}" and its GET route is 2 segments (not 3),
+    # so this is order-independent relative to plugin_registry_router too.
+    app.include_router(plugin_packaging_router)
+    # plugin_marketplace's bare "GET /plugins/marketplace" would otherwise be
+    # shadowed by the registry's "/plugins/{name}" route (its "/search",
+    # "/install", and "/update/{plugin}" sub-paths don't collide with anything).
+    app.include_router(plugin_marketplace_router)
+    # plugin_analytics's bare "GET /plugins/analytics" would otherwise be
+    # shadowed by the registry's "/plugins/{name}" route (its "/summary" and
+    # "/trends" sub-paths don't collide with anything).
+    app.include_router(plugin_analytics_router)
+    # plugin_dashboard's bare "GET /plugins/dashboard" would otherwise be
+    # shadowed by the registry's "/plugins/{name}" route (its "/registry",
+    # "/runtime", "/marketplace", and "/analytics" sub-paths don't collide with
+    # anything).
+    app.include_router(plugin_dashboard_router)
+    app.include_router(plugin_registry_router)
+    bootstrap_plugin_framework()
 
-# AI Model Management & Inference Platform subsystem
-# Route ordering matters here for the same reason as the plugin and pipeline
-# subsystems above: model_registry_router's catch-all "/ai/models/{name}"
-# route must be included LAST, since any other router adding a static
-# second-segment path under "/ai/models/" (e.g. "/loaded") would otherwise be
-# shadowed by it.
-#   - model_loader's bare "GET /ai/models/loaded" would otherwise be shadowed
-#     by the registry's "/ai/models/{name}" route (its "POST /load",
-#     "/reload/{model}", and "/unload/{model}" sub-paths don't collide with
-#     anything).
-# inference_engine, model_versioning, prompt_templates, batch_inference,
-# model_routing, model_benchmark, model_deployment, inference_analytics, and
-# dashboard/export are order-independent relative to the registry: none of
-# them define a bare 2-segment GET under "/ai/models/", so they never collide
-# with "/{name}".
-app.include_router(ai_model_loader_router)
-app.include_router(ai_inference_router)
-app.include_router(ai_model_versioning_router)
-app.include_router(ai_prompt_templates_router)
-app.include_router(ai_batch_inference_router)
-app.include_router(ai_model_routing_router)
-app.include_router(ai_model_benchmark_router)
-app.include_router(ai_model_deployment_router)
-app.include_router(ai_inference_analytics_router)
-app.include_router(ai_dashboard_router)
-app.include_router(ai_export_router)
-app.include_router(ai_model_registry_router)
-bootstrap_ai_subsystem()
+    # Caching & Performance Optimization subsystem
+    app.include_router(performance_cache_router)
+    app.include_router(performance_profile_router)
+    app.include_router(performance_pool_router)
+    app.include_router(performance_dashboard_router)
+    app.include_router(performance_export_router)
+    bootstrap_performance_subsystem()
 
-# Distributed Execution & Compute Orchestration subsystem
-# Each router owns its own distinct top-level path segment under "/cluster/"
-# (workers, discovery, dispatch, tasks, executions, health, schedule/
-# scheduler, scaling, recovery, analytics, dashboard, export), so unlike the
-# plugin/pipeline/ai registries above there's no catch-all "/{name}" route
-# for a sibling router's static path to collide with, and inclusion order is
-# not significant here.
-app.include_router(cluster_worker_registry_router)
-app.include_router(cluster_worker_discovery_router)
-app.include_router(cluster_job_dispatcher_router)
-app.include_router(cluster_task_serializer_router)
-app.include_router(cluster_execution_coordinator_router)
-app.include_router(cluster_worker_health_router)
-app.include_router(cluster_distributed_scheduler_router)
-app.include_router(cluster_auto_scaling_router)
-app.include_router(cluster_fault_tolerance_router)
-app.include_router(cluster_analytics_router)
-app.include_router(cluster_dashboard_router)
-app.include_router(cluster_export_router)
-bootstrap_cluster_subsystem()
+    # Data Pipeline & ETL Framework subsystem
+    # Route ordering matters here for the same reason as the plugin subsystem
+    # above: pipeline_registry_router's catch-all "/pipelines/{name}" route must
+    # be included LAST, since any other router adding a static second-segment
+    # path under "/pipelines/" (e.g. "/sources", "/schemas", "/schedules")
+    # would otherwise be shadowed by it.
+    #   - data_sources's bare "GET /pipelines/sources" would otherwise be
+    #     shadowed by the registry's "/pipelines/{name}" route.
+    #   - schema_registry's bare "GET /pipelines/schemas" would otherwise be
+    #     shadowed by the registry's "/pipelines/{name}" route.
+    #   - pipeline_scheduler's bare "GET /pipelines/schedules" would otherwise
+    #     be shadowed by the registry's "/pipelines/{name}" route.
+    #   - pipeline_executor's "GET /pipelines/runs" would otherwise be shadowed
+    #     by the registry's "/pipelines/{name}" route (its "POST /execute" and
+    #     "/runs/{run}" sub-paths don't collide with anything).
+    #   - checkpoint_manager's bare "GET /pipelines/checkpoints" would otherwise
+    #     be shadowed by the registry's "/pipelines/{name}" route.
+    #   - pipeline_analytics's bare "GET /pipelines/analytics" would otherwise
+    #     be shadowed by the registry's "/pipelines/{name}" route.
+    #   - dashboard's bare "GET /pipelines/dashboard" would otherwise be
+    #     shadowed by the registry's "/pipelines/{name}" route.
+    # transformation_engine, data_validation, etl_engine, and export are
+    # order-independent relative to the registry: none of them define a bare
+    # 2-segment GET under "/pipelines/", so they never collide with "/{name}".
+    app.include_router(pipeline_data_sources_router)
+    app.include_router(pipeline_transformation_router)
+    app.include_router(pipeline_validation_router)
+    app.include_router(pipeline_etl_router)
+    app.include_router(pipeline_schema_registry_router)
+    app.include_router(pipeline_scheduler_router)
+    app.include_router(pipeline_executor_router)
+    app.include_router(pipeline_checkpoint_router)
+    app.include_router(pipeline_analytics_router)
+    app.include_router(pipeline_dashboard_router)
+    app.include_router(pipeline_export_router)
+    app.include_router(pipeline_registry_router)
+    bootstrap_pipeline_subsystem()
+
+    # AI Model Management & Inference Platform subsystem
+    # Route ordering matters here for the same reason as the plugin and pipeline
+    # subsystems above: model_registry_router's catch-all "/ai/models/{name}"
+    # route must be included LAST, since any other router adding a static
+    # second-segment path under "/ai/models/" (e.g. "/loaded") would otherwise be
+    # shadowed by it.
+    #   - model_loader's bare "GET /ai/models/loaded" would otherwise be shadowed
+    #     by the registry's "/ai/models/{name}" route (its "POST /load",
+    #     "/reload/{model}", and "/unload/{model}" sub-paths don't collide with
+    #     anything).
+    # inference_engine, model_versioning, prompt_templates, batch_inference,
+    # model_routing, model_benchmark, model_deployment, inference_analytics, and
+    # dashboard/export are order-independent relative to the registry: none of
+    # them define a bare 2-segment GET under "/ai/models/", so they never collide
+    # with "/{name}".
+    app.include_router(ai_model_loader_router)
+    app.include_router(ai_inference_router)
+    app.include_router(ai_model_versioning_router)
+    app.include_router(ai_prompt_templates_router)
+    app.include_router(ai_batch_inference_router)
+    app.include_router(ai_model_routing_router)
+    app.include_router(ai_model_benchmark_router)
+    app.include_router(ai_model_deployment_router)
+    app.include_router(ai_inference_analytics_router)
+    app.include_router(ai_dashboard_router)
+    app.include_router(ai_export_router)
+    app.include_router(ai_model_registry_router)
+    bootstrap_ai_subsystem()
+
+    # Distributed Execution & Compute Orchestration subsystem
+    # Each router owns its own distinct top-level path segment under "/cluster/"
+    # (workers, discovery, dispatch, tasks, executions, health, schedule/
+    # scheduler, scaling, recovery, analytics, dashboard, export), so unlike the
+    # plugin/pipeline/ai registries above there's no catch-all "/{name}" route
+    # for a sibling router's static path to collide with, and inclusion order is
+    # not significant here.
+    app.include_router(cluster_worker_registry_router)
+    app.include_router(cluster_worker_discovery_router)
+    app.include_router(cluster_job_dispatcher_router)
+    app.include_router(cluster_task_serializer_router)
+    app.include_router(cluster_execution_coordinator_router)
+    app.include_router(cluster_worker_health_router)
+    app.include_router(cluster_distributed_scheduler_router)
+    app.include_router(cluster_auto_scaling_router)
+    app.include_router(cluster_fault_tolerance_router)
+    app.include_router(cluster_analytics_router)
+    app.include_router(cluster_dashboard_router)
+    app.include_router(cluster_export_router)
+    bootstrap_cluster_subsystem()
+
+
+if experimental_routers_enabled():
+    _mount_experimental_routers()
 
 
 def _frontend_index_file():

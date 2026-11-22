@@ -216,6 +216,8 @@ def get_plugin_lifecycle_manager() -> PluginLifecycleManager:
     return _plugin_lifecycle_manager
 
 
+from backend.plugins.plugin_security import check_entry_point  # noqa: E402
+
 router = APIRouter(prefix="/plugins", tags=["plugins-lifecycle"])
 
 
@@ -229,6 +231,7 @@ def install_plugin_endpoint(
     except ManifestValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     try:
+        check_entry_point(manifest.entry_point)
         event = lifecycle.install(manifest)
     except PluginAlreadyInstalledError as exc:
         raise HTTPException(status_code=409, detail=f"'{exc}' is already installed")

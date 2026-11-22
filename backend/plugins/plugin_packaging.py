@@ -233,6 +233,8 @@ def get_plugin_packaging_service() -> PluginPackagingService:
     return _plugin_packaging_service
 
 
+from backend.plugins.plugin_security import resolve_source_dir  # noqa: E402
+
 router = APIRouter(prefix="/plugins", tags=["plugins-packaging"])
 
 
@@ -248,6 +250,7 @@ def package_plugin_endpoint(
     source_dir = payload.get("source_dir", "")
     if not source_dir:
         raise HTTPException(status_code=422, detail="source_dir is required")
+    source_dir = resolve_source_dir(source_dir)
     try:
         package = service.package(manifest, source_dir, format=payload.get("format", "zip"))
     except UnsupportedPackageFormatError as exc:

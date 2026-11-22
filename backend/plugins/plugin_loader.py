@@ -229,6 +229,8 @@ def get_plugin_loader() -> PluginLoader:
     return _plugin_loader
 
 
+from backend.plugins.plugin_security import check_entry_point  # noqa: E402
+
 router = APIRouter(prefix="/plugins", tags=["plugins-loader"])
 
 
@@ -241,6 +243,7 @@ def load_plugin_endpoint(
         manifest = PluginManifest.from_dict(payload)
     except ManifestValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+    check_entry_point(manifest.entry_point)
     try:
         loaded = loader.load(manifest)
     except PluginAlreadyLoadedError as exc:
