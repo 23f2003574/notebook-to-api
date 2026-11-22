@@ -90,10 +90,10 @@ def test_openapi_publishes_component_references(built):
     assert components["Point"]["required"] == ["x", "y"]
 
 
-def test_untyped_and_primitive_results_keep_their_previous_open_schema(built):
+def test_untyped_results_stay_open_and_primitives_are_now_typed(built):
     _, _, schema = built
     assert _result(schema, "/untyped") == {}
-    assert _result(schema, "/plain") == {}
+    assert _result(schema, "/plain") == {"type": "integer"}  # a primitive annotation is published (see test_openapi_result_schemas)
 
 
 def test_runtime_responses_match_the_published_shapes(built):
