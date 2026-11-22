@@ -566,6 +566,16 @@ def docker_compose_content(package_name="generated", env_vars=None, notebook_env
         # NOTEBOOK_API_BIND_ADDRESS=0.0.0.0 (with your own NOTEBOOK_API_KEY)
         # to serve other machines.
         '      - "${NOTEBOOK_API_BIND_ADDRESS:-127.0.0.1}:${PORT:-8000}:${PORT:-8000}"\n'
+        # The image's own HEALTHCHECK allows only 5 seconds before failures count, so a notebook
+        # that loads a large model at import (the server is not listening meanwhile) was reported
+        # unhealthy while it was still starting. Same probe, with a start period you can raise.
+        "    healthcheck:\n"
+        '      test: ["CMD", "python", "-c", "import os, urllib.request; urllib.request.urlopen('
+        "'http://localhost:' + os.environ.get('PORT', '8000') + '/health', timeout=2)\"]\n"
+        "      interval: 30s\n"
+        "      timeout: 3s\n"
+        "      start_period: ${NOTEBOOK_API_HEALTHCHECK_START_PERIOD:-5s}\n"
+        "      retries: 3\n"
         "    environment:\n"
         "      - PORT=${PORT:-8000}\n"
         f"{environment_lines}\n"
@@ -653,6 +663,11 @@ def env_example_content(env_vars=None, notebook_env_vars=None):
         "# \"environment\" sections map, and the Dockerfile's own CMD/",
         "# HEALTHCHECK read -- not read by the compiled app itself.",
         "PORT=8000",
+        "",
+        "# How long docker compose waits for the app to start before failed health checks count",
+        "# (read by docker-compose.yml only). Raise it when the notebook loads a large model at",
+        "# import: the server is not listening until that finishes.",
+        "# NOTEBOOK_API_HEALTHCHECK_START_PERIOD=5s",
         "",
     ]
 
