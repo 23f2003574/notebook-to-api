@@ -104,6 +104,19 @@ class AuditKeyring:
             return None
         return hmac.compare_digest(stored, self._tag(parts[1], message))
 
+    def checkpoint_mac(self, purged_through, purged_hash) -> str:
+        """Tag for the archive checkpoint: the record hash the retained chain continues from."""
+        return self._tag(self.epoch, f"checkpoint|{purged_through}|{purged_hash}")
+
+    def check_checkpoint(self, stored: str, purged_through, purged_hash):
+        return self._check(stored, f"checkpoint|{purged_through}|{purged_hash}")
+
+    def archive_mac(self, digest: str) -> str:
+        return self._tag(self.epoch, f"archive|{digest}")
+
+    def check_archive(self, stored: str, digest: str):
+        return self._check(stored, f"archive|{digest}")
+
     def check_record(self, stored: str, record_hash: str):
         return self._check(stored, f"record|{record_hash}")
 
@@ -153,7 +166,8 @@ class SqliteAuditStore:
         process gets there first)."""
         wanted = {
             "audit_meta": {"purged_through": "INTEGER NOT NULL DEFAULT 0", "keyed_from": "INTEGER NOT NULL DEFAULT 0",
-                           "head_mac": "TEXT NOT NULL DEFAULT ''"},
+                           "head_mac": "TEXT NOT NULL DEFAULT ''",
+                           "purged_hash": "TEXT NOT NULL DEFAULT ''", "purged_mac": "TEXT NOT NULL DEFAULT ''"},
             "audit_records": {"mac": "TEXT NOT NULL DEFAULT ''"},
         }
         for table, columns in wanted.items():
@@ -245,7 +259,8 @@ class SqliteAuditStore:
         """The chain head the store remembers independently of the rows (for detecting lost records)."""
         try:
             return dict(self._connect().execute(
-                "SELECT last_sequence, last_hash, purged_through, keyed_from, head_mac FROM audit_meta WHERE id = 1").fetchone())
+                "SELECT last_sequence, last_hash, purged_through, keyed_from, head_mac, purged_hash, purged_mac "
+                "FROM audit_meta WHERE id = 1").fetchone())
         except sqlite3.Error as exc:
             raise GovernanceAuditStorageError(f"governance audit read failed ({type(exc).__name__})") from None
 
@@ -331,12 +346,13 @@ class SqliteAuditStore:
             conn.execute("BEGIN IMMEDIATE")
             try:
                 removed = conn.execute("DELETE FROM audit_records").rowcount
-                conn.execute("UPDATE audit_meta SET purged_through = last_sequence WHERE id = 1")
+                conn.execute("UPDATE audit_meta SET purged_through = last_sequence, purged_hash = last_hash WHERE id = 1")
                 if self.keyring is not None:
                     meta = conn.execute("SELECT last_sequence, last_hash, purged_through, keyed_from FROM audit_meta WHERE id = 1").fetchone()
                     if meta["keyed_from"]:
-                        conn.execute("UPDATE audit_meta SET head_mac = ? WHERE id = 1", (self.keyring.head_mac(
-                            meta["last_sequence"], meta["last_hash"], meta["purged_through"], meta["keyed_from"]),))
+                        conn.execute("UPDATE audit_meta SET head_mac = ?, purged_mac = ? WHERE id = 1", (self.keyring.head_mac(
+                            meta["last_sequence"], meta["last_hash"], meta["purged_through"], meta["keyed_from"]),
+                            self.keyring.checkpoint_mac(meta["purged_through"], meta["last_hash"])))
                 conn.execute("COMMIT")
             except BaseException:
                 conn.execute("ROLLBACK")
@@ -344,6 +360,39 @@ class SqliteAuditStore:
             return removed
         except sqlite3.Error as exc:
             raise GovernanceAuditStorageError(f"governance audit purge failed ({type(exc).__name__})") from None
+
+    def prune_through(self, sequence: int, record_hash: str) -> int:
+        """Delete records 1..`sequence` (those still stored) and remember `record_hash` -- the hash of
+        record `sequence` -- as the checkpoint the retained chain continues from, in one transaction.
+        Refuses unless that record exists with that hash and a newer record remains, so the chain
+        always keeps at least its newest record. Returns how many rows were removed."""
+        try:
+            conn = self._connect()
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                meta = conn.execute(
+                    "SELECT last_sequence, last_hash, purged_through, keyed_from FROM audit_meta WHERE id = 1").fetchone()
+                row = conn.execute("SELECT record_hash FROM audit_records WHERE sequence = ?", (sequence,)).fetchone()
+                if (row is None or row["record_hash"] != record_hash or sequence <= meta["purged_through"]
+                        or sequence >= meta["last_sequence"]):
+                    raise GovernanceAuditStorageError(
+                        "the audit checkpoint does not match a stored record that can be pruned")
+                removed = conn.execute("DELETE FROM audit_records WHERE sequence <= ?", (sequence,)).rowcount
+                head_mac = purged_mac = ""
+                if self.keyring is not None and meta["keyed_from"]:
+                    head_mac = self.keyring.head_mac(meta["last_sequence"], meta["last_hash"], sequence, meta["keyed_from"])
+                    purged_mac = self.keyring.checkpoint_mac(sequence, record_hash)
+                conn.execute(
+                    "UPDATE audit_meta SET purged_through = ?, purged_hash = ?, purged_mac = ?, "
+                    "head_mac = CASE WHEN ? != '' THEN ? ELSE head_mac END WHERE id = 1",
+                    (sequence, record_hash, purged_mac, head_mac, head_mac))
+                conn.execute("COMMIT")
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
+            return removed
+        except sqlite3.Error as exc:
+            raise GovernanceAuditStorageError(f"governance audit prune failed ({type(exc).__name__})") from None
 
     def count(self) -> int:
         return self._connect().execute("SELECT COUNT(*) FROM audit_records").fetchone()[0]

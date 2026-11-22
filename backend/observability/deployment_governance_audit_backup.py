@@ -164,6 +164,8 @@ def run_cli(args) -> int:
 
     database = getattr(args, "database", None) or os.environ.get(
         "NOTEBOOK2API_GOVERNANCE_DATABASE_PATH", "data/notebook2api.db")
+    if args.audit_db_command in ("archive", "verify-archive"):
+        return _run_archive_cli(args, database)
     try:
         if args.audit_db_command == "backup":
             result = backup(database, args.output, force=args.force)
@@ -187,3 +189,31 @@ def run_cli(args) -> int:
         if args.audit_db_command == "restore":
             print("Restart the dashboard so it opens the restored database.")
     return EXIT_OK if result["valid"] else EXIT_INVALID
+
+
+def _run_archive_cli(args, database) -> int:
+    import json
+
+    from .deployment_governance_audit_archive import archive_and_prune, verify_archive
+
+    try:
+        if args.audit_db_command == "verify-archive":
+            result = verify_archive(args.file)
+        else:
+            result = archive_and_prune(
+                database, args.output, through=args.through, keep_latest=args.keep_latest,
+                older_than_days=args.older_than_days, dry_run=args.dry_run, force=args.force)
+    except AuditDbError as exc:
+        print(f"error: {exc}")
+        return exc.code
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    elif args.audit_db_command == "verify-archive":
+        print("archive intact: records %s-%s (%s, integrity %s)" % (result["from_sequence"], result["to_sequence"], result["count"], result["integrity"])
+              if result["valid"] else f"archive INVALID: {result['reason']}")
+    elif result.get("dry_run"):
+        print(f"dry run: would archive and prune {result.get('archived', 0)} records; nothing changed")
+    else:
+        print(f"archived {result['archived']} records to {result.get('archive', '-')}; pruned {result['pruned']}"
+              if result["pruned"] else "nothing to archive")
+    return EXIT_OK if result.get("valid", True) else EXIT_INVALID

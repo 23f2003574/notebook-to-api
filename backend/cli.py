@@ -15935,6 +15935,18 @@ def main():
         ),
     )
     audit_db_sub = audit_db_parser.add_subparsers(dest="audit_db_command", required=True)
+    _archive = audit_db_sub.add_parser("archive", help="Archive old records to a verified file, then prune them with a checkpoint.")
+    _archive.add_argument("--database", default=None, help="The live audit database (default: $NOTEBOOK2API_GOVERNANCE_DATABASE_PATH or data/notebook2api.db).")
+    _archive.add_argument("--output", required=True, help="The archive file to write (it must not exist unless --force).")
+    _archive.add_argument("--through", type=int, default=None, help="Archive and prune records up to this sequence number.")
+    _archive.add_argument("--keep-latest", type=int, default=None, dest="keep_latest", help="Keep this many of the newest records; archive the rest.")
+    _archive.add_argument("--older-than-days", type=float, default=None, dest="older_than_days", help="Archive records older than this many days.")
+    _archive.add_argument("--dry-run", action="store_true", dest="dry_run", help="Report what would be archived; change nothing.")
+    _archive.add_argument("--force", action="store_true", help="Replace an existing archive file.")
+    _archive.add_argument("--json", action="store_true", help="Print the result as JSON.")
+    _verify_archive = audit_db_sub.add_parser("verify-archive", help="Verify an archive file on its own (no database needed).")
+    _verify_archive.add_argument("file", help="The archive file.")
+    _verify_archive.add_argument("--json", action="store_true", help="Print the result as JSON.")
     for _name, _help in (("backup", "Write a verified, consistent copy of the database."),
                          ("restore", "Replace the database with a verified backup (stop the dashboard first)."),
                          ("verify-file", "Verify the hash chain of a database file without modifying it.")):

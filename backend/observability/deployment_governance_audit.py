@@ -507,7 +507,8 @@ class GovernanceAuditService:
         first = last = None
         result: "AuditChainVerification | None" = None
         keyring = self._store.keyring if self._store is not None else None
-        keyed_from = self._store.head()["keyed_from"] if self._store is not None else 0
+        store_head = self._store.head() if self._store is not None else None
+        keyed_from = store_head["keyed_from"] if store_head is not None else 0
         unverifiable = False
 
         for current, mac in self._iter_records(with_mac=True):
@@ -517,6 +518,11 @@ class GovernanceAuditService:
 
             if checked == 1 and current.sequence == 1:
                 expected_previous = GENESIS_HASH
+            elif (checked == 1 and store_head is not None and store_head["purged_hash"]
+                    and current.sequence == store_head["purged_through"] + 1):
+                # Records before this one were archived and pruned: the checkpoint stored with the
+                # purge point is the hash this record must continue from.
+                expected_previous = store_head["purged_hash"]
 
             if expected_previous is not None and current.previous_hash != expected_previous:
                 result = AuditChainVerification(
@@ -577,6 +583,20 @@ class GovernanceAuditService:
         if result is None and self._store is not None:
             result = self._missing_records(first, last, checked)
 
+        if result is None and keyed_from and store_head["purged_hash"]:
+            checkpoint = None if keyring is None else (keyring.check_checkpoint(
+                store_head["purged_mac"], store_head["purged_through"], store_head["purged_hash"]
+            ) if store_head["purged_mac"] else False)
+            if checkpoint is False:
+                result = AuditChainVerification(
+                    valid=False,
+                    checked=checked,
+                    first_broken_sequence=store_head["purged_through"] + 1,
+                    reason="the archive checkpoint failed keyed integrity (rewritten, missing its tag, or written with a different key)",
+                    integrity="keyed",
+                )
+            elif checkpoint is None:
+                unverifiable = True
         if result is None and keyed_from and not unverifiable:
             head = self._store.head()
             tag = head["keyed_from"] == keyed_from and keyring.check_head(
