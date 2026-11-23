@@ -32522,3 +32522,29 @@ def test_versions_compare_fail_on_data_change_exits_1_only_for_real_differences(
     unknown = {"comparable": False, "added": [], "removed": [], "changed": []}
     proc = _compare_with_files(tmp_path, fake_dashboard, unknown, "--fail-on-data-change")
     assert proc.returncode == 0 and "not compared" in proc.stdout
+
+
+def test_whoami_prints_the_key_name_scope_and_abilities(tmp_path, fake_dashboard):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_json_response(200, {"name": "ci", "scope": "compile", "authenticated": True,
+                                              "can": {"read": True, "compile": True, "delete": False, "deploy": False}})]
+    proc = _run_cli(["whoami", "--dashboard-url", dashboard_url], cwd=tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    assert "signed in as key 'ci' with compile access" in proc.stdout
+    assert "can:    compile, read" in proc.stdout and "cannot: delete, deploy" in proc.stdout
+    assert handler.requests == ["/api/whoami"]
+
+
+def test_whoami_without_a_key_and_as_json(tmp_path, fake_dashboard):
+    dashboard_url, handler = fake_dashboard
+    body = {"name": "local", "scope": "admin", "authenticated": False, "can": {"read": True}}
+    handler.responses = [_json_response(200, body), _json_response(200, body)]
+    assert "this machine (no dashboard key configured) with admin access" in _run_cli(["whoami", "--dashboard-url", dashboard_url], cwd=tmp_path).stdout
+    assert json.loads(_run_cli(["whoami", "--json", "--dashboard-url", dashboard_url], cwd=tmp_path).stdout) == body
+
+
+def test_whoami_reports_a_rejected_key_clearly(tmp_path, fake_dashboard):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_json_response(401, {"detail": "Invalid API key"})]
+    proc = _run_cli(["whoami", "--dashboard-url", dashboard_url], cwd=tmp_path)
+    assert proc.returncode != 0 and "401" in proc.stdout + proc.stderr and "Invalid API key" in proc.stdout + proc.stderr

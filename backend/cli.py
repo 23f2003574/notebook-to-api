@@ -424,7 +424,7 @@ _CORE_COMMANDS = frozenset({
     "export-curl", "export-postman", "serve", "watch", "deploy", "diff", "upload", "import-notebooks", "import-url", "import-url-many",
     "list", "info", "info-batch",
     "search-functions", "search-content", "search-version-content", "find-duplicates", "resolve-duplicates", "storage",
-    "download", "export-notebooks", "generated", "delete", "trash", "delete-batch", "rename", "copy",
+    "download", "export-notebooks", "generated", "delete", "trash", "whoami", "delete-batch", "rename", "copy",
     "copy-batch", "copy-many", "rename-many", "tags", "prune-versions", "prune-temp-files", "description", "source-url", "deploy-history",
     "clear-deploy-history", "compile-history", "clear-compile-history",
     "remote-compile", "remote-inspect", "remote-build", "apps", "dashboard-deployment", "audit-db",
@@ -4833,6 +4833,34 @@ def _dispatch_core_command(args):
                     print(f"  restore with: trash restore {data.get('trash_id')} (until {data.get('expires_at')})")
                 if data.get("was_currently_compiled"):
                     print("  note: this was the notebook backing the currently compiled app.")
+    elif args.command == "whoami":
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+
+        try:
+            response = httpx.get(f"{dashboard_url}/api/whoami", timeout=args.timeout)
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        else:
+            who = f"key '{data['name']}'" if data.get("authenticated") else "this machine (no dashboard key configured)"
+            print(f"{dashboard_url}: signed in as {who} with {data['scope']} access")
+            allowed = sorted(name for name, ok in data.get("can", {}).items() if ok)
+            denied = sorted(name for name, ok in data.get("can", {}).items() if not ok)
+            print(f"  can:    {', '.join(allowed) or 'nothing'}")
+            if denied:
+                print(f"  cannot: {', '.join(denied)}")
     elif args.command == "trash":
         import httpx
 
@@ -13544,6 +13572,15 @@ def main():
             "Applies to a single notebook, not --all."
         ),
     )
+    whoami_parser = subparsers.add_parser(
+        "whoami",
+        help=(
+            "Show which dashboard key the CLI is using (its name and scope) and what that scope "
+            "allows, via GET /api/whoami. The key itself is never printed."
+        ),
+    )
+    _add_dashboard_url_and_timeout_arguments(whoami_parser)
+    whoami_parser.add_argument("--json", action="store_true", dest="json_output", help="Print the dashboard's JSON reply.")
     trash_parser = subparsers.add_parser(
         "trash",
         help="List, restore or purge notebooks moved to a dashboard's trash by `delete --soft`.",
