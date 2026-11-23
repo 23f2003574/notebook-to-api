@@ -13,6 +13,7 @@ import hashlib
 import importlib
 import io
 import ipaddress
+import unicodedata
 import json
 import os
 import logging
@@ -616,6 +617,11 @@ def validate_new_notebook_filename(name):
         problems.append("a backslash")
     if any(ord(ch) < 32 or ord(ch) == 127 for ch in name):
         problems.append("a control character")
+    # Bidi overrides (U+202E), zero-width and other invisible format characters let one name
+    # display as another ("evil\u202egpj.ipynb" reads "evilbpyni.jpg"-style), and line/paragraph
+    # separators break listings; none belongs in a notebook filename.
+    if any(unicodedata.category(ch) in ("Cf", "Zl", "Zp", "Cc") and ord(ch) >= 128 for ch in name):
+        problems.append("an invisible or direction-control Unicode character")
     bad = sorted({ch for ch in name if ch in _WINDOWS_INVALID_CHARACTERS})
     if bad:
         problems.append("the character(s) " + " ".join(bad))
@@ -637,16 +643,22 @@ def resolve_new_notebook_path(name, exclude=None) -> Path:
     again is not a collision here: overwrite semantics stay with the callers."""
     validate_new_notebook_filename(name)
     path = resolve_upload_path(name)
-    folded = name.casefold()
+    def _fold(value):
+        return unicodedata.normalize("NFC", value).casefold()
+
+    folded = _fold(name)
     try:
         existing = [entry.name for entry in Path(UPLOAD_DIR).iterdir()]
     except OSError:
         existing = []
     for other in existing:
-        if other != name and other.casefold() == folded and (exclude is None or other != Path(exclude).name):
+        if other != name and _fold(other) == folded and (exclude is None or other != Path(exclude).name):
             raise HTTPException(
                 status_code=409,
-                detail=f"A notebook named {other!r} already exists and differs from {name!r} only by letter case",
+                detail=(
+                    f"A notebook named {other!r} already exists and differs from {name!r} only by "
+                    "letter case or Unicode normalization"
+                ),
             )
     return path
 

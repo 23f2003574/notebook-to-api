@@ -100,3 +100,20 @@ def test_control_characters_are_rejected_by_the_validator():
         with pytest.raises(HTTPException) as err:
             upload.validate_new_notebook_filename(name)
         assert err.value.status_code == 400
+
+
+@pytest.mark.parametrize("name", ["evil‮gpj.ipynb", "a​b.ipynb", "a b.ipynb", "a﻿b.ipynb"])
+def test_invisible_and_direction_control_characters_are_rejected(client, name):
+    r = _up(client, name)
+    assert r.status_code == 400 and "Unicode character" in r.json()["detail"]
+    assert client.get("/api/notebooks").json()["notebooks"] == []
+
+
+def test_ordinary_unicode_names_still_work(client):
+    assert _up(client, "métrique-数据.ipynb").status_code == 200
+
+
+def test_unicode_normalization_colliding_upload_is_refused(client):
+    assert _up(client, "café.ipynb").status_code == 200
+    r = _up(client, "café.ipynb", overwrite="true")
+    assert r.status_code == 409 and "normalization" in r.json()["detail"]
