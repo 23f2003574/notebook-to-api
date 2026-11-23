@@ -10,7 +10,21 @@ from backend.generator.api_generator import generate_fastapi_code
 
 
 @pytest.fixture
-def ns():
+def ns(monkeypatch):
+    # The generated code imports "generated.runtime.notebook_module". Provide it here instead of
+    # depending on whichever app an earlier test left in ./generated or in sys.modules.
+    import sys
+    import types
+
+    notebook_module = types.ModuleType("generated.runtime.notebook_module")
+    notebook_module.train_model = lambda: {}
+    runtime = types.ModuleType("generated.runtime")
+    runtime.notebook_module = notebook_module
+    package = types.ModuleType("generated")
+    package.runtime = runtime
+    package.__path__ = []
+    for name, module in (("generated", package), ("generated.runtime", runtime), ("generated.runtime.notebook_module", notebook_module)):
+        monkeypatch.setitem(sys.modules, name, module)
     code = generate_fastapi_code([{"name": "train_model", "args": [], "return_type": "dict"}])
     namespace = {"__name__": "webhook_guard_ns"}
     exec(compile(code, "<generated>", "exec"), namespace)
