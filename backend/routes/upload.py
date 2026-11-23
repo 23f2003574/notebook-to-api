@@ -17321,13 +17321,13 @@ def openapi_preview_endpoint(data: dict):
         ) as f:
             f.write(app_code)
 
-        sys.path.insert(0, temp_root)
-
         try:
 
-            module = importlib.import_module(f"{temp_package_name}.app")
+            from backend.exporters.openapi_exporter import isolated_openapi_schema
 
-            schema = module.app.openapi()
+            # Importing the generated app runs the uploaded notebook's top-level code, so it
+            # happens in a child process, never in this dashboard.
+            schema = isolated_openapi_schema(temp_output_dir, temp_package_name)
 
         except Exception as e:
 
@@ -17335,7 +17335,7 @@ def openapi_preview_endpoint(data: dict):
                 status_code=422,
                 detail=(
                     "Generated app failed to import while building the "
-                    f"OpenAPI preview: {e}. If the notebook imports a "
+                    f"OpenAPI preview: {_public_error_text(e)}. If the notebook imports a "
                     "third-party package not installed in this dashboard's "
                     "own Python environment, this can fail here even "
                     "though a real POST /api/compile (which never imports "
@@ -17343,11 +17343,6 @@ def openapi_preview_endpoint(data: dict):
                     "succeed -- see this endpoint's own docstring."
                 )
             )
-
-        finally:
-
-            _evict_compiled_app_from_module_cache(temp_package_name)
-            sys.path.remove(temp_root)
 
     response = {
         "status": "success",
@@ -18198,13 +18193,12 @@ def export_openapi_endpoint(
 
             package_name = package_name_for_output_dir(GENERATED_DIR)
 
-            _evict_compiled_app_from_module_cache(package_name)
-
             export_openapi_schema(
                 output_path,
                 package_name,
                 format=export_format,
-                app_dir=GENERATED_DIR if data.get("notebook") else None,
+                app_dir=GENERATED_DIR,
+                isolated=True,
             )
 
             with open(output_path, "r", encoding="utf-8") as f:

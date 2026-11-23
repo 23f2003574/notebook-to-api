@@ -31914,12 +31914,17 @@ def test_delete_generated_app_evicts_the_compiled_app_from_the_module_cache():
 
     # POST /api/export-openapi already imports "<package_name>.app" into
     # sys.modules as part of exporting the schema.
+    # (The dashboard now builds the schema in a child process, so a cached import is staged here.)
     export_resp = client.post("/api/export-openapi", json={"format": "json"})
     assert export_resp.status_code == 200
 
     package_name = upload_module.package_name_for_output_dir(
         upload_module.GENERATED_DIR
     )
+    import types
+
+    sys.modules[package_name] = types.ModuleType(package_name)
+    sys.modules[f"{package_name}.app"] = types.ModuleType(f"{package_name}.app")
     assert package_name in sys.modules
 
     delete_resp = client.delete("/api/generated")
@@ -32005,12 +32010,17 @@ def test_delete_generated_app_dry_run_does_not_evict_the_module_cache():
     filename = "delete_generated_app_dry_run_evict_test.ipynb"
     _compile_a_notebook(filename)
 
+    # (The dashboard now builds the schema in a child process, so a cached import is staged here.)
     export_resp = client.post("/api/export-openapi", json={"format": "json"})
     assert export_resp.status_code == 200
 
     package_name = upload_module.package_name_for_output_dir(
         upload_module.GENERATED_DIR
     )
+    import types
+
+    sys.modules[package_name] = types.ModuleType(package_name)
+    sys.modules[f"{package_name}.app"] = types.ModuleType(f"{package_name}.app")
     assert package_name in sys.modules
 
     dry_run_resp = client.delete("/api/generated", params={"dry_run": "true"})

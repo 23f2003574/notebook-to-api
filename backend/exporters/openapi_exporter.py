@@ -188,7 +188,68 @@ def missing_dependency_hint(exc, package_name, app_dir):
     )
 
 
-def export_openapi_schema(output_path="generated/openapi.json", package_name="generated", format="json", app_dir=None):
+_SECRET_ENV_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|DASHBOARD", re.IGNORECASE)
+_ISOLATED_SCRIPT = """
+import importlib, json, sys
+parent, package, out = sys.argv[1:4]
+sys.path.insert(0, parent)
+schema = importlib.import_module(package + ".app").app.openapi()
+with open(out, "w", encoding="utf-8") as handle:
+    json.dump(schema, handle)
+"""
+
+
+def isolated_openapi_schema(app_dir, package_name, timeout=None, max_bytes=None):
+    """The compiled app's OpenAPI schema, built in a child process.
+
+    Importing a compiled app runs the notebook's top-level code, so a server that handles uploaded
+    notebooks must not do it in its own process: the child gets no stdin, an environment without
+    secret-looking names, its own process group (killed and reaped on timeout) and bounded output.
+    """
+    import os
+    import signal
+    import subprocess
+    import sys
+    import tempfile
+
+    timeout = float(os.getenv("NOTEBOOK_API_OPENAPI_TIMEOUT_SECONDS", "30")) if timeout is None else timeout
+    max_bytes = int(os.getenv("NOTEBOOK_API_OPENAPI_MAX_BYTES", str(8 * 1024 * 1024))) if max_bytes is None else max_bytes
+    app_path = Path(app_dir).resolve()
+    if not (app_path / "app.py").is_file():
+        raise ModuleNotFoundError(f"No compiled app found in {app_dir!r} (resolved {app_path})")
+    environment = {k: v for k, v in os.environ.items() if not _SECRET_ENV_NAME.search(k)}
+    with tempfile.TemporaryDirectory(prefix="n2a_openapi_") as scratch:
+        out, err = Path(scratch) / "schema.json", Path(scratch) / "stderr.txt"
+        with open(err, "wb") as err_file:
+            process = subprocess.Popen(
+                [sys.executable, "-c", _ISOLATED_SCRIPT, str(app_path.parent), package_name, str(out)],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err_file,
+                cwd=str(app_path.parent), env=environment, start_new_session=True,
+            )
+            try:
+                process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except OSError:
+                    process.kill()
+                process.wait()
+                raise RuntimeError(f"Building the OpenAPI schema did not finish within {timeout:g} seconds; "
+                                   "set NOTEBOOK_API_OPENAPI_TIMEOUT_SECONDS to allow longer") from None
+            finally:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except OSError:
+                    pass
+        if process.returncode != 0:
+            tail = err.read_bytes()[-1500:].decode("utf-8", "replace").strip().splitlines()
+            raise RuntimeError("The compiled app failed to import: " + (tail[-1] if tail else f"exit status {process.returncode}"))
+        if not out.is_file() or out.stat().st_size > max_bytes:
+            raise RuntimeError(f"The OpenAPI schema is missing or larger than {max_bytes} bytes")
+        return json.loads(out.read_text(encoding="utf-8"))
+
+
+def export_openapi_schema(output_path="generated/openapi.json", package_name="generated", format="json", app_dir=None, isolated=False):
     """Export the FastAPI OpenAPI schema to a JSON or YAML file.
 
     Parameters
@@ -220,6 +281,17 @@ def export_openapi_schema(output_path="generated/openapi.json", package_name="ge
         outside the current working directory -- ../build, /srv/apps/nb --
         imports instead of failing with "No module named '<package>'".
     """
+    if isolated:
+        schema = isolated_openapi_schema(app_dir or package_name, package_name)
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            if format == "yaml":
+                f.write(_to_yaml(schema))
+            else:
+                json.dump(schema, f, indent=2)
+        print(f"OpenAPI schema written to {output_path}")
+        return
+
     if app_dir and not (Path(app_dir) / "app.py").is_file():
         raise FileNotFoundError(
             f"No compiled app found in '{app_dir}' (no app.py there). Compile "
