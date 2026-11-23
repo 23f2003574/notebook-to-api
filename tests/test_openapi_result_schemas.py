@@ -11,6 +11,8 @@ from backend.compiler import compile_notebook
 SOURCE = '''
 from typing import Optional, List, Dict
 from decimal import Decimal
+import datetime, enum, uuid
+from typing import Iterator, Generator, AsyncIterator
 
 def i(a: int) -> int:
     return a
@@ -44,6 +46,36 @@ def bare(a: int) -> list:
 
 def untyped(a: int):
     return a
+
+class Color(enum.Enum):
+    RED = "red"
+
+def gen(n: int) -> Iterator[int]:
+    yield from range(n)
+
+def gen3(n: int) -> Generator[str, None, None]:
+    yield "a"
+
+async def agen(n: int) -> AsyncIterator[int]:
+    yield n
+
+def day(a: int) -> datetime.date:
+    return datetime.date(2026, 1, a)
+
+def stamp(a: int) -> datetime.datetime:
+    return datetime.datetime(2026, 1, 1, 12, 0, a)
+
+def ident(a: int) -> uuid.UUID:
+    return uuid.UUID(int=a)
+
+def color(a: int) -> Color:
+    return Color.RED
+
+def blob(a: int) -> bytes:
+    return b"ab" * a
+
+def nan(a: int) -> float:
+    return float("nan")
 '''
 H = {"X-API-Key": "schema-key"}
 
@@ -76,11 +108,12 @@ def _result(client, path):
 def test_plain_types_have_meaningful_schemas(make):
     c = make()
     assert _result(c, "/i") == {"type": "integer"}
-    assert _result(c, "/fl") == {"type": "number"}
+    # NaN and infinity cannot be JSON numbers; the app sends null, so the schema says so
+    assert _result(c, "/fl") == {"anyOf": [{"type": "number"}, {"type": "null"}]}
     assert _result(c, "/st") == {"type": "string"}
     assert _result(c, "/bo") == {"type": "boolean"}
     assert _result(c, "/li") == {"type": "array", "items": {"type": "integer"}}
-    assert _result(c, "/di") == {"type": "object", "additionalProperties": {"type": "number"}}
+    assert _result(c, "/di") == {"type": "object", "additionalProperties": {"anyOf": [{"type": "number"}, {"type": "null"}]}}
     assert _result(c, "/op") == {"anyOf": [{"type": "integer"}, {"type": "null"}]}
     assert _result(c, "/bare")["type"] == "array"
 
@@ -113,3 +146,48 @@ def test_endpoint_values_still_match_their_schemas(make):
     assert c.post("/li", json={"a": 4}, headers=H).json() == {"result": [4]}
     assert c.post("/op", json={}, headers=H).json() == {"result": None}
     assert c.post("/di", json={"a": 1}, headers=H).json() == {"result": {"x": 1.5}}
+
+
+def test_generators_dates_enums_uuids_and_bytes_have_typed_schemas(make):
+    c = make()
+    assert _result(c, "/gen") == {"type": "array", "items": {"type": "integer"}}
+    assert _result(c, "/gen3") == {"type": "array", "items": {"type": "string"}}
+    assert _result(c, "/agen") == {"type": "array", "items": {"type": "integer"}}
+    assert _result(c, "/day") == {"type": "string", "format": "date"}
+    assert _result(c, "/stamp") == {"type": "string", "format": "date-time"}
+    assert _result(c, "/ident") == {"type": "string", "format": "uuid"}
+    assert _result(c, "/color")["enum"] == ["red"]
+    assert _result(c, "/blob") == {"type": "string"}
+
+
+def test_published_schemas_describe_what_the_endpoints_return(make):
+    from jsonschema import validate
+    c = make()
+    for path, body in (("/gen", {"n": 3}), ("/gen3", {"n": 1}), ("/agen", {"n": 2}), ("/day", {"a": 5}),
+                       ("/stamp", {"a": 7}), ("/ident", {"a": 9}), ("/color", {"a": 1}), ("/blob", {"a": 2}),
+                       ("/nan", {"a": 1}), ("/fl", {"a": 1.5})):
+        response = c.post(path, json=body, headers=H)
+        assert response.status_code == 200, (path, response.text)
+        validate(response.json()["result"], _result(c, path))
+    assert c.post("/nan", json={"a": 1}, headers=H).json() == {"result": None}
+
+
+def test_sdks_keep_the_declared_result_types(make, tmp_path):
+    import json
+    import subprocess
+
+    c = make()
+    spec = tmp_path / "openapi.json"
+    spec.write_text(json.dumps(c.get("/openapi.json", headers=H).json()))
+    for language, suffix, expected in (
+        ("python", "py", ("class GenResponse(TypedDict):\n    result: List[int]", "class NanResponse(TypedDict):\n    result: Optional[float]")),
+        ("typescript", "ts", ("export interface GenResponse {\n  result: number[];", "export interface DayResponse {\n  result: string;")),
+    ):
+        out = tmp_path / f"sdk.{suffix}"
+        done = subprocess.run([sys.executable, "-m", "backend.cli", "export-sdk", "--openapi", str(spec),
+                               "--language", language, "--output", str(out)], capture_output=True, text=True)
+        assert done.returncode == 0, done.stderr
+        text = out.read_text()
+        for snippet in expected:
+            assert snippet in text, (language, snippet)
+        assert "class DayResponse(TypedDict):\n    result: Any" not in text
