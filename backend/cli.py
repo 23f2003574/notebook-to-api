@@ -382,6 +382,25 @@ from backend.observability.deployment_governance_delivery_worker_cli import (
 # reporting entirely internally -- every governance branch ends in its own
 # sys.exit(exit_code)). Kept as a set so main() can route only these
 # commands through _dispatch_core_command's shared error handling.
+def _print_data_file_diff(files):
+    """The data files added, removed or changed between two versions (GET .../diff's "files")."""
+    if not files:
+        return
+    if not files.get("comparable"):
+        print("Data files: not compared (a version was saved before data files were versioned).")
+        return
+    if not any(files.get(kind) for kind in ("added", "removed", "changed")):
+        print("Data files: no differences.")
+        return
+    print("Data files:")
+    for entry in files["added"]:
+        print(f"  + {entry['path']} ({entry['bytes']} bytes)")
+    for entry in files["removed"]:
+        print(f"  - {entry['path']} ({entry['bytes']} bytes)")
+    for entry in files["changed"]:
+        print(f"  ~ {entry['path']} ({entry['from']['bytes']} -> {entry['to']['bytes']} bytes)")
+
+
 def _warn_about_audit_storage_growth():
     """`governance doctor`: when the audit database has crossed a warning threshold, say so on
     stderr (so --json output on stdout stays valid)."""
@@ -8061,10 +8080,16 @@ def _dispatch_core_command(args):
                     f"{dashboard_url}"
                 )
                 print_notebook_diff(data)
+                _print_data_file_diff(data.get("files"))
 
                 if args.content and data.get("content_diff"):
                     print("\n" + "\n".join(data["content_diff"]))
 
+            data_files = data.get("files") or {}
+            if args.fail_on_data_change and data_files.get("comparable") and any(
+                data_files.get(kind) for kind in ("added", "removed", "changed")
+            ):
+                sys.exit(1)
             if args.fail_on_breaking and not data.get("compatible", True):
                 sys.exit(1)
             if args.fail_on_deprecation and data.get("newly_deprecated"):
@@ -17411,6 +17436,15 @@ def main():
             "\"changed\", \"unchanged\", \"compatible\", "
             "\"breaking_changes\"[, \"content_diff\"]}) instead of "
             "the human-readable report, for scripting/automation."
+        )
+    )
+    versions_compare_parser.add_argument(
+        "--fail-on-data-change",
+        action="store_true",
+        help=(
+            "Exit with status 1 if the data files saved with the two versions differ (a file "
+            "added, removed or changed). Versions saved before data files were versioned cannot "
+            "be compared and do not trigger it."
         )
     )
     versions_compare_parser.add_argument(

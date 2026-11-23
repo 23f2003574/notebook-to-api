@@ -32489,3 +32489,36 @@ def test_trash_listing_is_read_only_in_the_cli_too(tmp_path, fake_dashboard):
     handler.responses = [_json_response(200, {"items": []})]
     _run_cli(["trash", "list", "--dashboard-url", dashboard_url], cwd=tmp_path)
     assert all("purge" not in request for request in handler.requests)
+
+
+def _file(path, size, char="a"):
+    return {"path": path, "bytes": size, "sha256": char * 64}
+
+
+def _compare_with_files(tmp_path, fake_dashboard, files, *flags):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_json_response(200, {
+        "status": "success", "filename": "nb.ipynb", "version_id": "v1.ipynb", "against": None,
+        "added": [], "removed": [], "changed": [], "unchanged": [], "files": files,
+    })]
+    return _run_cli(["versions", "compare", "nb.ipynb", "v1.ipynb", "--dashboard-url", dashboard_url, *flags], cwd=tmp_path)
+
+
+def test_versions_compare_prints_added_removed_and_changed_data_files(tmp_path, fake_dashboard):
+    files = {"comparable": True, "from_recorded": True, "to_recorded": True, "added": [_file("new.csv", 3)],
+             "removed": [_file("gone.csv", 5)], "changed": [{"path": "w.json", "from": _file("w.json", 4), "to": _file("w.json", 9, "b")}]}
+    proc = _compare_with_files(tmp_path, fake_dashboard, files)
+    assert proc.returncode == 0, proc.stderr
+    for line in ("Data files:", "+ new.csv (3 bytes)", "- gone.csv (5 bytes)", "~ w.json (4 -> 9 bytes)"):
+        assert line in proc.stdout
+
+
+def test_versions_compare_fail_on_data_change_exits_1_only_for_real_differences(tmp_path, fake_dashboard):
+    changed = {"comparable": True, "added": [_file("new.csv", 3)], "removed": [], "changed": []}
+    assert _compare_with_files(tmp_path, fake_dashboard, changed, "--fail-on-data-change").returncode == 1
+    same = {"comparable": True, "added": [], "removed": [], "changed": []}
+    proc = _compare_with_files(tmp_path, fake_dashboard, same, "--fail-on-data-change")
+    assert proc.returncode == 0 and "Data files: no differences." in proc.stdout
+    unknown = {"comparable": False, "added": [], "removed": [], "changed": []}
+    proc = _compare_with_files(tmp_path, fake_dashboard, unknown, "--fail-on-data-change")
+    assert proc.returncode == 0 and "not compared" in proc.stdout
