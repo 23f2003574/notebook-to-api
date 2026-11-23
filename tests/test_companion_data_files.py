@@ -231,3 +231,37 @@ def test_a_recorded_version_with_no_files_is_distinct_from_not_recorded(env):
     assert listed["recorded"] is True and listed["files"] == []
     files = client.get(f"/api/notebooks/m.ipynb/versions/{version}/diff").json()["files"]
     assert files["comparable"] is True and [f["path"] for f in files["added"]] == ["weights.json"]
+
+
+def test_a_data_file_saved_with_a_version_downloads_unchanged(env):
+    version = _versioned(env, {"weights.json": "OLD-BYTES", "models/vocab.txt": "tok"}, {"weights.json": "NEW"})
+    base = f"/api/notebooks/m.ipynb/versions/{version}/files"
+    old = client.get(f"{base}/weights.json")
+    assert old.status_code == 200 and old.content == b"OLD-BYTES"
+    assert "attachment" in old.headers["content-disposition"] and "weights.json" in old.headers["content-disposition"]
+    assert client.get(f"{base}/models/vocab.txt").content == b"tok"
+    assert (env / "uploads" / ".m.ipynb.files" / "weights.json").read_text() == "NEW"  # the current file is untouched
+
+
+@pytest.mark.parametrize("path", ["missing.csv", "models", "../../m.ipynb", "..%2F..%2Fm.ipynb", "%2Fetc%2Fpasswd"])
+def test_version_file_download_refuses_missing_directories_and_escapes(env, path):
+    version = _versioned(env, {"weights.json": "A", "models/vocab.txt": "t"}, {"weights.json": "B"})
+    response = client.get(f"/api/notebooks/m.ipynb/versions/{version}/files/{path}")
+    assert response.status_code in (400, 404)
+    assert b"def weights" not in response.content
+
+
+def test_version_file_download_refuses_symlinks_and_unrecorded_versions(env):
+    import os
+    import shutil
+
+    version = _versioned(env, {"weights.json": "A"}, {"weights.json": "B"})
+    snapshot = Path(upload_routes._notebook_versions_dir("m.ipynb")) / f"{version}.files"
+    secret = env / "secret.txt"
+    secret.write_text("TOP-SECRET")
+    os.symlink(secret, snapshot / "link.txt")
+    link = client.get(f"/api/notebooks/m.ipynb/versions/{version}/files/link.txt")
+    assert link.status_code in (400, 404) and b"TOP-SECRET" not in link.content
+    shutil.rmtree(snapshot)
+    assert client.get(f"/api/notebooks/m.ipynb/versions/{version}/files/weights.json").status_code == 404
+    assert client.get("/api/notebooks/m.ipynb/versions/nope.ipynb/files/weights.json").status_code == 404

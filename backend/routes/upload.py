@@ -13700,6 +13700,26 @@ def list_notebook_version_files(filename: str, version_id: str):
             "files": files, "total_count": len(files), "total_bytes": sum(f["bytes"] for f in files)}
 
 
+@router.get("/notebooks/{filename}/versions/{version_id}/files/{file_path:path}")
+def download_notebook_version_file(filename: str, version_id: str, file_path: str):
+    """Download one data file exactly as it was saved with a version (a path from
+    GET .../versions/{version_id}/files). 404 when the version, its snapshot or the file is
+    missing; paths that leave the snapshot, and symlinks, are refused."""
+    notebook = resolve_upload_path(filename)
+    if not notebook.is_file():
+        raise HTTPException(status_code=404, detail="Notebook file not found")
+    version_path = _resolve_path_within(str(_notebook_versions_dir(notebook.name)), version_id, "notebook version")
+    if not version_path.is_file():
+        raise HTTPException(status_code=404, detail="Notebook version not found")
+    snapshot = _version_companion_dir(notebook.name, version_id)
+    if not snapshot.is_dir():
+        raise HTTPException(status_code=404, detail="This version has no recorded data files")
+    target = _resolve_path_within(str(snapshot), file_path, "version data file")
+    if target.is_symlink() or not target.is_file():
+        raise HTTPException(status_code=404, detail="Data file not found in this version")
+    return FileResponse(str(target), media_type="application/octet-stream", filename=target.name)
+
+
 @router.get("/notebooks/{filename}/versions/{version_id}/diff")
 def diff_notebook_version(
     filename: str, version_id: str, against: str = None, content: bool = False,
