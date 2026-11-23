@@ -9553,7 +9553,7 @@ def _notebook_trash_entries(name):
 def _trash_count():
     from backend import notebook_trash
 
-    return len(notebook_trash.list_entries(_trash_root()))
+    return len(notebook_trash.active_entries(_trash_root()))
 
 
 def _soft_delete_notebook(file_path, was_compiled):
@@ -9573,13 +9573,12 @@ def _soft_delete_notebook(file_path, was_compiled):
 
 @router.get("/notebooks/trash")
 def list_trashed_notebooks():
-    """Soft-deleted notebooks still inside their retention window, newest first. Expired entries are
-    purged first."""
+    """Soft-deleted notebooks still inside their retention window, newest first. Read-only: expired
+    entries are hidden here and removed only by POST /api/notebooks/trash/purge (audited)."""
     from backend import notebook_trash
 
-    notebook_trash.purge_expired(_trash_root())
     return {"status": "success", "retention_days": _trash_retention_days(),
-            "items": [{k: m[k] for k in ("trash_id", "filename", "deleted_at", "expires_at", "sha256")} for m in notebook_trash.list_entries(_trash_root())]}
+            "items": [{k: m[k] for k in ("trash_id", "filename", "deleted_at", "expires_at", "sha256")} for m in notebook_trash.active_entries(_trash_root())]}
 
 
 @router.post("/notebooks/trash/purge")
@@ -9600,8 +9599,9 @@ def restore_trashed_notebook(trash_id: str):
     409 when its name is taken (or differs from a stored name only by case): nothing is changed."""
     from backend import notebook_trash
 
-    notebook_trash.purge_expired(_trash_root())
     meta = notebook_trash.get_entry(_trash_root(), trash_id)
+    if meta is not None and notebook_trash.is_expired(meta):
+        meta = None
     if meta is None:
         raise HTTPException(status_code=404, detail="No such trashed notebook (it may have expired)")
     name = meta["filename"]

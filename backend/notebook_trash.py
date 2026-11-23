@@ -135,6 +135,18 @@ def purge(trash_root: Path, trash_id: str) -> bool:
     return True
 
 
+def is_expired(meta, now=None) -> bool:
+    try:
+        return datetime.fromisoformat(meta["expires_at"]) <= (now or _now())
+    except (KeyError, ValueError):
+        return True
+
+
+def active_entries(trash_root: Path, now=None) -> list[dict]:
+    """The entries still inside their retention window. Reading never deletes anything."""
+    return [meta for meta in list_entries(trash_root) if not is_expired(meta, now)]
+
+
 def purge_expired(trash_root: Path, now=None, everything: bool = False) -> list[str]:
     """Permanently remove entries past their expiry (all of them with `everything`); returns the ids."""
     now = now or _now()

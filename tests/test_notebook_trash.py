@@ -106,6 +106,11 @@ def test_expired_entries_are_purged_and_cannot_be_restored(env, monkeypatch):
     tid = client.delete("/api/notebooks/a.ipynb?soft=true").json()["trash_id"]
     assert client.post(f"/api/notebooks/trash/{tid}/restore").status_code == 404
     assert client.get("/api/notebooks/trash").json()["items"] == []
+    # Listing and a refused restore are read-only: the expired entry is still on disk ...
+    assert len(list((tmp / "up" / ".trash").iterdir())) == 1
+    assert client.get("/api/notebooks").json().get("trash_count", 0) == 0
+    # ... until the separate, audited purge removes it.
+    assert client.post("/api/notebooks/trash/purge").json()["purged"] == [tid]
     assert not any((tmp / "up" / ".trash").iterdir())
 
 

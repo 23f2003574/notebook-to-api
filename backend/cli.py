@@ -16,7 +16,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote as _urlquote, urlsplit
 
 # nbformat and watchdog are imported unconditionally below, so a partial
 # install failed every command -- `doctor` included -- with a bare
@@ -388,7 +388,7 @@ _CORE_COMMANDS = frozenset({
     "export-curl", "export-postman", "serve", "watch", "deploy", "diff", "upload", "import-notebooks", "import-url", "import-url-many",
     "list", "info", "info-batch",
     "search-functions", "search-content", "search-version-content", "find-duplicates", "resolve-duplicates", "storage",
-    "download", "export-notebooks", "generated", "delete", "delete-batch", "rename", "copy",
+    "download", "export-notebooks", "generated", "delete", "trash", "delete-batch", "rename", "copy",
     "copy-batch", "copy-many", "rename-many", "tags", "prune-versions", "prune-temp-files", "description", "source-url", "deploy-history",
     "clear-deploy-history", "compile-history", "clear-compile-history",
     "remote-compile", "remote-inspect", "remote-build", "apps", "dashboard-deployment", "audit-db",
@@ -4648,6 +4648,9 @@ def _dispatch_core_command(args):
         if args.expected_sha256 and args.all:
             raise RuntimeError("--expected-sha256 does not apply together with --all.")
 
+        if args.soft and args.all:
+            raise RuntimeError("--soft applies to a single notebook, not --all.")
+
         if args.all:
             # DELETE /api/notebooks requires its own ?confirm=true before
             # it does anything (routes/upload.py) -- always passed here
@@ -4762,6 +4765,8 @@ def _dispatch_core_command(args):
             params = {"dry_run": "true"} if args.dry_run else {}
             if args.expected_sha256:
                 params["expected_sha256"] = args.expected_sha256
+            if args.soft:
+                params["soft"] = "true"
 
             try:
                 response = httpx.delete(
@@ -4785,11 +4790,61 @@ def _dispatch_core_command(args):
                 print(json.dumps(data, indent=2))
             else:
 
-                verb = "Would delete" if data.get("dry_run") else "Deleted"
+                verb = "Would delete" if data.get("dry_run") else ("Moved to the trash:" if data.get("soft") else "Deleted")
 
                 print(f"{verb} '{data.get('filename', args.filename)}' from {dashboard_url}")
+                if data.get("soft"):
+                    print(f"  restore with: trash restore {data.get('trash_id')} (until {data.get('expires_at')})")
                 if data.get("was_currently_compiled"):
                     print("  note: this was the notebook backing the currently compiled app.")
+    elif args.command == "trash":
+        import httpx
+
+        dashboard_url = args.dashboard_url.rstrip("/")
+        command = args.trash_command
+
+        if command == "purge" and args.everything and not args.yes:
+            answer = _confirmation_input(f"Permanently remove ALL trashed notebooks on {dashboard_url}? [y/N] ")
+            if answer.strip().lower() not in ("y", "yes"):
+                print("Aborted.")
+                return
+
+        try:
+            if command == "list":
+                response = httpx.get(f"{dashboard_url}/api/notebooks/trash", timeout=args.timeout)
+            elif command == "restore":
+                response = httpx.post(
+                    f"{dashboard_url}/api/notebooks/trash/{_urlquote(args.trash_id, safe='')}/restore", timeout=args.timeout,
+                )
+            else:
+                response = httpx.post(
+                    f"{dashboard_url}/api/notebooks/trash/purge",
+                    params={"everything": "true"} if args.everything else {}, timeout=args.timeout,
+                )
+        except httpx.HTTPError as exc:
+            raise _dashboard_connection_error(exc, dashboard_url)
+
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Dashboard rejected the request ({response.status_code}): "
+                f"{_extract_dashboard_error_detail(response)}"
+            )
+
+        data = response.json()
+
+        if args.json_output:
+            print(json.dumps(data, indent=2))
+        elif command == "list":
+            items = data.get("items", [])
+            if not items:
+                print(f"The trash on {dashboard_url} is empty.")
+            for item in items:
+                print(f"{item['trash_id']}  {item['filename']}  deleted {item['deleted_at']}  expires {item['expires_at']}")
+        elif command == "restore":
+            print(f"Restored '{data.get('filename')}' on {dashboard_url}")
+        else:
+            purged = data.get("purged", [])
+            print(f"Purged {len(purged)} trash entr{'y' if len(purged) == 1 else 'ies'} on {dashboard_url}")
     elif args.command == "delete-batch":
         # See `upload` above for why this is imported here rather than at
         # module scope.
@@ -13438,6 +13493,33 @@ def main():
         )
     )
     _add_dashboard_url_and_timeout_arguments(delete_parser)
+    delete_parser.add_argument(
+        "--soft",
+        action="store_true",
+        help=(
+            "Move the notebook (with its versions, data files and compiled app) to the dashboard's "
+            "trash instead of deleting it for good; `trash restore` brings it back until it expires. "
+            "Applies to a single notebook, not --all."
+        ),
+    )
+    trash_parser = subparsers.add_parser(
+        "trash",
+        help="List, restore or purge notebooks moved to a dashboard's trash by `delete --soft`.",
+    )
+    trash_subparsers = trash_parser.add_subparsers(dest="trash_command", required=True)
+    for _name, _help in (
+        ("list", "List trashed notebooks still inside their retention window (read-only)."),
+        ("restore", "Put a trashed notebook back, with its versions, data files and compiled app."),
+        ("purge", "Permanently remove expired trash entries (all of them with --everything)."),
+    ):
+        _trash_sub = trash_subparsers.add_parser(_name, help=_help)
+        _add_dashboard_url_and_timeout_arguments(_trash_sub)
+        _trash_sub.add_argument("--json", action="store_true", dest="json_output", help="Print the dashboard's JSON reply.")
+        if _name == "restore":
+            _trash_sub.add_argument("trash_id", help="The id shown by `trash list`.")
+        if _name == "purge":
+            _trash_sub.add_argument("--everything", action="store_true", help="Remove every trash entry, not only the expired ones.")
+            _trash_sub.add_argument("--yes", action="store_true", help="Skip the confirmation prompt that --everything otherwise asks for.")
     delete_parser.add_argument(
         "--all",
         action="store_true",

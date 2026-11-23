@@ -100,6 +100,8 @@ COMPOSE = f"""services:
       NOTEBOOK2API_GOVERNANCE_DATABASE_PATH: {AUDIT_DB}
       NOTEBOOK2API_GOVERNANCE_VOLUME_PERSISTENT: "1"
       NOTEBOOK_API_STORAGE_VOLUME_PERSISTENT: "1"
+      NOTEBOOK_API_SOFT_DELETE: ${{NOTEBOOK_API_SOFT_DELETE:-false}}
+      NOTEBOOK_API_TRASH_RETENTION_DAYS: ${{NOTEBOOK_API_TRASH_RETENTION_DAYS:-30}}
     volumes:
       - dashboard-data:/data
     read_only: true          # only the /data volume and /tmp are writable
@@ -206,6 +208,11 @@ spec:
 ENV_EXAMPLE = """# Required: the dashboard refuses to listen on a non-loopback address without a key. Use at least
 # 16 random characters (production refuses weaker keys), e.g. `openssl rand -hex 24`.
 NOTEBOOK_API_DASHBOARD_KEY=change-me
+
+# Optional: make every delete (API and CLI) move the notebook to the trash, where `trash restore`
+# can bring it back until it expires; the UI always uses the trash.
+# NOTEBOOK_API_SOFT_DELETE=true
+# NOTEBOOK_API_TRASH_RETENTION_DAYS=30
 """
 
 README = """# Dashboard container

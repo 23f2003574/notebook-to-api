@@ -62,6 +62,9 @@ The dashboard API can upload, delete and compile notebooks and manage secrets an
 - Without a key, only requests from this machine are served, whichever way the dashboard is launched (`python -m backend.dashboard`, `uvicorn backend.dashboard:app`, a container); any other peer gets `401`. Every route, including `/api/health`, then requires the `X-API-Key` header when a key is set.
 - Binding to any non-loopback host (for example `0.0.0.0`) **without** `NOTEBOOK_API_DASHBOARD_KEY` is refused at startup with an error. To expose the dashboard on the network, set both, for example `NOTEBOOK_API_DASHBOARD_HOST=0.0.0.0 NOTEBOOK_API_DASHBOARD_KEY=<secret> ./start-dashboard.sh`, and serve it over HTTPS (`NOTEBOOK_API_DASHBOARD_SSL_KEYFILE`/`NOTEBOOK_API_DASHBOARD_SSL_CERTFILE` or a TLS-terminating proxy).
 
+## Trash (soft delete)
+The dashboard's Delete moves a notebook, with its saved versions, data files and compiled app, to a trash instead of removing it. From the CLI use `delete <notebook> --soft` (or set `NOTEBOOK_API_SOFT_DELETE=true` on the dashboard to make every delete soft), then `trash list`, `trash restore <id>` and `trash purge [--everything]`. Entries expire after `NOTEBOOK_API_TRASH_RETENTION_DAYS` (default 30); listing never deletes anything, and expired entries are removed only by `trash purge`, which is recorded in the governance audit trail.
+
 ## Building the Docker Image
 Make sure Docker is installed on your system.
 ```bash

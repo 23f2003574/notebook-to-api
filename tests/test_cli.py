@@ -32445,3 +32445,47 @@ def test_readme_run_locally_commands_serve_the_sample_notebook_and_answer_a_requ
             server.wait(timeout=10)
         except subprocess.TimeoutExpired:
             server.kill()
+
+
+def test_delete_soft_moves_to_the_trash_and_says_how_to_restore(tmp_path, fake_dashboard):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_json_response(200, {"status": "success", "filename": "nb.ipynb", "soft": True,
+                                              "trash_id": "t-1", "expires_at": "2026-12-23"})]
+    proc = _run_cli(["delete", "nb.ipynb", "--soft", "--dashboard-url", dashboard_url, "--yes"], cwd=tmp_path)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks/nb.ipynb?soft=true"]
+    assert "Moved to the trash: 'nb.ipynb'" in proc.stdout and "trash restore t-1" in proc.stdout
+
+
+def test_delete_soft_is_refused_together_with_all(tmp_path, fake_dashboard):
+    dashboard_url, handler = fake_dashboard
+    proc = _run_cli(["delete", "--all", "--soft", "--yes", "--dashboard-url", dashboard_url], cwd=tmp_path)
+    assert proc.returncode != 0 and "--soft applies to a single notebook" in proc.stderr + proc.stdout
+    assert handler.requests == []
+
+
+def test_trash_list_restore_and_purge_use_the_dashboard_endpoints(tmp_path, fake_dashboard):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [
+        _json_response(200, {"items": [{"trash_id": "t-1", "filename": "nb.ipynb", "deleted_at": "d", "expires_at": "e"}]}),
+        _json_response(200, {"status": "success", "filename": "nb.ipynb"}),
+        _json_response(200, {"status": "success", "purged": ["t-1", "t-2"]}),
+        _json_response(200, {"items": []}),
+    ]
+    listed = _run_cli(["trash", "list", "--dashboard-url", dashboard_url], cwd=tmp_path)
+    assert "t-1  nb.ipynb" in listed.stdout, listed.stderr
+    restored = _run_cli(["trash", "restore", "t-1", "--dashboard-url", dashboard_url], cwd=tmp_path)
+    assert "Restored 'nb.ipynb'" in restored.stdout
+    purged = _run_cli(["trash", "purge", "--everything", "--yes", "--dashboard-url", dashboard_url], cwd=tmp_path)
+    assert "Purged 2 trash entries" in purged.stdout
+    as_json = _run_cli(["trash", "list", "--json", "--dashboard-url", dashboard_url], cwd=tmp_path)
+    assert json.loads(as_json.stdout) == {"items": []}
+    assert handler.requests == ["/api/notebooks/trash", "/api/notebooks/trash/t-1/restore",
+                                "/api/notebooks/trash/purge?everything=true", "/api/notebooks/trash"]
+
+
+def test_trash_listing_is_read_only_in_the_cli_too(tmp_path, fake_dashboard):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_json_response(200, {"items": []})]
+    _run_cli(["trash", "list", "--dashboard-url", dashboard_url], cwd=tmp_path)
+    assert all("purge" not in request for request in handler.requests)
