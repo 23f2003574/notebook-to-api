@@ -18,6 +18,9 @@ COMPOSE_ONLY_ENV_VARS = frozenset({
     "NOTEBOOK_API_BIND_ADDRESS",
     "NOTEBOOK_API_READ_ONLY_ROOTFS",
     "NOTEBOOK_API_HEALTHCHECK_START_PERIOD",
+    "NOTEBOOK_API_MEMORY_LIMIT",
+    "NOTEBOOK_API_CPU_LIMIT",
+    "NOTEBOOK_API_PIDS_LIMIT",
 })
 
 
@@ -579,6 +582,11 @@ def docker_compose_content(package_name="generated", env_vars=None, notebook_env
         # The image's own HEALTHCHECK allows only 5 seconds before failures count, so a notebook
         # that loads a large model at import (the server is not listening meanwhile) was reported
         # unhealthy while it was still starting. Same probe, with a start period you can raise.
+        # Bounded like kubernetes.yaml's resources.limits, so one leaking or runaway notebook
+        # cannot take the host down. Raise them in .env for heavier notebooks.
+        "    mem_limit: ${NOTEBOOK_API_MEMORY_LIMIT:-1g}\n"
+        "    cpus: ${NOTEBOOK_API_CPU_LIMIT:-2}\n"
+        "    pids_limit: ${NOTEBOOK_API_PIDS_LIMIT:-256}\n"
         "    healthcheck:\n"
         '      test: ["CMD", "python", "-c", "import os, urllib.request; urllib.request.urlopen('
         "'http://localhost:' + os.environ.get('PORT', '8000') + '/health', timeout=2)\"]\n"
@@ -682,6 +690,13 @@ def env_example_content(env_vars=None, notebook_env_vars=None):
         "# Whether docker compose mounts the container's root filesystem read-only (read by",
         "# docker-compose.yml only). Set false if the notebook writes outside /data and /tmp.",
         "# NOTEBOOK_API_READ_ONLY_ROOTFS=true",
+        "",
+        "# Resource limits docker compose puts on the container (read by docker-compose.yml only):",
+        "# memory (same as kubernetes.yaml's 1Gi limit), CPUs and processes. Raise them for heavier",
+        "# notebooks; a notebook that hits the memory limit is killed and restarted.",
+        "# NOTEBOOK_API_MEMORY_LIMIT=1g",
+        "# NOTEBOOK_API_CPU_LIMIT=2",
+        "# NOTEBOOK_API_PIDS_LIMIT=256",
         "",
         "# How long docker compose waits for the app to start before failed health checks count",
         "# (read by docker-compose.yml only). Raise it when the notebook loads a large model at",
@@ -1109,6 +1124,10 @@ there, not in the directory above:
 cd {package_name}  # skip if you are already inside it
 docker compose up --build
 ```
+
+The container is limited to 1 GB of memory, 2 CPUs and 256 processes; set \
+`NOTEBOOK_API_MEMORY_LIMIT`, `NOTEBOOK_API_CPU_LIMIT` or `NOTEBOOK_API_PIDS_LIMIT` in `.env` \
+to change them (read by docker compose only, not by the app).
 
 ## Deploying to Kubernetes
 
