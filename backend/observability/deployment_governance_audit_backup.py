@@ -166,6 +166,8 @@ def run_cli(args) -> int:
         "NOTEBOOK2API_GOVERNANCE_DATABASE_PATH", "data/notebook2api.db")
     if args.audit_db_command in ("archive", "verify-archive"):
         return _run_archive_cli(args, database)
+    if args.audit_db_command == "status":
+        return _run_status_cli(args, database)
     try:
         if args.audit_db_command == "backup":
             result = backup(database, args.output, force=args.force)
@@ -189,6 +191,31 @@ def run_cli(args) -> int:
         if args.audit_db_command == "restore":
             print("Restart the dashboard so it opens the restored database.")
     return EXIT_OK if result["valid"] else EXIT_INVALID
+
+
+def _run_status_cli(args, database) -> int:
+    """Record count, size and age of the audit database with threshold warnings (read-only). A
+    warning still exits 0: the store works; the recommendation says how to shrink it."""
+    import json
+
+    from .deployment_governance_audit_storage import storage_stats
+
+    try:
+        stats = storage_stats(database)
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: the audit database could not be read ({type(exc).__name__})")
+        return EXIT_ERROR
+    if args.json:
+        print(json.dumps(stats, indent=2, sort_keys=True))
+        return EXIT_OK
+    age = stats["oldest_record_age_days"]
+    print(f"audit database: {stats['records']} records, {stats['bytes']} bytes"
+          + (f", oldest record {age} days old" if age is not None else ", empty"))
+    for warning in stats["warnings"]:
+        print(f"WARNING: {warning}")
+    if stats.get("recommendation"):
+        print(stats["recommendation"])
+    return EXIT_OK
 
 
 def _run_archive_cli(args, database) -> int:

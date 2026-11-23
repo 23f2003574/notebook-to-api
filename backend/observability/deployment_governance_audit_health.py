@@ -100,7 +100,20 @@ class AuditHealth:
             data["state"], data["reason"] = "degraded", "not_durable"
         else:
             data["state"], data["reason"] = "healthy", None
+        data["storage"] = self._storage(status)
         return data
+
+    @staticmethod
+    def _storage(status) -> "dict | None":
+        """Size and age of a sqlite audit database; a warning here never changes `state`."""
+        if status["backend"] != "sqlite":
+            return None
+        from .deployment_governance_audit_storage import database_path, storage_stats
+
+        try:
+            return storage_stats(database_path())
+        except Exception:  # noqa: BLE001 - statistics must never break a health probe
+            return {"state": "unknown", "warnings": []}
 
     def prometheus_text(self) -> str:
         snap = self.snapshot(probe=True)
@@ -117,6 +130,16 @@ class AuditHealth:
             "# HELP notebook_to_api_governance_audit_write_failures_total Audit writes that failed, by reason.",
             "# TYPE notebook_to_api_governance_audit_write_failures_total counter",
         ]
+        storage = snap.get("storage") or {}
+        if "records" in storage:
+            lines += [
+                "# HELP notebook_to_api_governance_audit_records Audit records currently stored.",
+                "# TYPE notebook_to_api_governance_audit_records gauge",
+                f"notebook_to_api_governance_audit_records {storage['records']}",
+                "# HELP notebook_to_api_governance_audit_database_bytes Size of the audit database on disk.",
+                "# TYPE notebook_to_api_governance_audit_database_bytes gauge",
+                f"notebook_to_api_governance_audit_database_bytes {storage['bytes']}",
+            ]
         for reason in REASONS:
             lines.append(
                 f'notebook_to_api_governance_audit_write_failures_total{{reason="{reason}"}} {snap["write_failures_total"][reason]}'

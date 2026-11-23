@@ -382,6 +382,23 @@ from backend.observability.deployment_governance_delivery_worker_cli import (
 # reporting entirely internally -- every governance branch ends in its own
 # sys.exit(exit_code)). Kept as a set so main() can route only these
 # commands through _dispatch_core_command's shared error handling.
+def _warn_about_audit_storage_growth():
+    """`governance doctor`: when the audit database has crossed a warning threshold, say so on
+    stderr (so --json output on stdout stays valid)."""
+    try:
+        from backend.observability.deployment_governance_audit_storage import database_path, storage_stats
+
+        if os.environ.get("NOTEBOOK2API_GOVERNANCE_PERSISTENCE_BACKEND", "").strip().lower() != "sqlite":
+            return
+        stats = storage_stats(database_path())
+    except Exception:  # noqa: BLE001 - advisory only
+        return
+    for warning in stats["warnings"]:
+        print(f"WARNING: {warning}", file=sys.stderr)
+    if stats.get("recommendation"):
+        print(stats["recommendation"], file=sys.stderr)
+
+
 _CORE_COMMANDS = frozenset({
     "doctor",
     "compile", "inspect", "validate", "export-openapi", "export-sdk",
@@ -16029,6 +16046,9 @@ def main():
     _verify_archive = audit_db_sub.add_parser("verify-archive", help="Verify an archive file on its own (no database needed).")
     _verify_archive.add_argument("file", help="The archive file.")
     _verify_archive.add_argument("--json", action="store_true", help="Print the result as JSON.")
+    _status = audit_db_sub.add_parser("status", help="Show the audit database's record count, size and age, with warnings (read-only).")
+    _status.add_argument("--database", default=None, help="The audit database (default: $NOTEBOOK2API_GOVERNANCE_DATABASE_PATH or data/notebook2api.db).")
+    _status.add_argument("--json", action="store_true", help="Print the result as JSON.")
     for _name, _help in (("backup", "Write a verified, consistent copy of the database."),
                          ("restore", "Replace the database with a verified backup (stop the dashboard first)."),
                          ("verify-file", "Verify the hash chain of a database file without modifying it.")):
@@ -24611,6 +24631,7 @@ def main():
         if args.governance_command == "doctor":
             if args.batch_size <= 0:
                 parser.error("--batch-size must be greater than zero")
+            _warn_about_audit_storage_growth()
             exit_code = run_deployment_governance_doctor(
                 deep=args.deep,
                 json_output=args.json_output,

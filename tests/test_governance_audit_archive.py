@@ -209,3 +209,96 @@ def test_cli_archive_and_verify(tmp_path):
     bad = run("verify-archive", str(out))
     assert bad.returncode == 3 and "INVALID" in bad.stdout
     assert run("archive", "--database", str(db), "--output", str(out)).returncode == 1  # no selector
+
+
+# --- storage size and age ----------------------------------------------------------------------
+from backend.observability.deployment_governance_audit_storage import storage_stats  # noqa: E402
+
+
+def test_stats_for_a_missing_or_empty_database(tmp_path):
+    missing = storage_stats(tmp_path / "nope.db", environ={})
+    assert (missing["records"], missing["bytes"], missing["oldest_record_at"], missing["state"]) == (0, 0, None, "ok")
+    empty = tmp_path / "empty.db"
+    SqliteAuditStore(empty)
+    stats = storage_stats(empty, environ={})
+    assert stats["records"] == 0 and stats["bytes"] > 0 and stats["oldest_record_age_days"] is None and stats["warnings"] == []
+
+
+def test_stats_count_records_and_report_the_oldest_age(tmp_path):
+    db = _make(tmp_path, 5)
+    later = datetime.now(timezone.utc) + timedelta(days=10)
+    stats = storage_stats(db, environ={}, now=later)
+    assert stats["records"] == 5 and stats["bytes"] >= db.stat().st_size
+    assert 9.9 < stats["oldest_record_age_days"] < 10.1
+    assert stats["state"] == "ok" and "recommendation" not in stats
+
+
+def test_crossing_a_threshold_warns_with_an_archive_recommendation(tmp_path):
+    db = _make(tmp_path, 5)
+    by_records = storage_stats(db, environ={"NOTEBOOK2API_GOVERNANCE_AUDIT_WARN_RECORDS": "5"})
+    assert by_records["state"] == "warning" and "5 records" in by_records["warnings"][0]
+    assert "audit-db archive" in by_records["recommendation"]
+    by_bytes = storage_stats(db, environ={"NOTEBOOK2API_GOVERNANCE_AUDIT_WARN_BYTES": "1"})
+    assert by_bytes["state"] == "warning" and "bytes" in by_bytes["warnings"][0]
+    assert storage_stats(db, environ={"NOTEBOOK2API_GOVERNANCE_AUDIT_WARN_RECORDS": "6"})["state"] == "ok"
+
+
+@pytest.mark.parametrize("value", ["0", "", "abc", "-3"])
+def test_disabled_or_invalid_thresholds_never_warn(tmp_path, value):
+    db = _make(tmp_path, 5)
+    stats = storage_stats(db, environ={"NOTEBOOK2API_GOVERNANCE_AUDIT_WARN_RECORDS": value, "NOTEBOOK2API_GOVERNANCE_AUDIT_WARN_BYTES": value})
+    assert stats["state"] == "ok" and stats["thresholds"] == {"records": None, "bytes": None}
+
+
+def test_reading_statistics_does_not_change_the_chain(tmp_path):
+    db = _make(tmp_path, 5)
+    before = _rows(db)
+    storage_stats(db, environ={"NOTEBOOK2API_GOVERNANCE_AUDIT_WARN_RECORDS": "1"})
+    assert _rows(db) == before and _verify(db).valid
+
+
+def _cli(*args, env=None):
+    import os
+    import subprocess
+
+    root = Path(__file__).resolve().parent.parent
+    return subprocess.run([sys.executable, "-m", "backend.cli", "audit-db", *args], cwd=root, capture_output=True, text=True,
+                          env={**os.environ, **(env or {})})
+
+
+def test_audit_db_status_json_and_text_output(tmp_path):
+    db = _make(tmp_path, 4)
+    done = _cli("status", "--database", str(db), "--json", env={"NOTEBOOK2API_GOVERNANCE_AUDIT_WARN_RECORDS": "3"})
+    assert done.returncode == 0, done.stderr
+    data = json.loads(done.stdout)
+    assert data["records"] == 4 and data["state"] == "warning" and data["thresholds"]["records"] == 3
+    text = _cli("status", "--database", str(db), env={"NOTEBOOK2API_GOVERNANCE_AUDIT_WARN_RECORDS": "3"})
+    assert text.returncode == 0 and "4 records" in text.stdout and "WARNING" in text.stdout and "audit-db archive" in text.stdout
+
+
+def test_health_endpoint_reports_storage_without_changing_the_state(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from backend import dashboard
+    from backend.observability.deployment_governance_audit import reset_audit_service
+
+    db = tmp_path / "health.db"
+    monkeypatch.setenv("NOTEBOOK2API_GOVERNANCE_PERSISTENCE_BACKEND", "sqlite")
+    monkeypatch.setenv("NOTEBOOK2API_GOVERNANCE_DATABASE_PATH", str(db))
+    monkeypatch.setenv("NOTEBOOK2API_GOVERNANCE_VOLUME_PERSISTENT", "1")
+    monkeypatch.setenv("NOTEBOOK2API_GOVERNANCE_AUDIT_WARN_RECORDS", "1")
+    monkeypatch.delenv("NOTEBOOK_API_DASHBOARD_KEY", raising=False)
+    monkeypatch.delenv("NOTEBOOK_API_DASHBOARD_KEYS", raising=False)
+    reset_audit_service()
+    try:
+        client = TestClient(dashboard.app, client=("127.0.0.1", 5000))
+        from backend.observability.deployment_governance_audit import get_audit_service
+
+        get_audit_service().record(action="notebook.compile", actor="u", resource="notebook:a", outcome="success", metadata={})
+        before = get_audit_service().size()
+        body = client.get("/governance/audit/health").json()
+        assert body["state"] == "healthy" and body["storage"]["state"] == "warning" and body["storage"]["records"] == 1
+        assert "audit-db archive" in body["storage"]["recommendation"]
+        assert get_audit_service().size() == before
+    finally:
+        reset_audit_service()
