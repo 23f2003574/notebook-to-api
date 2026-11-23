@@ -5,6 +5,7 @@ import nbformat
 import pytest
 
 from backend.compiler import compile_notebook
+from backend.generator.docker_generator import COMPOSE_ONLY_ENV_VARS
 
 SOURCE = "# notebook-to-api: background\ndef work(x: int) -> int:\n    return x\n"
 READ = re.compile(r'(?:os\.getenv|_env_[a-z]+)\(\s*["\'](NOTEBOOK_API_[A-Z_]+)["\']\s*,\s*["\']([^"\']*)["\']')
@@ -33,10 +34,10 @@ def test_runtime_reads_the_settings_users_are_told_about(project):
 
 def test_every_documented_name_exists_in_the_runtime(project):
     text, runtime = project
+    compose_only = COMPOSE_ONLY_ENV_VARS  # read by docker compose itself, not the app
     for name in ("README.md", ".env.example"):
-        for var in set(re.findall(r"NOTEBOOK_API_[A-Z_]+", text[name])):
+        for var in set(re.findall(r"NOTEBOOK_API_[A-Z_]+", text[name])) - compose_only:
             assert var in runtime, f"{name} documents {var}, which the app never reads"
-    compose_only = {"NOTEBOOK_API_BIND_ADDRESS", "NOTEBOOK_API_READ_ONLY_ROOTFS"}  # read by docker compose itself, not the app
     for var in set(re.findall(r"NOTEBOOK_API_[A-Z_]+", text["docker-compose.yml"])) - compose_only:
         assert var in runtime
 
@@ -109,3 +110,19 @@ def test_readme_explains_where_the_key_comes_from_and_it_matches_compose_and_env
     # The same variable, with no fallback, is what compose requires and .env.example asks for.
     assert "NOTEBOOK_API_KEY=${NOTEBOOK_API_KEY:?" in compose
     assert re.search(r"^# NOTEBOOK_API_KEY=$", env, re.M)
+
+
+def test_compose_only_settings_are_substituted_documented_and_not_runtime(project):
+    text, runtime = project
+    for var in COMPOSE_ONLY_ENV_VARS:
+        assert "${" + var in text["docker-compose.yml"], var
+        assert var in text[".env.example"], var
+        assert var not in runtime, f"{var} is registered as compose-only but the app reads it"
+
+
+def test_an_unregistered_compose_variable_still_fails_the_accuracy_check(project):
+    text, runtime = project
+    used = set(re.findall(r"NOTEBOOK_API_[A-Z_]+", text["docker-compose.yml"]))
+    assert used - COMPOSE_ONLY_ENV_VARS - set(runtime) == set()
+    assert "NOTEBOOK_API_UNREGISTERED_SETTING" not in COMPOSE_ONLY_ENV_VARS | set(runtime)
+    assert "NOTEBOOK_API_UNREGISTERED_SETTING" in (used | {"NOTEBOOK_API_UNREGISTERED_SETTING"}) - COMPOSE_ONLY_ENV_VARS - set(runtime)

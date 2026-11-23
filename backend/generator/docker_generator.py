@@ -11,6 +11,16 @@ from backend.generator.api_generator import (
 )
 
 
+# Settings read by `docker compose` itself (substituted into docker-compose.yml), never by the
+# compiled app: the generated-docs accuracy test uses this registry to tell them apart from the
+# app's own NOTEBOOK_API_* runtime settings.
+COMPOSE_ONLY_ENV_VARS = frozenset({
+    "NOTEBOOK_API_BIND_ADDRESS",
+    "NOTEBOOK_API_READ_ONLY_ROOTFS",
+    "NOTEBOOK_API_HEALTHCHECK_START_PERIOD",
+})
+
+
 def apt_install_content(apt_packages):
     """The Dockerfile "RUN apt-get ..." block dockerfile_content (below)
     inserts right after its own base-image ENV lines when `apt_packages`
@@ -663,6 +673,15 @@ def env_example_content(env_vars=None, notebook_env_vars=None):
         "# \"environment\" sections map, and the Dockerfile's own CMD/",
         "# HEALTHCHECK read -- not read by the compiled app itself.",
         "PORT=8000",
+        "",
+        "# Address docker compose publishes the port on (read by docker-compose.yml only). The",
+        "# default keeps the app reachable from this machine only; use 0.0.0.0 with your own",
+        "# NOTEBOOK_API_KEY to serve other machines.",
+        "# NOTEBOOK_API_BIND_ADDRESS=127.0.0.1",
+        "",
+        "# Whether docker compose mounts the container's root filesystem read-only (read by",
+        "# docker-compose.yml only). Set false if the notebook writes outside /data and /tmp.",
+        "# NOTEBOOK_API_READ_ONLY_ROOTFS=true",
         "",
         "# How long docker compose waits for the app to start before failed health checks count",
         "# (read by docker-compose.yml only). Raise it when the notebook loads a large model at",
