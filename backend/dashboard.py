@@ -5,6 +5,7 @@ Serves the React dashboard frontend and provides API endpoints for compilation
 
 import hmac
 import json
+import asyncio
 import contextlib
 import hashlib
 import re
@@ -116,6 +117,23 @@ from backend.cluster.dashboard import router as cluster_dashboard_router
 from backend.cluster.export_service import router as cluster_export_router
 from backend.cluster.bootstrap import bootstrap_cluster_subsystem
 
+def trash_purge_interval_seconds():
+    """How often expired trash is removed automatically (NOTEBOOK_API_TRASH_PURGE_INTERVAL_SECONDS,
+    default one hour; 0 turns the sweep off)."""
+    try:
+        return max(float(os.getenv("NOTEBOOK_API_TRASH_PURGE_INTERVAL_SECONDS", "3600")), 0.0)
+    except ValueError:
+        return 3600.0
+
+
+async def _sweep_expired_trash():
+    from backend.routes.upload import purge_expired_trash_now
+
+    while True:
+        await asyncio.to_thread(purge_expired_trash_now)
+        await asyncio.sleep(max(trash_purge_interval_seconds(), 1.0))
+
+
 @contextlib.asynccontextmanager
 async def _dashboard_lifespan(_app):
     """Validate audit storage whichever way the app is launched (`python -m backend.dashboard`,
@@ -146,7 +164,14 @@ async def _dashboard_lifespan(_app):
     notebook_storage = _notebook_storage_status()
     for issue in notebook_storage["issues"]:
         logging.getLogger("uvicorn.error").warning("notebook storage: %s", issue)
-    yield
+    sweeper = asyncio.create_task(_sweep_expired_trash()) if trash_purge_interval_seconds() else None
+    try:
+        yield
+    finally:
+        if sweeper is not None:
+            sweeper.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await sweeper
 
 
 app = FastAPI(

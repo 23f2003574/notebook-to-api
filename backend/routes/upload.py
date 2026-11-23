@@ -9608,6 +9608,22 @@ def _soft_delete_notebook(file_path, was_compiled):
     return {"soft": True, "trash_id": record["trash_id"], "expires_at": record["expires_at"]}
 
 
+def purge_expired_trash_now():
+    """Remove trash entries past their retention window and record one audit entry for the sweep
+    (nothing is recorded when nothing expired). Returns the purged ids; never raises."""
+    from backend import notebook_trash
+
+    try:
+        purged = notebook_trash.purge_expired(_trash_root())
+    except OSError as exc:
+        logging.getLogger("uvicorn.error").warning("automatic trash purge failed (%s)", type(exc).__name__)
+        return []
+    if purged:
+        _lifecycle_event(None, "notebook.trash_purge", None, "success",
+                         {"purged": len(purged), "everything": False, "automatic": True}, "trash")
+    return purged
+
+
 @router.get("/notebooks/trash")
 def list_trashed_notebooks():
     """Soft-deleted notebooks still inside their retention window, newest first. Read-only: expired

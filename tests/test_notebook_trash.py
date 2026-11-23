@@ -233,3 +233,56 @@ def test_batch_delete_is_hard_by_default_dry_run_moves_nothing_and_validates(env
     assert client.post("/api/notebooks/delete-batch", json={"filenames": ["a.ipynb"], "soft": "yes"}).status_code == 400
     client.post("/api/notebooks/delete-batch", json={"filenames": ["a.ipynb"]})
     assert not (tmp / "up" / "a.ipynb").exists() and not (tmp / "up" / ".trash").exists()
+
+
+def test_expired_trash_is_purged_automatically_and_audited_once(env, monkeypatch):
+    client, tmp = env
+    monkeypatch.setenv("NOTEBOOK_API_TRASH_RETENTION_DAYS", "0")
+    for name in ("a.ipynb", "b.ipynb"):
+        client.post("/api/upload", files={"file": (name, NB.encode())})
+        client.delete(f"/api/notebooks/{name}?soft=true")
+    assert len(list((tmp / "up" / ".trash").iterdir())) == 2
+    assert len(upload.purge_expired_trash_now()) == 2
+    assert not any((tmp / "up" / ".trash").iterdir())
+    records = client.get("/governance/audit/history?limit=50").json()["records"]
+    sweeps = [r for r in records if r["action"] == "notebook.trash_purge"]
+    assert len(sweeps) == 1 and sweeps[0]["metadata"]["purged"] == 2 and sweeps[0]["metadata"]["automatic"] is True
+    assert upload.purge_expired_trash_now() == []
+    assert len([r for r in client.get("/governance/audit/history?limit=50").json()["records"] if r["action"] == "notebook.trash_purge"]) == 1
+
+
+def test_entries_inside_their_window_survive_the_sweep(env):
+    client, tmp = env
+    client.post("/api/upload", files={"file": ("a.ipynb", NB.encode())})
+    tid = client.delete("/api/notebooks/a.ipynb?soft=true").json()["trash_id"]
+    assert upload.purge_expired_trash_now() == []
+    assert client.post(f"/api/notebooks/trash/{tid}/restore").status_code == 200
+
+
+def test_the_dashboard_sweeps_on_start_and_the_sweep_can_be_turned_off(tmp_path, monkeypatch):
+    import time
+
+    for name in ("NOTEBOOK_API_DASHBOARD_KEY", "NOTEBOOK_API_DASHBOARD_KEYS", "NOTEBOOK_API_SOFT_DELETE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(upload, "UPLOAD_DIR", str(tmp_path / "up"))
+    monkeypatch.setattr(upload, "GENERATED_APPS_DIR", str(tmp_path / "apps"))
+    monkeypatch.setenv("NOTEBOOK2API_GOVERNANCE_PERSISTENCE_BACKEND", "memory")
+    reset_audit_service()
+    (tmp_path / "up").mkdir()
+    now = datetime.now(timezone.utc)
+    entry = tmp_path / "up" / ".trash" / "old-1"
+    entry.mkdir(parents=True)
+    (entry / "meta.json").write_text(json.dumps({"trash_id": "old-1", "filename": "x.ipynb", "deleted_at": (now - timedelta(days=40)).isoformat(),
+                                                 "expires_at": (now - timedelta(days=10)).isoformat(), "sha256": "x", "entries": []}))
+    monkeypatch.setenv("NOTEBOOK_API_TRASH_PURGE_INTERVAL_SECONDS", "0")
+    with TestClient(dashboard.app):
+        time.sleep(0.5)
+        assert entry.exists()  # the sweep is off
+    monkeypatch.setenv("NOTEBOOK_API_TRASH_PURGE_INTERVAL_SECONDS", "3600")
+    with TestClient(dashboard.app):
+        for _ in range(50):
+            if not entry.exists():
+                break
+            time.sleep(0.1)
+        assert not entry.exists()  # swept right after startup
+    reset_audit_service()
