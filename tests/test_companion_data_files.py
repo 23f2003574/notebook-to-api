@@ -3,6 +3,7 @@ import io
 import json
 import stat
 import zipfile
+from pathlib import Path
 
 import nbformat
 import pytest
@@ -164,3 +165,69 @@ def test_exported_notebook_archives_do_not_turn_their_metadata_into_data_files(e
     client.delete("/api/notebooks/m.ipynb")
     results = _import(exported.content)
     assert results[0]["companion_files"] == [] and results[0]["companion_skipped"] == []
+
+
+def _versioned(env, files_v1, files_v2):
+    """A notebook imported twice (so its first state is a saved version), with data files per import."""
+    def bundle(files):
+        entries = [("m.ipynb", _nb())] + list(files.items())
+        return _zip(entries)
+    _import(bundle(files_v1))
+    _import(bundle(files_v2), overwrite=True)
+    versions = client.get("/api/notebooks/m.ipynb/versions").json()["versions"]
+    return versions[0]["version_id"]
+
+
+def test_a_versions_data_files_are_listed_with_sizes_and_hashes(env):
+    import hashlib
+
+    version = _versioned(env, {"weights.json": "AAAA", "models/vocab.txt": "x"}, {"weights.json": "BB"})
+    body = client.get(f"/api/notebooks/m.ipynb/versions/{version}/files").json()
+    assert body["recorded"] is True and body["total_count"] == 2 and body["total_bytes"] == 5
+    assert {f["path"]: (f["bytes"], f["sha256"]) for f in body["files"]} == {
+        "weights.json": (4, hashlib.sha256(b"AAAA").hexdigest()), "models/vocab.txt": (1, hashlib.sha256(b"x").hexdigest())}
+    assert client.get("/api/notebooks/m.ipynb/versions/nope.ipynb/files").status_code == 404
+
+
+def test_version_diff_reports_added_removed_and_changed_data_files(env):
+    version = _versioned(env, {"weights.json": "AAAA", "gone.csv": "g", "same.txt": "s"},
+                         {"weights.json": "BBBB", "new.csv": "n", "same.txt": "s"})
+    files = client.get(f"/api/notebooks/m.ipynb/versions/{version}/diff").json()["files"]
+    assert files["comparable"] is True
+    assert [f["path"] for f in files["added"]] == ["new.csv"]
+    assert [f["path"] for f in files["removed"]] == ["gone.csv"]
+    assert [(f["path"], f["from"]["bytes"], f["to"]["bytes"]) for f in files["changed"]] == [("weights.json", 4, 4)]
+    assert files["changed"][0]["from"]["sha256"] != files["changed"][0]["to"]["sha256"]
+
+
+def test_two_saved_versions_can_be_compared_against_each_other(env):
+    _import(_zip([("m.ipynb", _nb()), ("weights.json", "ONE")]))
+    _import(_zip([("m.ipynb", _nb()), ("weights.json", "TWO")]), overwrite=True)
+    _import(_zip([("m.ipynb", _nb()), ("weights.json", "TWO"), ("extra.txt", "e")]), overwrite=True)
+    ids = [v["version_id"] for v in client.get("/api/notebooks/m.ipynb/versions").json()["versions"]]
+    assert len(ids) == 2
+    newest, oldest = ids[0], ids[1]
+    files = client.get(f"/api/notebooks/m.ipynb/versions/{oldest}/diff", params={"against": newest}).json()["files"]
+    assert files["comparable"] is True and [f["path"] for f in files["changed"]] == ["weights.json"]
+
+
+def test_versions_without_recorded_data_files_are_not_compared_and_not_reported_as_empty(env):
+    import shutil
+
+    version = _versioned(env, {"weights.json": "AAAA"}, {"weights.json": "BBBB"})
+    for snapshot in Path(upload_routes._notebook_versions_dir("m.ipynb")).glob("*.files"):
+        shutil.rmtree(snapshot)
+    listed = client.get(f"/api/notebooks/m.ipynb/versions/{version}/files").json()
+    assert listed["recorded"] is False and listed["files"] == []
+    files = client.get(f"/api/notebooks/m.ipynb/versions/{version}/diff").json()["files"]
+    assert files == {"comparable": False, "from_recorded": False, "to_recorded": True, "added": [], "removed": [], "changed": []}
+
+
+def test_a_recorded_version_with_no_files_is_distinct_from_not_recorded(env):
+    version = _versioned(env, {}, {"weights.json": "AAAA"})
+    versions_dir = Path(upload_routes._notebook_versions_dir("m.ipynb"))
+    (versions_dir / f"{version}.files").mkdir(exist_ok=True)
+    listed = client.get(f"/api/notebooks/m.ipynb/versions/{version}/files").json()
+    assert listed["recorded"] is True and listed["files"] == []
+    files = client.get(f"/api/notebooks/m.ipynb/versions/{version}/diff").json()["files"]
+    assert files["comparable"] is True and [f["path"] for f in files["added"]] == ["weights.json"]

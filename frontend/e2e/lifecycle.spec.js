@@ -89,6 +89,7 @@ test('two versions can be compared and the data files listed from the dashboard'
   const panel = page.getByTestId('compare-life_cmp.ipynb')
   await panel.getByRole('button', { name: 'Compare versions' }).click()
   await expect(page.getByRole('region', { name: 'Added functions' })).toContainText('extra() -> int')
+  await expect(page.getByRole('region', { name: 'Changed data files' })).toContainText('weights.json')
   await panel.getByRole('button', { name: 'Show data files' }).click()
   await expect(page.getByRole('list', { name: 'Data files' })).toContainText('weights.json')
 })

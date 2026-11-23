@@ -1071,6 +1071,43 @@ def _version_companion_dir(notebook_filename: str, version_id: str) -> Path:
     return _notebook_versions_dir(notebook_filename) / f"{version_id}.files"
 
 
+def _file_manifest(root: Path):
+    """[{path, bytes, sha256}] for every regular file under `root`, sorted by relative path."""
+    manifest = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path.is_symlink():
+            continue
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
+        manifest.append({"path": path.relative_to(root).as_posix(), "bytes": path.stat().st_size, "sha256": digest.hexdigest()})
+    return manifest
+
+
+def _version_files_manifest(notebook_filename: str, version_id: str):
+    """The data files saved with a version, or None when it predates companion-file versioning
+    ("not recorded" -- distinct from a recorded version that had no files)."""
+    directory = _version_companion_dir(notebook_filename, version_id)
+    return _file_manifest(directory) if directory.is_dir() else None
+
+
+def _diff_file_manifests(old, new):
+    """Compare two manifests by relative path and content hash. None on either side means that
+    side's files were not recorded, so no honest comparison exists."""
+    result = {"comparable": old is not None and new is not None,
+              "from_recorded": old is not None, "to_recorded": new is not None,
+              "added": [], "removed": [], "changed": []}
+    if not result["comparable"]:
+        return result
+    before, after = {f["path"]: f for f in old}, {f["path"]: f for f in new}
+    result["added"] = [after[name] for name in sorted(after.keys() - before.keys())]
+    result["removed"] = [before[name] for name in sorted(before.keys() - after.keys())]
+    result["changed"] = [{"path": name, "from": before[name], "to": after[name]}
+                         for name in sorted(before.keys() & after.keys()) if before[name]["sha256"] != after[name]["sha256"]]
+    return result
+
+
 def _count_version_companions(notebook_filename: str, version_id: str):
     """How many data files the version carries; None for a version saved before companion files
     were versioned (restoring it leaves the current data files alone)."""
@@ -13631,6 +13668,22 @@ def inspect_notebook_version(
     }
 
 
+@router.get("/notebooks/{filename}/versions/{version_id}/files")
+def list_notebook_version_files(filename: str, version_id: str):
+    """The data files saved with one version: path, size and SHA-256. "recorded" is false for a
+    version saved before companion files were versioned (its files are unknown, not absent)."""
+    file_path = resolve_upload_path(filename)
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Notebook file not found")
+    version_path = _resolve_path_within(str(_notebook_versions_dir(file_path.name)), version_id, "notebook version")
+    if not version_path.is_file():
+        raise HTTPException(status_code=404, detail="Notebook version not found")
+    manifest = _version_files_manifest(file_path.name, version_id)
+    files = manifest or []
+    return {"status": "success", "filename": file_path.name, "version_id": version_id, "recorded": manifest is not None,
+            "files": files, "total_count": len(files), "total_bytes": sum(f["bytes"] for f in files)}
+
+
 @router.get("/notebooks/{filename}/versions/{version_id}/diff")
 def diff_notebook_version(
     filename: str, version_id: str, against: str = None, content: bool = False,
@@ -13777,12 +13830,18 @@ def diff_notebook_version(
     diff = _filter_notebook_diff_by_name(diff, only_names, exclude_names)
     diff.update(classify_notebook_diff(diff))
 
+    new_files = (
+        _file_manifest(_companion_dir(file_path.name)) if against is None and _companion_dir(file_path.name).is_dir()
+        else ([] if against is None else _version_files_manifest(file_path.name, against))
+    )
+
     response = {
         "status": "success",
         "filename": filename,
         "version_id": version_id,
         "against": against,
         **diff,
+        "files": _diff_file_manifests(_version_files_manifest(file_path.name, version_id), new_files),
     }
 
     if content:

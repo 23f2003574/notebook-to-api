@@ -53,6 +53,35 @@ describe('VersionCompare', () => {
     expect(calls[0]).toContain(`/diff?against=${encodeURIComponent(versions[1].version_id)}`)
   })
 
+  const sha = (c) => c.repeat(64)
+  const file = (path, bytes, c) => ({ path, bytes, sha256: sha(c) })
+
+  it('shows data files added, removed and changed between the versions', async () => {
+    mount(() => json({
+      added: [], removed: [], changed: [],
+      files: {
+        comparable: true, from_recorded: true, to_recorded: true,
+        added: [file('new.csv', 3, 'a')], removed: [file('gone.csv', 5, 'b')],
+        changed: [{ path: 'weights.json', from: file('weights.json', 4, 'c'), to: file('weights.json', 9, 'd') }],
+      },
+    }))
+    fireEvent.click(screen.getByRole('button', { name: 'Compare versions' }))
+    expect(await screen.findByRole('region', { name: 'Added data files' })).toHaveTextContent('new.csv')
+    expect(screen.getByRole('region', { name: 'Removed data files' })).toHaveTextContent('gone.csv')
+    expect(screen.getByRole('region', { name: 'Changed data files' })).toHaveTextContent(/weights\.json\s*4 → 9 bytes/)
+    expect(screen.getByText('No differences in the endpoint functions.')).toBeInTheDocument()
+  })
+
+  it('says so when the data files are identical or were not recorded for a version', async () => {
+    mount(() => json({ added: [], removed: [], changed: [], files: { comparable: true, from_recorded: true, to_recorded: true, added: [], removed: [], changed: [] } }))
+    fireEvent.click(screen.getByRole('button', { name: 'Compare versions' }))
+    expect(await screen.findByText('No differences in the data files.')).toBeInTheDocument()
+    cleanup()
+    mount(() => json({ added: [], removed: [], changed: [], files: { comparable: false, from_recorded: false, to_recorded: true, added: [], removed: [], changed: [] } }))
+    fireEvent.click(screen.getByRole('button', { name: 'Compare versions' }))
+    expect(await screen.findByText(/Data files were not compared: the older version was saved before data files were versioned/)).toBeInTheDocument()
+  })
+
   it('refuses to compare a version with itself', () => {
     mount(() => json({}))
     fireEvent.change(screen.getByLabelText(/^with/), { target: { value: versions[0].version_id } })

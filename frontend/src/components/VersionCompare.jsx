@@ -24,7 +24,7 @@ export default function VersionCompare({ filename, versions }) {
       const response = await dashboardFetch(`${base}/versions/${encodeURIComponent(selected)}/diff${query}`)
       if (!response.ok) throw new Error(await errorFromResponse(response, 'Could not compare the versions'))
       const data = await response.json()
-      setDiff({ status: 'ready', added: data.added || [], removed: data.removed || [], changed: data.changed || [] })
+      setDiff({ status: 'ready', added: data.added || [], removed: data.removed || [], changed: data.changed || [], files: data.files || null })
     } catch (err) {
       setDiff({ status: 'error', message: err.message })
     }
@@ -90,6 +90,34 @@ export default function VersionCompare({ filename, versions }) {
                     {signature(fn.old) === signature(fn.new) && <span className="text-slate-500"> (settings or documentation changed)</span>}
                   </li>
                 ))}</ul></section>
+            )}
+          </div>
+        )}
+        {diff.status === 'ready' && diff.files && (
+          <div className="mt-2 text-xs" data-testid={'data-diff-' + filename}>
+            {!diff.files.comparable ? (
+              <p className="text-slate-400">
+                Data files were not compared: {diff.files.from_recorded ? 'the other version' : 'the older version'} was saved before data files were versioned.
+              </p>
+            ) : !diff.files.added.length && !diff.files.removed.length && !diff.files.changed.length ? (
+              <p className="text-slate-400">No differences in the data files.</p>
+            ) : (
+              <>
+                {diff.files.added.length > 0 && (
+                  <section aria-label="Added data files"><h4 className="text-emerald-400">Data files added</h4>
+                    <ul>{diff.files.added.map((f) => <li key={f.path}><code>{f.path}</code> <span className="text-slate-500">{f.bytes} bytes</span></li>)}</ul></section>
+                )}
+                {diff.files.removed.length > 0 && (
+                  <section aria-label="Removed data files"><h4 className="text-red-400">Data files removed</h4>
+                    <ul>{diff.files.removed.map((f) => <li key={f.path}><code>{f.path}</code> <span className="text-slate-500">{f.bytes} bytes</span></li>)}</ul></section>
+                )}
+                {diff.files.changed.length > 0 && (
+                  <section aria-label="Changed data files"><h4 className="text-amber-400">Data files changed</h4>
+                    <ul>{diff.files.changed.map((f) => (
+                      <li key={f.path}><code>{f.path}</code> <span className="text-slate-500">{f.from.bytes} → {f.to.bytes} bytes</span></li>
+                    ))}</ul></section>
+                )}
+              </>
             )}
           </div>
         )}
