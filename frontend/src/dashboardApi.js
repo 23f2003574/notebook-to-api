@@ -45,6 +45,23 @@ export function dashboardFetch(path, init = {}) {
 //   - production dashboard API: the page's own origin, which is how `python -m backend.dashboard`
 //     serves a built frontend;
 //   - production compiled application: there is no same-origin equivalent, so it must be set.
+// Who the key in use is and what it may do (GET /api/whoami): { name, scope, authenticated, can }.
+// Null when the answer is unavailable (401, 403, an old backend, a network failure): the page then
+// keeps every action enabled and lets the backend refuse what it must.
+export async function fetchCaller(signal) {
+  try {
+    const response = await dashboardFetch('/api/whoami', { signal })
+    if (!response.ok) return null
+    const body = await response.json()
+    return body && typeof body.scope === 'string' && body.can && typeof body.can === 'object' ? body : null
+  } catch {
+    return null
+  }
+}
+
+// An action is allowed unless the backend said it is not.
+export const allows = (caller, action) => !caller || caller.can[action] !== false
+
 export const DEFAULT_DASHBOARD_API_URL = 'http://localhost:8001'
 export const DEFAULT_APP_URL = 'http://localhost:8000'
 

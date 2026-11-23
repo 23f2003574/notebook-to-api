@@ -590,14 +590,26 @@ _COMPILE_POSTS = frozenset({
 })
 
 
+def _is_public_shell_path(method, path):
+    """GETs of the built UI and API docs, which every authenticated key may load."""
+    if method not in ("GET", "HEAD", "OPTIONS"):
+        return False
+    return (path in ("/", "/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect")
+            or path.startswith("/assets/") or "." in path.rsplit("/", 1)[-1])
+
+
 def required_scope(method, path):
     """The least scope that may call `method path`: read for safe methods; compile for uploading and
     compiling a notebook and the non-mutating previews/exports; admin for everything else
     (delete, rename, restore, tags, deploy, history, governance and experimental routes)."""
     method = method.upper()
+    path = path.rstrip("/") or "/"
+    if not (path == "/api" or path.startswith("/api/")) and not _is_public_shell_path(method, path):
+        # Routes outside /api/ (the opt-in experimental routers) can read server directories and
+        # secrets, so no method on them is open to read or compile keys.
+        return "admin"
     if method in ("GET", "HEAD", "OPTIONS"):
         return "read"
-    path = path.rstrip("/") or "/"
     if method == "POST" and (path in _COMPILE_POSTS or (path.startswith("/api/") and path.endswith("-preview"))):
         return "compile"
     return "admin"
@@ -836,6 +848,7 @@ async def _require_dashboard_api_key(request: Request, call_next):
         if key_name is not None:
             request.state.dashboard_actor = key_name
             key_scope = key_scopes.get(key_name, "admin")
+            request.state.dashboard_scope = key_scope
             if not scope_allows(key_scope, request.method, request.url.path):
                 needed = required_scope(request.method, request.url.path)
                 auth_metrics.record_denied(client, key_name, key_scope, needed)
@@ -1239,6 +1252,35 @@ def _frontend_index_file():
     index = Path(dist_dir) / "index.html" if dist_dir is not None else None
 
     return index if index is not None and index.is_file() else None
+
+
+@app.get("/api/whoami")
+def whoami(request: Request):
+    """Who the caller is and what it may do: the key's name and scope (never the key itself).
+    The frontend uses it to hide actions the key cannot perform; without any configured key the
+    dashboard serves this machine only, as admin."""
+    scope = getattr(request.state, "dashboard_scope", None)
+    name = getattr(request.state, "dashboard_actor", None)
+    authenticated = name is not None
+    scope = scope or "admin"
+    return {
+        "name": name or "local",
+        "scope": scope,
+        "authenticated": authenticated,
+        "can": {action: scope_allows(scope, method, path) for action, (method, path) in _WHOAMI_ACTIONS.items()},
+    }
+
+
+_WHOAMI_ACTIONS = {
+    "read": ("GET", "/api/notebooks"),
+    "upload": ("POST", "/api/upload"),
+    "compile": ("POST", "/api/compile"),
+    "deploy": ("POST", "/api/deploy"),
+    "delete": ("DELETE", "/api/notebooks/x"),
+    "rename": ("POST", "/api/notebooks/x/rename"),
+    "restore": ("POST", "/api/notebooks/trash/x/restore"),
+    "settings": ("PUT", "/api/settings"),
+}
 
 
 @app.get("/")

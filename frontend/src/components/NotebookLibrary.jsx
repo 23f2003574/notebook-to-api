@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { dashboardFetch } from '../dashboardApi'
+import { allows, dashboardFetch } from '../dashboardApi'
 import { errorFromResponse } from '../errorMessage'
 import VersionCompare from './VersionCompare'
 import { diagnosticsFrom } from '../diagnostics'
@@ -31,7 +31,9 @@ const stem = (filename) => filename.replace(/\.ipynb$/, '')
 // Notebooks stored on the dashboard (GET /api/notebooks). Each one can be opened (inspected and
 // compiled in the main panel) and has its own compiled app (compile with per_notebook), which can
 // be downloaded, deployed and exported without touching any other notebook's app.
-export default function NotebookLibrary({ onOpen, refreshKey, onAudit }) {
+export default function NotebookLibrary({ onOpen, refreshKey, onAudit, caller = null }) {
+  const can = (action) => allows(caller, action)
+  const refusal = (action) => (can(action) ? undefined : `Your key's ${caller.scope} scope cannot ${action}`)
   const [notebooks, setNotebooks] = useState(null)
   const [error, setError] = useState(null)
   const [reload, setReload] = useState(0)
@@ -305,7 +307,7 @@ export default function NotebookLibrary({ onOpen, refreshKey, onAudit }) {
               </button>
             </div>
             <div className="mt-2 flex flex-wrap gap-3">
-              <button type="button" className={button} disabled={Boolean(working)} onClick={() => compileApp(filename)}>
+              <button type="button" className={button} disabled={Boolean(working) || !can('compile')} title={refusal('compile')} onClick={() => compileApp(filename)}>
                 {working === 'compile' ? 'Compiling...' : app ? 'Recompile app' : 'Compile app'}
               </button>
               {app && app.status === 'compiled' && (
@@ -325,7 +327,8 @@ export default function NotebookLibrary({ onOpen, refreshKey, onAudit }) {
                   <button
                     type="button"
                     className={button}
-                    disabled={Boolean(working)}
+                    disabled={Boolean(working) || !can('deploy')}
+                    title={refusal('deploy')}
                     onClick={() => {
                       if (window.confirm('Build a Docker image for ' + filename + '?')) deployApp(filename)
                     }}
@@ -337,7 +340,9 @@ export default function NotebookLibrary({ onOpen, refreshKey, onAudit }) {
               {[['rename', 'Rename'], ['versions', 'Versions'], ['delete', 'Delete']].map(([name, label]) => (
                 <button key={name} type="button" className={button + (name === 'delete' ? ' !text-red-400' : '')}
                   ref={(element) => { triggers.current[`${filename}|${name}`] = element }}
-                  aria-label={`${label} ${filename}`} aria-expanded={panel[filename] === name} disabled={Boolean(working)}
+                  aria-label={`${label} ${filename}`} aria-expanded={panel[filename] === name}
+                  disabled={Boolean(working) || (name === 'rename' && !can('rename')) || (name === 'delete' && !can('delete'))}
+                  title={name === 'rename' || name === 'delete' ? refusal(name) : undefined}
                   onClick={() => (panel[filename] === name ? closePanel(filename, name) : openPanel(filename, name))}>
                   {label}
                 </button>
@@ -442,7 +447,7 @@ export default function NotebookLibrary({ onOpen, refreshKey, onAudit }) {
           {trash.map((item) => (
             <li key={item.trash_id} className="bg-slate-900 rounded px-3 py-1 flex items-center justify-between text-xs text-slate-300">
               <span><code>{item.filename}</code> <span className="text-slate-500">expires {new Date(item.expires_at).toLocaleDateString()}</span></span>
-              <button type="button" className={button} disabled={Boolean(busy[item.filename])}
+              <button type="button" className={button} disabled={Boolean(busy[item.filename]) || !can('restore')} title={refusal('restore')}
                 aria-label={'Restore ' + item.filename + ' from the trash'} onClick={() => restoreFromTrash(item)}>
                 {busy[item.filename] === 'untrash' ? 'Restoring...' : 'Restore'}
               </button>

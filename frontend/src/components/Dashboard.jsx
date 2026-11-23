@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import NotebookUpload from './NotebookUpload'
 import NotebookLibrary from './NotebookLibrary'
 import GovernanceAudit from './GovernanceAudit'
-import { appUrl, configError, dashboardApiUrl, dashboardFetch, getDashboardKey, setDashboardKey } from '../dashboardApi'
+import { allows, appUrl, configError, dashboardApiUrl, dashboardFetch, fetchCaller, getDashboardKey, setDashboardKey } from '../dashboardApi'
 import { errorFromResponse } from '../errorMessage'
 import FunctionList from './FunctionList'
 import Diagnostics from './Diagnostics'
@@ -125,6 +125,13 @@ const HEALTH_DISPLAY = {
 
 export default function Dashboard() {
   const backendStatus = useBackendHealth()
+  const [caller, setCaller] = useState(null) // GET /api/whoami, once the backend accepts the key
+  useEffect(() => {
+    if (backendStatus !== 'running') return undefined
+    const controller = new AbortController()
+    fetchCaller(controller.signal).then((body) => { if (!controller.signal.aborted) setCaller(body) })
+    return () => controller.abort()
+  }, [backendStatus])
   const health = HEALTH_DISPLAY[backendStatus]
   const settingsError = configError()
   const [uploadedNotebook, setUploadedNotebook] = useState(null)
@@ -290,6 +297,11 @@ export default function Dashboard() {
               {(backendStatus === 'locked' || backendStatus === 'rejected') && (
                 <DashboardKeyForm rejected={backendStatus === 'rejected'} />
               )}
+              {caller && caller.authenticated && (
+                <p className="text-sm text-slate-400 mr-3" data-testid="caller">
+                  Signed in as <strong>{caller.name}</strong> ({caller.scope} access)
+                </p>
+              )}
               {backendStatus !== 'locked' && getDashboardKey() && (
                 <button
                   type="button"
@@ -330,7 +342,7 @@ export default function Dashboard() {
 
             <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 hover:border-slate-600 transition">
               <h2 className="text-xl font-semibold text-white mb-4">📚 Your Notebooks</h2>
-              <NotebookLibrary onOpen={handleUploadSuccess} refreshKey={`${uploadedNotebook}|${lastCompiled}`} onAudit={setAuditSequence} />
+              <NotebookLibrary caller={caller} onOpen={handleUploadSuccess} refreshKey={`${uploadedNotebook}|${lastCompiled}`} onAudit={setAuditSequence} />
             </div>
 
             <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 hover:border-slate-600 transition">
@@ -345,7 +357,8 @@ export default function Dashboard() {
               </label>
               <button
                 onClick={handleCompile}
-                disabled={!uploadedNotebook || isCompiling}
+                disabled={!uploadedNotebook || isCompiling || !allows(caller, 'compile')}
+                title={allows(caller, 'compile') ? undefined : `Your key's ${caller.scope} scope cannot compile`}
                 className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:cursor-not-allowed text-white font-semibold py-3 px-6 rounded-lg transition"
               >
                 {isCompiling ? '🔄 Compiling...' : '🚀 Compile Now'}

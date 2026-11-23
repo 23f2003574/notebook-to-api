@@ -8,6 +8,7 @@ import Dashboard from './Dashboard'
 import EndpointTester from './EndpointTester'
 import FunctionList from './FunctionList'
 import NotebookLibrary from './NotebookLibrary'
+import { allows, fetchCaller } from '../dashboardApi'
 import NotebookUpload from './NotebookUpload'
 import { dashboardFetch, dashboardHeaders, getDashboardKey, setDashboardKey } from '../dashboardApi'
 
@@ -22,7 +23,9 @@ const stubFetch = (mock) =>
   vi.stubGlobal('fetch', (url, init) =>
     /\/api\/health$/.test(String(url))
       ? Promise.resolve({ ok: true, json: async () => ({ status: 'healthy' }) })
-      : /\/governance\/audit/.test(String(url))
+      : /\/api\/whoami$/.test(String(url))
+        ? Promise.resolve({ ok: false, status: 404, json: async () => ({}) })
+        : /\/governance\/audit/.test(String(url))
         ? Promise.resolve({ ok: true, json: async () => ({ records: [], has_more: false, next_cursor: null }) })
         : /\/api\/notebooks$/.test(String(url))
         ? Promise.resolve({ ok: true, json: async () => ({ notebooks: [] }) })
@@ -1148,5 +1151,60 @@ describe('NotebookLibrary lifecycle actions', () => {
     await setup((path) => (path.endsWith('/versions') ? json({ versions: [] }) : null))
     click('Versions a.ipynb')
     expect(await screen.findByText(/No earlier versions/)).toBeInTheDocument()
+  })
+})
+
+describe('dashboard key scope', () => {
+  const readOnly = { name: 'viewer', scope: 'read', authenticated: true, can: { read: true, compile: false, deploy: false, delete: false, rename: false, restore: false } }
+  const stubNotebooks = () => vi.stubGlobal('fetch', (url) => Promise.resolve(
+    /\/api\/notebooks$/.test(String(url))
+      ? { ok: true, json: async () => ({ notebooks: [{ filename: 'a.ipynb', size_bytes: 3 }] }) }
+      : { ok: true, json: async () => ({}) },
+  ))
+
+  it('disables compile, rename and delete for a read-only key and explains why', async () => {
+    stubNotebooks()
+    render(<NotebookLibrary onOpen={() => {}} refreshKey={null} caller={readOnly} />)
+    await screen.findByText('a.ipynb')
+    for (const name of [/Compile app/, /Rename a.ipynb/, /Delete a.ipynb/]) {
+      const button = screen.getByRole('button', { name })
+      expect(button).toBeDisabled()
+      expect(button.getAttribute('title')).toMatch(/read scope cannot/)
+    }
+    expect(screen.getByRole('button', { name: /Versions a.ipynb/ })).toBeEnabled()
+  })
+
+  it('keeps every action enabled for an admin key or when the identity is unavailable', async () => {
+    stubNotebooks()
+    const admin = { ...readOnly, scope: 'admin', can: { ...readOnly.can, compile: true, delete: true, rename: true } }
+    const { rerender } = render(<NotebookLibrary onOpen={() => {}} refreshKey={null} caller={admin} />)
+    await screen.findByText('a.ipynb')
+    expect(screen.getByRole('button', { name: /Delete a.ipynb/ })).toBeEnabled()
+    rerender(<NotebookLibrary onOpen={() => {}} refreshKey={null} caller={null} />)
+    expect(screen.getByRole('button', { name: /Delete a.ipynb/ })).toBeEnabled()
+    expect(screen.getByRole('button', { name: /Compile app/ })).toBeEnabled()
+  })
+
+  it('reads the caller from /api/whoami and treats 401, 403 and bad answers as unknown', async () => {
+    vi.stubGlobal('fetch', async () => ({ ok: true, json: async () => readOnly }))
+    expect((await fetchCaller()).scope).toBe('read')
+    for (const reply of [{ ok: false, status: 401 }, { ok: false, status: 403 }, { ok: true, json: async () => ({ status: 'healthy' }) }]) {
+      vi.stubGlobal('fetch', async () => reply)
+      expect(await fetchCaller()).toBeNull()
+    }
+    vi.stubGlobal('fetch', async () => { throw new Error('down') })
+    expect(await fetchCaller()).toBeNull()
+    expect(allows(readOnly, 'delete')).toBe(false)
+    expect(allows(null, 'delete')).toBe(true)
+  })
+
+  it('shows who is signed in and with which scope', async () => {
+    vi.stubGlobal('fetch', (url) => Promise.resolve(
+      /\/api\/health$/.test(String(url)) ? { ok: true, json: async () => ({ status: 'healthy' }) }
+        : /\/api\/whoami$/.test(String(url)) ? { ok: true, json: async () => readOnly }
+          : { ok: true, json: async () => ({ notebooks: [], records: [] }) },
+    ))
+    render(<Dashboard />)
+    expect(await screen.findByTestId('caller')).toHaveTextContent('Signed in as viewer (read access)')
   })
 })

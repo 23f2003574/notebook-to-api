@@ -126,3 +126,18 @@ test('version history lists earlier versions and restore brings back the noteboo
   await expect(page.getByTestId('linked-record')).toContainText('Restore version')
   await expect(page.getByTestId('version-life_ver.ipynb')).toHaveCount(2) // the restore saved the replaced state
 })
+
+test('the dashboard shows the key scope and disables what a read-only key cannot do', async ({ page, request }) => {
+  const local = await (await request.get('/api/whoami')).json()
+  expect(local).toMatchObject({ scope: 'admin', authenticated: false })
+  expect(local.can.delete).toBe(true)
+
+  await uploadNotebook(page, 'scope_nb.ipynb')
+  const readOnly = { name: 'viewer', scope: 'read', authenticated: true, can: { read: true, compile: false, deploy: false, delete: false, rename: false, restore: false } }
+  await page.route('**/api/whoami', (route) => route.fulfill({ json: readOnly }))
+  await page.reload()
+  await expect(page.getByTestId('caller')).toHaveText('Signed in as viewer (read access)')
+  await expect(button(page, 'Delete', 'scope_nb.ipynb')).toBeDisabled()
+  await expect(button(page, 'Rename', 'scope_nb.ipynb')).toBeDisabled()
+  await expect(button(page, 'Versions', 'scope_nb.ipynb')).toBeEnabled()
+})

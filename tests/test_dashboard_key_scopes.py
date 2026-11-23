@@ -88,7 +88,7 @@ def test_digest_keys_and_plain_colons_parse(monkeypatch):
 
 
 def test_matrix_helper():
-    assert dashboard.required_scope("GET", "/anything") == "read"
+    assert dashboard.required_scope("GET", "/api/anything") == "read"
     assert dashboard.required_scope("POST", "/api/compile") == "compile"
     assert dashboard.required_scope("POST", "/api/curl-preview") == "compile"
     for method, path in (("DELETE", "/api/notebooks/x"), ("POST", "/api/deploy"), ("PUT", "/api/notebooks/x/tags"),
@@ -106,3 +106,28 @@ def test_denials_are_audited_and_counted_without_key_values():
     denied = [r for r in records if r["action"] == "dashboard.authorization_denied"]
     assert denied and denied[0]["actor"] == "viewer" and denied[0]["outcome"] == "failure"
     assert RD not in str(records)
+
+
+def test_whoami_reports_the_key_name_and_scope_without_the_key():
+    for key, name, scope, can_delete, can_compile in ((RD, "viewer", "read", False, False), (CP, "ci", "compile", False, True), (AD, "boss", "admin", True, True)):
+        body = _as(key).get("/api/whoami").json()
+        assert (body["name"], body["scope"], body["authenticated"]) == (name, scope, True)
+        assert body["can"]["delete"] is can_delete and body["can"]["compile"] is can_compile and body["can"]["read"] is True
+        assert key not in str(body)
+    assert TestClient(dashboard.app).get("/api/whoami").status_code == 401
+
+
+def test_whoami_without_configured_keys_is_local_admin(monkeypatch):
+    monkeypatch.delenv("NOTEBOOK_API_DASHBOARD_KEYS")
+    body = TestClient(dashboard.app, client=("127.0.0.1", 5000)).get("/api/whoami").json()
+    assert body["scope"] == "admin" and body["authenticated"] is False and body["can"]["delete"] is True
+
+
+def test_routes_outside_api_need_admin_for_every_method():
+    for method in ("GET", "POST", "PUT", "DELETE"):
+        assert dashboard.required_scope(method, "/plugins/load") == "admin"
+        assert dashboard.required_scope(method, "/v2/secrets") == "admin"
+    assert dashboard.required_scope("GET", "/api/notebooks") == "read"
+    for shell in ("/", "/assets/index-abc.js", "/favicon.svg", "/docs", "/openapi.json"):
+        assert dashboard.required_scope("GET", shell) == "read"
+    assert dashboard.required_scope("POST", "/") == "admin"
