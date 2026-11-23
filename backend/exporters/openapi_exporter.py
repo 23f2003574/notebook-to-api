@@ -199,6 +199,39 @@ with open(out, "w", encoding="utf-8") as handle:
 """
 
 
+class OpenAPIBuildBusy(RuntimeError):
+    """Every isolated-build slot is taken and none freed up in time (answer 503, retry later)."""
+
+
+_BUILD_SLOTS = {}
+
+
+def _build_slot(limit):
+    import threading
+
+    if limit not in _BUILD_SLOTS:
+        _BUILD_SLOTS[limit] = threading.BoundedSemaphore(limit)
+    return _BUILD_SLOTS[limit]
+
+
+def _child_limits(memory_mb, cpu_seconds):
+    """A preexec function applying resource limits in the child (POSIX only; None elsewhere)."""
+    try:
+        import resource
+    except ImportError:
+        return None
+    if not memory_mb and not cpu_seconds:
+        return None
+
+    def apply():
+        if memory_mb:
+            resource.setrlimit(resource.RLIMIT_AS, (memory_mb * 1024 * 1024,) * 2)
+        if cpu_seconds:
+            resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds + 1))
+
+    return apply
+
+
 def isolated_openapi_schema(app_dir, package_name, timeout=None, max_bytes=None):
     """The compiled app's OpenAPI schema, built in a child process.
 
@@ -207,10 +240,6 @@ def isolated_openapi_schema(app_dir, package_name, timeout=None, max_bytes=None)
     secret-looking names, its own process group (killed and reaped on timeout) and bounded output.
     """
     import os
-    import signal
-    import subprocess
-    import sys
-    import tempfile
 
     timeout = float(os.getenv("NOTEBOOK_API_OPENAPI_TIMEOUT_SECONDS", "30")) if timeout is None else timeout
     max_bytes = int(os.getenv("NOTEBOOK_API_OPENAPI_MAX_BYTES", str(8 * 1024 * 1024))) if max_bytes is None else max_bytes
@@ -218,6 +247,34 @@ def isolated_openapi_schema(app_dir, package_name, timeout=None, max_bytes=None)
     if not (app_path / "app.py").is_file():
         raise ModuleNotFoundError(f"No compiled app found in {app_dir!r} (resolved {app_path})")
     environment = {k: v for k, v in os.environ.items() if not _SECRET_ENV_NAME.search(k)}
+
+    def _number(name, default):
+        try:
+            return max(int(float(os.getenv(name, str(default)))), 0)
+        except ValueError:
+            return default
+
+    # Bounded like the dashboard's other child processes: a few at a time, each with a CPU
+    # limit and an optional memory limit, so a burst of previews cannot exhaust the host.
+    slots = _number("NOTEBOOK_API_OPENAPI_MAX_CONCURRENT", 2) or 2
+    memory_mb = _number("NOTEBOOK_API_OPENAPI_MEMORY_LIMIT_MB", 0)
+    cpu_seconds = _number("NOTEBOOK_API_OPENAPI_CPU_LIMIT_SECONDS", 60)
+    slot = _build_slot(slots)
+    if not slot.acquire(timeout=timeout):
+        raise OpenAPIBuildBusy(f"{slots} OpenAPI builds are already running; try again shortly")
+    try:
+        return _run_isolated(app_path, package_name, environment, timeout, max_bytes, _child_limits(memory_mb, cpu_seconds))
+    finally:
+        slot.release()
+
+
+def _run_isolated(app_path, package_name, environment, timeout, max_bytes, preexec):
+    import os
+    import signal
+    import subprocess
+    import sys
+    import tempfile
+
     with tempfile.TemporaryDirectory(prefix="n2a_openapi_") as scratch:
         out, err = Path(scratch) / "schema.json", Path(scratch) / "stderr.txt"
         with open(err, "wb") as err_file:
@@ -225,6 +282,7 @@ def isolated_openapi_schema(app_dir, package_name, timeout=None, max_bytes=None)
                 [sys.executable, "-c", _ISOLATED_SCRIPT, str(app_path.parent), package_name, str(out)],
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err_file,
                 cwd=str(app_path.parent), env=environment, start_new_session=True,
+                preexec_fn=preexec,
             )
             try:
                 process.wait(timeout=timeout)

@@ -17382,11 +17382,15 @@ def openapi_preview_endpoint(data: dict):
 
         try:
 
-            from backend.exporters.openapi_exporter import isolated_openapi_schema
+            from backend.exporters.openapi_exporter import OpenAPIBuildBusy, isolated_openapi_schema
 
             # Importing the generated app runs the uploaded notebook's top-level code, so it
             # happens in a child process, never in this dashboard.
             schema = isolated_openapi_schema(temp_output_dir, temp_package_name)
+
+        except OpenAPIBuildBusy as e:
+
+            raise HTTPException(status_code=503, detail=str(e), headers={"Retry-After": "5"})
 
         except Exception as e:
 
@@ -18270,7 +18274,15 @@ def export_openapi_endpoint(
             detail="No compiled app found. Run /api/compile first."
         )
 
+    except HTTPException:
+
+        raise
+
     except Exception as e:
+
+        if type(e).__name__ == "OpenAPIBuildBusy":
+
+            raise HTTPException(status_code=503, detail=str(e), headers={"Retry-After": "5"})
 
         raise HTTPException(
             status_code=500,

@@ -101,3 +101,48 @@ def test_oversized_schema_is_refused(tmp_path):
     with pytest.raises(RuntimeError, match="larger than"):
         isolated_openapi_schema(pkg, "pkg", max_bytes=1000)
     assert isolated_openapi_schema(pkg, "pkg")["x"].startswith("yyy")
+
+
+def test_builds_are_limited_to_a_few_at_a_time_and_overflow_is_a_503(tmp_path, monkeypatch):
+    import threading
+
+    from backend.exporters import openapi_exporter as exporter
+
+    monkeypatch.setenv("NOTEBOOK_API_OPENAPI_MAX_CONCURRENT", "1")
+    pkg = _app(tmp_path, "import time\ntime.sleep(3)\nclass app:\n    @staticmethod\n    def openapi():\n        return {}\n")
+    first = threading.Thread(target=lambda: exporter.isolated_openapi_schema(pkg, "pkg", timeout=20))
+    first.start()
+    time.sleep(1)
+    with pytest.raises(exporter.OpenAPIBuildBusy):
+        exporter.isolated_openapi_schema(pkg, "pkg", timeout=0.5)
+    first.join()
+
+
+def test_a_busy_dashboard_answers_503_with_retry_after(tmp_path, monkeypatch):
+    from backend.exporters import openapi_exporter as exporter
+
+    def busy(*args, **kwargs):
+        raise exporter.OpenAPIBuildBusy("2 OpenAPI builds are already running; try again shortly")
+
+    monkeypatch.setattr(exporter, "isolated_openapi_schema", busy)
+    c = _client(CP)
+    assert c.post("/api/upload", files={"file": ("a.ipynb", _nb("def f(a: int) -> int:\n    return a\n"))}).status_code == 200
+    r = c.post("/api/openapi-preview", json={"notebook_path": "a.ipynb"})
+    assert r.status_code == 503 and r.headers["retry-after"] == "5"
+
+
+def test_child_gets_cpu_and_memory_limits(tmp_path, monkeypatch):
+    from backend.exporters.openapi_exporter import isolated_openapi_schema
+
+    monkeypatch.setenv("NOTEBOOK_API_OPENAPI_CPU_LIMIT_SECONDS", "2")
+    pkg = _app(tmp_path, "while True:\n    pass\n")
+    started = time.time()
+    with pytest.raises(RuntimeError):
+        isolated_openapi_schema(pkg, "pkg", timeout=30)
+    assert time.time() - started < 15  # the CPU limit ended it long before the 30 s timeout
+    monkeypatch.setenv("NOTEBOOK_API_OPENAPI_CPU_LIMIT_SECONDS", "60")
+    monkeypatch.setenv("NOTEBOOK_API_OPENAPI_MEMORY_LIMIT_MB", "300")
+    (tmp_path / "m").mkdir()
+    hog = _app(tmp_path / "m", "x = bytearray(1024 * 1024 * 1024)\n")
+    with pytest.raises(RuntimeError, match="failed to import"):
+        isolated_openapi_schema(hog, "pkg", timeout=30)
