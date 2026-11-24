@@ -875,6 +875,25 @@ GENERATED_APP_ENV_VARS = [
         ),
     },
     {
+        "name": "NOTEBOOK_API_HOST",
+        "default": "",
+        "description": (
+            "The address this app's server listens on, as the generated Dockerfile's CMD passes it to "
+            "uvicorn (the image sets it to 0.0.0.0). The app reads it only to decide whether the public "
+            "default API key may be used: with the default key and a non-loopback address, startup is "
+            "refused unless NOTEBOOK_API_ALLOW_DEFAULT_KEY=true. Leave it unset for local development."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_ALLOW_DEFAULT_KEY",
+        "default": "false",
+        "description": (
+            "Set to \"true\" to let the app start on a non-loopback address (NOTEBOOK_API_HOST) while it "
+            "still uses the built-in default API key, which is published in this project's source. Off "
+            "by default so a generated image can never silently serve that public key on all interfaces."
+        ),
+    },
+    {
         "name": "NOTEBOOK_API_STRICT_FIELDS",
         "default": "false",
         "description": (
@@ -3816,6 +3835,13 @@ def generate_fastapi_code(
     lines.append("        raise RuntimeError(")
     lines.append("            'NOTEBOOK_API_REQUIRE_CUSTOM_KEY is set but NOTEBOOK_API_KEY is '")
     lines.append("            'unset or still includes the built-in default key; set a secret key.'")
+    lines.append("        )")
+    lines.append("    _bind_host = os.getenv('NOTEBOOK_API_HOST', '').strip().lower()")
+    lines.append("    if _bind_host and _bind_host not in ('localhost', '::1', '[::1]') and not _bind_host.startswith('127.') and not _env_flag('NOTEBOOK_API_ALLOW_DEFAULT_KEY', 'false'):")
+    lines.append("        raise RuntimeError(")
+    lines.append("            'Refusing to listen on ' + _bind_host + ' with the public default API key. Set a secret '")
+    lines.append("            'NOTEBOOK_API_KEY (for example `openssl rand -hex 32`), or set '")
+    lines.append("            'NOTEBOOK_API_ALLOW_DEFAULT_KEY=true to knowingly accept the risk.'")
     lines.append("        )")
     lines.append("    import logging as _logging")
     lines.append("    _logging.getLogger('uvicorn.error').warning(")

@@ -317,6 +317,10 @@ FROM python:{python_version}-slim
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
+# The address uvicorn listens on (see CMD). The app refuses to start on a non-loopback address while it
+# still uses the public default NOTEBOOK_API_KEY, unless NOTEBOOK_API_ALLOW_DEFAULT_KEY=true.
+ENV NOTEBOOK_API_HOST=0.0.0.0
+
 {apt_install_content(apt_packages)}WORKDIR /app
 
 # Copy requirements first for Docker layer caching
@@ -377,7 +381,7 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \\
 # X-Forwarded-For whenever the peer is 127.0.0.1 (or FORWARDED_ALLOW_IPS). The app
 # applies the forwarded header itself, and only for the proxies listed in
 # NOTEBOOK_API_TRUSTED_PROXIES, so a forged header never picks a client identity.
-CMD ["sh", "-c", "exec uvicorn {package_name}.app:app --host 0.0.0.0 --port ${{PORT:-8000}} --no-proxy-headers"]
+CMD ["sh", "-c", "exec uvicorn {package_name}.app:app --host ${{NOTEBOOK_API_HOST:-0.0.0.0}} --port ${{PORT:-8000}} --no-proxy-headers"]
 """
 
 
