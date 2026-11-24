@@ -622,6 +622,10 @@ def validate_new_notebook_filename(name):
     # separators break listings; none belongs in a notebook filename.
     if any(unicodedata.category(ch) in ("Cf", "Zl", "Zp", "Cc") and ord(ch) >= 128 for ch in name):
         problems.append("an invisible or direction-control Unicode character")
+    if any(unicodedata.category(ch) == "Zs" and ch != " " for ch in name):
+        problems.append("a non-ASCII space character (no-break and ideographic spaces look like a plain space)")
+    if name != name.strip():
+        problems.append("leading or trailing whitespace")
     bad = sorted({ch for ch in name if ch in _WINDOWS_INVALID_CHARACTERS})
     if bad:
         problems.append("the character(s) " + " ".join(bad))
@@ -644,7 +648,7 @@ def resolve_new_notebook_path(name, exclude=None) -> Path:
     validate_new_notebook_filename(name)
     path = resolve_upload_path(name)
     def _fold(value):
-        return unicodedata.normalize("NFC", value).casefold()
+        return unicodedata.normalize("NFKC", value).casefold()
 
     folded = _fold(name)
     try:

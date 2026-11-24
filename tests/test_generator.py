@@ -85,6 +85,8 @@ def test_generated_app_env_vars_default_matches_the_actual_generated_code():
         "NOTEBOOK_API_MAX_CONCURRENT_CALLS",
         "NOTEBOOK_API_STRICT_FIELDS",
         "NOTEBOOK_API_REQUIRE_CUSTOM_KEY",
+        "NOTEBOOK_API_HOST",
+        "NOTEBOOK_API_ALLOW_DEFAULT_KEY",
         "NOTEBOOK_API_REJECT_DEPRECATED",
         "NOTEBOOK_API_ENFORCE_SUNSET",
         "NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS",

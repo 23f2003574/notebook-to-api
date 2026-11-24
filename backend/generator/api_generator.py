@@ -143,7 +143,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # subsystem every endpoint depends on" exposure, just one level
     # removed from _enforce_rate_limit's own name instead of the call
     # site.
-    "_enforce_rate_limit", "_notebook_result_schema", "_INFERRED_RETURN_TYPES", "AUTH_FAILURE_LIMIT_PER_MINUTE", "AUTH_FAILURE_WINDOW_SECONDS", "_AUTH_FAILURE_MAX_CLIENTS", "_AUTH_FAILURES", "_AUTH_FAILURES_LOCK", "_auth_client_id", "_auth_logging", "_AUTH_METRICS", "_AUTH_FAILURES_BY_ENDPOINT", "_auth_endpoint", "_auth_log", "TRUSTED_PROXIES", "_parse_trusted_proxies", "_TRUSTED_NETWORKS", "_is_trusted_proxy", "_auth_throttle_check", "_auth_throttle_record_failure", "_Request", "RATE_LIMIT_PER_MINUTE", "RATE_LIMIT_WINDOW_SECONDS",
+    "_enforce_rate_limit", "_notebook_result_schema", "_INFERRED_RETURN_TYPES", "_typing", "AUTH_FAILURE_LIMIT_PER_MINUTE", "AUTH_FAILURE_WINDOW_SECONDS", "_AUTH_FAILURE_MAX_CLIENTS", "_AUTH_FAILURES", "_AUTH_FAILURES_LOCK", "_auth_client_id", "_auth_logging", "_AUTH_METRICS", "_AUTH_FAILURES_BY_ENDPOINT", "_auth_endpoint", "_auth_log", "TRUSTED_PROXIES", "_parse_trusted_proxies", "_TRUSTED_NETWORKS", "_is_trusted_proxy", "_auth_throttle_check", "_auth_throttle_record_failure", "_Request", "RATE_LIMIT_PER_MINUTE", "RATE_LIMIT_WINDOW_SECONDS",
     "_RATE_LIMIT_WINDOWS", "_RATE_LIMIT_LOCK", "_TASKS_ADMISSION_LOCK",
     "verify_api_key", "custom_openapi",
     "root", "health_check", "readiness_check", "auth_status", "auth_info",
@@ -3836,8 +3836,8 @@ def generate_fastapi_code(
     lines.append("            'NOTEBOOK_API_REQUIRE_CUSTOM_KEY is set but NOTEBOOK_API_KEY is '")
     lines.append("            'unset or still includes the built-in default key; set a secret key.'")
     lines.append("        )")
-    lines.append("    _bind_host = os.getenv('NOTEBOOK_API_HOST', '').strip().lower()")
-    lines.append("    if _bind_host and _bind_host not in ('localhost', '::1', '[::1]') and not _bind_host.startswith('127.') and not _env_flag('NOTEBOOK_API_ALLOW_DEFAULT_KEY', 'false'):")
+    lines.append("    _bind_host = os.getenv(\"NOTEBOOK_API_HOST\", \"\").strip().lower()")
+    lines.append("    if _bind_host and _bind_host not in ('localhost', '::1', '[::1]') and not _bind_host.startswith('127.') and not _env_flag(\"NOTEBOOK_API_ALLOW_DEFAULT_KEY\", \"false\"):")
     lines.append("        raise RuntimeError(")
     lines.append("            'Refusing to listen on ' + _bind_host + ' with the public default API key. Set a secret '")
     lines.append("            'NOTEBOOK_API_KEY (for example `openssl rand -hex 32`), or set '")

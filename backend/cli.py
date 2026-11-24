@@ -614,7 +614,11 @@ def _run_local_deploy_smoke_test(tag, cwd):
     try:
 
         run_result = subprocess.run(
-            ["docker", "run", "-d", "--rm", "-p", "127.0.0.1::8000", tag],
+            [
+                "docker", "run", "-d", "--rm", "-p", "127.0.0.1::8000",
+                # A throwaway container published on loopback only: it may use the public default key.
+                "-e", "NOTEBOOK_API_ALLOW_DEFAULT_KEY=true", tag,
+            ],
             cwd=str(cwd),
             capture_output=True,
             text=True,

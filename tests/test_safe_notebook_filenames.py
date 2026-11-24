@@ -117,3 +117,17 @@ def test_unicode_normalization_colliding_upload_is_refused(client):
     assert _up(client, "café.ipynb").status_code == 200
     r = _up(client, "café.ipynb", overwrite="true")
     assert r.status_code == 409 and "normalization" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("name", ["a b.ipynb", "a　b.ipynb", "a b.ipynb", " lead.ipynb", "x .ipynb"])
+def test_lookalike_spaces_and_edge_whitespace_are_rejected(client, name):
+    r = _up(client, name)
+    assert r.status_code == 400 and "space" in r.json()["detail"] + "whitespace", (name, r.text)
+    assert client.get("/api/notebooks").json()["notebooks"] == []
+
+
+def test_compatibility_forms_collide_with_the_plain_name(client):
+    assert _up(client, "report.ipynb").status_code == 200
+    r = _up(client, "ｒeport.ipynb")  # full-width "r" folds to "r" under NFKC
+    assert r.status_code == 409 and "Unicode normalization" in r.json()["detail"]
+    assert _up(client, "plain name.ipynb").status_code == 200  # an ordinary ASCII space stays valid
