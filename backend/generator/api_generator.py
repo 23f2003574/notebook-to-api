@@ -143,7 +143,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # subsystem every endpoint depends on" exposure, just one level
     # removed from _enforce_rate_limit's own name instead of the call
     # site.
-    "_enforce_rate_limit", "_notebook_result_schema", "AUTH_FAILURE_LIMIT_PER_MINUTE", "AUTH_FAILURE_WINDOW_SECONDS", "_AUTH_FAILURE_MAX_CLIENTS", "_AUTH_FAILURES", "_AUTH_FAILURES_LOCK", "_auth_client_id", "_auth_logging", "_AUTH_METRICS", "_AUTH_FAILURES_BY_ENDPOINT", "_auth_endpoint", "_auth_log", "TRUSTED_PROXIES", "_parse_trusted_proxies", "_TRUSTED_NETWORKS", "_is_trusted_proxy", "_auth_throttle_check", "_auth_throttle_record_failure", "_Request", "RATE_LIMIT_PER_MINUTE", "RATE_LIMIT_WINDOW_SECONDS",
+    "_enforce_rate_limit", "_notebook_result_schema", "_INFERRED_RETURN_TYPES", "AUTH_FAILURE_LIMIT_PER_MINUTE", "AUTH_FAILURE_WINDOW_SECONDS", "_AUTH_FAILURE_MAX_CLIENTS", "_AUTH_FAILURES", "_AUTH_FAILURES_LOCK", "_auth_client_id", "_auth_logging", "_AUTH_METRICS", "_AUTH_FAILURES_BY_ENDPOINT", "_auth_endpoint", "_auth_log", "TRUSTED_PROXIES", "_parse_trusted_proxies", "_TRUSTED_NETWORKS", "_is_trusted_proxy", "_auth_throttle_check", "_auth_throttle_record_failure", "_Request", "RATE_LIMIT_PER_MINUTE", "RATE_LIMIT_WINDOW_SECONDS",
     "_RATE_LIMIT_WINDOWS", "_RATE_LIMIT_LOCK", "_TASKS_ADMISSION_LOCK",
     "verify_api_key", "custom_openapi",
     "root", "health_check", "readiness_check", "auth_status", "auth_info",
@@ -4806,6 +4806,21 @@ def generate_fastapi_code(
     lines.append("    return None")
     lines.append("")
     lines.append("")
+    _inferred_literals = {
+        "Dict[str, Any]": "dict", "List[Any]": "list", "str": "str", "int": "int", "float": "float",
+        "bool": "bool", "Optional[str]": "_typing.Optional[str]", "Optional[int]": "_typing.Optional[int]",
+        "Optional[float]": "_typing.Optional[float]", "Optional[bool]": "_typing.Optional[bool]",
+        "Optional[Dict[str, Any]]": "_typing.Optional[dict]", "Optional[List[Any]]": "_typing.Optional[list]",
+    }
+    _inferred_map = {
+        f["name"]: _inferred_literals[f["return_type"]]
+        for f in functions
+        if f.get("return_type") in _inferred_literals and f.get("returns_value") and not f.get("return_annotated", True)
+    }
+    lines.append("import typing as _typing")
+    lines.append("_INFERRED_RETURN_TYPES = {" + ", ".join(f"{n!r}: {t}" for n, t in _inferred_map.items()) + "}")
+    lines.append("")
+    lines.append("")
     lines.append("def _notebook_result_schema(func):")
     lines.append("    # (schema, definitions) for a notebook function's return annotation when it")
     lines.append("    # names a dataclass / pydantic model / TypedDict, else None (primitives,")
@@ -4817,6 +4832,8 @@ def generate_fastapi_code(
     lines.append("        annotation = _typing.get_type_hints(func).get('return')")
     lines.append("    except Exception:")
     lines.append("        return None")
+    lines.append("    if annotation is None:")
+    lines.append("        annotation = _INFERRED_RETURN_TYPES.get(getattr(func, '__name__', None))")
     lines.append("    def _structured(tp):")
     lines.append("        if isinstance(tp, type) and (_dc.is_dataclass(tp) or issubclass(tp, BaseModel) or _typing.is_typeddict(tp)):")
     lines.append("            return True")
@@ -7466,6 +7483,10 @@ def generate_fastapi_code(
         # documented -- the identical "prefer the author's own words"
         # precedent field_description already establishes below for each
         # parameter's own "Args:"-section description.
+        if return_type is None and func.get("returns_value"):
+            # Unannotated and not inferable from literal returns: say Any, never a false "None".
+            return_type = "Any"
+
         response_description = func.get("return_description") or (
             f"Returns {return_type}"
         )

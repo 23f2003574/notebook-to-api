@@ -19735,8 +19735,10 @@ def test_compiled_kubernetes_manifest_declares_resource_requests_and_a_memory_li
         "            requests:\n"
         "              cpu: 100m\n"
         "              memory: 256Mi\n"
+        "              ephemeral-storage: 128Mi\n"
         "            limits:\n"
         "              memory: 1Gi\n"
+        "              ephemeral-storage: 2Gi\n"
         "          livenessProbe:\n"
     )
 

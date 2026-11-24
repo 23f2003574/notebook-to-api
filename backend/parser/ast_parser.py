@@ -685,8 +685,11 @@ def extract_functions_from_code(code):
                 })
 
             return_type = None
+            returns_value = False
             if node.returns:
                 return_type = _unparse_annotation(node.returns, type_param_names)
+            else:
+                return_type, returns_value = infer_return_type(node)
 
             # ast.get_docstring(clean=True) strips the docstring's own
             # leading/trailing whitespace and dedents it (equivalent to
@@ -762,6 +765,8 @@ def extract_functions_from_code(code):
                 "name": node.name,
                 "args": args,
                 "return_type": return_type,
+                "returns_value": returns_value or bool(node.returns),
+                "return_annotated": bool(node.returns),
                 "is_async": isinstance(node, ast.AsyncFunctionDef),
                 "docstring": docstring,
                 "return_description": return_description,
@@ -775,6 +780,86 @@ def extract_functions_from_code(code):
             functions.append(function_info)
 
     return functions
+
+
+def _own_nodes(function_node):
+    """Every AST node of `function_node`'s own body, not descending into nested defs, lambdas or classes."""
+    stack = list(function_node.body)
+
+    while stack:
+        node = stack.pop()
+        yield node
+
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            continue
+
+        stack.extend(ast.iter_child_nodes(node))
+
+
+def _literal_return_type(expression):
+    """The type a returned literal expression establishes, or None when the syntax does not settle it."""
+    if isinstance(expression, ast.Constant):
+        value = expression.value
+
+        if isinstance(value, bool):
+            return "bool"
+
+        for kind, name in ((int, "int"), (float, "float"), (str, "str")):
+            if isinstance(value, kind):
+                return name
+
+        return None
+
+    if isinstance(expression, ast.JoinedStr):
+        return "str"
+
+    if isinstance(expression, (ast.Dict, ast.DictComp)):
+        return "Dict[str, Any]" if isinstance(expression, ast.DictComp) or all(
+            isinstance(k, ast.Constant) and isinstance(k.value, str) for k in expression.keys
+        ) else None
+
+    if isinstance(expression, (ast.List, ast.ListComp)):
+        return "List[Any]"
+
+    return None
+
+
+def infer_return_type(function_node):
+    """(return_type, returns_value) for a function without a return annotation.
+
+    `returns_value` says whether the function can return something other than None (any `return <expr>`
+    that is not a bare None, or a yield). `return_type` is set only when every value-returning branch is a
+    literal of one compatible type (int and float widen to float; a None branch makes it Optional);
+    anything else stays None, which the generator publishes as Any rather than as a None result."""
+    values, has_none, has_yield = [], False, False
+
+    for node in _own_nodes(function_node):
+        if isinstance(node, (ast.Yield, ast.YieldFrom)):
+            has_yield = True
+        elif isinstance(node, ast.Return) and node.value is not None:
+            if isinstance(node.value, ast.Constant) and node.value.value is None:
+                has_none = True
+            else:
+                values.append(node.value)
+
+    returns_value = has_yield or bool(values)
+
+    if has_yield or not values:
+        return None, returns_value
+
+    kinds = {_literal_return_type(v) for v in values}
+
+    if None in kinds:
+        return None, True
+
+    if kinds == {"int", "float"}:
+        kinds = {"float"}
+
+    if len(kinds) != 1:
+        return None, True
+
+    kind = kinds.pop()
+    return (f"Optional[{kind}]" if has_none else kind), True
 
 
 def extract_skipped_functions_from_code(code):

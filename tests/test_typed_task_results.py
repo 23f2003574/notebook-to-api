@@ -80,7 +80,7 @@ def test_openapi_publishes_each_background_result_schema(built):
     components = schema["components"]["schemas"]
     assert components["Segment"]["properties"]["end"] == {"$ref": "#/components/schemas/Point"}
     assert components["Box"]["properties"]["corner"]["anyOf"][0] == {"$ref": "#/components/schemas/Point"}
-    assert _ext(schema, "/train_total") == {"type": "integer"} and _ext(schema, "/train_untyped") is None  # a primitive is typed, an unannotated result stays open
+    assert _ext(schema, "/train_total") == {"type": "integer"} and _ext(schema, "/train_untyped") == {"additionalProperties": True, "type": "object"}  # a primitive is typed, an unannotated literal result is inferred
 
 
 def test_the_submission_envelope_is_unchanged(built):
