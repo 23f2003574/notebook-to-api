@@ -1306,13 +1306,17 @@ def whoami(request: Request):
         "name": name or "local",
         "scope": scope,
         "authenticated": authenticated,
-        "can": {action: scope_allows(scope, method, path) for action, (method, path) in _WHOAMI_ACTIONS.items()},
+        "can": {
+            action: scope_allows(scope, method, *path.partition("?")[::2])
+            for action, (method, path) in _WHOAMI_ACTIONS.items()
+        },
     }
 
 
 _WHOAMI_ACTIONS = {
     "read": ("GET", "/api/notebooks"),
     "upload": ("POST", "/api/upload"),
+    "overwrite": ("POST", "/api/upload?overwrite=true"),
     "compile": ("POST", "/api/compile"),
     "deploy": ("POST", "/api/deploy"),
     "delete": ("DELETE", "/api/notebooks/x"),

@@ -88,6 +88,78 @@ describe('NotebookUpload', () => {
   })
 })
 
+describe('NotebookUpload replacing an existing notebook', () => {
+  const upload = (container, file) =>
+    fireEvent.change(container.querySelector('input[type=file]'), { target: { files: [file] } })
+  const json = (status, body, headers = {}) => ({
+    ok: status < 400, status, headers: { get: (k) => headers[k] ?? null },
+    json: async () => body, text: async () => JSON.stringify(body), clone() { return this },
+  })
+  const conflictFetch = (replaceResponse) => vi.fn(async (url) => {
+    const u = String(url)
+    if (u.includes('overwrite=true')) return replaceResponse
+    if (u.endsWith('/api/upload')) return json(409, { detail: "A notebook named 'nb.ipynb' already exists" })
+    if (u.endsWith('/versions')) return json(200, { versions: [{ version_id: 'v-1' }] })
+    return json(200, {}, { 'X-Content-SHA256': 'abc123' })
+  })
+
+  it('asks first, and cancelling changes nothing', async () => {
+    const fetchMock = conflictFetch(json(200, { filename: 'nb.ipynb' }))
+    vi.stubGlobal('fetch', fetchMock)
+    const onSuccess = vi.fn()
+    const { container } = render(<NotebookUpload onSuccess={onSuccess} />)
+    upload(container, new File(['{}'], 'nb.ipynb'))
+    expect(await screen.findByText('Replace existing notebook?')).toBeInTheDocument()
+    expect(screen.getByText('nb.ipynb')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByText('Replace existing notebook?')).not.toBeInTheDocument()
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes('overwrite=true'))).toBe(false)
+    expect(onSuccess).not.toHaveBeenCalled()
+  })
+
+  it('confirming replaces with overwrite and the current hash, and names the saved version', async () => {
+    const fetchMock = conflictFetch(json(200, { filename: 'nb.ipynb', overwritten: true }))
+    vi.stubGlobal('fetch', fetchMock)
+    const onSuccess = vi.fn()
+    const { container } = render(<NotebookUpload onSuccess={onSuccess} />)
+    upload(container, new File(['{}'], 'nb.ipynb'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Replace' }))
+    await waitFor(() => expect(onSuccess).toHaveBeenCalled())
+    const call = fetchMock.mock.calls.find(([u]) => String(u).includes('overwrite=true'))
+    expect(String(call[0])).toMatch(/expected_sha256=[0-9a-f]{64}/)
+    expect(call[1].method).toBe('POST')
+    expect(await screen.findByTestId('replaced-notice')).toHaveTextContent('version v-1')
+  })
+
+  it('reports a notebook that changed meanwhile instead of replacing it', async () => {
+    let reads = 0
+    const fetchMock = vi.fn(async (url) => {
+      const u = String(url)
+      if (u.endsWith('/api/upload')) return json(409, { detail: 'exists' })
+      if (u.includes('overwrite=true')) return json(200, {})
+      reads += 1
+      return json(200, {}, { 'X-Content-SHA256': reads === 1 ? 'abc123' : 'def456' })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const onSuccess = vi.fn()
+    const { container } = render(<NotebookUpload onSuccess={onSuccess} />)
+    upload(container, new File(['{}'], 'nb.ipynb'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Replace' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('changed after you opened this dialog')
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes('overwrite=true'))).toBe(false)
+    expect(onSuccess).not.toHaveBeenCalled()
+  })
+
+  it('disables replacing for a key without admin scope', async () => {
+    vi.stubGlobal('fetch', conflictFetch(json(200, {})))
+    const caller = { name: 'ci', scope: 'compile', can: { overwrite: false } }
+    const { container } = render(<NotebookUpload onSuccess={vi.fn()} caller={caller} />)
+    upload(container, new File(['{}'], 'nb.ipynb'))
+    expect(await screen.findByRole('button', { name: 'Replace' })).toBeDisabled()
+    expect(screen.getByText(/compile scope cannot replace/)).toBeInTheDocument()
+  })
+})
+
 describe('NotebookUpload archives', () => {
   it('imports a zip through the import endpoint and reports kept and skipped data files', async () => {
     const reply = { results: [{

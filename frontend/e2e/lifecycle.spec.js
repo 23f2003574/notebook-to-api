@@ -142,3 +142,33 @@ test('the dashboard shows the key scope and disables what a read-only key cannot
   await expect(button(page, 'Rename', 'scope_nb.ipynb')).toBeDisabled()
   await expect(button(page, 'Versions', 'scope_nb.ipynb')).toBeEnabled()
 })
+
+test('uploading an existing name asks before replacing it and the old content stays recoverable', async ({ page }) => {
+  const original = 'def one() -> int:\n    return 1\n'
+  const replacement = 'def two() -> int:\n    return 2\n'
+  const read = () => readFileSync(join(process.env.E2E_WORK_DIR, 'uploads', 'life_replace.ipynb'), 'utf8')
+  await uploadNotebook(page, 'life_replace.ipynb', original)
+  const before = read()
+
+  const choose = (source) => page.setInputFiles('input[type=file]', {
+    name: 'life_replace.ipynb', mimeType: 'application/json', buffer: Buffer.from(notebook(source)),
+  })
+  await choose(replacement)
+  await expect(page.getByRole('alertdialog')).toContainText('life_replace.ipynb')
+  await page.getByRole('button', { name: 'Cancel' }).click()
+  expect(read()).toBe(before) // cancelling changed nothing
+
+  await choose(replacement)
+  await page.getByRole('button', { name: 'Replace', exact: true }).click()
+  await expect(page.getByTestId('replaced-notice')).toContainText('The previous content was saved as version')
+  expect(read()).not.toBe(before)
+
+  await page.goto('/')
+  await button(page, 'Versions', 'life_replace.ipynb').click()
+  const versions = page.getByTestId('version-life_replace.ipynb')
+  await expect(versions).toHaveCount(1)
+  await versions.first().getByRole('button', { name: /^Restore the version of life_replace.ipynb/ }).click()
+  await page.getByRole('button', { name: 'Confirm restore' }).click()
+  await expect(page.getByTestId('note-life_replace.ipynb')).toContainText('Restored the version saved')
+  expect(read()).toBe(before)
+})

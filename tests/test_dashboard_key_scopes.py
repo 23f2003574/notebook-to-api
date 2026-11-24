@@ -164,3 +164,10 @@ def test_denied_overwrite_is_audited():
     assert c.post("/api/upload?overwrite=true", files={"file": ("a.ipynb", NB.encode())}).status_code == 403
     records = get_audit_service().query(AuditQuery(action="dashboard.authorization_denied", limit=10))
     assert records and records[0].actor == "ci"
+
+
+def test_whoami_reports_whether_the_key_may_overwrite():
+    assert _as(CP).get("/api/whoami").json()["can"]["upload"] is True
+    assert _as(CP).get("/api/whoami").json()["can"]["overwrite"] is False
+    assert _as(AD).get("/api/whoami").json()["can"]["overwrite"] is True
+    assert _as(RD).get("/api/whoami").json()["can"]["overwrite"] is False

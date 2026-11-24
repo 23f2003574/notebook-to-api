@@ -332,7 +332,7 @@ export default function Dashboard() {
 
             <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 hover:border-slate-600 transition">
               <h2 className="text-xl font-semibold text-white mb-4">📤 Upload Notebook</h2>
-              <NotebookUpload onSuccess={handleUploadSuccess} />
+              <NotebookUpload onSuccess={handleUploadSuccess} caller={caller} />
               {uploadedNotebook && (
                 <p className="mt-4 text-sm text-emerald-400">
                   ✅ Uploaded: <code className="bg-slate-900 px-2 py-1 rounded ml-2">{uploadedNotebook}</code>
