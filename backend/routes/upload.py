@@ -12482,6 +12482,162 @@ def export_notebook_versions(
     )
 
 
+def _stage_archive_versions(archive, entry_names, notebook_bytes=0):
+    """Validate every version entry and write it into a private staging directory beside UPLOAD_DIR.
+
+    Nothing live is touched: an oversized, corrupt, empty or unsafe entry raises before any notebook,
+    version or metadata is written. Returns (staging_dir, {version_id: staged_path})."""
+    names = sorted(entry_names)
+
+    if MAX_TOTAL_STORAGE_BYTES:
+        incoming = notebook_bytes + sum(archive.getinfo(n).file_size for n in names)
+
+        if _current_total_storage_bytes() + incoming > MAX_TOTAL_STORAGE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    "Restoring this archive's version history would exceed the maximum total storage of "
+                    f"{MAX_TOTAL_STORAGE_BYTES} bytes (NOTEBOOK_API_MAX_TOTAL_STORAGE_BYTES) -- delete "
+                    "or prune some existing notebooks/versions first."
+                ),
+            )
+
+    Path(UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
+    staging = Path(UPLOAD_DIR) / f".import-{uuid.uuid4().hex}.tmp"
+    staging.mkdir()
+    staged = {}
+
+    try:
+        for entry_name in names:
+            version_id = os.path.basename(entry_name)
+
+            if not version_id:
+                continue
+
+            target = _resolve_path_within(str(staging), version_id, "notebook version")
+
+            try:
+                data = _read_archive_member(archive, entry_name)
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(
+                    status_code=400, detail=f"Archive entry '{entry_name}' is corrupt and cannot be read"
+                ) from None
+
+            if not data:
+                raise HTTPException(
+                    status_code=400, detail=f"Archive entry '{entry_name}' is empty; refusing to import it"
+                )
+
+            target.write_bytes(data)
+            staged[version_id] = target
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+    return staging, staged
+
+
+async def _import_archive_all_or_nothing(
+    archive, version_entries, upload_file, filename, overwrite, tags, description, source_url
+):
+    """Apply a notebook version archive completely or not at all.
+
+    Every entry is validated and staged first. Then the live notebook, its versions and its metadata
+    are written, and any failure along the way puts the previous notebook, version files and metadata
+    back byte-for-byte."""
+    staging, staged = _stage_archive_versions(
+        archive, version_entries, len(upload_file.file.getvalue())
+    )
+    file_path = resolve_upload_path(filename)
+    versions_dir = _notebook_versions_dir(file_path.name)
+
+    try:
+        previous_bytes = file_path.read_bytes() if file_path.is_file() else None
+        previous_versions = (
+            {p.name: p.read_bytes() for p in versions_dir.iterdir() if p.is_file()} if versions_dir.is_dir() else {}
+        )
+        previous_meta = None
+
+        if previous_bytes is not None:
+            previous_meta = (
+                _read_notebook_tags(file_path.name),
+                _read_notebook_description(file_path.name),
+                _read_notebook_source_url(file_path.name),
+            )
+
+        installed = []
+
+        try:
+            result = await _save_uploaded_notebook(upload_file, overwrite, dry_run=False)
+
+            with _version_lock_for(file_path.name):
+                versions_dir.mkdir(parents=True, exist_ok=True)
+
+                for version_id, source in staged.items():
+                    destination = _resolve_path_within(str(versions_dir), version_id, "notebook version")
+                    os.replace(source, destination)
+                    installed.append(version_id)
+
+                    try:
+                        saved_at = datetime.strptime(
+                            version_id.split("_", 1)[0], "%Y%m%dT%H%M%S%f"
+                        ).replace(tzinfo=timezone.utc).timestamp()
+                        os.utime(destination, (saved_at, saved_at))
+                    except ValueError:
+                        pass
+
+                _prune_notebook_versions(versions_dir)
+
+            if tags is not None:
+                _write_notebook_tags(file_path.name, tags)
+
+            if description is not None:
+                _write_notebook_description(file_path.name, description)
+
+            if source_url is not None:
+                _write_notebook_source_url(file_path.name, source_url)
+        except BaseException:
+            _rollback_archive_import(file_path, versions_dir, previous_bytes, previous_versions, previous_meta)
+            raise
+
+        return sorted(installed), result
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+def _rollback_archive_import(file_path, versions_dir, previous_bytes, previous_versions, previous_meta):
+    """Best-effort restore of the state captured before an archive import began."""
+    try:
+        if previous_bytes is None:
+            file_path.unlink(missing_ok=True)
+        else:
+            file_path.write_bytes(previous_bytes)
+
+        if versions_dir.is_dir():
+            for entry in list(versions_dir.iterdir()):
+                if entry.is_file() and entry.name not in previous_versions:
+                    entry.unlink(missing_ok=True)
+
+        for name, data in previous_versions.items():
+            if not (versions_dir / name).is_file():
+                versions_dir.mkdir(parents=True, exist_ok=True)
+                (versions_dir / name).write_bytes(data)
+
+        if previous_bytes is None:
+            _write_notebook_tags(file_path.name, [])
+            _write_notebook_description(file_path.name, "")
+        elif previous_meta is not None:
+            _write_notebook_tags(file_path.name, previous_meta[0] or [])
+            _write_notebook_description(file_path.name, previous_meta[1] or "")
+
+            if previous_meta[2]:
+                _write_notebook_source_url(file_path.name, previous_meta[2])
+    except Exception:  # noqa: BLE001 - best effort; the caller sees the original error
+        logging.getLogger("uvicorn.error").warning("could not fully roll back a failed archive import")
+
+
 @router.post("/notebooks/{filename}/versions/import")
 async def import_notebook_versions(
     filename: str, file: UploadFile = File(...), overwrite: bool = False,
@@ -12653,12 +12809,9 @@ async def import_notebook_versions(
         )
 
     current_content_bytes = _read_archive_member(archive, current_content_entries[0])
-
     upload_file = UploadFile(
         file=io.BytesIO(current_content_bytes), filename=filename
     )
-
-    result = await _save_uploaded_notebook(upload_file, overwrite, dry_run=dry_run)
 
     archived_tags, archived_description, archived_source_url = (
         _read_notebook_metadata_from_archive(
@@ -12667,31 +12820,17 @@ async def import_notebook_versions(
     )
 
     if dry_run:
-
+        result = await _save_uploaded_notebook(upload_file, overwrite, dry_run=True)
         imported_version_ids = sorted({
             os.path.basename(name)
             for name in version_entries
             if os.path.basename(name)
         })
-
     else:
-
-        file_path = resolve_upload_path(filename)
-        versions_dir = _notebook_versions_dir(file_path.name)
-
-        with _version_lock_for(file_path.name):
-            imported_version_ids = _restore_version_snapshots_from_archive(
-                archive, version_entries, versions_dir
-            )
-
-        if archived_tags is not None:
-            _write_notebook_tags(file_path.name, archived_tags)
-
-        if archived_description is not None:
-            _write_notebook_description(file_path.name, archived_description)
-
-        if archived_source_url is not None:
-            _write_notebook_source_url(file_path.name, archived_source_url)
+        imported_version_ids, result = await _import_archive_all_or_nothing(
+            archive, version_entries, upload_file, filename, overwrite,
+            archived_tags, archived_description, archived_source_url,
+        )
 
     return {
         "status": "success",

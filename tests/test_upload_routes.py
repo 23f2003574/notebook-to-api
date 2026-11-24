@@ -16852,11 +16852,9 @@ def test_import_notebook_versions_rejects_when_the_version_history_would_exceed_
     assert resp.status_code == 413
     assert "maximum total storage" in resp.json()["detail"].lower()
 
-    # The current-content half was still written (it fit within the cap
-    # on its own) -- only the version-history restore was rejected,
-    # leaving no version snapshots behind.
-    assert client.get(f"/api/notebooks/{new_filename}").status_code == 200
-    assert client.get(f"/api/notebooks/{new_filename}/versions").json()["versions"] == []
+    # The import is all-or-nothing: the rejected archive leaves neither the
+    # current content nor any version snapshots behind.
+    assert client.get(f"/api/notebooks/{new_filename}").status_code == 404
 
 
 def test_import_notebook_versions_batch_reports_a_storage_cap_error_per_notebook(
