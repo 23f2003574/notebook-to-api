@@ -1317,6 +1317,7 @@ _WHOAMI_ACTIONS = {
     "read": ("GET", "/api/notebooks"),
     "upload": ("POST", "/api/upload"),
     "overwrite": ("POST", "/api/upload?overwrite=true"),
+    "clear_history": ("DELETE", "/api/compile/history"),
     "tags": ("PUT", "/api/notebooks/x/tags"),
     "description": ("PUT", "/api/notebooks/x/description"),
     "compile": ("POST", "/api/compile"),

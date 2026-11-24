@@ -177,3 +177,12 @@ def test_whoami_reports_who_may_edit_tags_and_descriptions():
     assert _as(AD).get("/api/whoami").json()["can"]["tags"] is True
     assert _as(CP).get("/api/whoami").json()["can"]["description"] is False
     assert _as(RD).get("/api/whoami").json()["can"]["tags"] is False
+
+
+def test_whoami_reports_who_may_clear_history_and_read_it():
+    assert _as(AD).get("/api/whoami").json()["can"]["clear_history"] is True
+    for key in (RD, CP):
+        assert _as(key).get("/api/whoami").json()["can"]["clear_history"] is False
+    assert _as(RD).get("/api/compile/history").status_code == 200
+    assert _as(RD).delete("/api/compile/history").status_code == 403
+    assert _as(AD).delete("/api/deploy/history").status_code == 200

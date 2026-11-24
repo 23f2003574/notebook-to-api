@@ -192,3 +192,16 @@ test('tags and a description can be edited, persist across a reload and filter t
   await expect(page.getByText('life_untagged.ipynb', { exact: true })).toHaveCount(0)
   await expect(page.getByText('life_tags.ipynb', { exact: true })).toBeVisible()
 })
+
+test('compile history lists a compile and an admin can clear it after confirming', async ({ page, request }) => {
+  await importBundle(request, 'life_hist.ipynb', 'DATA')
+  const compiled = await request.post('/api/compile', { data: { notebook_path: 'life_hist.ipynb' } })
+  expect(compiled.ok()).toBeTruthy()
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Show compile and deploy history' }).click()
+  await expect(page.getByTestId('history-compile')).toContainText('life_hist.ipynb')
+  await page.getByRole('button', { name: 'Clear compile history' }).click()
+  await expect(page.getByTestId('history-compile')).toBeVisible() // nothing cleared before confirming
+  await page.getByRole('button', { name: 'Yes, clear compile history' }).click()
+  await expect(page.getByText(/No compile history yet/)).toBeVisible()
+})
