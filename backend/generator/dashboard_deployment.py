@@ -51,6 +51,9 @@ ENV NOTEBOOK2API_ENVIRONMENT=production \\
     NOTEBOOK_API_GENERATED_DIR={GENERATED_DIR} \\
     NOTEBOOK_API_GENERATED_APPS_DIR={GENERATED_APPS_DIR} \\
     NOTEBOOK_API_DASHBOARD_HOST=0.0.0.0 \\
+    NOTEBOOK_API_MAX_NOTEBOOKS=1000 \\
+    NOTEBOOK_API_MAX_TOTAL_STORAGE_BYTES=5368709120 \\
+    NOTEBOOK_API_MIN_FREE_DISK_BYTES=536870912 \\
     XDG_CACHE_HOME=/tmp/cache MPLCONFIGDIR=/tmp/matplotlib
 # Notebooks, versions, generated apps and the audit database all live here: mount a volume (the
 # compose and Kubernetes files do). In production the dashboard refuses to start when the audit
@@ -102,6 +105,9 @@ COMPOSE = f"""services:
       NOTEBOOK_API_STORAGE_VOLUME_PERSISTENT: "1"
       NOTEBOOK_API_SOFT_DELETE: ${{NOTEBOOK_API_SOFT_DELETE:-true}}
       NOTEBOOK_API_TRASH_RETENTION_DAYS: ${{NOTEBOOK_API_TRASH_RETENTION_DAYS:-30}}
+      NOTEBOOK_API_MAX_NOTEBOOKS: ${{NOTEBOOK_API_MAX_NOTEBOOKS:-1000}}
+      NOTEBOOK_API_MAX_TOTAL_STORAGE_BYTES: ${{NOTEBOOK_API_MAX_TOTAL_STORAGE_BYTES:-5368709120}}
+      NOTEBOOK_API_MIN_FREE_DISK_BYTES: ${{NOTEBOOK_API_MIN_FREE_DISK_BYTES:-536870912}}
     volumes:
       - dashboard-data:/data
     read_only: true          # only the /data volume and /tmp are writable
@@ -170,6 +176,12 @@ spec:
               value: {GENERATED_APPS_DIR}
             - name: NOTEBOOK_API_STORAGE_VOLUME_PERSISTENT
               value: "1"
+            - name: NOTEBOOK_API_MAX_NOTEBOOKS
+              value: "1000"
+            - name: NOTEBOOK_API_MAX_TOTAL_STORAGE_BYTES
+              value: "5368709120"
+            - name: NOTEBOOK_API_MIN_FREE_DISK_BYTES
+              value: "536870912"
           # The probes run the image's own health check, which sends the dashboard key from the
           # container's environment (an httpGet probe cannot carry a Secret value).
           startupProbe:
@@ -213,6 +225,13 @@ NOTEBOOK_API_DASHBOARD_KEY=change-me
 # can bring it back until it expires; the UI always uses the trash.
 # NOTEBOOK_API_SOFT_DELETE=true  (the default: deletes go to the trash; false deletes for good)
 # NOTEBOOK_API_TRASH_RETENTION_DAYS=30
+
+# Container deployments bound storage by default (0 means unlimited): at most this many notebooks,
+# this many bytes of notebooks plus versions, and uploads are refused with HTTP 507 once the volume
+# has less than the reserve free.
+# NOTEBOOK_API_MAX_NOTEBOOKS=1000
+# NOTEBOOK_API_MAX_TOTAL_STORAGE_BYTES=5368709120
+# NOTEBOOK_API_MIN_FREE_DISK_BYTES=536870912
 """
 
 README = """# Dashboard container

@@ -781,6 +781,42 @@ MAX_TOTAL_STORAGE_BYTES = int(
     os.getenv("NOTEBOOK_API_MAX_TOTAL_STORAGE_BYTES", "0")
 )
 
+# Free-space reserve: new notebooks are refused with HTTP 507 once the filesystem holding UPLOAD_DIR has
+# less than this many bytes free (0, the default for bare local runs, turns the guard off). Container
+# deployments set it so a full volume is reported as an error instead of a half-written upload.
+MIN_FREE_DISK_BYTES = int(os.getenv("NOTEBOOK_API_MIN_FREE_DISK_BYTES", "0"))
+
+
+def _free_disk_bytes():
+    """Free bytes on the filesystem holding UPLOAD_DIR (its nearest existing parent), or None if unknown."""
+    path = Path(UPLOAD_DIR)
+
+    while not path.exists() and path != path.parent:
+        path = path.parent
+
+    try:
+        return shutil.disk_usage(path).free
+    except OSError:
+        return None
+
+
+def _enforce_min_free_disk():
+    """HTTP 507 when the free-space reserve is already used up. Only the reserve is compared, not the
+    upload's size, so unrelated fluctuations never reject an upload while there is comfortable room."""
+    if not MIN_FREE_DISK_BYTES:
+        return
+
+    free = _free_disk_bytes()
+
+    if free is not None and free < MIN_FREE_DISK_BYTES:
+        raise HTTPException(
+            status_code=507,
+            detail=(
+                f"Only {free} bytes are free on the storage volume, below the required reserve of "
+                f"{MIN_FREE_DISK_BYTES} bytes (NOTEBOOK_API_MIN_FREE_DISK_BYTES) -- free some space first."
+            ),
+        )
+
 
 def _current_notebook_count():
     """How many ".ipynb" files currently sit directly in UPLOAD_DIR --
@@ -1803,6 +1839,8 @@ async def _save_uploaded_notebook(
                     "one."
                 )
             )
+
+        _enforce_min_free_disk()
 
         upload_root = Path(UPLOAD_DIR).resolve()
         # A hidden, uniquely-suffixed name in the same directory as the final
@@ -8981,6 +9019,7 @@ def notebook_storage_usage(
         "notebooks_remaining": notebooks_remaining,
         "max_total_storage_bytes": MAX_TOTAL_STORAGE_BYTES,
         "storage_bytes_remaining": storage_bytes_remaining,
+
     }
 
 
@@ -12495,6 +12534,7 @@ def _stage_archive_versions(archive, entry_names, notebook_bytes=0):
     Nothing live is touched: an oversized, corrupt, empty or unsafe entry raises before any notebook,
     version or metadata is written. Returns (staging_dir, {version_id: staged_path})."""
     names = sorted(entry_names)
+    _enforce_min_free_disk()
 
     if MAX_TOTAL_STORAGE_BYTES:
         incoming = notebook_bytes + sum(archive.getinfo(n).file_size for n in names)
@@ -21545,6 +21585,7 @@ def get_config():
         "max_batch_upload_files": MAX_BATCH_UPLOAD_FILES,
         "max_notebooks": MAX_NOTEBOOKS,
         "max_total_storage_bytes": MAX_TOTAL_STORAGE_BYTES,
+        "min_free_disk_bytes": MIN_FREE_DISK_BYTES,
         "max_notebook_versions": MAX_NOTEBOOK_VERSIONS,
         "max_tag_length": _MAX_TAG_LENGTH,
         "max_tags_per_notebook": _MAX_TAGS_PER_NOTEBOOK,

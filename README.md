@@ -97,3 +97,7 @@ Exit codes:
 ## Next Steps
 - One-command deployment already exists: `.venv/bin/python -m backend.cli deploy <notebook.ipynb>` compiles and builds the Docker image (see `deploy --help`).
 - Add more advanced type handling.
+
+## Dashboard storage limits
+
+The generated dashboard container bounds its own storage by default: `NOTEBOOK_API_MAX_NOTEBOOKS=1000`, `NOTEBOOK_API_MAX_TOTAL_STORAGE_BYTES=5368709120` (notebooks plus their versions) and `NOTEBOOK_API_MIN_FREE_DISK_BYTES=536870912`. Uploads and archive imports are refused with HTTP 507 once the volume has less than that reserve free. Override any of them in the compose or Kubernetes environment; `0` means unlimited, which is also the default for bare local runs. `GET /api/config` and `GET /api/notebooks/storage` report the limits and current usage.
