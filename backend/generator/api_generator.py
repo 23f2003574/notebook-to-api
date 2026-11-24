@@ -143,7 +143,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # subsystem every endpoint depends on" exposure, just one level
     # removed from _enforce_rate_limit's own name instead of the call
     # site.
-    "_enforce_rate_limit", "_notebook_result_schema", "_INFERRED_RETURN_TYPES", "_typing", "AUTH_FAILURE_LIMIT_PER_MINUTE", "AUTH_FAILURE_WINDOW_SECONDS", "_AUTH_FAILURE_MAX_CLIENTS", "_AUTH_FAILURES", "_AUTH_FAILURES_LOCK", "_auth_client_id", "_auth_logging", "_AUTH_METRICS", "_AUTH_FAILURES_BY_ENDPOINT", "_auth_endpoint", "_auth_log", "TRUSTED_PROXIES", "_parse_trusted_proxies", "_TRUSTED_NETWORKS", "_is_trusted_proxy", "_auth_throttle_check", "_auth_throttle_record_failure", "_Request", "RATE_LIMIT_PER_MINUTE", "RATE_LIMIT_WINDOW_SECONDS",
+    "_enforce_rate_limit", "_notebook_result_schema", "_INFERRED_RETURN_TYPES", "_REQUEST_FIELDS", "_report_ignored_request_fields", "_typing", "AUTH_FAILURE_LIMIT_PER_MINUTE", "AUTH_FAILURE_WINDOW_SECONDS", "_AUTH_FAILURE_MAX_CLIENTS", "_AUTH_FAILURES", "_AUTH_FAILURES_LOCK", "_auth_client_id", "_auth_logging", "_AUTH_METRICS", "_AUTH_FAILURES_BY_ENDPOINT", "_auth_endpoint", "_auth_log", "TRUSTED_PROXIES", "_parse_trusted_proxies", "_TRUSTED_NETWORKS", "_is_trusted_proxy", "_auth_throttle_check", "_auth_throttle_record_failure", "_Request", "RATE_LIMIT_PER_MINUTE", "RATE_LIMIT_WINDOW_SECONDS",
     "_RATE_LIMIT_WINDOWS", "_RATE_LIMIT_LOCK", "_TASKS_ADMISSION_LOCK",
     "verify_api_key", "custom_openapi",
     "root", "health_check", "readiness_check", "auth_status", "auth_info",
@@ -2577,7 +2577,7 @@ def generate_fastapi_code(
         "'Deprecation', 'X-Deprecation-Reason', 'Sunset', "
         "'X-Notebook-API-Timeout', "
         "'X-Endpoint-RateLimit-Limit', 'X-Endpoint-RateLimit-Remaining', "
-        "'X-Endpoint-RateLimit-Reset', 'X-Cache', 'Age'"
+        "'X-Endpoint-RateLimit-Reset', 'X-Cache', 'Age', 'X-Notebook-API-Ignored-Fields'"
         "]"
         ")"
     )
@@ -2873,6 +2873,32 @@ def generate_fastapi_code(
     lines.append("        REJECT_DEPRECATED_ENDPOINTS")
     lines.append("        or (ENFORCE_DEPRECATION_SUNSET and _sunset_has_passed(path))")
     lines.append("    )")
+    lines.append("")
+    # Unknown JSON fields are dropped silently unless NOTEBOOK_API_STRICT_FIELDS is on, which hides typos
+    # such as {"agee": 3}. Name them in a response header so a caller can notice without a behaviour change.
+    lines.append(
+        "_REQUEST_FIELDS = {"
+        + ", ".join(
+            f"{'/' + f['name']!r}: {sorted({a['name'] for a in f.get('args', [])})!r}" for f in functions
+        )
+        + "}"
+    )
+    lines.append("")
+    lines.append("@app.middleware('http')")
+    lines.append("async def _report_ignored_request_fields(request, call_next):")
+    lines.append("    known = _REQUEST_FIELDS.get(request.url.path)")
+    lines.append("    ignored = []")
+    lines.append("    if known is not None and request.method == 'POST' and not STRICT_REQUEST_FIELDS:")
+    lines.append("        try:")
+    lines.append("            body = json.loads(await request.body() or b'null')")
+    lines.append("        except Exception:")
+    lines.append("            body = None")
+    lines.append("        if isinstance(body, dict):")
+    lines.append("            ignored = sorted(str(key) for key in body if key not in known)")
+    lines.append("    response = await call_next(request)")
+    lines.append("    if ignored and response.status_code < 300:")
+    lines.append("        response.headers['X-Notebook-API-Ignored-Fields'] = ', '.join(ignored)[:500]")
+    lines.append("    return response")
     lines.append("")
     lines.append("@app.middleware('http')")
     lines.append("async def _add_deprecation_headers(request, call_next):")

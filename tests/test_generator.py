@@ -704,7 +704,7 @@ def test_generated_app_cors_exposes_the_rate_limit_headers_to_cross_origin_js():
         "'Deprecation', 'X-Deprecation-Reason', 'Sunset', "
         "'X-Notebook-API-Timeout', "
         "'X-Endpoint-RateLimit-Limit', 'X-Endpoint-RateLimit-Remaining', "
-        "'X-Endpoint-RateLimit-Reset', 'X-Cache', 'Age']"
+        "'X-Endpoint-RateLimit-Reset', 'X-Cache', 'Age', 'X-Notebook-API-Ignored-Fields']"
         in code
     )
 
