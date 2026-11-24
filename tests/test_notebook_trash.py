@@ -52,11 +52,34 @@ def _snapshot(root):
     return {str(p.relative_to(root)): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file() and ".trash" not in p.parts}
 
 
-def test_hard_delete_is_still_the_default(env):
+def test_delete_moves_to_trash_by_default_and_permanent_is_explicit(env):
     client, tmp = env
     _populate(client)
     body = client.delete("/api/notebooks/a.ipynb").json()
-    assert "soft" not in body and not (tmp / "up" / ".trash").exists()
+    assert body["soft"] is True and (tmp / "up" / ".trash").exists()
+    tid = client.get("/api/notebooks/trash").json()["items"][0]["trash_id"]
+    assert client.post(f"/api/notebooks/trash/{tid}/restore").status_code == 200
+    assert len(client.get("/api/notebooks/a.ipynb/versions").json()["versions"]) == 1
+    gone = client.delete("/api/notebooks/a.ipynb?permanent=true").json()
+    assert "soft" not in gone
+    assert client.get("/api/notebooks/trash").json()["items"] == []
+    assert not any(k.startswith("a.ipynb") or ".a.ipynb" in k for k in _snapshot(tmp / "up"))
+
+
+def test_batch_delete_and_duplicate_resolution_follow_the_same_rules(env):
+    client, tmp = env
+    for name in ("a.ipynb", "b.ipynb", "c.ipynb", "d.ipynb"):
+        client.post("/api/upload", files={"file": (name, NB.encode())})
+    r = client.post("/api/notebooks/delete-batch", json={"filenames": ["a.ipynb"]})
+    assert r.status_code == 200 and len(client.get("/api/notebooks/trash").json()["items"]) == 1
+    r = client.post("/api/notebooks/delete-batch", json={"filenames": ["b.ipynb"], "permanent": True})
+    assert r.status_code == 200 and len(client.get("/api/notebooks/trash").json()["items"]) == 1
+    dup = client.get("/api/notebooks/duplicates").json()
+    assert dup["duplicate_groups"] if "duplicate_groups" in dup else dup
+    keep = {g["sha256"]: g["filenames"][0] for g in dup.get("duplicate_groups", dup.get("groups", []))}
+    r = client.post("/api/notebooks/duplicates/resolve", json={"keep": keep})
+    assert r.status_code == 200
+    assert len(client.get("/api/notebooks/trash").json()["items"]) == 2  # one duplicate trashed, restorable
 
 
 def test_soft_delete_moves_everything_and_restore_is_byte_identical(env):
@@ -78,11 +101,14 @@ def test_soft_delete_moves_everything_and_restore_is_byte_identical(env):
     assert len(client.get("/api/notebooks/a.ipynb/versions").json()["versions"]) == 1
 
 
-def test_env_default_makes_delete_soft_and_hard_can_be_forced(env, monkeypatch):
+def test_env_opt_out_makes_delete_permanent_and_soft_can_be_forced(env, monkeypatch):
     client, tmp = env
-    monkeypatch.setenv("NOTEBOOK_API_SOFT_DELETE", "true")
+    monkeypatch.setenv("NOTEBOOK_API_SOFT_DELETE", "false")
     client.post("/api/upload", files={"file": ("a.ipynb", NB.encode())})
-    assert client.delete("/api/notebooks/a.ipynb").json()["soft"] is True
+    assert "soft" not in client.delete("/api/notebooks/a.ipynb").json()
+    client.post("/api/upload", files={"file": ("a.ipynb", NB.encode())})
+    assert client.delete("/api/notebooks/a.ipynb?soft=true").json()["soft"] is True
+    monkeypatch.setenv("NOTEBOOK_API_SOFT_DELETE", "true")
     client.post("/api/upload", files={"file": ("b.ipynb", NB.encode())})
     assert "soft" not in client.delete("/api/notebooks/b.ipynb?soft=false").json()
 
@@ -225,14 +251,14 @@ def test_batch_delete_can_soft_delete_and_each_entry_restores(env):
     assert any(x["action"] == "notebook.delete" and x["metadata"].get("trash_id") for x in records)
 
 
-def test_batch_delete_is_hard_by_default_dry_run_moves_nothing_and_validates(env):
+def test_batch_delete_is_soft_by_default_dry_run_moves_nothing_and_validates(env):
     client, tmp = env
     client.post("/api/upload", files={"file": ("a.ipynb", NB.encode())})
     dry = client.post("/api/notebooks/delete-batch", json={"filenames": ["a.ipynb"], "soft": True, "dry_run": True}).json()
     assert dry["succeeded_count"] == 1 and (tmp / "up" / "a.ipynb").exists() and not (tmp / "up" / ".trash").exists()
     assert client.post("/api/notebooks/delete-batch", json={"filenames": ["a.ipynb"], "soft": "yes"}).status_code == 400
     client.post("/api/notebooks/delete-batch", json={"filenames": ["a.ipynb"]})
-    assert not (tmp / "up" / "a.ipynb").exists() and not (tmp / "up" / ".trash").exists()
+    assert not (tmp / "up" / "a.ipynb").exists() and (tmp / "up" / ".trash").exists()
 
 
 def test_expired_trash_is_purged_automatically_and_audited_once(env, monkeypatch):

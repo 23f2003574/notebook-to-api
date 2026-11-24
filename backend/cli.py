@@ -4196,6 +4196,8 @@ def _dispatch_core_command(args):
                 return
 
         resolve_body = {"keep": keep}
+        if args.permanent:
+            resolve_body["permanent"] = True
 
         if args.tag:
             resolve_body["tag"] = args.tag
@@ -4686,6 +4688,8 @@ def _dispatch_core_command(args):
 
         if args.soft and args.all:
             raise RuntimeError("--soft applies to a single notebook, not --all.")
+        if args.soft and getattr(args, "permanent", False):
+            raise RuntimeError("--soft and --permanent cannot be combined.")
 
         if args.all:
             # DELETE /api/notebooks requires its own ?confirm=true before
@@ -4803,6 +4807,8 @@ def _dispatch_core_command(args):
                 params["expected_sha256"] = args.expected_sha256
             if args.soft:
                 params["soft"] = "true"
+            if getattr(args, "permanent", False):
+                params["permanent"] = "true"
 
             try:
                 response = httpx.delete(
@@ -4931,6 +4937,8 @@ def _dispatch_core_command(args):
                 return
 
         delete_batch_body = {"filenames": args.filename}
+        if args.permanent:
+            delete_batch_body["permanent"] = True
         if args.dry_run:
             delete_batch_body["dry_run"] = True
 
@@ -12987,6 +12995,11 @@ def main():
         )
     )
     resolve_duplicates_parser.add_argument(
+        "--permanent",
+        action="store_true",
+        help="Delete the duplicates for good instead of moving them to the dashboard's trash (the default).",
+    )
+    resolve_duplicates_parser.add_argument(
         "--keep",
         action="append",
         metavar="SHA256=FILENAME",
@@ -13572,6 +13585,14 @@ def main():
             "Applies to a single notebook, not --all."
         ),
     )
+    delete_parser.add_argument(
+        "--permanent",
+        action="store_true",
+        help=(
+            "Delete for good instead of moving the notebook to the dashboard's trash (the default). "
+            "The versions, data files and compiled app are removed with it and cannot be restored."
+        ),
+    )
     whoami_parser = subparsers.add_parser(
         "whoami",
         help=(
@@ -13756,6 +13777,11 @@ def main():
             "Delete several named notebooks at once, via POST "
             "/api/notebooks/delete-batch."
         )
+    )
+    delete_batch_parser.add_argument(
+        "--permanent",
+        action="store_true",
+        help="Delete for good instead of moving the notebooks to the dashboard's trash (the default).",
     )
     delete_batch_parser.add_argument(
         "filename", nargs="+",

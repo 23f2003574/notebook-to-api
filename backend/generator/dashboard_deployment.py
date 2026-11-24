@@ -100,7 +100,7 @@ COMPOSE = f"""services:
       NOTEBOOK2API_GOVERNANCE_DATABASE_PATH: {AUDIT_DB}
       NOTEBOOK2API_GOVERNANCE_VOLUME_PERSISTENT: "1"
       NOTEBOOK_API_STORAGE_VOLUME_PERSISTENT: "1"
-      NOTEBOOK_API_SOFT_DELETE: ${{NOTEBOOK_API_SOFT_DELETE:-false}}
+      NOTEBOOK_API_SOFT_DELETE: ${{NOTEBOOK_API_SOFT_DELETE:-true}}
       NOTEBOOK_API_TRASH_RETENTION_DAYS: ${{NOTEBOOK_API_TRASH_RETENTION_DAYS:-30}}
     volumes:
       - dashboard-data:/data
@@ -211,7 +211,7 @@ NOTEBOOK_API_DASHBOARD_KEY=change-me
 
 # Optional: make every delete (API and CLI) move the notebook to the trash, where `trash restore`
 # can bring it back until it expires; the UI always uses the trash.
-# NOTEBOOK_API_SOFT_DELETE=true
+# NOTEBOOK_API_SOFT_DELETE=true  (the default: deletes go to the trash; false deletes for good)
 # NOTEBOOK_API_TRASH_RETENTION_DAYS=30
 """
 

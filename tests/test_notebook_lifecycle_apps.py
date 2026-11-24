@@ -97,7 +97,7 @@ def test_a_removal_failure_does_not_break_the_delete(env, monkeypatch):
     _make("a.ipynb")
     monkeypatch.setattr(upload_routes.shutil, "rmtree", lambda *a, **k: (_ for _ in ()).throw(OSError("busy"))
                         if "apps" in str(a[0]) else None)
-    r = client.delete("/api/notebooks/a.ipynb")
+    r = client.delete("/api/notebooks/a.ipynb?permanent=true")
     assert r.status_code == 200
     assert not (env / "uploads" / "a.ipynb").exists()
     assert Path(env / "apps" / _id("a.ipynb")).exists()  # left behind, logged, still clearable

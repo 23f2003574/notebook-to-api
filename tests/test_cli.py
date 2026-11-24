@@ -32457,6 +32457,16 @@ def test_delete_soft_moves_to_the_trash_and_says_how_to_restore(tmp_path, fake_d
     assert "Moved to the trash: 'nb.ipynb'" in proc.stdout and "trash restore t-1" in proc.stdout
 
 
+def test_delete_permanent_sends_the_explicit_flag_and_conflicts_with_soft(tmp_path, fake_dashboard):
+    dashboard_url, handler = fake_dashboard
+    handler.responses = [_json_response(200, {"status": "success", "filename": "nb.ipynb"})]
+    proc = _run_cli(["delete", "nb.ipynb", "--permanent", "--dashboard-url", dashboard_url, "--yes"], cwd=tmp_path)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert handler.requests == ["/api/notebooks/nb.ipynb?permanent=true"]
+    both = _run_cli(["delete", "nb.ipynb", "--soft", "--permanent", "--dashboard-url", dashboard_url, "--yes"], cwd=tmp_path)
+    assert both.returncode != 0 and "cannot be combined" in both.stderr + both.stdout
+
+
 def test_delete_soft_is_refused_together_with_all(tmp_path, fake_dashboard):
     dashboard_url, handler = fake_dashboard
     proc = _run_cli(["delete", "--all", "--soft", "--yes", "--dashboard-url", dashboard_url], cwd=tmp_path)

@@ -7526,6 +7526,7 @@ def resolve_duplicate_notebooks(data: dict = None):
     _validate_batch_entry_count(keep_overrides, noun="keep entries")
 
     dry_run = bool(data.get("dry_run", False))
+    soft = False if data.get("permanent") is True else _soft_delete_default()
 
     upload_root = Path(UPLOAD_DIR)
 
@@ -7613,7 +7614,9 @@ def resolve_duplicate_notebooks(data: dict = None):
                 compiled_path is not None and file_path.resolve() == compiled_path
             )
 
-            if not dry_run:
+            if not dry_run and soft:
+                _soft_delete_notebook(file_path, was_currently_compiled)
+            elif not dry_run:
                 os.remove(file_path)
                 _tags_sidecar_path(file_path.name).unlink(missing_ok=True)
                 _description_sidecar_path(file_path.name).unlink(missing_ok=True)
@@ -9569,7 +9572,8 @@ def prune_all_notebook_versions(
 
 
 def _soft_delete_default():
-    return os.getenv("NOTEBOOK_API_SOFT_DELETE", "").strip().lower() in {"1", "true", "yes"}
+    """Deletion moves notebooks to the trash unless an operator opts out with NOTEBOOK_API_SOFT_DELETE=false."""
+    return os.getenv("NOTEBOOK_API_SOFT_DELETE", "").strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _trash_retention_days():
@@ -9684,12 +9688,15 @@ def restore_trashed_notebook(trash_id: str):
 @router.delete("/notebooks/{filename}")
 @_lifecycle_audited("notebook.delete", name=lambda k, r: k.get("filename"),
                     extra=lambda k, r: {"soft": True, "trash_id": r.get("trash_id")} if isinstance(r, dict) and r.get("soft") else {})
-def delete_notebook(filename: str, dry_run: bool = False, expected_sha256: str = None, soft: bool = None):
+def delete_notebook(
+    filename: str, dry_run: bool = False, expected_sha256: str = None, soft: bool = None, permanent: bool = False
+):
     """Delete a previously uploaded notebook (and its per-notebook app), excluding a
     compile or rename of the same notebook while it happens."""
     with _notebook_lifecycle(filename):
         return _delete_notebook_locked(
-            filename, dry_run, expected_sha256, _soft_delete_default() if soft is None else soft,
+            filename, dry_run, expected_sha256,
+            False if permanent else (_soft_delete_default() if soft is None else soft),
         )
 
 
@@ -9881,7 +9888,7 @@ def _delete_notebooks_batch_locked(data: dict):
     _validate_batch_entry_count(filenames, noun="filenames")
 
     dry_run = bool(data.get("dry_run", False))
-    soft = data.get("soft", _soft_delete_default())
+    soft = False if data.get("permanent") is True else data.get("soft", _soft_delete_default())
 
     if not isinstance(soft, bool):
 
