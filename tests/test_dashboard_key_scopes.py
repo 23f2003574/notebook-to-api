@@ -171,3 +171,9 @@ def test_whoami_reports_whether_the_key_may_overwrite():
     assert _as(CP).get("/api/whoami").json()["can"]["overwrite"] is False
     assert _as(AD).get("/api/whoami").json()["can"]["overwrite"] is True
     assert _as(RD).get("/api/whoami").json()["can"]["overwrite"] is False
+
+
+def test_whoami_reports_who_may_edit_tags_and_descriptions():
+    assert _as(AD).get("/api/whoami").json()["can"]["tags"] is True
+    assert _as(CP).get("/api/whoami").json()["can"]["description"] is False
+    assert _as(RD).get("/api/whoami").json()["can"]["tags"] is False

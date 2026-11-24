@@ -4,6 +4,7 @@ import { errorFromResponse } from '../errorMessage'
 import VersionCompare from './VersionCompare'
 import { diagnosticsFrom } from '../diagnostics'
 import Diagnostics from './Diagnostics'
+import NotebookMetadata from './NotebookMetadata'
 
 const formatSize = (bytes) => (bytes >= 1024 ? (bytes / 1024).toFixed(1) + ' KB' : bytes + ' B')
 
@@ -37,6 +38,9 @@ export default function NotebookLibrary({ onOpen, refreshKey, onAudit, caller = 
   const [notebooks, setNotebooks] = useState(null)
   const [error, setError] = useState(null)
   const [reload, setReload] = useState(0)
+  const [tagFilter, setTagFilter] = useState('')
+  const [allTags, setAllTags] = useState([])
+  const [limits, setLimits] = useState({})
   const [trash, setTrash] = useState(null) // soft-deleted notebooks (loaded when the Trash is opened)
   const [trashCount, setTrashCount] = useState(0)
   const [busy, setBusy] = useState({}) // filename -> action name
@@ -54,13 +58,16 @@ export default function NotebookLibrary({ onOpen, refreshKey, onAudit, caller = 
     const controller = new AbortController()
     ;(async () => {
       try {
-        const response = await dashboardFetch('/api/notebooks', { signal: controller.signal })
+        const query = tagFilter ? '?tag=' + encodeURIComponent(tagFilter) : ''
+        const response = await dashboardFetch('/api/notebooks' + query, { signal: controller.signal })
         if (!response.ok) throw new Error(await errorFromResponse(response, 'Could not list notebooks'))
         const data = await response.json()
         const list = Array.isArray(data.notebooks) ? data.notebooks.filter((n) => n && typeof n.filename === 'string') : []
         if (!controller.signal.aborted) {
           setNotebooks(list)
           setError(null)
+          // The filter's choices come from the unfiltered list, so they stay available while filtering.
+          if (!tagFilter) setAllTags([...new Set(list.flatMap((n) => (Array.isArray(n.tags) ? n.tags : [])))].sort())
         }
         if (!controller.signal.aborted) setTrashCount(Number.isInteger(data.trash_count) ? data.trash_count : 0)
       } catch (err) {
@@ -68,7 +75,7 @@ export default function NotebookLibrary({ onOpen, refreshKey, onAudit, caller = 
       }
     })()
     return () => controller.abort()
-  }, [refreshKey, reload])
+  }, [refreshKey, reload, tagFilter])
 
   useEffect(() => {
     if (focusNext.current) {
@@ -78,12 +85,24 @@ export default function NotebookLibrary({ onOpen, refreshKey, onAudit, caller = 
     }
   })
 
+  // The server's own tag and description limits, fetched the first time a details editor opens.
+  const loadLimits = async () => {
+    if (limits.max_tag_length) return
+    try {
+      const response = await dashboardFetch('/api/config')
+      if (response.ok) setLimits(await response.json())
+    } catch {
+      // Without limits the server still validates on save.
+    }
+  }
+
   const openPanel = (filename, name) => {
     setPanel((current) => ({ ...current, [filename]: name }))
     setNotes((current) => ({ ...current, [filename]: null }))
     focusNext.current = `${name}-first-${filename}`
     if (name === 'rename') setRenameTo((current) => ({ ...current, [filename]: filename }))
     if (name === 'versions') loadVersions(filename)
+    if (name === 'details') loadLimits()
   }
 
   const closePanel = (filename, name) => {
@@ -282,6 +301,15 @@ export default function NotebookLibrary({ onOpen, refreshKey, onAudit, caller = 
   return (
     <>
     {eventNode}
+    {(allTags.length > 0 || tagFilter) && (
+      <div className="mb-2 flex items-center gap-2 text-xs text-slate-300">
+        <label htmlFor="tag-filter">Filter by tag</label>
+        <select id="tag-filter" className="bg-slate-800 text-slate-100 rounded px-2 py-1" value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}>
+          <option value="">All notebooks</option>
+          {[...new Set([...allTags, ...(tagFilter ? [tagFilter] : [])])].map((tag) => <option key={tag} value={tag}>{tag}</option>)}
+        </select>
+      </div>
+    )}
     <ul className="space-y-2">
       {notebooks.map((notebook) => {
         const app = notebook.per_notebook_app
@@ -301,6 +329,17 @@ export default function NotebookLibrary({ onOpen, refreshKey, onAudit, caller = 
                   </span>
                 )}
                 {app && app.status === 'incomplete' && <span className="ml-2 text-xs text-amber-400">app incomplete</span>}
+                {Array.isArray(notebook.tags) && notebook.tags.length > 0 && (
+                  <ul className="mt-1 flex flex-wrap gap-1" aria-label={`Tags of ${filename}`}>
+                    {notebook.tags.map((tag) => (
+                      <li key={tag}>
+                        <button type="button" className="text-xs bg-slate-800 text-slate-300 rounded px-2 py-0.5 hover:text-white"
+                          aria-label={`Show only notebooks tagged ${tag}`} onClick={() => setTagFilter(tag)}>{tag}</button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {notebook.description && <p className="mt-1 text-xs text-slate-400" data-testid={'description-' + filename}>{notebook.description}</p>}
               </div>
               <button type="button" onClick={() => onOpen({ filename })} className="ml-3 text-sm text-blue-400 hover:text-blue-300">
                 Open
@@ -337,7 +376,7 @@ export default function NotebookLibrary({ onOpen, refreshKey, onAudit, caller = 
                   </button>
                 </>
               )}
-              {[['rename', 'Rename'], ['versions', 'Versions'], ['delete', 'Delete']].map(([name, label]) => (
+              {[['details', 'Details'], ['rename', 'Rename'], ['versions', 'Versions'], ['delete', 'Delete']].map(([name, label]) => (
                 <button key={name} type="button" className={button + (name === 'delete' ? ' !text-red-400' : '')}
                   ref={(element) => { triggers.current[`${filename}|${name}`] = element }}
                   aria-label={`${label} ${filename}`} aria-expanded={panel[filename] === name}
@@ -360,6 +399,14 @@ export default function NotebookLibrary({ onOpen, refreshKey, onAudit, caller = 
                   </>
                 )}
               </p>
+            )}
+            {panel[filename] === 'details' && (
+              <NotebookMetadata notebook={notebook} limits={limits} canEdit={can('tags') && can('description')}
+                refusal={refusal('tags') || refusal('description')} onClose={() => closePanel(filename, 'details')}
+                onSaved={(saved) => {
+                  setNotebooks((list) => list.map((n) => (n.filename === filename ? { ...n, ...saved } : n)))
+                  setReload((n) => n + 1)
+                }} />
             )}
             {panel[filename] === 'rename' && (
               <form role="group" aria-label={'Rename ' + filename} className="mt-2 flex items-center gap-2"

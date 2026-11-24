@@ -172,3 +172,23 @@ test('uploading an existing name asks before replacing it and the old content st
   await expect(page.getByTestId('note-life_replace.ipynb')).toContainText('Restored the version saved')
   expect(read()).toBe(before)
 })
+
+test('tags and a description can be edited, persist across a reload and filter the library', async ({ page, request }) => {
+  await importBundle(request, 'life_tags.ipynb', 'DATA')
+  await importBundle(request, 'life_untagged.ipynb', 'DATA')
+  await page.goto('/')
+  await button(page, 'Details', 'life_tags.ipynb').click()
+  await page.getByPlaceholder('Add a tag').fill('production')
+  await page.getByRole('button', { name: 'Add tag' }).click()
+  await page.getByLabel('Description').fill('Scores customers')
+  await page.getByRole('button', { name: 'Save details' }).click()
+  await expect(page.getByTestId('description-life_tags.ipynb')).toHaveText('Scores customers')
+
+  await page.reload()
+  await expect(page.getByTestId('description-life_tags.ipynb')).toHaveText('Scores customers')
+  await expect(page.getByLabel('Tags of life_tags.ipynb')).toContainText('production')
+  await expect(page.getByText('life_untagged.ipynb', { exact: true })).toBeVisible()
+  await page.getByLabel('Filter by tag').selectOption('production')
+  await expect(page.getByText('life_untagged.ipynb', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('life_tags.ipynb', { exact: true })).toBeVisible()
+})
