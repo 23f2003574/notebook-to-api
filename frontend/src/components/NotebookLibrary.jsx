@@ -409,7 +409,7 @@ export default function NotebookLibrary({ onOpen, refreshKey, onAudit, caller = 
                 }} />
             )}
             {panel[filename] === 'rename' && (
-              <form role="group" aria-label={'Rename ' + filename} className="mt-2 flex items-center gap-2"
+              <form aria-label={'Rename ' + filename} className="mt-2 flex items-center gap-2"
                 onSubmit={(event) => { event.preventDefault(); renameNotebook(filename) }}
                 onKeyDown={(event) => { if (event.key === 'Escape') closePanel(filename, 'rename') }}>
                 <label className="text-xs text-slate-300" htmlFor={'rename-first-' + filename}>New name</label>

@@ -61,7 +61,7 @@ export default function NotebookMetadata({ notebook, limits, canEdit, refusal, o
   }
 
   return (
-    <form role="group" aria-label={`Details of ${filename}`} className="mt-2 text-xs text-slate-200 space-y-2"
+    <form aria-label={`Details of ${filename}`} className="mt-2 text-xs text-slate-200 space-y-2"
       onSubmit={save} onKeyDown={(event) => { if (event.key === 'Escape') onClose() }}>
       <div>
         <label htmlFor={`details-first-${filename}`} className="block text-slate-300">Tags</label>

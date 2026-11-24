@@ -101,7 +101,7 @@ describe('NotebookLibrary tags', () => {
     const caller = { name: 'viewer', scope: 'read', can: { tags: false, description: false } }
     render(<NotebookLibrary onOpen={() => {}} refreshKey="x" caller={caller} />)
     fireEvent.click(await screen.findByRole('button', { name: 'Details a.ipynb' }))
-    expect(await screen.findByRole('group', { name: 'Details of a.ipynb' })).toBeInTheDocument()
+    expect(await screen.findByRole('form', { name: 'Details of a.ipynb' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Save details' })).toBeDisabled()
   })
 })
