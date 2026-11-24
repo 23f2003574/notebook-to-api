@@ -23,6 +23,35 @@ from backend.generator.docker_generator import (
 # nothing about the compile itself ever warning of it.
 _K8S_NAME_INVALID_CHARS_RE = re.compile(r"[^a-z0-9-]+")
 
+# Compile-time hardening settings, read from the environment of the process that compiles. Each value is
+# validated: a malformed Kubernetes quantity would otherwise only fail at `kubectl apply`.
+_QUANTITY_RE = re.compile(r"^[1-9][0-9]*(\.[0-9]+)?(Ki|Mi|Gi|Ti|k|M|G|T)?$")
+_K8S_SETTINGS = {
+    "NOTEBOOK_API_K8S_TMP_SIZE_LIMIT": "256Mi",
+    "NOTEBOOK_API_K8S_DATA_SIZE_LIMIT": "1Gi",
+    "NOTEBOOK_API_K8S_EPHEMERAL_STORAGE_REQUEST": "128Mi",
+    "NOTEBOOK_API_K8S_EPHEMERAL_STORAGE_LIMIT": "2Gi",
+}
+
+
+def _k8s_quantity(name, environ=None):
+    import os
+
+    value = (os.environ if environ is None else environ).get(name, "").strip() or _K8S_SETTINGS[name]
+
+    if not _QUANTITY_RE.match(value):
+        raise ValueError(f"{name}={value!r} is not a valid Kubernetes quantity (for example 256Mi or 1Gi)")
+
+    return value
+
+
+def _k8s_network_policy_enabled(environ=None):
+    import os
+
+    return (os.environ if environ is None else environ).get(
+        "NOTEBOOK_API_K8S_NETWORK_POLICY", ""
+    ).strip().lower() in {"1", "true", "yes"}
+
 
 def _k8s_resource_name(package_name):
     """A DNS-1123-legal resource name derived from `package_name` (see the
@@ -251,6 +280,31 @@ def kubernetes_manifest_content(
     # the same Pod, but NOT across Pod replacement (rollout, eviction, node loss). Swap it
     # for a PersistentVolumeClaim if tasks must survive that. It is world-writable, so the
     # runAsUser 1000 container can write it.
+    tmp_limit = _k8s_quantity("NOTEBOOK_API_K8S_TMP_SIZE_LIMIT")
+    data_limit = _k8s_quantity("NOTEBOOK_API_K8S_DATA_SIZE_LIMIT")
+    ephemeral_request = _k8s_quantity("NOTEBOOK_API_K8S_EPHEMERAL_STORAGE_REQUEST")
+    ephemeral_limit = _k8s_quantity("NOTEBOOK_API_K8S_EPHEMERAL_STORAGE_LIMIT")
+    network_policy = ""
+
+    if _k8s_network_policy_enabled():
+        network_policy = f"""---
+# Only inbound traffic to the app port is allowed; egress is left open so the notebook can reach its
+# own dependencies. Tighten `egress` for a notebook that needs no outside access.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {package_name_scalar}
+spec:
+  podSelector:
+    matchLabels:
+      app: {package_name_scalar}
+  policyTypes: ["Ingress"]
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8000
+"""
+
     volume_mount_lines = (
         "          volumeMounts:\n"
         "            - name: tmp\n"
@@ -259,7 +313,7 @@ def kubernetes_manifest_content(
     volumes_lines = (
         "      volumes:\n"
         "        - name: tmp\n"
-        "          emptyDir: {}\n"
+        f"          emptyDir: {{sizeLimit: {tmp_limit}}}\n"
     )
     if any(entry["name"] == TASK_STORE_VAR for entry in env_entries):
         volume_mount_lines += (
@@ -272,9 +326,9 @@ def kubernetes_manifest_content(
             "      # tmp (emptyDir): the only other writable path, since the root filesystem is read-only.\n"
             "      volumes:\n"
             "        - name: tmp\n"
-            "          emptyDir: {}\n"
+            f"          emptyDir: {{sizeLimit: {tmp_limit}}}\n"
             "        - name: task-data\n"
-            "          emptyDir: {}\n"
+            f"          emptyDir: {{sizeLimit: {data_limit}}}\n"
         )
 
     # Variables the notebook itself reads (API keys, connection strings) come
@@ -349,6 +403,8 @@ spec:
             runAsNonRoot: true
             runAsUser: 1000
             allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
             # The image writes only to /data (task store) and /tmp, both mounted
             # below. Set this to false if the notebook itself writes elsewhere
             # in the container (a model cache under the home directory, say).
@@ -364,8 +420,10 @@ spec:
             requests:
               cpu: 100m
               memory: 256Mi
+              ephemeral-storage: {ephemeral_request}
             limits:
               memory: 1Gi
+              ephemeral-storage: {ephemeral_limit}
           livenessProbe:
             httpGet:
               path: /health
@@ -400,7 +458,7 @@ spec:
     - port: 80
       targetPort: 8000
   type: ClusterIP
-"""
+{network_policy}"""
 
 
 def generate_kubernetes_manifest(

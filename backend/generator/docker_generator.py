@@ -21,6 +21,8 @@ COMPOSE_ONLY_ENV_VARS = frozenset({
     "NOTEBOOK_API_MEMORY_LIMIT",
     "NOTEBOOK_API_CPU_LIMIT",
     "NOTEBOOK_API_PIDS_LIMIT",
+    "NOTEBOOK_API_LOG_MAX_SIZE",
+    "NOTEBOOK_API_LOG_MAX_FILE",
 })
 
 
@@ -591,6 +593,12 @@ def docker_compose_content(package_name="generated", env_vars=None, notebook_env
         "    mem_limit: ${NOTEBOOK_API_MEMORY_LIMIT:-1g}\n"
         "    cpus: ${NOTEBOOK_API_CPU_LIMIT:-2}\n"
         "    pids_limit: ${NOTEBOOK_API_PIDS_LIMIT:-256}\n"
+        # Docker's default json-file driver never rotates, so a chatty app slowly fills the host disk.
+        "    logging:\n"
+        "      driver: json-file\n"
+        "      options:\n"
+        '        max-size: "${NOTEBOOK_API_LOG_MAX_SIZE:-10m}"\n'
+        '        max-file: "${NOTEBOOK_API_LOG_MAX_FILE:-3}"\n'
         "    healthcheck:\n"
         '      test: ["CMD", "python", "-c", "import os, urllib.request; urllib.request.urlopen('
         "'http://localhost:' + os.environ.get('PORT', '8000') + '/health', timeout=2)\"]\n"
@@ -701,6 +709,11 @@ def env_example_content(env_vars=None, notebook_env_vars=None):
         "# NOTEBOOK_API_MEMORY_LIMIT=1g",
         "# NOTEBOOK_API_CPU_LIMIT=2",
         "# NOTEBOOK_API_PIDS_LIMIT=256",
+        "",
+        "# Log rotation docker compose configures for the container (read by docker-compose.yml only):",
+        "# the size at which a log file is rotated and how many files are kept.",
+        "# NOTEBOOK_API_LOG_MAX_SIZE=10m",
+        "# NOTEBOOK_API_LOG_MAX_FILE=3",
         "",
         "# How long docker compose waits for the app to start before failed health checks count",
         "# (read by docker-compose.yml only). Raise it when the notebook loads a large model at",
@@ -1130,7 +1143,7 @@ docker compose up --build
 ```
 
 The container is limited to 1 GB of memory, 2 CPUs and 256 processes; set \
-`NOTEBOOK_API_MEMORY_LIMIT`, `NOTEBOOK_API_CPU_LIMIT` or `NOTEBOOK_API_PIDS_LIMIT` in `.env` \
+`NOTEBOOK_API_MEMORY_LIMIT`, `NOTEBOOK_API_CPU_LIMIT` or `NOTEBOOK_API_PIDS_LIMIT` in `.env` (container logs are rotated at `NOTEBOOK_API_LOG_MAX_SIZE` (10m), keeping `NOTEBOOK_API_LOG_MAX_FILE` (3) files) \
 to change them (read by docker compose only, not by the app).
 
 ## Deploying to Kubernetes
