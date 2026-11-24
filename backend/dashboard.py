@@ -623,7 +623,18 @@ def _is_public_shell_path(method, path):
             or path.startswith("/assets/") or "." in path.rsplit("/", 1)[-1])
 
 
-def required_scope(method, path):
+_OVERWRITING_POSTS = frozenset({"/api/upload", "/api/upload/batch", "/api/notebooks/import"})
+
+
+def _query_overwrites(query):
+    """Whether a query string asks to replace an existing notebook (overwrite=true/1/yes/on)."""
+    from urllib.parse import parse_qs
+
+    values = parse_qs(query or "", keep_blank_values=True).get("overwrite", [])
+    return any(v.strip().lower() in {"true", "1", "yes", "on"} for v in values)
+
+
+def required_scope(method, path, query=""):
     """The least scope that may call `method path`: read for safe methods; compile for uploading and
     compiling a notebook and the non-mutating previews/exports; admin for everything else
     (delete, rename, restore, tags, deploy, history, governance and experimental routes)."""
@@ -635,13 +646,16 @@ def required_scope(method, path):
         return "admin"
     if method in ("GET", "HEAD", "OPTIONS"):
         return "read"
+    if method == "POST" and path in _OVERWRITING_POSTS and _query_overwrites(query):
+        # Replacing an existing notebook is destructive, so it is an admin action.
+        return "admin"
     if method == "POST" and (path in _COMPILE_POSTS or (path.startswith("/api/") and path.endswith("-preview"))):
         return "compile"
     return "admin"
 
 
-def scope_allows(scope, method, path):
-    return _SCOPE_RANK.get(scope, 2) >= _SCOPE_RANK[required_scope(method, path)]
+def scope_allows(scope, method, path, query=""):
+    return _SCOPE_RANK.get(scope, 2) >= _SCOPE_RANK[required_scope(method, path, query)]
 
 
 def authenticate_dashboard_key(supplied, entries):
@@ -874,8 +888,8 @@ async def _require_dashboard_api_key(request: Request, call_next):
             request.state.dashboard_actor = key_name
             key_scope = key_scopes.get(key_name, "admin")
             request.state.dashboard_scope = key_scope
-            if not scope_allows(key_scope, request.method, request.url.path):
-                needed = required_scope(request.method, request.url.path)
+            if not scope_allows(key_scope, request.method, request.url.path, request.url.query):
+                needed = required_scope(request.method, request.url.path, request.url.query)
                 auth_metrics.record_denied(client, key_name, key_scope, needed)
                 _record_denied_scope(key_name, key_scope, needed, request)
                 return JSONResponse(status_code=403, content={

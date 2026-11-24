@@ -131,3 +131,36 @@ def test_routes_outside_api_need_admin_for_every_method():
     for shell in ("/", "/assets/index-abc.js", "/favicon.svg", "/docs", "/openapi.json"):
         assert dashboard.required_scope("GET", shell) == "read"
     assert dashboard.required_scope("POST", "/") == "admin"
+
+
+def _other_notebook():
+    return nbformat.writes(nbformat.v4.new_notebook(cells=[nbformat.v4.new_code_cell("def g():\n    return 2\n")])).encode()
+
+
+def test_overwriting_requires_admin_and_leaves_notebook_unchanged():
+    import pathlib
+    ci, boss = _as(CP), _as(AD)
+    assert _upload(ci).status_code == 200
+    path = pathlib.Path(upload.UPLOAD_DIR) / "a.ipynb"
+    before = path.read_bytes()
+    other = _other_notebook()
+    for url, files in (
+        ("/api/upload?overwrite=true", {"file": ("a.ipynb", other)}),
+        ("/api/upload/batch?overwrite=true", {"files": ("a.ipynb", other)}),
+        ("/api/notebooks/import?overwrite=true", {"file": ("a.ipynb", other)}),
+    ):
+        r = ci.post(url, files=files)
+        assert r.status_code == 403 and "admin" in r.json()["detail"], url
+    assert path.read_bytes() == before
+    assert ci.post("/api/upload?overwrite=false", files={"file": ("b.ipynb", NB.encode())}).status_code == 200
+    r = boss.post("/api/upload?overwrite=true", files={"file": ("a.ipynb", other)})
+    assert r.status_code == 200 and path.read_bytes() != before
+
+
+def test_denied_overwrite_is_audited():
+    from backend.observability.deployment_governance_audit import AuditQuery, get_audit_service
+    c = _as(CP)
+    _upload(c)
+    assert c.post("/api/upload?overwrite=true", files={"file": ("a.ipynb", NB.encode())}).status_code == 403
+    records = get_audit_service().query(AuditQuery(action="dashboard.authorization_denied", limit=10))
+    assert records and records[0].actor == "ci"
