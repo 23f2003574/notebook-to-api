@@ -44,6 +44,10 @@ def stream(n: int):
     for i in range(n):
         yield i
 
+def counted(x: int):
+    yield 1
+    yield 2
+
 def nothing(x: int):
     print(x)
 
@@ -66,7 +70,7 @@ def _infer(code):
     ("def f(x):\n    if x:\n        return 1\n    return None", ("Optional[int]", True)),
     ("def f(x):\n    if x:\n        return 1\n    return 'a'", (None, True)),
     ("def f(x):\n    return x", (None, True)),
-    ("def f():\n    yield 1", (None, True)),
+    ("def f():\n    yield 1", ("List[int]", True)),
     ("def f():\n    pass", (None, False)),
     ("def f():\n    def g():\n        return 1\n    return None", (None, False)),
 ])
@@ -104,11 +108,36 @@ def test_inferred_results_are_typed_and_described(spec):
 
 
 def test_unknown_shapes_say_any_not_none(spec):
-    for name in ("mixed", "opaque", "stream"):
+    for name in ("mixed", "opaque"):
         assert _result(spec, name) == {}
         assert _ok(spec, name)["description"] == "Returns Any", name
     assert _ok(spec, "nothing")["description"] == "Returns None"
     assert _ok(spec, "typed")["description"] == "Returns int"
+
+
+@pytest.mark.parametrize("code,expected", [
+    ("def f(n):\n    for i in range(n):\n        yield i", "List[Any]"),  # a name: element type unknown
+    ("def f():\n    yield 1\n    yield 2", "List[int]"),
+    ("def f():\n    yield 1\n    yield 2.5", "List[float]"),
+    ("def f():\n    yield 'a'\n    yield 'b'", "List[str]"),
+    ("def f():\n    yield 1\n    yield 'a'", "List[Any]"),
+    ("def f():\n    yield (1, 2)", "List[List[Any]]"),
+    ("def f(n):\n    yield from range(n)", "List[int]"),
+    ("def f():\n    yield from [1, 2, 3]", "List[int]"),
+    ("def f(xs):\n    yield from xs", "List[Any]"),
+    ("def f():\n    yield\n", "List[Any]"),
+    ("def f():\n    yield 1\n    return 'ignored'", "List[int]"),
+    ("async def f():\n    yield 1", None),
+])
+def test_generator_results_are_arrays(code, expected):
+    assert _infer(code)[0] == expected
+
+
+def test_generator_endpoint_publishes_an_array_schema(spec):
+    stream = _result(spec, "stream")
+    assert stream == {"type": "array", "items": {}}
+    assert _ok(spec, "stream")["description"] == "Returns List[Any]"
+    assert _result(spec, "counted") == {"type": "array", "items": {"type": "integer"}}
 
 
 def test_python_and_typescript_sdks_follow_the_published_types(spec):

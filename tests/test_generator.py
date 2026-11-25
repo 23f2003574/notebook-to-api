@@ -90,6 +90,8 @@ def test_generated_app_env_vars_default_matches_the_actual_generated_code():
         "NOTEBOOK_API_REJECT_DEPRECATED",
         "NOTEBOOK_API_ENFORCE_SUNSET",
         "NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS",
+        "NOTEBOOK_API_ISOLATE_MAX_FILE_MB",
+        "NOTEBOOK_API_ISOLATE_MAX_OPEN_FILES",
         "NOTEBOOK_API_JSON_LOGS",
         "NOTEBOOK_API_HIDE_ERROR_DETAILS",
         "NOTEBOOK_API_ISOLATE_EXECUTION",

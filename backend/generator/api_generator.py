@@ -4933,6 +4933,9 @@ def _nb_request_schema(request_path):
         "bool": "bool", "Optional[str]": "_typing.Optional[str]", "Optional[int]": "_typing.Optional[int]",
         "Optional[float]": "_typing.Optional[float]", "Optional[bool]": "_typing.Optional[bool]",
         "Optional[Dict[str, Any]]": "_typing.Optional[dict]", "Optional[List[Any]]": "_typing.Optional[list]",
+        # Inferred from the yields of an unannotated sync generator (collected into one array).
+        "List[int]": "list[int]", "List[float]": "list[float]", "List[str]": "list[str]",
+        "List[bool]": "list[bool]", "List[List[Any]]": "list[list]",
     }
     _inferred_map = {
         f["name"]: _inferred_literals[f["return_type"]]

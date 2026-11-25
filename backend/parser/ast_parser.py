@@ -824,6 +824,33 @@ def _literal_return_type(expression):
     return None
 
 
+def _yielded_element_type(expression):
+    """The element type one yielded expression establishes ("Any" when the syntax does not settle it)."""
+    if isinstance(expression, (ast.Tuple, ast.Set, ast.SetComp, ast.GeneratorExp)):
+        return "List[Any]"
+    return _literal_return_type(expression) or "Any"
+
+
+def _generator_result_type(yields):
+    """`List[<element>]` for the values a sync generator yields: one compatible literal type (int and
+    float widen to float) gives that element type, anything else `List[Any]`."""
+    kinds = set()
+    for node in yields:
+        if isinstance(node, ast.Yield):
+            kinds.add(_yielded_element_type(node.value) if node.value is not None else "Any")
+            continue
+        source = node.value
+        if isinstance(source, ast.Call) and isinstance(source.func, ast.Name) and source.func.id == "range":
+            kinds.add("int")
+        elif isinstance(source, (ast.List, ast.Tuple, ast.Set)) and source.elts:
+            kinds.update(_yielded_element_type(e) for e in source.elts)
+        else:
+            kinds.add("Any")
+    if kinds == {"int", "float"}:
+        kinds = {"float"}
+    return f"List[{kinds.pop()}]" if len(kinds) == 1 else "List[Any]"
+
+
 def infer_return_type(function_node):
     """(return_type, returns_value) for a function without a return annotation.
 
@@ -831,11 +858,12 @@ def infer_return_type(function_node):
     that is not a bare None, or a yield). `return_type` is set only when every value-returning branch is a
     literal of one compatible type (int and float widen to float; a None branch makes it Optional);
     anything else stays None, which the generator publishes as Any rather than as a None result."""
-    values, has_none, has_yield = [], False, False
+    values, has_none, has_yield, yields = [], False, False, []
 
     for node in _own_nodes(function_node):
         if isinstance(node, (ast.Yield, ast.YieldFrom)):
             has_yield = True
+            yields.append(node)
         elif isinstance(node, ast.Return) and node.value is not None:
             if isinstance(node.value, ast.Constant) and node.value.value is None:
                 has_none = True
@@ -843,6 +871,10 @@ def infer_return_type(function_node):
                 values.append(node.value)
 
     returns_value = has_yield or bool(values)
+
+    if has_yield and not isinstance(function_node, ast.AsyncFunctionDef):
+        # The generated app collects a sync generator's items into one JSON array.
+        return _generator_result_type(yields), True
 
     if has_yield or not values:
         return None, returns_value
