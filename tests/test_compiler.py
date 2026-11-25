@@ -12688,8 +12688,9 @@ assert png_uri.startswith("data:image/png;base64,")
 # The app's own binary output round-trips back in as the original bytes.
 assert result("inspect_blob", {{"blob": png_uri}}) == "89504e470d0a1a0a07"
 assert result("read_file", {{"f": png_uri}}) == "89504e470d0a1a0a07"
-assert result("read_binary", {{"f": "abc"}}) == 3  # plain text stays UTF-8
-assert result("inspect_blob", {{"blob": "hi"}}) == "6869"
+assert result("read_binary", {{"f": "YWJj"}}) == 3  # base64 of b"abc"
+assert result("inspect_blob", {{"blob": "aGk="}}) == "6869"  # base64 of b"hi"
+assert post("inspect_blob", {{"blob": "hi there"}}).status_code == 422  # text is not silently reinterpreted
 assert result("maybe_blob", {{}}) is None
 assert result("maybe_blob", {{"blob": "data:application/octet-stream;base64,AAE="}}) == 2
 bad = post("inspect_blob", {{"blob": "data:image/png;base64,***"}})

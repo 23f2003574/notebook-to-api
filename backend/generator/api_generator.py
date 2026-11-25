@@ -4231,7 +4231,13 @@ def _nb_request_schema(request_path):
     lines.append("        except (_binascii.Error, ValueError) as e:")
     lines.append("            raise HTTPException(status_code=422, detail=f'Invalid base64 data URI: {e}')")
     lines.append("    else:")
-    lines.append("        raw = value.encode('utf-8')")
+    lines.append("        # The contract is base64: text is never silently reinterpreted as binary.")
+    lines.append("        import base64 as _base64")
+    lines.append("        import binascii as _binascii")
+    lines.append("        try:")
+    lines.append("            raw = _base64.b64decode(value, validate=True)")
+    lines.append("        except (_binascii.Error, ValueError):")
+    lines.append("            raise HTTPException(status_code=422, detail='Binary parameters must be base64-encoded strings (or data: URIs)')")
     lines.append("    if kind == 'bytesio':")
     lines.append("        import io as _io")
     lines.append("        return _io.BytesIO(raw)")
@@ -7376,6 +7382,9 @@ def _nb_request_schema(request_path):
             field_name = _field_name({"name": arg_name})
             # The real parameter name stays the JSON key via an alias.
             alias_part = f", alias={arg_name!r}" if field_name != arg_name else ""
+            if _binary_kind(arg.get("type")):
+                # JSON has no bytes: the contract is a base64 string (or a data: URI), published as such.
+                alias_part += ", json_schema_extra={'contentEncoding': 'base64', 'format': 'byte'}"
             raw_arg_type = arg.get("type")
             arg_type, _ = _arg_annotation_source(arg)
             # `def f(a: int = None)` is valid Python that accepts f(a=None),
@@ -7436,6 +7445,8 @@ def _nb_request_schema(request_path):
                     f"Parameter '{arg_name}' "
                     f"of type {raw_arg_type or arg_type}"
                 )
+                if _binary_kind(arg.get("type")):
+                    field_description += " (send base64-encoded data; a data:...;base64, URI is also accepted)"
 
             default_value = arg.get("default")
 
