@@ -174,6 +174,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     "_WEBHOOK_BLOCKED_PORTS", "_WORKERS", "_WebhookHTTPConnection", "_WebhookHTTPHandler",
     "_WebhookHTTPSConnection", "_WebhookHTTPSHandler", "_add_deprecation_headers",
     "_add_process_time_header", "_add_request_id_header", "_add_security_headers",
+    "_REQUEST_SCHEMA_CACHE", "_nb_request_schema", "_nb_unknown_paths",
     "_apply_cpu_limit", "_apply_memory_limit", "_child", "_coerce_array_like_items",
     "_coerce_binary", "_constants_enter", "_constants_exit", "_context", "_drain_async_gen",
     "_emit_event", "_env_flag", "_env_number", "_error_text", "_example_from_schema",
@@ -2905,6 +2906,60 @@ def generate_fastapi_code(
         + "}"
     )
     lines.append("")
+    helper = """\
+_REQUEST_SCHEMA_CACHE = {}
+
+
+def _nb_unknown_paths(value, schema, resolve, path="", depth=0):
+    \"\"\"Dotted paths of object keys in `value` that the JSON schema does not declare (nested models,
+    lists, dicts of models). A key valid under any anyOf/oneOf branch is known.\"\"\"
+    if depth > 8 or not isinstance(schema, dict):
+        return []
+    ref = schema.get("$ref")
+    if ref:
+        return _nb_unknown_paths(value, resolve(ref), resolve, path, depth + 1)
+    branches = schema.get("anyOf") or schema.get("oneOf") or schema.get("allOf")
+    if branches:
+        found = [_nb_unknown_paths(value, branch, resolve, path, depth + 1) for branch in branches
+                 if isinstance(branch, dict) and (isinstance(value, dict) == bool(
+                     branch.get("properties") or branch.get("$ref") or branch.get("additionalProperties")))
+                 or isinstance(value, list) and branch.get("items")]
+        if not found:
+            return []
+        return sorted(set.intersection(*[set(f) for f in found])) if schema.get("anyOf") or schema.get("oneOf") else sorted(set().union(*found))
+    if isinstance(value, dict):
+        properties = schema.get("properties")
+        extra = schema.get("additionalProperties")
+        out = []
+        for key, item in value.items():
+            label = f"{path}.{key}" if path else str(key)
+            if properties is not None and key in properties:
+                out += _nb_unknown_paths(item, properties[key], resolve, label, depth + 1)
+            elif properties is not None and not extra:
+                out.append(label)
+            elif isinstance(extra, dict):
+                out += _nb_unknown_paths(item, extra, resolve, label, depth + 1)
+        return out
+    if isinstance(value, list) and isinstance(schema.get("items"), dict):
+        out = []
+        for index, item in enumerate(value[:100]):
+            out += _nb_unknown_paths(item, schema["items"], resolve, f"{path}[{index}]", depth + 1)
+        return out
+    return []
+
+
+def _nb_request_schema(request_path):
+    if request_path not in _REQUEST_SCHEMA_CACHE:
+        spec = app.openapi()
+        try:
+            body = spec["paths"][request_path]["post"]["requestBody"]["content"]["application/json"]["schema"]
+        except KeyError:
+            body = None
+        _REQUEST_SCHEMA_CACHE[request_path] = (body, spec.get("components", {}).get("schemas", {}))
+    return _REQUEST_SCHEMA_CACHE[request_path]
+"""
+    lines.extend(helper.splitlines())
+    lines.append("")
     lines.append("@app.middleware('http')")
     lines.append("async def _report_ignored_request_fields(request, call_next):")
     lines.append("    known = _REQUEST_FIELDS.get(request.url.path)")
@@ -2916,6 +2971,13 @@ def generate_fastapi_code(
     lines.append("            body = None")
     lines.append("        if isinstance(body, dict):")
     lines.append("            ignored = sorted(str(key) for key in body if key not in known)")
+    lines.append("            try:")
+    lines.append("                schema, defs = _nb_request_schema(request.url.path)")
+    lines.append("                resolve = lambda ref: defs.get(ref.rsplit('/', 1)[-1], {})")
+    lines.append("                nested = [p for p in _nb_unknown_paths(body, schema, resolve) if p not in known and p not in ignored]")
+    lines.append("                ignored = sorted(set(ignored) | {p for p in nested if '.' in p or '[' in p})")
+    lines.append("            except Exception:  # reporting must never fail a request")
+    lines.append("                pass")
     lines.append("    response = await call_next(request)")
     lines.append("    if ignored and response.status_code < 300:")
     lines.append("        response.headers['X-Notebook-API-Ignored-Fields'] = ', '.join(ignored)[:500]")
@@ -7470,6 +7532,18 @@ def generate_fastapi_code(
                 f"        'json_schema_extra': {{'example': {repr(_json_safe_example(example_payload))}}}"
             )
         lines.append("    }")
+        lines.append("")
+        lines.append("    @model_validator(mode='before')")
+        lines.append("    @classmethod")
+        lines.append("    def _nb_reject_nested_unknown_fields(cls, data):")
+        lines.append("        if STRICT_REQUEST_FIELDS and isinstance(data, dict):")
+        lines.append("            _schema = cls.model_json_schema()")
+        lines.append("            _defs = _schema.get('$defs', {})")
+        lines.append("            _bad = [p for p in _nb_unknown_paths(data, _schema, lambda ref: _defs.get(ref.rsplit('/', 1)[-1], {}))")
+        lines.append("                    if '.' in p or '[' in p]")
+        lines.append("            if _bad:")
+        lines.append("                raise ValueError('unknown field(s) not permitted: ' + ', '.join(_bad[:20]))")
+        lines.append("        return data")
         if _numeric_input_keys:
             lines.append("")
             lines.append("    @model_validator(mode='before')")
