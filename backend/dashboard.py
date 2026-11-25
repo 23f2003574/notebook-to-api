@@ -10,6 +10,7 @@ import contextlib
 import hashlib
 import re
 import os
+from datetime import date, datetime, timezone
 import logging
 import sys
 import threading
@@ -538,11 +539,21 @@ def _key_digest(value):
 KEY_SCOPES = ("read", "compile", "admin")
 
 
-def _parse_named_keys(text, source, scopes=None):
+_EXPIRY_SUFFIX = re.compile(r"@(\d{4}-\d{2}-\d{2})$")
+KEY_EXPIRY_WARNING_DAYS = 7
+
+
+def _utc_today():
+    """Today's date in UTC; a seam so tests can use a fake clock."""
+    return datetime.now(timezone.utc).date()
+
+
+def _parse_named_keys(text, source, scopes=None, expiries=None):
     """Parse `name:key[:scope]` entries separated by commas or newlines (`#` starts a comment line).
     `key` is either the secret itself or `sha256:<64 hex digits>`, so a deployment can keep only
-    digests on disk. Returns [(name, digest, plaintext_length_or_None)]. Messages never contain a
-    key."""
+    digests on disk. An optional trailing `@YYYY-MM-DD` makes the key valid through the end of that
+    UTC day (recorded in `expiries`). Returns [(name, digest, plaintext_length_or_None)]. Messages
+    never contain a key."""
     entries = []
     for raw in re.split(r"[,\n]", text):
         line = raw.strip()
@@ -553,6 +564,15 @@ def _parse_named_keys(text, source, scopes=None):
         if not separator or not _KEY_NAME.match(name) or not secret:
             raise ValueError(f"{source} entries must look like name:key[:scope] (name: letters, digits, . _ -)")
         scope = "admin"
+        expiry = _EXPIRY_SUFFIX.search(secret)
+        if expiry:
+            try:
+                expires = date.fromisoformat(expiry.group(1))
+            except ValueError:
+                raise ValueError(f"{source}: key {name!r} has an invalid expiry date (use YYYY-MM-DD)") from None
+            secret = secret[:expiry.start()].strip()
+            if expiries is not None:
+                expiries[name] = expires
         head, colon, tail = secret.rpartition(":")
         if colon and head and re.fullmatch(r"[A-Za-z]+", tail) and head.strip().lower() != "sha256":
             # A trailing alphabetic segment after the key is its scope; unknown scopes are refused
@@ -584,18 +604,24 @@ def dashboard_api_keys():
 def dashboard_api_keys_and_scopes():
     """(entries, {name: scope}). A key's scope is "read", "compile" or "admin" (`name:key:scope`);
     a key with none, and the legacy NOTEBOOK_API_DASHBOARD_KEY, is "admin", as before."""
+    return dashboard_api_keys_scopes_and_expiries()[:2]
+
+
+def dashboard_api_keys_scopes_and_expiries():
+    """(entries, {name: scope}, {name: last valid UTC date}); keys without `@YYYY-MM-DD` never expire."""
     scopes = {}
+    expiries = {}
     entries = []
     inline = os.getenv("NOTEBOOK_API_DASHBOARD_KEYS", "")
     if inline.strip():
-        entries += _parse_named_keys(inline, "NOTEBOOK_API_DASHBOARD_KEYS", scopes)
+        entries += _parse_named_keys(inline, "NOTEBOOK_API_DASHBOARD_KEYS", scopes, expiries)
     path = os.getenv("NOTEBOOK_API_DASHBOARD_KEYS_FILE", "").strip()
     if path:
         try:
             text = Path(path).read_text()
         except OSError:
             raise ValueError("NOTEBOOK_API_DASHBOARD_KEYS_FILE could not be read") from None
-        entries += _parse_named_keys(text, "NOTEBOOK_API_DASHBOARD_KEYS_FILE", scopes)
+        entries += _parse_named_keys(text, "NOTEBOOK_API_DASHBOARD_KEYS_FILE", scopes, expiries)
     legacy = dashboard_api_key()
     if legacy:
         entries.append(("default", _key_digest(legacy), len(legacy)))
@@ -603,7 +629,11 @@ def dashboard_api_keys_and_scopes():
     names = [entry[0] for entry in entries]
     if len(names) != len(set(names)):
         raise ValueError("dashboard key names must be unique (\"default\" is the legacy NOTEBOOK_API_DASHBOARD_KEY)")
-    return entries, scopes
+    return entries, scopes, expiries
+
+
+def key_is_expired(expires, today=None):
+    return expires is not None and (today or _utc_today()) > expires
 
 
 # Scope authorization. Anything not listed below needs "admin", so a new mutating route is
@@ -673,8 +703,17 @@ def validate_dashboard_auth_config(host, environ=None):
     """Startup check: the key configuration parses, and a production deployment reachable from the
     network uses only strong keys (at least 16 characters; digest entries are trusted). Raises
     ValueError; the message never contains a key."""
-    entries = dashboard_api_keys()
+    entries, _scopes, expiries = dashboard_api_keys_scopes_and_expiries()
     environ = os.environ if environ is None else environ
+    today = _utc_today()
+    for name, expires in sorted(expiries.items()):
+        days_left = (expires - today).days
+        if days_left < 0:
+            logging.getLogger("uvicorn.error").warning(
+                "dashboard key %r expired on %s and is refused; remove it from the configuration", name, expires)
+        elif days_left <= KEY_EXPIRY_WARNING_DAYS:
+            logging.getLogger("uvicorn.error").warning(
+                "dashboard key %r expires in %d day(s), on %s; add its replacement before then", name, days_left, expires)
     production = environ.get("NOTEBOOK2API_ENVIRONMENT", "").strip().lower() in {"production", "prod"}
     if production and not host_is_loopback(host):
         weak = [name for name, _d, length in entries if length is not None and length < _MIN_PRODUCTION_KEY_LENGTH]
@@ -854,7 +893,7 @@ async def _require_dashboard_api_key(request: Request, call_next):
     """
 
     try:
-        entries, key_scopes = dashboard_api_keys_and_scopes()
+        entries, key_scopes, key_expiries = dashboard_api_keys_scopes_and_expiries()
     except ValueError:
         # Fail closed without saying what is wrong (startup validation reports the details).
         return JSONResponse(status_code=503, content={"detail": "Dashboard authentication is misconfigured"})
@@ -883,6 +922,11 @@ async def _require_dashboard_api_key(request: Request, call_next):
             )
 
         key_name = authenticate_dashboard_key(supplied, entries)
+
+        if key_name is not None and key_is_expired(key_expiries.get(key_name)):
+            # Indistinguishable from a wrong key to the caller; the audit trail names which key it was.
+            _record_denied_scope(key_name, key_scopes.get(key_name, "admin"), "an unexpired key", request)
+            key_name = None
 
         if key_name is not None:
             request.state.dashboard_actor = key_name
@@ -1302,7 +1346,15 @@ def whoami(request: Request):
     name = getattr(request.state, "dashboard_actor", None)
     authenticated = name is not None
     scope = scope or "admin"
+    expires = None
+    if authenticated:
+        try:
+            expires = dashboard_api_keys_scopes_and_expiries()[2].get(name)
+        except ValueError:
+            pass
     return {
+        "expires": expires.isoformat() if expires else None,
+        "expires_in_days": (expires - _utc_today()).days if expires else None,
         "name": name or "local",
         "scope": scope,
         "authenticated": authenticated,

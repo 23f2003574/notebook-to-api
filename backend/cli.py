@@ -4881,6 +4881,8 @@ def _dispatch_core_command(args):
         else:
             who = f"key '{data['name']}'" if data.get("authenticated") else "this machine (no dashboard key configured)"
             print(f"{dashboard_url}: signed in as {who} with {data['scope']} access")
+            if data.get("expires"):
+                print(f"  expires: {data['expires']} ({data['expires_in_days']} day(s) left)")
             allowed = sorted(name for name, ok in data.get("can", {}).items() if ok)
             denied = sorted(name for name, ok in data.get("can", {}).items() if not ok)
             print(f"  can:    {', '.join(allowed) or 'nothing'}")
