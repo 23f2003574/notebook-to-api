@@ -163,6 +163,7 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # derives this inventory from a real generated app.py, so a new generated name fails there.
     "HIDE_ERROR_DETAILS", "IDEMPOTENCY_FINGERPRINTS", "IDEMPOTENCY_KEYS",
     "ISOLATE_ALLOW_ENV", "scrub_service_secrets", "_blank_secrets_in_loaded_modules", "hide_service_secrets_in_proc_environ", "_is_service_secret", "_allowed_names", "ISOLATE_CPU_LIMIT_SECONDS", "ISOLATE_EXECUTION", "ISOLATE_MAX_PROCESSES",
+    "ISOLATE_MAX_FILE_MB", "ISOLATE_MAX_OPEN_FILES", "MIN_OPEN_FILES", "_MAX_FILE", "_MAX_OPEN", "_apply_file_limits",
     "ISOLATE_MEMORY_LIMIT_MB", "IsolatedExecutionCancelled", "IsolatedExecutionError",
     "IsolatedExecutionTimeout", "IsolatedWorker", "MAX_ERROR_DETAIL_CHARS",
     "MIN_MEMORY_LIMIT_MB", "_ACTIVE", "_ACTIVE_LOCK", "_CACHE_FLIGHTS", "_CONST_IN_FLIGHT",
@@ -691,6 +692,26 @@ GENERATED_APP_ENV_VARS = [
             "counts CPU time actually used, not wall-clock time (use "
             "NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS for that). POSIX only; "
             "0 (the default) means unlimited."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_ISOLATE_MAX_FILE_MB",
+        "default": "0",
+        "description": (
+            "With NOTEBOOK_API_ISOLATE_EXECUTION=1, the largest file in MB "
+            "a child process may write (RLIMIT_FSIZE); a write past it fails "
+            "with an OSError instead of filling the disk. Core dumps are "
+            "always disabled in children. POSIX only; 0 (the default) means "
+            "unlimited."
+        ),
+    },
+    {
+        "name": "NOTEBOOK_API_ISOLATE_MAX_OPEN_FILES",
+        "default": "0",
+        "description": (
+            "With NOTEBOOK_API_ISOLATE_EXECUTION=1, the most file descriptors "
+            "a child process may hold open (RLIMIT_NOFILE, at least 16). "
+            "POSIX only; 0 (the default) means unlimited."
         ),
     },
     {
@@ -3357,6 +3378,18 @@ def generate_fastapi_code(
         ', float)'
     )
     lines.append(
+        'ISOLATE_MAX_FILE_MB = _env_number('
+        '"NOTEBOOK_API_ISOLATE_MAX_FILE_MB", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_ISOLATE_MAX_FILE_MB")}"'
+        ', float)'
+    )
+    lines.append(
+        'ISOLATE_MAX_OPEN_FILES = _env_number('
+        '"NOTEBOOK_API_ISOLATE_MAX_OPEN_FILES", '
+        f'"{_generated_app_env_var_default("NOTEBOOK_API_ISOLATE_MAX_OPEN_FILES")}"'
+        ', float)'
+    )
+    lines.append(
         'ISOLATE_MAX_PROCESSES = _env_number('
         '"NOTEBOOK_API_ISOLATE_MAX_PROCESSES", '
         f'"{_generated_app_env_var_default("NOTEBOOK_API_ISOLATE_MAX_PROCESSES")}"'
@@ -3390,6 +3423,7 @@ def generate_fastapi_code(
     lines.append("        cpu_limit_seconds=ISOLATE_CPU_LIMIT_SECONDS, isolate=ISOLATE_EXECUTION,")
     lines.append("        rlimits_supported=_RLIMITS_SUPPORTED, max_processes=ISOLATE_MAX_PROCESSES,")
     lines.append("        isolation_problem=isolation_platform_problem(),")
+    lines.append("        max_file_mb=ISOLATE_MAX_FILE_MB, max_open_files=ISOLATE_MAX_OPEN_FILES,")
     lines.append("    )")
     lines.append("except ValueError as _limits_error:")
     lines.append("    raise RuntimeError(str(_limits_error)) from None")

@@ -10,6 +10,9 @@ _MEMORY = "NOTEBOOK_API_ISOLATE_MEMORY_LIMIT_MB"
 _CPU = "NOTEBOOK_API_ISOLATE_CPU_LIMIT_SECONDS"
 _TIMEOUT = "NOTEBOOK_API_REQUEST_TIMEOUT_SECONDS"
 _MAX_PROCS = "NOTEBOOK_API_ISOLATE_MAX_PROCESSES"
+_MAX_FILE = "NOTEBOOK_API_ISOLATE_MAX_FILE_MB"
+_MAX_OPEN = "NOTEBOOK_API_ISOLATE_MAX_OPEN_FILES"
+MIN_OPEN_FILES = 16
 
 
 def isolation_platform_problem(start_methods=None, has_killpg=None):
@@ -46,6 +49,8 @@ def validate_execution_limits(
     rlimits_supported: bool,
     max_processes: int = 0,
     isolation_problem: str | None = None,
+    max_file_mb: float = 0,
+    max_open_files: float = 0,
 ) -> None:
     """Raise ValueError with an actionable message for an unusable configuration.
 
@@ -60,6 +65,15 @@ def validate_execution_limits(
             raise ValueError(f"{name} must be a finite number >= 0 (0 disables it), got {value!r}")
     if isinstance(max_processes, bool) or not isinstance(max_processes, int) or max_processes < 0:
         raise ValueError(f"{_MAX_PROCS} must be a whole number >= 0 (0 disables it), got {max_processes!r}")
+    for name, value in ((_MAX_FILE, max_file_mb), (_MAX_OPEN, max_open_files)):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+            raise ValueError(f"{name} must be a finite number >= 0 (0 disables it), got {value!r}")
+        if value > 0 and not isolate:
+            raise ValueError(f"{name} is set but has no effect unless {_ISOLATE}=1; enable isolation or unset {name}")
+        if value > 0 and not rlimits_supported:
+            raise ValueError(f"{name} is not supported on this platform (no resource.setrlimit); unset it")
+    if max_open_files and (max_open_files != int(max_open_files) or max_open_files < MIN_OPEN_FILES):
+        raise ValueError(f"{_MAX_OPEN} must be a whole number >= {MIN_OPEN_FILES} (the interpreter needs some), got {max_open_files!r}")
     if isolate and isolation_problem:
         raise ValueError(
             f"{_ISOLATE}=1 is not supported here: {isolation_problem}. Run on Linux or macOS "

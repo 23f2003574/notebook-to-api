@@ -84,6 +84,8 @@ def check_execution_limit_env(environ=None):
         rlimits_supported=rlimits,
         max_processes=int(processes) if processes == int(processes) else processes,
         isolation_problem=isolation_platform_problem(),
+        max_file_mb=number("NOTEBOOK_API_ISOLATE_MAX_FILE_MB"),
+        max_open_files=number("NOTEBOOK_API_ISOLATE_MAX_OPEN_FILES"),
     )
 
 

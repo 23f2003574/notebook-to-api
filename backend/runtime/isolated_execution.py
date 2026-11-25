@@ -216,6 +216,41 @@ def _apply_cpu_limit(limit_seconds: float) -> None:
     resource.setrlimit(resource.RLIMIT_CPU, (min(soft, new_hard), new_hard))
 
 
+def _apply_file_limits() -> None:
+    """Disable core dumps and apply the optional file-size / open-file caps in the child.
+
+    Read from the environment (NOTEBOOK_API_ISOLATE_MAX_FILE_MB, NOTEBOOK_API_ISOLATE_MAX_OPEN_FILES;
+    0 or unset = unlimited) so every child, including pooled workers, gets them. A write past the
+    file cap raises OSError (and SIGXFSZ is ignored so it surfaces as that error, not a kill).
+    """
+    import resource
+
+    def number(name):
+        try:
+            return float(os.environ.get(name, "") or 0)
+        except ValueError:
+            return 0.0
+
+    try:
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    except (ValueError, OSError):
+        pass
+    max_file_mb = number("NOTEBOOK_API_ISOLATE_MAX_FILE_MB")
+    if max_file_mb > 0:
+        _, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+        limit = int(max_file_mb * 1024 * 1024)
+        if hard != resource.RLIM_INFINITY:
+            limit = min(limit, hard)
+        signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+        resource.setrlimit(resource.RLIMIT_FSIZE, (limit, hard))
+    max_open = int(number("NOTEBOOK_API_ISOLATE_MAX_OPEN_FILES"))
+    if max_open > 0:
+        _, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        if hard != resource.RLIM_INFINITY:
+            max_open = min(max_open, hard)
+        resource.setrlimit(resource.RLIMIT_NOFILE, (max_open, hard))
+
+
 def _kill_process_group(pid: int | None) -> None:
     """SIGKILL the child's process group so subprocesses started by notebook code
     cannot outlive a timeout or crash. No-op when the child never became a group
@@ -308,6 +343,10 @@ def _child(
                 except OSError:
                     pass
             scrub_service_secrets()
+            try:
+                _apply_file_limits()
+            except ImportError:  # no `resource` module on this platform
+                pass
             if memory_limit_mb:
                 _apply_memory_limit(memory_limit_mb)
             if cpu_limit_seconds:
