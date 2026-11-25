@@ -29091,7 +29091,7 @@ def test_deploy_endpoint_smoke_test_passes_when_health_responds_200(
     calls = [block for block in log_path.read_text(encoding="utf-8").split("==CALL==\n") if block]
     subcommands = [call.splitlines()[0] for call in calls]
     assert "run" in subcommands
-    assert "stop" in subcommands
+    assert "rm" in subcommands
 
 
 def test_deploy_endpoint_smoke_test_fails_when_docker_run_fails(tmp_path, monkeypatch):
@@ -29117,7 +29117,7 @@ def test_deploy_endpoint_smoke_test_fails_when_docker_run_fails(tmp_path, monkey
     # nothing to stop.
     calls = [block for block in log_path.read_text(encoding="utf-8").split("==CALL==\n") if block]
     subcommands = [call.splitlines()[0] for call in calls]
-    assert "stop" not in subcommands
+    assert "rm" not in subcommands
 
 
 def test_deploy_endpoint_smoke_test_fails_when_docker_port_fails(
@@ -29143,7 +29143,7 @@ def test_deploy_endpoint_smoke_test_fails_when_docker_port_fails(
     # stopped even though the smoke test itself failed.
     calls = [block for block in log_path.read_text(encoding="utf-8").split("==CALL==\n") if block]
     subcommands = [call.splitlines()[0] for call in calls]
-    assert "stop" in subcommands
+    assert "rm" in subcommands
 
 
 def test_deploy_endpoint_smoke_test_times_out_and_reports_container_logs(
@@ -29179,7 +29179,7 @@ def test_deploy_endpoint_smoke_test_times_out_and_reports_container_logs(
 
     calls = [block for block in log_path.read_text(encoding="utf-8").split("==CALL==\n") if block]
     subcommands = [call.splitlines()[0] for call in calls]
-    assert "stop" in subcommands
+    assert "rm" in subcommands
 
 
 def test_deploy_endpoint_smoke_test_fails_when_health_never_returns_200(

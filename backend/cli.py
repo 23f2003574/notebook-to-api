@@ -42,7 +42,7 @@ if __name__ == "__main__":
 from nbformat import ValidationError as NotebookValidationError
 
 # Import the compiler function
-from backend.generator.docker_generator import default_image_tag
+from backend.generator.docker_generator import default_image_tag, smoke_test_run_command
 from backend.compiler import (
     notebook_failure_location,
     NOTEBOOK_TO_API_VERSION,
@@ -614,11 +614,7 @@ def _run_local_deploy_smoke_test(tag, cwd):
     try:
 
         run_result = subprocess.run(
-            [
-                "docker", "run", "-d", "-p", "127.0.0.1::8000",
-                # A throwaway container published on loopback only: it may use the public default key.
-                "-e", "NOTEBOOK_API_ALLOW_DEFAULT_KEY=true", tag,
-            ],
+            smoke_test_run_command(tag),
             cwd=str(cwd),
             capture_output=True,
             text=True,

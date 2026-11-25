@@ -54,3 +54,29 @@ def test_healthy_container_still_passes(monkeypatch):
     monkeypatch.setattr(httpx, "get", lambda *a, **k: Ok())
     assert cli._run_local_deploy_smoke_test("img:latest", ".")["passed"] is True
     assert calls[-1][:3] == ["docker", "rm", "-f"]
+
+
+def test_smoke_container_runs_with_the_compose_restrictions():
+    from backend.generator.docker_generator import docker_compose_content, smoke_test_run_command
+
+    command = smoke_test_run_command("img:latest")
+    assert command[-1] == "img:latest" and "--rm" not in command
+    for flag in ("--read-only", "--tmpfs", "--cap-drop", "--pids-limit"):
+        assert flag in command
+    assert command[command.index("--cap-drop") + 1] == "ALL"
+    assert "no-new-privileges:true" in command and "NOTEBOOK_API_ALLOW_DEFAULT_KEY=true" in command
+    compose = docker_compose_content("svc", [])
+    assert 'cap_drop: ["ALL"]' in compose and "read_only:" in compose and "no-new-privileges:true" in compose
+
+
+def test_dashboard_smoke_test_reports_a_crash_at_once(monkeypatch):
+    from backend.routes import upload as upload_module
+
+    calls = []
+    monkeypatch.setattr(upload_module.subprocess, "run", _fake_docker(calls, running=False))
+    monkeypatch.setattr(upload_module, "DEPLOY_SMOKE_TEST_TIMEOUT_SECONDS", 30.0)
+    started = time.monotonic()
+    result = upload_module._run_deploy_smoke_test("img:latest", ".")
+    assert time.monotonic() - started < 5
+    assert result["passed"] is False and "exited with code 1" in result["detail"] and "Traceback: boom" in result["detail"]
+    assert calls[-1][:3] == ["docker", "rm", "-f"]

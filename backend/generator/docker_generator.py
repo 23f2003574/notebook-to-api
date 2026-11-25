@@ -1346,3 +1346,19 @@ def generate_dockerignore(output_path="generated/.dockerignore", announce=True):
 
     if announce:
         print(f".dockerignore generated at: {output_path}")
+
+
+def smoke_test_run_command(tag):
+    """`docker run` argument list for the throwaway container the deploy smoke tests start.
+
+    It mirrors the restrictions of the generated compose file (read-only root filesystem, writable
+    /tmp, no capabilities, no privilege escalation, a process cap), so a startup that only works as
+    root or with a writable filesystem fails the smoke test instead of the deployment. The public
+    default key is allowed because the container is published on loopback only. No --rm: a crashed
+    container must stay inspectable so its logs can be reported."""
+    return [
+        "docker", "run", "-d", "-p", "127.0.0.1::8000",
+        "--read-only", "--tmpfs", "/tmp", "--cap-drop", "ALL",
+        "--security-opt", "no-new-privileges:true", "--pids-limit", "256",
+        "-e", "NOTEBOOK_API_ALLOW_DEFAULT_KEY=true", tag,
+    ]
