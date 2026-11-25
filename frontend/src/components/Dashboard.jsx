@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import NotebookUpload from './NotebookUpload'
 import OperationHistory from './OperationHistory'
 import StoragePanel from './StoragePanel'
+import DeploymentPreview from './DeploymentPreview'
 import LibraryValidation from './LibraryValidation'
 import NotebookLibrary from './NotebookLibrary'
 import GovernanceAudit from './GovernanceAudit'
@@ -347,6 +348,11 @@ export default function Dashboard() {
               <h2 className="text-xl font-semibold text-white mb-4">📚 Your Notebooks</h2>
               <NotebookLibrary caller={caller} onOpen={handleUploadSuccess} refreshKey={`${uploadedNotebook}|${lastCompiled}`} onAudit={setAuditSequence} />
               <div className="mt-4"><LibraryValidation refreshKey={`${uploadedNotebook}|${lastCompiled}`} /></div>
+            </div>
+
+            <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 hover:border-slate-600 transition">
+              <h2 className="text-xl font-semibold text-white mb-4">📦 Deployment files</h2>
+              <DeploymentPreview notebook={uploadedNotebook} />
             </div>
 
             <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 hover:border-slate-600 transition">
