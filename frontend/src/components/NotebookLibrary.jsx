@@ -5,6 +5,7 @@ import VersionCompare from './VersionCompare'
 import { diagnosticsFrom } from '../diagnostics'
 import Diagnostics from './Diagnostics'
 import NotebookMetadata from './NotebookMetadata'
+import NotebookValidation from './NotebookValidation'
 
 const formatSize = (bytes) => (bytes >= 1024 ? (bytes / 1024).toFixed(1) + ' KB' : bytes + ' B')
 
@@ -376,7 +377,7 @@ export default function NotebookLibrary({ onOpen, refreshKey, onAudit, caller = 
                   </button>
                 </>
               )}
-              {[['details', 'Details'], ['rename', 'Rename'], ['versions', 'Versions'], ['delete', 'Delete']].map(([name, label]) => (
+              {[['details', 'Details'], ['validate', 'Validate'], ['rename', 'Rename'], ['versions', 'Versions'], ['delete', 'Delete']].map(([name, label]) => (
                 <button key={name} type="button" className={button + (name === 'delete' ? ' !text-red-400' : '')}
                   ref={(element) => { triggers.current[`${filename}|${name}`] = element }}
                   aria-label={`${label} ${filename}`} aria-expanded={panel[filename] === name}
@@ -408,6 +409,7 @@ export default function NotebookLibrary({ onOpen, refreshKey, onAudit, caller = 
                   setReload((n) => n + 1)
                 }} />
             )}
+            {panel[filename] === 'validate' && <NotebookValidation filename={filename} canValidate={can('compile')} />}
             {panel[filename] === 'rename' && (
               <form aria-label={'Rename ' + filename} className="mt-2 flex items-center gap-2"
                 onSubmit={(event) => { event.preventDefault(); renameNotebook(filename) }}
