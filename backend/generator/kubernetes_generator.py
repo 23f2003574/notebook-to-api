@@ -53,6 +53,48 @@ def _k8s_network_policy_enabled(environ=None):
     ).strip().lower() in {"1", "true", "yes"}
 
 
+_METADATA_IP = "169.254.169.254"
+
+
+def _k8s_egress_rules(environ=None):
+    """Egress rules for NOTEBOOK_API_K8S_EGRESS_CIDRS, or None when the variable is unset.
+
+    "none" (or an empty list) allows DNS only; otherwise each comma-separated CIDR is allowed in
+    addition to DNS. A CIDR that contains the cloud metadata address gets it carved out via
+    `except`. Raises ValueError for a malformed CIDR, or when set without the network policy.
+    """
+    import ipaddress
+    import os
+
+    environ = os.environ if environ is None else environ
+    raw = environ.get("NOTEBOOK_API_K8S_EGRESS_CIDRS")
+    if raw is None or not raw.strip():
+        return None
+    if not _k8s_network_policy_enabled(environ):
+        raise ValueError(
+            "NOTEBOOK_API_K8S_EGRESS_CIDRS has no effect unless NOTEBOOK_API_K8S_NETWORK_POLICY=true"
+        )
+    rules = [{"ports": [{"protocol": "UDP", "port": 53}, {"protocol": "TCP", "port": 53}]}]
+    metadata = ipaddress.ip_address(_METADATA_IP)
+    for item in raw.split(","):
+        item = item.strip()
+        if not item or item.lower() == "none":
+            continue
+        try:
+            network = ipaddress.ip_network(item, strict=False)
+        except ValueError:
+            raise ValueError(
+                f"NOTEBOOK_API_K8S_EGRESS_CIDRS entry {item!r} is not a valid CIDR (use e.g. 203.0.113.0/24)"
+            ) from None
+        block = {"cidr": str(network)}
+        if network.version == 4 and metadata in network and network.prefixlen < 32:
+            block["except"] = [f"{_METADATA_IP}/32"]
+        elif network.version == 4 and metadata in network:
+            raise ValueError(f"NOTEBOOK_API_K8S_EGRESS_CIDRS must not allow the cloud metadata address {_METADATA_IP}")
+        rules.append({"to": [{"ipBlock": block}]})
+    return rules
+
+
 def _k8s_resource_name(package_name):
     """A DNS-1123-legal resource name derived from `package_name` (see the
     module-level comment above for exactly which names this fixes).
@@ -286,10 +328,17 @@ def kubernetes_manifest_content(
     ephemeral_limit = _k8s_quantity("NOTEBOOK_API_K8S_EPHEMERAL_STORAGE_LIMIT")
     network_policy = ""
 
+    egress_rules = _k8s_egress_rules()
+    egress_yaml = ""
+    if egress_rules is not None:
+        import json
+
+        egress_yaml = f"  egress: {json.dumps(egress_rules)}\n"
     if _k8s_network_policy_enabled():
         network_policy = f"""---
-# Only inbound traffic to the app port is allowed; egress is left open so the notebook can reach its
-# own dependencies. Tighten `egress` for a notebook that needs no outside access.
+# Only inbound traffic to the app port is allowed. Egress is left open unless
+# NOTEBOOK_API_K8S_EGRESS_CIDRS is set: then it is denied except DNS and the listed CIDRs (the cloud
+# metadata address is never allowed). Enforced only by a CNI that implements NetworkPolicy.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -298,12 +347,12 @@ spec:
   podSelector:
     matchLabels:
       app: {package_name_scalar}
-  policyTypes: ["Ingress"]
+  policyTypes: {'["Ingress", "Egress"]' if egress_rules is not None else '["Ingress"]'}
   ingress:
     - ports:
         - protocol: TCP
           port: 8000
-"""
+{egress_yaml}"""
 
     volume_mount_lines = (
         "          volumeMounts:\n"

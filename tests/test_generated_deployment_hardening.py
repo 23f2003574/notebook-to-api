@@ -67,3 +67,46 @@ def test_compose_rotates_logs_with_configurable_limits():
     assert {"NOTEBOOK_API_LOG_MAX_SIZE", "NOTEBOOK_API_LOG_MAX_FILE"} <= COMPOSE_ONLY_ENV_VARS
     example = env_example_content(ENV)
     assert "NOTEBOOK_API_LOG_MAX_SIZE=10m" in example and "NOTEBOOK_API_LOG_MAX_FILE=3" in example
+
+
+def _policy(monkeypatch, **env):
+    monkeypatch.delenv("NOTEBOOK_API_K8S_EGRESS_CIDRS", raising=False)
+    return next(d for d in _docs(monkeypatch, **env) if d["kind"] == "NetworkPolicy")["spec"]
+
+
+def test_egress_stays_open_unless_cidrs_are_configured(monkeypatch):
+    spec = _policy(monkeypatch, NOTEBOOK_API_K8S_NETWORK_POLICY="true")
+    assert spec["policyTypes"] == ["Ingress"] and "egress" not in spec
+
+
+def test_egress_none_allows_dns_only(monkeypatch):
+    spec = _policy(monkeypatch, NOTEBOOK_API_K8S_NETWORK_POLICY="true", NOTEBOOK_API_K8S_EGRESS_CIDRS="none")
+    assert spec["policyTypes"] == ["Ingress", "Egress"]
+    assert spec["egress"] == [{"ports": [{"protocol": "UDP", "port": 53}, {"protocol": "TCP", "port": 53}]}]
+
+
+def test_egress_cidrs_are_allowed_and_metadata_is_excluded(monkeypatch):
+    spec = _policy(monkeypatch, NOTEBOOK_API_K8S_NETWORK_POLICY="true",
+                   NOTEBOOK_API_K8S_EGRESS_CIDRS="203.0.113.0/24, 0.0.0.0/0")
+    blocks = [r["to"][0]["ipBlock"] for r in spec["egress"] if "to" in r]
+    assert blocks[0] == {"cidr": "203.0.113.0/24"}
+    assert blocks[1] == {"cidr": "0.0.0.0/0", "except": ["169.254.169.254/32"]}
+    assert "10.0.0.0/8" not in str(spec)
+
+
+@pytest.mark.parametrize("value, message", [
+    ("not-a-cidr", "not a valid CIDR"),
+    ("169.254.169.254/32", "metadata"),
+])
+def test_bad_egress_cidrs_fail_at_compile_time(monkeypatch, value, message):
+    monkeypatch.setenv("NOTEBOOK_API_K8S_NETWORK_POLICY", "true")
+    monkeypatch.setenv("NOTEBOOK_API_K8S_EGRESS_CIDRS", value)
+    with pytest.raises(ValueError, match=message):
+        kubernetes_manifest_content("svc", ENV)
+
+
+def test_egress_cidrs_without_the_policy_is_an_error(monkeypatch):
+    monkeypatch.delenv("NOTEBOOK_API_K8S_NETWORK_POLICY", raising=False)
+    monkeypatch.setenv("NOTEBOOK_API_K8S_EGRESS_CIDRS", "none")
+    with pytest.raises(ValueError, match="no effect"):
+        kubernetes_manifest_content("svc", ENV)
