@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import NotebookUpload from './NotebookUpload'
 import OperationHistory from './OperationHistory'
+import StoragePanel from './StoragePanel'
 import NotebookLibrary from './NotebookLibrary'
 import GovernanceAudit from './GovernanceAudit'
 import { allows, appUrl, configError, dashboardApiUrl, dashboardFetch, fetchCaller, getDashboardKey, setDashboardKey } from '../dashboardApi'
@@ -344,6 +345,11 @@ export default function Dashboard() {
             <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 hover:border-slate-600 transition">
               <h2 className="text-xl font-semibold text-white mb-4">📚 Your Notebooks</h2>
               <NotebookLibrary caller={caller} onOpen={handleUploadSuccess} refreshKey={`${uploadedNotebook}|${lastCompiled}`} onAudit={setAuditSequence} />
+            </div>
+
+            <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 hover:border-slate-600 transition">
+              <h2 className="text-xl font-semibold text-white mb-4">💾 Storage</h2>
+              <StoragePanel refreshKey={`${uploadedNotebook}|${lastCompiled}`} />
             </div>
 
             <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 hover:border-slate-600 transition">

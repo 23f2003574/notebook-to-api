@@ -43,6 +43,8 @@ export async function errorFromResponse(response, fallback = 'Unknown error') {
     body = undefined
   }
   const message = messageFromBody(body, '')
+  // 507: the dashboard's storage quota or free-disk reserve refused the write.
+  if (message && response && response.status === 507) return `Not enough storage: ${message}`
   if (message) return message
   return response && response.status ? `${fallback} (HTTP ${response.status})` : fallback
 }

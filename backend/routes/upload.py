@@ -9023,7 +9023,8 @@ def notebook_storage_usage(
         "notebooks_remaining": notebooks_remaining,
         "max_total_storage_bytes": MAX_TOTAL_STORAGE_BYTES,
         "storage_bytes_remaining": storage_bytes_remaining,
-
+        "free_disk_bytes": _free_disk_bytes(),
+        "min_free_disk_bytes": MIN_FREE_DISK_BYTES,
     }
 
 
