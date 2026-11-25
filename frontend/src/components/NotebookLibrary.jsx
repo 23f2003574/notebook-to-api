@@ -6,6 +6,7 @@ import { diagnosticsFrom } from '../diagnostics'
 import Diagnostics from './Diagnostics'
 import NotebookMetadata from './NotebookMetadata'
 import NotebookValidation from './NotebookValidation'
+import { VersionActions, VersionArchive } from './VersionActions'
 
 const formatSize = (bytes) => (bytes >= 1024 ? (bytes / 1024).toFixed(1) + ' KB' : bytes + ' B')
 
@@ -115,7 +116,7 @@ export default function NotebookLibrary({ onOpen, refreshKey, onAudit, caller = 
   const loadVersions = async (filename) => {
     setVersions((current) => ({ ...current, [filename]: { status: 'loading', items: [], error: '' } }))
     try {
-      const response = await dashboardFetch(`/api/notebooks/${encodeURIComponent(filename)}/versions?companions=true`)
+      const response = await dashboardFetch(`/api/notebooks/${encodeURIComponent(filename)}/versions?companions=true&notes=true`)
       if (!response.ok) throw new Error(await errorFromResponse(response, 'Could not load the version history'))
       const data = await response.json()
       setVersions((current) => ({ ...current, [filename]: { status: 'ready', items: Array.isArray(data.versions) ? data.versions : [], error: '' } }))
@@ -451,6 +452,8 @@ export default function NotebookLibrary({ onOpen, refreshKey, onAudit, caller = 
                         {typeof version.companion_files === 'number' && version.companion_files > 0 && (
                           <span className="text-slate-500">{version.companion_files} data file{version.companion_files === 1 ? '' : 's'}</span>
                         )}
+                        <VersionActions filename={filename} version={version} onChanged={() => { loadVersions(filename); setReload((n) => n + 1) }}
+                          canEdit={can('description')} canDelete={can('delete')} refusal={refusal('delete') || refusal('description')} />
                         {pendingRestore[filename] === version.version_id ? (
                           <>
                             <button type="button" className="text-xs text-amber-400 hover:text-amber-300" disabled={Boolean(working)}
@@ -469,6 +472,10 @@ export default function NotebookLibrary({ onOpen, refreshKey, onAudit, caller = 
                       </li>
                     ))}
                   </ul>
+                )}
+                {versions[filename]?.status === 'ready' && (
+                  <VersionArchive filename={filename} canImport={can('overwrite')} refusal={refusal('overwrite')}
+                    onImported={() => { loadVersions(filename); setReload((n) => n + 1) }} />
                 )}
                 {versions[filename]?.status === 'ready' && versions[filename].items.length > 0 && (
                   <VersionCompare filename={filename} versions={versions[filename].items} />
