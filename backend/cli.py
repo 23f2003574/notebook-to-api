@@ -615,7 +615,7 @@ def _run_local_deploy_smoke_test(tag, cwd):
 
         run_result = subprocess.run(
             [
-                "docker", "run", "-d", "--rm", "-p", "127.0.0.1::8000",
+                "docker", "run", "-d", "-p", "127.0.0.1::8000",
                 # A throwaway container published on loopback only: it may use the public default key.
                 "-e", "NOTEBOOK_API_ALLOW_DEFAULT_KEY=true", tag,
             ],
@@ -680,7 +680,20 @@ def _run_local_deploy_smoke_test(tag, cwd):
         last_status_code = None
         last_error = None
 
+        exited = None
+
         while time.monotonic() < deadline:
+
+            # --rm is not used, so a crashed container (and its logs) outlives the crash;
+            # stop waiting as soon as it has exited instead of polling until the deadline.
+            state = subprocess.run(
+                ["docker", "inspect", "--format", "{{.State.Running}} {{.State.ExitCode}}", container_id],
+                capture_output=True, text=True, timeout=DEPLOY_SUBPROCESS_TIMEOUT_SECONDS,
+            )
+            parts = state.stdout.split()
+            if state.returncode == 0 and len(parts) == 2 and parts[0] == "false":
+                exited = parts[1]
+                break
 
             try:
 
@@ -712,7 +725,9 @@ def _run_local_deploy_smoke_test(tag, cwd):
         )
         container_logs = (logs_result.stdout + logs_result.stderr).strip()
 
-        if last_status_code is not None:
+        if exited is not None:
+            reason = f"The container exited with code {exited} before /health answered"
+        elif last_status_code is not None:
             reason = f"GET /health last responded {last_status_code}"
         elif last_error is not None:
             reason = f"GET /health never responded: {last_error}"
@@ -723,15 +738,15 @@ def _run_local_deploy_smoke_test(tag, cwd):
             "passed": False,
             "status_code": last_status_code,
             "detail": (
-                f"{reason} within {DEPLOY_SMOKE_TEST_TIMEOUT_SECONDS}s. "
-                f"Container logs:\n{container_logs}"
+                (f"{reason}. " if exited is not None else f"{reason} within {DEPLOY_SMOKE_TEST_TIMEOUT_SECONDS}s. ")
+                + f"Container logs:\n{container_logs}"
             ),
         }
 
     finally:
 
         subprocess.run(
-            ["docker", "stop", container_id],
+            ["docker", "rm", "-f", container_id],
             capture_output=True,
             text=True,
             timeout=DEPLOY_SUBPROCESS_TIMEOUT_SECONDS,

@@ -1168,7 +1168,7 @@ def test_deploy_smoke_test_passes_when_health_responds_200(
     calls = [block for block in log_path.read_text(encoding="utf-8").split("==CALL==\n") if block]
     subcommands = [call.splitlines()[0] for call in calls]
     assert "run" in subcommands
-    assert "stop" in subcommands
+    assert "rm" in subcommands
 
 
 def test_deploy_smoke_test_json_flag_includes_smoke_test_field(
