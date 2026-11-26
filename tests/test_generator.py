@@ -2672,7 +2672,6 @@ def test_task_record_reports_webhook_delivery_status_code_from_non_retryable_err
     not None -- that's exactly the detail an operator debugging a
     misconfigured receiver (wrong auth, wrong path) needs.
     """
-    import urllib.error
     import urllib.request
 
     functions = [{"name": "process_data", "args": [], "return_type": "dict"}]
@@ -3625,7 +3624,6 @@ def test_webhook_delivery_retries_a_5xx_http_error_then_succeeds(monkeypatch):
     receiver is (or was, at the moment of that response) having its own
     problem, not deliberately rejecting this request.
     """
-    import urllib.error
     import urllib.request
 
     monkeypatch.setenv("NOTEBOOK_API_WEBHOOK_MAX_RETRIES", "1")
@@ -3681,7 +3679,6 @@ def test_webhook_delivery_does_not_retry_a_non_retryable_4xx_http_error(
     again can only ever fail the same way, so this must never retry it
     even with retries otherwise enabled.
     """
-    import urllib.error
     import urllib.request
 
     monkeypatch.setenv("NOTEBOOK_API_WEBHOOK_MAX_RETRIES", "3")
@@ -3730,7 +3727,6 @@ def test_webhook_delivery_honors_retry_after_header_on_429(monkeypatch):
     wait, the identical "honor Retry-After instead of guessing" behavior
     the generated SDK clients' own retry logic already gives a 429.
     """
-    import urllib.error
     import urllib.request
 
     monkeypatch.setenv("NOTEBOOK_API_WEBHOOK_MAX_RETRIES", "1")

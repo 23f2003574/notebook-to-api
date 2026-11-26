@@ -80,8 +80,6 @@ from .deployment_governance_delivery_policies import (
     InMemoryGovernanceIntegrityDeliveryPolicyRepository,
 )
 
-from typing import TYPE_CHECKING
-
 if TYPE_CHECKING:
     from .deployment_governance_audit import GovernanceAuditService
     from .deployment_governance_cron import GovernanceCronScheduler

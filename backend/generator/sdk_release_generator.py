@@ -68,22 +68,6 @@ class SDKReleaseGenerator:
                 )
         }
 
-    def infrastructure_manifest(
-        self,
-        targets
-    ):
-
-        return {
-
-            "infrastructure":
-                targets,
-
-            "count":
-                len(
-                    targets
-                )
-        }
-
     def cicd_manifest(
         self,
         workflows
@@ -633,26 +617,6 @@ class SDKReleaseGenerator:
 
             "message":
                 alert.message
-        }
-
-    def metrics_manifest(
-        self,
-        metrics
-    ):
-
-        return {
-
-            "success_rate":
-                metrics.success_rate,
-
-            "availability":
-                metrics.availability,
-
-            "reliability_score":
-                metrics.reliability_score,
-
-            "slo_compliant":
-                metrics.slo_compliant
         }
 
     def dashboard_manifest(
@@ -2402,23 +2366,6 @@ class SDKReleaseGenerator:
                 documentation.returns
         }
 
-    def openapi_manifest(
-        self,
-        description
-    ):
-
-        return {
-
-            "summary":
-                description.summary,
-
-            "description":
-                description.description,
-
-            "tags":
-                description.tags
-        }
-
     def example_manifest(
         self,
         example
@@ -2576,30 +2523,6 @@ class SDKReleaseGenerator:
                 len(
                     guide.steps
                 )
-        }
-
-    def changelog_manifest(
-        self,
-        changelog
-    ):
-
-        return {
-
-            "version":
-                changelog.version,
-
-            "entry_count":
-                len(
-                    changelog.entries
-                ),
-
-            "categories": [
-
-                entry.category
-
-                for entry
-                in changelog.entries
-            ]
         }
 
     def portal_manifest(

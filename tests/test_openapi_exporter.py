@@ -521,7 +521,6 @@ def test_export_tells_the_user_to_install_the_notebooks_dependencies(tmp_path):
     'pandas'" and no hint where those dependencies are listed."""
     import pytest
 
-    from backend.exporters.openapi_exporter import export_openapi_schema
 
     app_dir = tmp_path / "depapp"
     app_dir.mkdir()
@@ -543,7 +542,6 @@ def test_export_tells_the_user_to_install_the_notebooks_dependencies(tmp_path):
 def test_export_adds_no_install_hint_when_the_app_package_itself_is_missing(tmp_path):
     import pytest
 
-    from backend.exporters.openapi_exporter import export_openapi_schema
 
     app_dir = tmp_path / "wrongdir"
     app_dir.mkdir()

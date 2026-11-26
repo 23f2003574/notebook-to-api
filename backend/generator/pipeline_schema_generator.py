@@ -610,9 +610,6 @@ from .alert_policy import (
 from .monitoring_dashboard import (
     MonitoringDashboardEngine
 )
-from .distributed_tracing import (
-    DistributedTracingEngine
-)
 from .service_dependency_map import (
     ServiceDependencyMapEngine
 )
@@ -627,9 +624,6 @@ from .observability_report import (
 )
 from .observability_intelligence_control_center import (
     ObservabilityIntelligenceControlCenterGenerator
-)
-from .automated_remediation import (
-    AutomatedRemediationEngine
 )
 from .observability_automation import (
     ObservabilityAutomationEngine
@@ -741,9 +735,6 @@ from .reliability_automation import (
 )
 from .reliability_remediation import (
     ReliabilityRemediationEngine
-)
-from .reliability_governance import (
-    ReliabilityGovernanceEngine
 )
 from .autonomous_reliability import (
     AutonomousReliabilityEngine
@@ -3510,16 +3501,6 @@ class PipelineSchemaGenerator:
             .generate()
         )
 
-    def generate_reliability_governance(
-        self
-    ):
-
-        return (
-            self
-            .reliability_governance_engine
-            .generate()
-        )
-
     def generate_reliability_remediation(
         self
     ):
@@ -3560,16 +3541,6 @@ class PipelineSchemaGenerator:
             .generate()
         )
 
-    def generate_reliability_scorecard(
-        self
-    ):
-
-        return (
-            self
-            .reliability_scorecard_engine
-            .generate()
-        )
-
     def generate_reliability_risks(
         self
     ):
@@ -3590,16 +3561,6 @@ class PipelineSchemaGenerator:
             .generate()
         )
 
-    def generate_reliability_forecast(
-        self
-    ):
-
-        return (
-            self
-            .reliability_forecasting_engine
-            .generate()
-        )
-
     def generate_availability_model(
         self
     ):
@@ -3607,16 +3568,6 @@ class PipelineSchemaGenerator:
         return (
             self
             .availability_modeling_engine
-            .generate()
-        )
-
-    def generate_failure_patterns(
-        self
-    ):
-
-        return (
-            self
-            .failure_pattern_detection_engine
             .generate()
         )
 
@@ -4984,26 +4935,6 @@ class PipelineSchemaGenerator:
             )
         )
 
-    def generate_deployment_automation(
-        self,
-        project,
-        deployment_artifacts
-    ):
-
-        execution_plan = (
-            self.generate_deployment_execution_plan(
-                project,
-                deployment_artifacts
-            )
-        )
-
-        return (
-            self.automation_engine
-            .generate(
-                execution_plan
-            )
-        )
-
     def generate_deployment_control_center(
         self,
         project,
@@ -5579,18 +5510,6 @@ class PipelineSchemaGenerator:
 
         return (
             self.openapi_description_generator
-            .generate(
-                endpoint
-            )
-        )
-
-    def generate_api_examples(
-        self,
-        endpoint
-    ):
-
-        return (
-            self.example_generator
             .generate(
                 endpoint
             )
@@ -6767,16 +6686,6 @@ class PipelineSchemaGenerator:
         return (
             self
             .enterprise_report_generator
-            .generate()
-        )
-
-    def generate_enterprise_intelligence_control_center(
-        self
-    ):
-
-        return (
-            self
-            .enterprise_intelligence_control_center
             .generate()
         )
 

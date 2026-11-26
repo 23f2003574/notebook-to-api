@@ -28,5 +28,5 @@ namespaces = true
 
 [tool.ruff.lint]
 # Bug-finding rules only (syntax errors, undefined names, invalid
-# comparisons); style rules would need a repo-wide cleanup.
-select = ["E9", "F63", "F7", "F82"]
+# comparisons, F811 silently shadowed definitions); style rules would need a repo-wide cleanup.
+select = ["E9", "F63", "F7", "F82", "F811"]

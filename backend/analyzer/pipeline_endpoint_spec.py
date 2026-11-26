@@ -393,12 +393,6 @@ class PipelineEndpointSpec:
 
         return True
 
-    def api_lifecycle_automation_enabled(
-        self
-    ):
-
-        return True
-
     def api_lifecycle_remediation_enabled(
         self
     ):
@@ -682,24 +676,6 @@ class PipelineEndpointSpec:
         return True
 
     def reliability_trend_analysis_enabled(
-        self
-    ):
-
-        return True
-
-    def reliability_forecasting_enabled(
-        self
-    ):
-
-        return True
-
-    def reliability_scorecard_enabled(
-        self
-    ):
-
-        return True
-
-    def reliability_governance_enabled(
         self
     ):
 
