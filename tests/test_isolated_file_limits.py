@@ -67,3 +67,46 @@ def test_invalid_settings_fail_validation(kwargs, message):
 
 def test_valid_settings_pass():
     validate_execution_limits(**KW, isolate=True, max_file_mb=10, max_open_files=64)
+
+
+def _list_open_descriptors():
+    return sorted(int(name) for name in os.listdir("/proc/self/fd") if name.isdigit())
+
+
+def _read_descriptor(fd):
+    return os.read(fd, 16)
+
+
+def _open_one(path):
+    with open(path) as fh:
+        return fh.fileno() >= 0
+
+
+@pytest.fixture
+def many_parent_descriptors():
+    handles = [open(os.devnull) for _ in range(40)]
+    yield handles
+    for handle in handles:
+        handle.close()
+
+
+def test_open_file_cap_works_when_the_parent_holds_more_descriptors_than_the_cap(
+    tmp_path, monkeypatch, many_parent_descriptors,
+):
+    monkeypatch.setenv("NOTEBOOK_API_ISOLATE_MAX_OPEN_FILES", "32")
+    target = tmp_path / "f"
+    target.write_text("x")
+    assert run_isolated(_open_one, args=(str(target),), timeout=20) is True
+
+
+def test_child_cannot_use_a_descriptor_inherited_from_the_parent(many_parent_descriptors):
+    secret = many_parent_descriptors[0].fileno()
+    with pytest.raises(IsolatedExecutionError, match="OSError|Bad file descriptor"):
+        run_isolated(_read_descriptor, args=(secret,), timeout=20)
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc/self/fd"), reason="needs /proc")
+def test_child_keeps_only_standard_streams_and_its_result_pipe(many_parent_descriptors):
+    inherited = run_isolated(_list_open_descriptors, timeout=20)
+    assert len(inherited) <= 6, inherited
+    assert not set(inherited) & {h.fileno() for h in many_parent_descriptors}

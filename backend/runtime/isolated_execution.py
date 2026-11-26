@@ -216,6 +216,33 @@ def _apply_cpu_limit(limit_seconds: float) -> None:
     resource.setrlimit(resource.RLIMIT_CPU, (min(soft, new_hard), new_hard))
 
 
+def _close_inherited_descriptors(keep: Sequence[int]) -> None:
+    """Close every descriptor this forked child inherited except 0-2 and ``keep``.
+
+    A forked child holds copies of whatever the parent had open: its listening socket, the audit
+    database, other workers' pipes. Notebook code must not be able to read or write those, and
+    they also count against RLIMIT_NOFILE, so a low cap could leave the child unable to open its
+    first file. Best effort and POSIX only: a failure to enumerate or close never stops the run.
+    """
+    if not hasattr(os, "closerange"):
+        return
+    protected = sorted({0, 1, 2, *(fd for fd in keep if isinstance(fd, int) and fd >= 0)})
+    try:
+        import resource
+        soft = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+        top = 1 << 16 if soft == resource.RLIM_INFINITY else min(int(soft), 1 << 20)
+    except (ImportError, ValueError, OSError):
+        top = 1 << 16
+    start = 0
+    for fd in protected + [top]:
+        if fd > start:
+            try:
+                os.closerange(start, fd)
+            except OSError:
+                pass
+        start = max(start, fd + 1)
+
+
 def _apply_file_limits() -> None:
     """Disable core dumps and apply the optional file-size / open-file caps in the child.
 
@@ -343,6 +370,7 @@ def _child(
                 except OSError:
                     pass
             scrub_service_secrets()
+            _close_inherited_descriptors([conn.fileno()])
             try:
                 _apply_file_limits()
             except ImportError:  # no `resource` module on this platform
@@ -511,6 +539,7 @@ def _worker_main(conn: Any, handler: Callable[[Any], Any], memory_limit_mb: floa
         except OSError:
             pass
     scrub_service_secrets()
+    _close_inherited_descriptors([conn.fileno()])
     # Forked from the app: forget its children and any lock held at fork time.
     _ACTIVE_LOCK = threading.Lock()
     _FORK_LOCK = threading.Lock()
