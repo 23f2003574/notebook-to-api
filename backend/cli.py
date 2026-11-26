@@ -7223,7 +7223,16 @@ def _dispatch_core_command(args):
     elif args.command == "dashboard-deployment":
         from backend.generator.dashboard_deployment import generate_dashboard_deployment
 
-        written = generate_dashboard_deployment(args.output)
+        try:
+            written = generate_dashboard_deployment(
+                args.output, node_image=args.node_image, python_image=args.python_image,
+                require_pinned=args.require_pinned,
+            )
+        except ValueError as exc:
+            if "base image" not in str(exc):
+                raise
+            print(f"\n✗ {exc}", file=sys.stderr)
+            sys.exit(1)
         print(f"Wrote {', '.join(written)} to {args.output}")
         print(f"Build it from the repository root: docker build -f {Path(args.output).as_posix()}/Dockerfile -t notebook2api-dashboard .")
         print(f"(see {Path(args.output).as_posix()}/README.md for running it, durable audit storage and Docker access)")
@@ -16139,6 +16148,9 @@ def main():
         help="Write Dockerfile, docker-compose.yml and kubernetes.yaml for the dashboard itself, with a persistent governance audit volume."
     )
     dashboard_deployment_parser.add_argument("--output", default="dashboard-deployment", help="Directory to write the files to.")
+    dashboard_deployment_parser.add_argument("--node-image", dest="node_image", default=None, help="Image for the frontend build stage instead of node:22-slim, e.g. node@sha256:<digest>.")
+    dashboard_deployment_parser.add_argument("--python-image", dest="python_image", default=None, help="Image for the runtime stage instead of python:3.13-slim, e.g. python@sha256:<digest>.")
+    dashboard_deployment_parser.add_argument("--require-pinned", dest="require_pinned", action="store_true", help="Refuse to write the files unless both images are pinned by digest (name@sha256:<64 hex>).")
 
     remote_audit_parser = subparsers.add_parser(
         "remote-audit",

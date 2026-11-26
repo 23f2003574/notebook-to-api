@@ -281,6 +281,10 @@ or `cp .env.example .env`, set the key, and `docker compose -f {compose} up --bu
   --build`) loses nothing as long as the same volume is mounted. `GET /api/health` reports
   `notebook_storage.durable`, and the Prometheus gauge `notebook_to_api_notebook_storage_durable` mirrors it.
   The root filesystem is read-only in the compose and Kubernetes files; only `/data` and `/tmp` are writable.
+- **Reproducible base images.** The Dockerfile starts from `node:22-slim` and `python:3.13-slim`, tags that
+  move. Regenerate it with `notebook-to-api dashboard-deployment --node-image node@sha256:<digest>
+  --python-image python@sha256:<digest> --require-pinned` to build from exact images (and to refuse
+  floating tags).
 - **Kubernetes resources.** `kubernetes.yaml` holds the PersistentVolumeClaim, the Deployment (service-account
   token not mounted), a Service on port 8001 and a NetworkPolicy that admits ingress to port 8001 only.
   Egress is left unrestricted; add your own egress policy if your cluster needs one.
@@ -301,11 +305,32 @@ def _posix(path: str) -> str:
     return Path(path).as_posix()
 
 
-def generate_dashboard_deployment(output_dir: str | Path, repo_root: str | Path | None = None) -> list[str]:
+DEFAULT_NODE_IMAGE = "node:22-slim"
+DEFAULT_PYTHON_IMAGE = "python:3.13-slim"
+
+
+def generate_dashboard_deployment(
+    output_dir: str | Path,
+    repo_root: str | Path | None = None,
+    node_image: str | None = None,
+    python_image: str | None = None,
+    require_pinned: bool = False,
+) -> list[str]:
     """Write the dashboard's Dockerfile, Dockerfile.dockerignore, compose, Kubernetes, .env.example
     and README files. The build context is the repository root, so the compose file points at it
     relative to `output_dir`. Raises ValueError when `repo_root` lacks the sources the image needs
     (the dashboard image cannot be built from an installed package alone)."""
+    from backend.generator.docker_generator import base_image_is_digest_pinned, validate_base_image
+
+    node = validate_base_image(node_image) if node_image else DEFAULT_NODE_IMAGE
+    python = validate_base_image(python_image) if python_image else DEFAULT_PYTHON_IMAGE
+    if require_pinned:
+        floating = [ref for ref in (node, python) if not base_image_is_digest_pinned(ref)]
+        if floating:
+            raise ValueError(
+                f"base image(s) not pinned by digest: {', '.join(floating)}; pass --node-image and "
+                "--python-image as name@sha256:<64 hex>"
+            )
     root = Path(repo_root) if repo_root is not None else REPO_ROOT
     missing = [name for name in ("backend", "requirements.txt", "constraints.txt", "frontend/package-lock.json")
                if not (root / name).exists()]
@@ -320,7 +345,9 @@ def generate_dashboard_deployment(output_dir: str | Path, repo_root: str | Path 
     compose = _posix(os.path.relpath((out / "docker-compose.yml").resolve(), root.resolve()))
     context = _posix(os.path.relpath(root.resolve(), out.resolve()))
     files = {
-        "Dockerfile": DOCKERFILE.replace("{dockerfile}", dockerfile),
+        "Dockerfile": DOCKERFILE.replace("{dockerfile}", dockerfile)
+        .replace(f"FROM {DEFAULT_NODE_IMAGE} AS frontend", f"FROM {node} AS frontend")
+        .replace(f"\nFROM {DEFAULT_PYTHON_IMAGE}\n", f"\nFROM {python}\n"),
         "Dockerfile.dockerignore": DOCKERIGNORE,
         "docker-compose.yml": COMPOSE.replace("{context}", context).replace("{dockerfile}", dockerfile),
         "kubernetes.yaml": KUBERNETES,
