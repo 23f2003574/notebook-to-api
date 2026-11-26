@@ -103,7 +103,11 @@ jobs:
           nb.cells.append(nbformat.v4.new_code_cell("import tabulate\ndef table(a: int) -> str:\n    return tabulate.tabulate([[a]])\n"))
           nbformat.write(nb, "pinned.ipynb")
           PY
-          python -m backend.cli compile pinned.ipynb --output pinned_app --resolve-versions --require-pinned
+          # --require-pinned also demands a digest-pinned base image: resolve today's python:3.13-slim.
+          BASE_DIGEST=$(docker buildx imagetools inspect python:3.13-slim --format '{{.Manifest.Digest}}')
+          python -m backend.cli compile pinned.ipynb --output pinned_app --resolve-versions --require-pinned \
+            --base-image "python@${BASE_DIGEST}"
+          grep -E '^FROM python@sha256:[0-9a-f]{64}$' pinned_app/Dockerfile
           grep -E '^tabulate==' pinned_app/requirements.txt
           docker build -t n2a-pinned pinned_app
 

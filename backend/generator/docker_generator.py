@@ -265,6 +265,34 @@ def torch_weights_content(torch_weights):
     return "\n".join(lines) + "\n"
 
 
+BASE_IMAGE_ENV = "NOTEBOOK_API_BASE_IMAGE"
+_IMAGE_REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/:-]*(@sha256:[0-9a-f]{64})?")
+
+
+def validate_base_image(reference):
+    """The base-image reference, stripped, or ValueError. It becomes the Dockerfile's FROM line, so
+    it must be one token of image-name characters; a digest, when present, must be a full
+    ``@sha256:<64 hex>``."""
+    ref = (reference or "").strip()
+    if not _IMAGE_REF.fullmatch(ref):
+        raise ValueError(
+            f"invalid base image {reference!r}: use an image reference such as python:3.13-slim or "
+            "python@sha256:<64 hexadecimal characters>"
+        )
+    return ref
+
+
+def base_image_is_digest_pinned(reference):
+    """True when `reference` pins an exact image with ``name@sha256:<digest>`` (a bare tag can move)."""
+    return "@sha256:" in (reference or "") and bool(_IMAGE_REF.fullmatch(reference.strip()))
+
+
+def configured_base_image(environ=None):
+    """The validated base image from NOTEBOOK_API_BASE_IMAGE, or None when it is unset or empty."""
+    value = (os.environ if environ is None else environ).get(BASE_IMAGE_ENV, "").strip()
+    return validate_base_image(value) if value else None
+
+
 def dockerfile_content(
     package_name="generated",
     python_version="3.11",
@@ -272,6 +300,7 @@ def dockerfile_content(
     hub_models=None,
     language_data=None,
     torch_weights=None,
+    base_image=None,
 ):
     """The exact Dockerfile text generate_dockerfile (below) writes to
     disk, as a pure string -- no filesystem access at all.
@@ -294,8 +323,15 @@ def dockerfile_content(
     unaffected.
     """
 
+    base_image = validate_base_image(base_image) if base_image else configured_base_image()
+    from_line = base_image or f"python:{python_version}-slim"
+    pin_note = (
+        "# Base image pinned by digest (NOTEBOOK_API_BASE_IMAGE / --base-image): rebuilds use these exact layers.\n"
+        if base_image and base_image_is_digest_pinned(base_image) else ""
+    )
+
     return f"""\
-FROM python:{python_version}-slim
+{pin_note}FROM {from_line}
 
 # Python buffers stdout/stderr in blocks (not line-by-line) whenever it
 # isn't attached to a real terminal -- which a container's stdout never

@@ -1655,6 +1655,29 @@ def _save_media_from_result(result, directory, stem):
     return walk(result), saved
 
 
+def _apply_base_image(args):
+    """Validate --base-image / NOTEBOOK_API_BASE_IMAGE and export the choice for the Dockerfile
+    generator. Returns an error message, or None when compiling may go ahead. With --require-pinned a
+    base image that is not digest-pinned (including the default python:<version>-slim tag) is refused."""
+    from backend.generator.docker_generator import (
+        BASE_IMAGE_ENV, base_image_is_digest_pinned, configured_base_image, validate_base_image,
+    )
+
+    try:
+        chosen = validate_base_image(args.base_image) if args.base_image else configured_base_image()
+    except ValueError as exc:
+        return str(exc)
+    if args.require_pinned and not (chosen and base_image_is_digest_pinned(chosen)):
+        shown = chosen or "the default python:<version>-slim tag"
+        return (
+            f"the Dockerfile base image is not pinned by digest ({shown}) and --require-pinned is set. "
+            "Pass --base-image name@sha256:<64 hex> (or set NOTEBOOK_API_BASE_IMAGE)."
+        )
+    if chosen:
+        os.environ[BASE_IMAGE_ENV] = chosen
+    return None
+
+
 def _startup_problem_count(data):
     """How many things compile accepts but the compiled app will choke on or
     ignore: typo'd/malformed directives, top-level input()/data-file reads,
@@ -2373,6 +2396,10 @@ def _dispatch_core_command(args):
         # --drop-past-sunset: see _apply_drop_past_sunset.
         if args.drop_past_sunset:
             only, exclude = apply_drop_past_sunset(args.notebook, only, exclude)
+        base_image_problem = _apply_base_image(args)
+        if base_image_problem:
+            print(f"\n✗ {base_image_problem}", file=sys.stderr)
+            sys.exit(1)
         if args.resolve_versions:
             from backend.compiler import begin_version_resolution
 
@@ -10923,11 +10950,22 @@ def main():
     )
     compile_parser.add_argument("notebook", help="Path to the notebook file.")
     compile_parser.add_argument(
+        "--base-image",
+        dest="base_image",
+        default=None,
+        help=(
+            "Base image for the generated Dockerfile's FROM line instead of python:<version>-slim "
+            "(also NOTEBOOK_API_BASE_IMAGE). Use name@sha256:<digest> to pin the exact image; with "
+            "--require-pinned a floating tag is refused."
+        ),
+    )
+    compile_parser.add_argument(
         "--require-pinned",
         action="store_true",
         dest="require_pinned",
         help=(
-            "After compiling, exit with status 1 if any dependency in the "
+            "Also requires the Dockerfile's base image to be pinned by digest (--base-image "
+            "name@sha256:<digest>). After compiling, exit with status 1 if any dependency in the "
             "generated requirements.txt has no version pin (a package not "
             "installed in the compiling Python environment is listed "
             "unpinned). The app is still written; this makes builds "

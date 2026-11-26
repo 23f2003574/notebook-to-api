@@ -74,6 +74,11 @@ Run the container:
 ```bash
 docker run -p 8000:8000 notebook-api
 ```
+
+The Dockerfile starts from `python:<version>-slim`, a tag that moves. For reproducible builds pin the
+exact base image by digest: `compile notebook.ipynb --base-image python@sha256:<64 hex digest>` (or set
+`NOTEBOOK_API_BASE_IMAGE`). With `--require-pinned` the compile is refused unless the base image is
+digest-pinned and every requirement is version-pinned.
 Visit `http://localhost:8000/docs` to explore the generated API.
 
 ## Deployment Governance Persistence Diagnostics
