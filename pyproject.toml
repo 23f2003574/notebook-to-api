@@ -30,3 +30,25 @@ namespaces = true
 # Bug-finding rules only (syntax errors, undefined names, invalid
 # comparisons, F811 silently shadowed definitions); style rules would need a repo-wide cleanup.
 select = ["E9", "F63", "F7", "F82", "F811"]
+
+# Coverage of the security-sensitive modules, measured over the whole suite on Python 3.13 (see the
+# "Run tests with coverage" step in .github/workflows/tests.yml). Measured 96% overall when this was
+# added (isolated_execution.py 71%: code that runs in forked children is not traced). The floor sits
+# below that so only a real loss of coverage fails CI; raise it when coverage rises, never lower it
+# to make a build pass.
+[tool.coverage.run]
+source = ["backend"]
+concurrency = ["thread", "multiprocessing"]
+
+[tool.coverage.report]
+fail_under = 90
+include = [
+    "backend/dashboard.py",
+    "backend/auth_metrics.py",
+    "backend/serve.py",
+    "backend/runtime/isolated_execution.py",
+    "backend/runtime/execution_limits.py",
+    "backend/generator/api_generator.py",
+    "backend/generator/docker_generator.py",
+    "backend/generator/kubernetes_generator.py",
+]
