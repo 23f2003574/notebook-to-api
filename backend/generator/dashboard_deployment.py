@@ -145,6 +145,7 @@ spec:
     metadata:
       labels: {{app: notebook2api-dashboard}}
     spec:
+      automountServiceAccountToken: false   # the dashboard never calls the Kubernetes API
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -215,6 +216,34 @@ spec:
             claimName: notebook2api-dashboard-data
         - name: tmp
           emptyDir: {{sizeLimit: 1Gi}}   # scratch space only: nothing durable lives here
+---
+# Reaches the dashboard from inside the cluster; expose it with an Ingress or `kubectl port-forward`.
+apiVersion: v1
+kind: Service
+metadata:
+  name: notebook2api-dashboard
+spec:
+  selector: {{app: notebook2api-dashboard}}
+  ports:
+    - name: http
+      port: 8001
+      targetPort: 8001
+---
+# Only the dashboard port accepts traffic. Egress is not restricted here: the dashboard needs DNS and,
+# for remote builds and webhooks, whatever destinations you allow; add an egress policy for your cluster.
+# Enforced only by a CNI that implements NetworkPolicy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: notebook2api-dashboard
+spec:
+  podSelector:
+    matchLabels: {{app: notebook2api-dashboard}}
+  policyTypes: ["Ingress"]
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8001
 """
 
 ENV_EXAMPLE = """# Required: the dashboard refuses to listen on a non-loopback address without a key. Use at least
@@ -252,6 +281,9 @@ or `cp .env.example .env`, set the key, and `docker compose -f {compose} up --bu
   --build`) loses nothing as long as the same volume is mounted. `GET /api/health` reports
   `notebook_storage.durable`, and the Prometheus gauge `notebook_to_api_notebook_storage_durable` mirrors it.
   The root filesystem is read-only in the compose and Kubernetes files; only `/data` and `/tmp` are writable.
+- **Kubernetes resources.** `kubernetes.yaml` holds the PersistentVolumeClaim, the Deployment (service-account
+  token not mounted), a Service on port 8001 and a NetworkPolicy that admits ingress to port 8001 only.
+  Egress is left unrestricted; add your own egress policy if your cluster needs one.
 - **Audit storage must be durable.** The image runs with `NOTEBOOK2API_ENVIRONMENT=production`, so the
   dashboard refuses to start when the governance audit database is on the container's disposable layer.
   Mount a volume at `/data` (the compose and Kubernetes files do) and assert it with
