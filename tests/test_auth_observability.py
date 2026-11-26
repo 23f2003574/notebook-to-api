@@ -109,7 +109,7 @@ def test_dashboard_counts_exposes_and_logs_the_same_events(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING, logger="uvicorn.error"):
         codes = [client.get("/api/health", headers={"X-API-Key": GUESS}).status_code for _ in range(4)]
     assert codes == [401, 401, 429, 429]
-    assert auth_metrics.totals() == {"failures": 2, "throttled": 2, "lockouts": 1, "denied": 0}
+    assert auth_metrics.totals() == {"failures": 2, "throttled": 2, "lockouts": 1, "denied": 0, "expired_keys": 0}
     text = client.get("/api/metrics/prometheus", headers={"X-API-Key": "dash-key"}).text if False else auth_metrics.prometheus_text()
     assert "notebook_to_api_dashboard_auth_failures_total 2" in text and "notebook_to_api_dashboard_auth_lockouts_total 1" in text
     events = _events(caplog)

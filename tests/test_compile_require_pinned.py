@@ -8,6 +8,8 @@ import nbformat
 from backend.compiler import unpinned_requirements
 
 ROOT = Path(__file__).resolve().parent.parent
+# --require-pinned also demands a digest-pinned base image; these tests are about requirements.txt.
+PINNED_BASE = ("--base-image", "python@sha256:" + "ab" * 32)
 
 
 def _compile(tmp_path, source, *flags):
@@ -27,7 +29,7 @@ def test_unpinned_requirements_lists_only_entries_without_a_version(tmp_path):
 
 
 def test_fully_pinned_project_passes_the_gate(tmp_path):
-    result = _compile(tmp_path, "def add(a: int) -> int:\n    return a\n", "--require-pinned")
+    result = _compile(tmp_path, "def add(a: int) -> int:\n    return a\n", "--require-pinned", *PINNED_BASE)
     assert result.returncode == 0, result.stdout + result.stderr
     assert unpinned_requirements(str(tmp_path / "out" / "requirements.txt")) == []
 
@@ -36,7 +38,7 @@ def test_uninstalled_dependency_fails_the_gate_but_still_writes_the_app(tmp_path
     source = "import zzz_not_a_real_pkg\n\ndef add(a: int) -> int:\n    return a\n"
     plain = _compile(tmp_path, source)
     assert plain.returncode == 0  # default behavior unchanged: warns, does not fail
-    gated = _compile(tmp_path, source, "--require-pinned")
+    gated = _compile(tmp_path, source, "--require-pinned", *PINNED_BASE)
     assert gated.returncode == 1
     assert "zzz-not-a-real-pkg" in gated.stdout.replace("_", "-") and "--require-pinned" in gated.stdout
     assert (tmp_path / "out" / "app.py").exists()
