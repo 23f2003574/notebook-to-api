@@ -77,8 +77,15 @@ test('edit a version note, export the history, import it again, then delete the 
 
   // The import itself saved the replaced notebook as a version, so pick the annotated one.
   const annotated = page.getByTestId(`version-${NAME}`).filter({ hasText: 'before the subtract change' })
-  await annotated.getByRole('button', { name: /^Delete the version saved/ }).click()
-  await annotated.getByRole('button', { name: 'Yes, delete version' }).click()
+  // The library reloads the version list after the import; the list re-renders while that settles,
+  // so retry the whole open-confirm-and-delete sequence instead of clicking a row that is replaced.
+  await expect(page.getByTestId(`version-${NAME}`)).toHaveCount(2)
+  await expect(async () => {
+    const row = page.getByTestId(`version-${NAME}`).filter({ hasText: 'before the subtract change' })
+    if (await row.count() === 0) return
+    await row.getByRole('button', { name: /^Delete the version saved/ }).click({ timeout: 3000 })
+    await row.getByRole('button', { name: 'Yes, delete version' }).click({ timeout: 3000 })
+  }).toPass({ timeout: 30_000 })
   await expect(annotated).toHaveCount(0)
   const after = await (await request.get(`/api/notebooks/${NAME}/versions`)).json()
   for (const version of after.versions) {
