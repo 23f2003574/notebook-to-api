@@ -9031,7 +9031,12 @@ def test_notebook_storage_reports_zeros_for_an_empty_catalog():
     resp = client.get("/api/notebooks/storage")
 
     assert resp.status_code == 200
-    assert resp.json() == {
+    body = resp.json()
+    # free_disk_bytes / min_free_disk_bytes describe the host volume, so they are checked by
+    # type; everything else is the catalog's own accounting and must be exact.
+    assert isinstance(body.pop("free_disk_bytes"), int | None)
+    assert isinstance(body.pop("min_free_disk_bytes"), int)
+    assert body == {
         "status": "success",
         "notebooks": [],
         "notebook_count": 0,
@@ -32557,8 +32562,13 @@ def test_health_check_never_leaks_the_source_notebooks_server_side_filesystem_pa
     resp = client.get("/api/health")
 
     assert resp.status_code == 200
+    body = json.dumps(resp.json())
     assert "source_notebook" not in resp.json()
-    assert "uploads" not in json.dumps(resp.json())
+    # The property is "no server-side path to the notebook leaks", not "the word uploads never
+    # appears": the storage warnings legitimately name NOTEBOOK_API_UPLOAD_DIR-style settings, and
+    # a checkout under a temporary directory produces them.
+    assert os.path.abspath(UPLOAD_DIR) not in body
+    assert os.path.abspath(os.path.join(UPLOAD_DIR, "health_check_no_leak_test.ipynb")) not in body
 
 
 def test_dashboard_metrics_prometheus_requires_no_body_or_auth():
