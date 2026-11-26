@@ -55,6 +55,12 @@ test('edit a version note, export the history, import it again, then delete the 
   const noteReply = await request.get(`/api/notebooks/${NAME}/versions/${listed.versions[0].version_id}/note`)
   expect(JSON.stringify(await noteReply.json())).toContain('before the subtract change')
 
+  await versions(page).getByRole('button', { name: /^Copy the version saved .* to a new notebook$/ }).click()
+  await versions(page).getByRole('textbox', { name: /^Name of the new notebook/ }).fill('feat_copy.ipynb')
+  await versions(page).getByRole('button', { name: 'Copy version' }).click()
+  await expect(page.getByRole('button', { name: 'Rename feat_copy.ipynb', exact: true })).toBeVisible()
+  expect((await request.get('/api/notebooks/feat_copy.ipynb/versions')).ok()).toBeTruthy()
+
   const [download] = await Promise.all([
     page.waitForEvent('download'),
     versions(page).getByRole('button', { name: 'Export versions (.zip)' }).click(),
@@ -80,6 +86,8 @@ test('edit a version note, export the history, import it again, then delete the 
     expect(JSON.stringify(await reply.json())).not.toContain('before the subtract change')
   }
 
-  const cleanup = await request.delete(`/api/notebooks/${NAME}?confirm=true`)
-  expect(cleanup.status()).toBeLessThan(300)
+  for (const name of [NAME, 'feat_copy.ipynb']) {
+    const cleanup = await request.delete(`/api/notebooks/${name}?confirm=true`)
+    expect(cleanup.status()).toBeLessThan(300)
+  }
 })

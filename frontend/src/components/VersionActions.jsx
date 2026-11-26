@@ -8,8 +8,9 @@ const base = (filename) => `/api/notebooks/${encodeURIComponent(filename)}/versi
 // Note editing and deletion for one saved version of a notebook. Both are admin actions on the
 // backend; `canEdit`/`canDelete` only reflect the key's scope so the controls are disabled up front.
 export function VersionActions({ filename, version, canEdit = true, canDelete = true, refusal = '', onChanged }) {
-  const [mode, setMode] = useState('idle') // idle | editing | deleting
+  const [mode, setMode] = useState('idle') // idle | editing | deleting | copying
   const [draft, setDraft] = useState(version.note || '')
+  const [copyName, setCopyName] = useState('')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState(null)
 
@@ -33,6 +34,15 @@ export function VersionActions({ filename, version, canEdit = true, canDelete = 
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note: draft }),
     }), 'Could not save the note')
     if (ok) { setMode('idle'); setMessage({ kind: 'ok', text: 'Note saved' }); onChanged?.() }
+  }
+
+  const copy = async () => {
+    const target = copyName.trim()
+    if (!target) { setMessage({ kind: 'error', text: 'Enter a name for the new notebook' }); return }
+    const ok = await call(() => dashboardFetch(`${base(filename)}/${encodeURIComponent(version.version_id)}/copy`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ new_filename: target }),
+    }), 'Could not copy the version')
+    if (ok) { setMode('idle'); setCopyName(''); setMessage({ kind: 'ok', text: `Copied to ${target}` }); onChanged?.() }
   }
 
   const remove = async () => {
@@ -67,6 +77,18 @@ export function VersionActions({ filename, version, canEdit = true, canDelete = 
       ) : (
         <button type="button" className={link + ' !text-red-400'} disabled={!canDelete || busy} title={canDelete ? undefined : refusal}
           aria-label={`Delete the version saved ${when}`} onClick={() => setMode('deleting')}>Delete</button>
+      )}
+      {mode === 'copying' ? (
+        <form className="inline-flex items-center gap-2" aria-label={`Copy the version saved ${when} to a new notebook`}
+          onSubmit={(event) => { event.preventDefault(); copy() }}>
+          <input aria-label={`Name of the new notebook copied from the version saved ${when}`} value={copyName} placeholder="new-name.ipynb"
+            onChange={(e) => setCopyName(e.target.value)} className="bg-slate-900 border border-slate-600 rounded px-2 py-0.5" />
+          <button type="submit" className={link} disabled={busy}>{busy ? 'Copying...' : 'Copy version'}</button>
+          <button type="button" className={link} onClick={() => { setMode('idle'); setCopyName('') }}>Cancel</button>
+        </form>
+      ) : (
+        <button type="button" className={link} disabled={!canEdit || busy} title={canEdit ? undefined : refusal}
+          aria-label={`Copy the version saved ${when} to a new notebook`} onClick={() => setMode('copying')}>Copy to new notebook</button>
       )}
       {message && <span role={message.kind === 'error' ? 'alert' : 'status'} className={message.kind === 'error' ? 'text-red-400' : 'text-emerald-400'}>{message.text}</span>}
     </span>

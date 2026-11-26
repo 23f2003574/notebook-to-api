@@ -56,6 +56,44 @@ describe('VersionActions', () => {
   })
 })
 
+describe('VersionActions copy', () => {
+  it('copies a version into a new notebook with POST and refreshes', async () => {
+    const fetchMock = vi.fn(async () => reply({ status: 'success' }))
+    vi.stubGlobal('fetch', fetchMock)
+    const onChanged = vi.fn()
+    const { container } = render(<VersionActions filename="a.ipynb" version={VERSION} onChanged={onChanged} />)
+    fireEvent.click(screen.getByText('Copy to new notebook'))
+    fireEvent.change(screen.getByLabelText(/^Name of the new notebook/), { target: { value: ' branch.ipynb ' } })
+    expect((await (await axe.run(container, { rules: { 'color-contrast': { enabled: false } } })).violations).map((v) => v.id)).toEqual([])
+    fireEvent.click(screen.getByText('Copy version'))
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(String(url)).toMatch(/\/api\/notebooks\/a\.ipynb\/versions\/v1\/copy$/)
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({ new_filename: 'branch.ipynb' })
+    expect(screen.getByRole('status')).toHaveTextContent('Copied to branch.ipynb')
+  })
+
+  it('refuses an empty name without calling the backend and shows backend refusals', async () => {
+    const fetchMock = vi.fn(async () => reply({ detail: 'branch.ipynb already exists' }, false, 409))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<VersionActions filename="a.ipynb" version={VERSION} />)
+    fireEvent.click(screen.getByText('Copy to new notebook'))
+    fireEvent.click(screen.getByText('Copy version'))
+    expect(screen.getByRole('alert')).toHaveTextContent('Enter a name')
+    expect(fetchMock).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByLabelText(/^Name of the new notebook/), { target: { value: 'branch.ipynb' } })
+    fireEvent.click(screen.getByText('Copy version'))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('already exists'))
+    expect(screen.getByLabelText(/^Name of the new notebook/)).toBeInTheDocument()
+  })
+
+  it('disables the copy for a key without the scope', () => {
+    render(<VersionActions filename="a.ipynb" version={VERSION} canEdit={false} refusal="needs admin" />)
+    expect(screen.getByText('Copy to new notebook')).toBeDisabled()
+  })
+})
+
 describe('VersionArchive', () => {
   it('exports the archive as a download', async () => {
     const fetchMock = vi.fn(async () => reply({}))
