@@ -922,8 +922,10 @@ async def _require_dashboard_api_key(request: Request, call_next):
             )
 
         key_name = authenticate_dashboard_key(supplied, entries)
+        key_expired = False
 
         if key_name is not None and key_is_expired(key_expiries.get(key_name)):
+            key_expired = True
             # Indistinguishable from a wrong key to the caller; the audit trail names which key it was.
             _record_denied_scope(key_name, key_scopes.get(key_name, "admin"), "an unexpired key", request)
             key_name = None
@@ -943,7 +945,7 @@ async def _require_dashboard_api_key(request: Request, call_next):
         if key_name is None:
             window_count = _auth_record_failure(client)
             auth_metrics.record_failure(
-                client, "missing_key" if not supplied else "invalid_key",
+                client, "expired_key" if key_expired else "missing_key" if not supplied else "invalid_key",
                 window_count, dashboard_auth_failure_limit_per_minute(),
             )
             return JSONResponse(status_code=401, content={"detail": "Invalid API key"})

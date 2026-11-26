@@ -71,3 +71,25 @@ def test_near_expiry_and_expired_keys_warn_at_startup(monkeypatch, clock, caplog
     text = caplog.text
     assert "'soon' expires in 3 day(s)" in text and "'gone' expired on 2026-11-01" in text and "far" not in text
     assert KEY not in text
+
+
+def test_expired_key_is_counted_apart_from_invalid_keys_and_the_401_is_unchanged(client, clock, monkeypatch):
+    from backend import auth_metrics
+    auth_metrics.reset()
+    c = client(f"alice:{KEY}:read@2026-11-24")
+    expired = c.get("/api/whoami", headers={"X-API-Key": KEY})
+    wrong = c.get("/api/whoami", headers={"X-API-Key": "not-a-real-key-0123456789"})
+    assert expired.status_code == wrong.status_code == 401
+    assert expired.json() == wrong.json() == {"detail": "Invalid API key"}
+    totals = auth_metrics.totals()
+    assert totals["failures"] == 2 and totals["expired_keys"] == 1
+    assert "notebook_to_api_dashboard_auth_expired_keys_total 1" in auth_metrics.prometheus_text()
+
+
+def test_a_client_cannot_make_a_wrong_key_count_as_expired(client, clock):
+    from backend import auth_metrics
+    auth_metrics.reset()
+    c = client(f"alice:{KEY}:read@2026-11-24")
+    for header in ({"X-API-Key": "expired_key"}, {"X-Expired": "1", "X-API-Key": "x" * 24}, {}):
+        c.get("/api/whoami", headers=header)
+    assert auth_metrics.totals()["expired_keys"] == 0

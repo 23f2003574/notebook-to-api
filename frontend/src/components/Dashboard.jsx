@@ -1,3 +1,4 @@
+import KeyExpiryNotice from './KeyExpiryNotice'
 import { useEffect, useRef, useState } from 'react'
 import NotebookUpload from './NotebookUpload'
 import OperationHistory from './OperationHistory'
@@ -306,6 +307,7 @@ export default function Dashboard() {
                   Signed in as <strong>{caller.name}</strong> ({caller.scope} access)
                 </p>
               )}
+              <KeyExpiryNotice caller={caller} />
               {backendStatus !== 'locked' && getDashboardKey() && (
                 <button
                   type="button"

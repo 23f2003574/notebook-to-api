@@ -8,7 +8,7 @@ import logging
 import threading
 
 _LOCK = threading.Lock()
-_TOTALS = {"failures": 0, "throttled": 0, "lockouts": 0, "denied": 0}
+_TOTALS = {"failures": 0, "throttled": 0, "lockouts": 0, "denied": 0, "expired_keys": 0}
 
 
 def reset():
@@ -34,6 +34,8 @@ def record_failure(client, reason, window_count, limit):
     moment the client is locked out."""
     with _LOCK:
         _TOTALS["failures"] += 1
+        if reason == "expired_key":
+            _TOTALS["expired_keys"] += 1
         if limit > 0 and window_count == limit:
             _TOTALS["lockouts"] += 1
     if window_count <= 1:
@@ -62,6 +64,7 @@ def prometheus_text():
         ("notebook_to_api_dashboard_auth_throttled_total", "Requests refused with 429 because their client had too many failed attempts.", "throttled"),
         ("notebook_to_api_dashboard_auth_lockouts_total", "Times a client reached the failed-authentication limit.", "lockouts"),
         ("notebook_to_api_dashboard_auth_denied_total", "Authenticated requests refused with 403 because the key's scope was too narrow.", "denied"),
+        ("notebook_to_api_dashboard_auth_expired_keys_total", "Requests rejected because the key presented has expired (also counted in the failures total).", "expired_keys"),
     ):
         text += f"# HELP {metric} {help_text}\n# TYPE {metric} counter\n{metric} {totals_now[key]}\n"
     return text
