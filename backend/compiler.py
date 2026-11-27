@@ -5207,6 +5207,92 @@ def pip_dry_run_resolver(requirements, python_executable=None, timeout=300):
     }
 
 
+def pip_hash_resolver(requirements, python_executable=None, timeout=300):
+    """[(normalized name, version, sha256 hex)] for every distribution pip would install for
+    `requirements` (direct and transitive), with the digest of the exact file pip would download for
+    this interpreter and platform (`pip install --dry-run --report`; nothing is installed). A wheel
+    is platform specific, so a lock made here only matches the platform it was resolved on."""
+    import json
+    import subprocess
+    import sys
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as scratch:
+        report = os.path.join(scratch, "report.json")
+        command = [
+            python_executable or sys.executable, "-m", "pip", "install", "--dry-run", "--ignore-installed",
+            "--quiet", "--disable-pip-version-check", "--no-input", "--report", report, *requirements,
+        ]
+        try:
+            completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise VersionResolutionError(f"pip could not be run ({type(exc).__name__})") from None
+        if completed.returncode != 0:
+            lines = [line for line in (completed.stderr or "").splitlines() if line.strip()]
+            raise VersionResolutionError(lines[-1][:200] if lines else "pip failed")
+        try:
+            with open(report, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            raise VersionResolutionError("pip produced no readable report") from None
+    locked = []
+    for item in data.get("install", []):
+        info = (item.get("download_info") or {}).get("archive_info") or {}
+        digest = (info.get("hashes") or {}).get("sha256")
+        if not digest and str(info.get("hash", "")).startswith("sha256="):
+            digest = info["hash"][len("sha256="):]
+        meta = item.get("metadata") or {}
+        if not digest or not re.fullmatch(r"[0-9a-f]{64}", digest) or not meta.get("name") or not meta.get("version"):
+            raise VersionResolutionError(
+                f"pip reported no sha256 for {meta.get('name', 'a dependency')}; it cannot be hash-pinned")
+        locked.append((_normalized_distribution_name(meta["name"]), meta["version"], digest))
+    return sorted(set(locked))
+
+
+_EXACT_REQUIREMENT = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==([A-Za-z0-9][A-Za-z0-9._+!-]*)$")
+
+
+def lock_requirements_with_hashes(requirements_path, resolver=None):
+    """Rewrite requirements.txt as a complete hash-pinned lock: every direct and transitive
+    dependency as `name==version --hash=sha256:...`, installable with `pip install --require-hashes`.
+    Every existing line must already be an exact `name==version` pin (compile with --resolve-versions
+    or install the libraries here first); anything else raises VersionResolutionError and the file is
+    left untouched. Returns the number of locked distributions."""
+    with open(requirements_path, encoding="utf-8") as f:
+        original = f.read()
+    direct = [line.strip() for line in original.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    loose = [line for line in direct if not _EXACT_REQUIREMENT.match(line)]
+    if loose:
+        raise VersionResolutionError(f"not pinned to an exact version: {', '.join(loose)}")
+    if not direct:
+        return 0
+    locked = (resolver or pip_hash_resolver)(direct)
+    wanted = {_normalized_distribution_name(_EXACT_REQUIREMENT.match(line).group(1)) for line in direct}
+    if not wanted <= {name for name, _version, _digest in locked}:
+        raise VersionResolutionError("the resolver did not return every requested dependency")
+    grouped = {}
+    for name, version, digest in locked:
+        grouped.setdefault((name, version), []).append(digest)
+    lines = ["# Hash-locked by notebook-to-api (--require-hashes): install with `pip install --require-hashes -r`.",
+             "# Hashes are of the files pip chose for the platform that compiled this notebook."]
+    for (name, version), digests in sorted(grouped.items()):
+        lines.append(f"{name}=={version} \\\n    " + " \\\n    ".join(f"--hash=sha256:{d}" for d in sorted(digests)))
+    with open(requirements_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    return len(grouped)
+
+
+def require_hashes_in_dockerfile(dockerfile_path):
+    """Make the Dockerfile's dependency install verify the hashes: `pip install --require-hashes`."""
+    with open(dockerfile_path, encoding="utf-8") as f:
+        text = f.read()
+    old = "pip install --no-cache-dir -r requirements.txt"
+    if old not in text:
+        raise VersionResolutionError("the Dockerfile has no requirements install step to harden")
+    with open(dockerfile_path, "w", encoding="utf-8") as f:
+        f.write(text.replace(old, "pip install --no-cache-dir --require-hashes -r requirements.txt"))
+
+
 def begin_version_resolution(resolver=None):
     """Turn version resolution on for the compiles that follow in this context. Returns the state
     dict (its "result" is filled in by the compile). `resolver(requirements) -> {name: version}`

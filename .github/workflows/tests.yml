@@ -131,6 +131,11 @@ jobs:
           grep -E '^FROM python@sha256:[0-9a-f]{64}$' pinned_app/Dockerfile
           grep -E '^tabulate==' pinned_app/requirements.txt
           docker build -t n2a-pinned pinned_app
+          # The same notebook as a hash-locked build: pip must verify every file it installs.
+          python -m backend.cli compile pinned.ipynb --output hashed_app --resolve-versions --require-hashes
+          grep -q -- '--hash=sha256:' hashed_app/requirements.txt
+          grep -q -- 'pip install --no-cache-dir --require-hashes' hashed_app/Dockerfile
+          docker build -t n2a-hashed hashed_app
 
       - name: Start the sample's generated compose project and check /health
         run: |

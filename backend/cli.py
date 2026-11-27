@@ -2512,6 +2512,20 @@ def _dispatch_core_command(args):
                     )
                 sys.exit(1)
 
+        if args.require_hashes:
+            from backend.compiler import VersionResolutionError, lock_requirements_with_hashes, require_hashes_in_dockerfile
+
+            try:
+                locked = lock_requirements_with_hashes(os.path.join(str(output_dir), "requirements.txt"))
+                require_hashes_in_dockerfile(os.path.join(str(output_dir), "Dockerfile"))
+            except VersionResolutionError as exc:
+                if not args.json_output:
+                    print(f"\n✗ --require-hashes: could not hash-pin requirements.txt ({exc}). "
+                          "Pin every library (--resolve-versions) and check the network, then recompile.")
+                sys.exit(1)
+            if not args.json_output:
+                print(f"\nrequirements.txt hash-locked ({locked} distributions); the image installs with --require-hashes")
+
         if args.fail_on_startup_warnings:
             # A compile that produced no routes is a startup problem too.
             startup_problems = _startup_problem_count(data) + (1 if data["no_endpoints"] else 0)
@@ -10955,6 +10969,17 @@ def main():
             "network needed) and write name==version to requirements.txt, so every image build "
             "installs the same versions. Offline or unresolvable names stay unpinned, with a "
             "warning. The resolver and time are recorded in .compile_metadata.json."
+        ),
+    )
+    compile_parser.add_argument(
+        "--require-hashes",
+        action="store_true",
+        dest="require_hashes",
+        help=(
+            "After compiling, rewrite requirements.txt as a complete hash-pinned lock (every direct and "
+            "transitive dependency with its sha256, resolved by pip for this platform) and make the "
+            "Dockerfile install it with `pip install --require-hashes`. Fails closed (exit 1) if a "
+            "dependency is not pinned to an exact version or a hash cannot be determined."
         ),
     )
     compile_parser.add_argument("notebook", help="Path to the notebook file.")
