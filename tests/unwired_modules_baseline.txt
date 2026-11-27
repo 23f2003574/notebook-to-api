@@ -1,7 +1,6 @@
 # Backend modules unreachable from every entry point when the guard was added (shrink only).
 backend.analyzer.api_candidate_analyzer
 backend.analyzer.call_graph_engine
-backend.analyzer.cell_analyzer
 backend.analyzer.cell_classifier
 backend.analyzer.compiler_optimization_pipeline
 backend.analyzer.control_flow_graph_engine
@@ -16,14 +15,12 @@ backend.analyzer.notebook_model_analyzer
 backend.analyzer.notebook_output_analyzer
 backend.analyzer.notebook_understanding
 backend.analyzer.pipeline_endpoint_spec
-backend.analyzer.pipeline_model
 backend.analyzer.program_dependence_graph_engine
 backend.analyzer.semantic_ast_engine
 backend.analyzer.semantic_code_transformation_engine
 backend.analyzer.static_single_assignment_engine
 backend.analyzer.symbol_resolution_engine
 backend.analyzer.type_inference_engine
-backend.analyzer.variable_tracker
 backend.cloud.autoscaling_engine
 backend.cloud.cloud_infrastructure_lifecycle_orchestrator
 backend.cloud.cloud_platform_control_plane
