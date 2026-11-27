@@ -1185,6 +1185,9 @@ async def _log_dashboard_request_json(request: Request, call_next):
 from backend.dashboard_keys import router as dashboard_keys_router  # noqa: E402
 
 app.include_router(dashboard_keys_router)
+from backend.dashboard_compile_slots import router as dashboard_compile_slots_router  # noqa: E402
+
+app.include_router(dashboard_compile_slots_router)
 app.include_router(upload_router)
 app.include_router(governance_metrics_router)
 app.include_router(governance_health_router)
