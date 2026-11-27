@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import os
 import sqlite3
+import time
 from contextlib import closing
 
 _SCHEMA = ("CREATE TABLE IF NOT EXISTS rate_windows (client TEXT PRIMARY KEY, window_start REAL NOT NULL,"
@@ -24,7 +25,8 @@ def database_path() -> str:
 
 def _connect(path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(path, timeout=5, isolation_level=None)  # we issue BEGIN IMMEDIATE ourselves
-    conn.execute("PRAGMA journal_mode=WAL")
+    if conn.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":  # switching needs an exclusive lock
+        conn.execute("PRAGMA journal_mode=WAL")
     conn.execute(_SCHEMA)
     conn.execute("CREATE INDEX IF NOT EXISTS rate_windows_start ON rate_windows (window_start)")
     return conn
@@ -35,6 +37,20 @@ def client_id(client: str) -> str:
 
 
 def hit(path: str, client: str, now: float, window_seconds: float) -> tuple[float, int]:
+    """Count one request (retrying briefly when another worker holds the database lock)."""
+    delay = 0.02
+    for attempt in range(8):
+        try:
+            return _hit(path, client, now, window_seconds)
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower() or attempt == 7:
+                raise
+            time.sleep(delay)
+            delay *= 2
+    raise AssertionError("unreachable")
+
+
+def _hit(path: str, client: str, now: float, window_seconds: float) -> tuple[float, int]:
     """Count one request from `client` and return (window_start, count) of its current window.
     Raises sqlite3.Error when the database cannot be used (the caller decides how to degrade)."""
     ident = client_id(client)
