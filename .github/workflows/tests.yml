@@ -9,6 +9,11 @@ on:
     branches:
       - main
 
+# Least privilege: every job gets a read-only token. A job that needs more declares it itself
+# (tests/test_workflow_permissions.py rejects anything broader than read access).
+permissions:
+  contents: read
+
 # Each run takes ~30 minutes. A new push to a pull request supersedes its
 # earlier runs, so those are cancelled. Every push to main gets its own group
 # (the commit SHA) and is never cancelled: with one shared group, GitHub drops
