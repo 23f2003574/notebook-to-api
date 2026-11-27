@@ -183,6 +183,31 @@ def hide_service_secrets_in_proc_environ() -> list[str]:
     return blanked
 
 
+def restrict_process_inspection() -> bool:
+    """Make this process non-dumpable (prctl PR_SET_DUMPABLE=0) so that same-user processes,
+    notebook children included, cannot open its /proc/<pid>/mem or attach to it with ptrace.
+
+    Scrubbing environment variables does not stop a forked child from reading the service's
+    memory (API keys, audit key); /proc/<ppid>/mem is readable by the same user unless the parent
+    is non-dumpable. The flag is inherited by forked children. Returns True once the flag is
+    verified, False where the platform has no such control (not Linux). Raises
+    IsolatedExecutionError on Linux when the flag cannot be set, so isolation fails closed."""
+    import ctypes
+    import sys
+
+    if not sys.platform.startswith("linux"):
+        return False
+    pr_set_dumpable, pr_get_dumpable = 4, 3
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        failed = libc.prctl(pr_set_dumpable, 0, 0, 0, 0) != 0 or libc.prctl(pr_get_dumpable, 0, 0, 0, 0) != 0
+    except (OSError, AttributeError):
+        failed = True
+    if failed:
+        raise IsolatedExecutionError("could not make the service non-dumpable; refusing to run isolated code")
+    return True
+
+
 def _apply_memory_limit(limit_mb: float) -> None:
     """Cap the child's address space (RLIMIT_AS) before any notebook code runs.
 
@@ -442,6 +467,7 @@ def run_isolated(
     proc = ctx.Process(target=_child, args=(child_conn, func, tuple(args), dict(kwargs or {}), memory_limit_mb, cpu_limit_seconds), daemon=True)
     try:
         with _FORK_LOCK:
+            restrict_process_inspection()
             proc.start()
         with _ACTIVE_LOCK:
             _ACTIVE[proc.pid] = proc
@@ -606,6 +632,7 @@ class IsolatedWorker:
         if "fork" not in mp.get_all_start_methods():
             raise IsolatedExecutionError('isolated workers are not supported on this platform (no "fork" start method)')
         hide_service_secrets_in_proc_environ()
+        restrict_process_inspection()
         ctx = _context()
         parent_conn, child_conn = ctx.Pipe(duplex=True)
         proc = ctx.Process(target=_worker_main, daemon=True,
