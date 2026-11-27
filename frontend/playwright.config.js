@@ -15,13 +15,20 @@ export default defineConfig({
   testDir: './e2e',
   workers: 1,
   timeout: 90_000,
-  reporter: [['list']],
+  // A failure is retried once in CI only: a pass on retry is reported as "flaky" (visible in the
+  // list output and the uploaded report) instead of failing the build, and the retry records a
+  // trace. Locally nothing is retried, so flakiness shows up while developing.
+  retries: process.env.CI ? 1 : 0,
+  forbidOnly: !!process.env.CI,
+  reporter: process.env.CI ? [['list'], ['html', { open: 'never', outputFolder: 'playwright-report' }]] : [['list']],
+  outputDir: 'test-results',
   use: {
     baseURL: `http://127.0.0.1:${PORT}`,
     launchOptions: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE
       ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE, args: ['--no-sandbox'] }
       : {},
-    trace: 'off',
+    trace: 'on-first-retry',
+    screenshot: 'only-on-failure',
   },
   webServer: {
     command: process.env.E2E_PYTHON ? `${process.env.E2E_PYTHON} -m backend.dashboard` : 'python -m backend.dashboard',
