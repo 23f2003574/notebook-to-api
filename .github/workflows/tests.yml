@@ -71,14 +71,17 @@ jobs:
       - name: Run tests
         if: matrix.python-version != '3.13'
         run: |
-          pytest -n auto --dist loadgroup --durations=25
+          pytest -n auto --dist loadgroup --durations=25 --ignore=tests/test_cli_remote_audit.py
+          # Needs a single, ordered process (its tests share one dashboard and tamper with its database).
+          pytest tests/test_cli_remote_audit.py
 
       # One leg measures coverage of the security-critical modules (the list and the floor are in
       # pyproject.toml); a drop below the recorded floor fails the job.
       - name: Run tests with coverage
         if: matrix.python-version == '3.13'
         run: |
-          pytest -n auto --dist loadgroup --durations=25 --cov --cov-report=term --cov-report=xml:coverage.xml
+          pytest -n auto --dist loadgroup --durations=25 --ignore=tests/test_cli_remote_audit.py --cov --cov-report=term
+          pytest tests/test_cli_remote_audit.py --cov --cov-append --cov-report=term --cov-report=xml:coverage.xml
 
       - name: Upload the coverage report
         if: always() && matrix.python-version == '3.13'

@@ -1,5 +1,27 @@
 """Suite-wide guards against state leaking between tests."""
 import os
+import tempfile
+
+# Under pytest-xdist every worker runs in its own working directory. The dashboard modules default to
+# ./uploads, ./generated and ./data (relative to the working directory), so without this tests on
+# different workers would list and delete each other's files. The worker directory holds real
+# uploads/ (seeded with the tracked sample) and generated/ directories and symlinks to everything
+# else in the repository, so relative paths such as notebooks/sample.ipynb keep working.
+if os.environ.get("PYTEST_XDIST_WORKER"):
+    import shutil
+
+    _repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _work = os.path.join(tempfile.gettempdir(), f"n2a-tests-{os.getpid()}-{os.environ['PYTEST_XDIST_WORKER']}")
+    os.makedirs(_work, exist_ok=True)
+    for _entry in os.listdir(_repo):
+        if _entry in {".git", "uploads", "generated", "data"} or os.path.lexists(os.path.join(_work, _entry)):
+            continue
+        os.symlink(os.path.join(_repo, _entry), os.path.join(_work, _entry))
+    os.makedirs(os.path.join(_work, "uploads"), exist_ok=True)
+    os.makedirs(os.path.join(_work, "generated"), exist_ok=True)
+    if os.path.isfile(os.path.join(_repo, "uploads", "sample.ipynb")):
+        shutil.copy(os.path.join(_repo, "uploads", "sample.ipynb"), os.path.join(_work, "uploads"))
+    os.chdir(_work)
 import signal
 import sys
 import time

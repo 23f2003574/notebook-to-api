@@ -1,6 +1,8 @@
 """NOTEBOOK_API_DASHBOARD_RATE_LIMIT_DB makes the dashboard's request limit hold across workers."""
-import multiprocessing
 import sqlite3
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,16 +10,16 @@ from fastapi.testclient import TestClient
 from backend import dashboard, dashboard_rate_limit as rl
 
 
-def _hammer(args):
-    path, n = args
-    return [rl.hit(path, "10.0.0.1", 1000.0, 60)[1] for _ in range(n)]
+HAMMER = ("import sys; from backend import dashboard_rate_limit as rl; "
+          "print(*[rl.hit(sys.argv[1], '10.0.0.1', 1000.0, 60)[1] for _ in range(25)])")
 
 
 def test_concurrent_workers_never_lose_an_increment(tmp_path):
     path = str(tmp_path / "rl.db")
-    with multiprocessing.get_context("spawn").Pool(4) as pool:
-        results = pool.map(_hammer, [(path, 25)] * 4)
-    counts = sorted(c for r in results for c in r)
+    root = Path(__file__).resolve().parent.parent
+    workers = [subprocess.Popen([sys.executable, "-c", HAMMER, path], cwd=root, stdout=subprocess.PIPE, text=True)
+               for _ in range(4)]
+    counts = sorted(int(c) for w in workers for c in w.communicate(timeout=120)[0].split())
     assert counts == list(range(1, 101))  # 100 hits, each seen exactly once, none repeated
 
 

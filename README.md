@@ -49,6 +49,7 @@ curl -X POST http://localhost:8000/add -H "X-API-Key: notebook-to-api-dev-key" -
 After installing `requirements-dev.txt`, run the same command CI runs from the repository root (`pytest.ini` already puts the repo on the import path). The suite is large; pass a file or `-k` expression to run a part of it:
 ```bash
 .venv/bin/python -m pytest
+.venv/bin/python -m pytest -n auto --dist loadgroup   # parallel, as CI runs it (shared-resource files stay serial)
 .venv/bin/python -m pytest tests/test_compiler.py -k dockerfile
 ```
 

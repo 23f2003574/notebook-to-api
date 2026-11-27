@@ -9,8 +9,9 @@ def test_readme_documents_the_pytest_command_ci_runs_and_the_files_it_names_exis
     ci = (ROOT / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
     section = readme.split("## Running the Tests")[1].split("\n## ")[0]
 
-    assert re.search(r"^\s+pytest\s*$", ci, re.M), "CI no longer runs bare pytest"
+    assert re.search(r"^\s+pytest -n auto --dist loadgroup\b", ci, re.M), "CI no longer runs the parallel pytest command"
     assert ".venv/bin/python -m pytest\n" in section
+    assert ".venv/bin/python -m pytest -n auto --dist loadgroup" in section
     assert "requirements-dev.txt" in readme
     assert "pytest" in (ROOT / "requirements-dev.txt").read_text()
     for name in re.findall(r"pytest (tests/\S+\.py)", section):

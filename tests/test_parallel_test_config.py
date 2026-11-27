@@ -16,9 +16,12 @@ def test_xdist_is_a_pinned_dev_dependency():
 
 def test_ci_runs_both_test_legs_in_parallel_and_reports_slow_tests():
     runs = [s["run"] for s in WORKFLOW["jobs"]["test"]["steps"] if "pytest" in s.get("run", "")]
-    assert len(runs) == 2
+    assert len(runs) == 2  # the non-coverage leg and the coverage leg
     for run in runs:
-        assert "-n auto" in run and "--dist loadgroup" in run and "--durations=25" in run
+        parallel = next(line for line in run.splitlines() if "-n auto" in line)
+        assert "--dist loadgroup" in parallel and "--durations=25" in parallel
+        assert "--ignore=tests/test_cli_remote_audit.py" in parallel
+        assert "pytest tests/test_cli_remote_audit.py" in run  # still run, once, in a single process
 
 
 def test_serial_files_exist_and_are_grouped():

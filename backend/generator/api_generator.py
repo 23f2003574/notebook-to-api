@@ -162,6 +162,8 @@ RESERVED_INFRASTRUCTURE_NAMES = frozenset({
     # off; `_webhook_connect` would disable the SSRF guard). tests/test_reserved_names_cover_generated_app.py
     # derives this inventory from a real generated app.py, so a new generated name fails there.
     "HIDE_ERROR_DETAILS", "IDEMPOTENCY_FINGERPRINTS", "IDEMPOTENCY_KEYS",
+    "_HIDDEN", "_LANDLOCK_DIR_RIGHTS", "_LANDLOCK_FILE_RIGHTS", "_SIDECARS", "_landlock_rules", "hide_protected_paths",
+    "protected_paths", "restrict_process_inspection",
     "ISOLATE_ALLOW_ENV", "scrub_service_secrets", "_blank_secrets_in_loaded_modules", "hide_service_secrets_in_proc_environ", "_is_service_secret", "_allowed_names", "ISOLATE_CPU_LIMIT_SECONDS", "ISOLATE_EXECUTION", "ISOLATE_MAX_PROCESSES",
     "ISOLATE_MAX_FILE_MB", "ISOLATE_MAX_OPEN_FILES", "MIN_OPEN_FILES", "_MAX_FILE", "_MAX_OPEN", "_apply_file_limits", "_close_inherited_descriptors",
     "ISOLATE_MEMORY_LIMIT_MB", "IsolatedExecutionCancelled", "IsolatedExecutionError",
