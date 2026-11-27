@@ -607,8 +607,30 @@ def dashboard_api_keys_and_scopes():
     return dashboard_api_keys_scopes_and_expiries()[:2]
 
 
+def configured_dashboard_keys():
+    """Keys from the environment/file only (not the runtime-managed ones): [(name, digest, length)]."""
+    return _configured_keys_scopes_and_expiries()[0]
+
+
 def dashboard_api_keys_scopes_and_expiries():
-    """(entries, {name: scope}, {name: last valid UTC date}); keys without `@YYYY-MM-DD` never expire."""
+    """(entries, {name: scope}, {name: last valid UTC date}); keys without `@YYYY-MM-DD` never expire.
+    Runtime-managed keys (backend/dashboard_keys.py) are included unless revoked; a configured key of
+    the same name wins."""
+    entries, scopes, expiries = _configured_keys_scopes_and_expiries()
+    from backend import dashboard_keys
+
+    names = {entry[0] for entry in entries}
+    for name, digest, scope, expires in dashboard_keys.active_credentials():
+        if name in names:
+            continue
+        entries.append((name, digest, None))
+        scopes[name] = scope
+        if expires:
+            expiries[name] = expires
+    return entries, scopes, expiries
+
+
+def _configured_keys_scopes_and_expiries():
     scopes = {}
     expiries = {}
     entries = []
@@ -670,6 +692,8 @@ def required_scope(method, path, query=""):
     (delete, rename, restore, tags, deploy, history, governance and experimental routes)."""
     method = method.upper()
     path = path.rstrip("/") or "/"
+    if path == "/api/keys" or path.startswith("/api/keys/"):
+        return "admin"  # key management, including listing, is never open to read or compile keys
     if not (path == "/api" or path.startswith("/api/")) and not _is_public_shell_path(method, path):
         # Routes outside /api/ (the opt-in experimental routers) can read server directories and
         # secrets, so no method on them is open to read or compile keys.
@@ -1145,6 +1169,9 @@ async def _log_dashboard_request_json(request: Request, call_next):
 
 
 # Include API routes
+from backend.dashboard_keys import router as dashboard_keys_router  # noqa: E402
+
+app.include_router(dashboard_keys_router)
 app.include_router(upload_router)
 app.include_router(governance_metrics_router)
 app.include_router(governance_health_router)

@@ -1,0 +1,166 @@
+"""Dashboard API keys managed at runtime (create, rotate, revoke) without a restart.
+
+Keys from NOTEBOOK_API_DASHBOARD_KEY(S)/_KEYS_FILE keep working unchanged and take precedence over
+a stored key of the same name. Managed keys live in a small SQLite database
+(NOTEBOOK_API_DASHBOARD_KEYS_DB, default dashboard_keys.db beside the governance audit database).
+Only the SHA-256 digest of a key is stored; the secret is returned once, by the request that
+creates or rotates it. Revoking, expiring or rotating a key takes effect on the next request
+because authentication reads the store every time. The routes need the admin scope (see
+dashboard.required_scope). Authentication is by the X-API-Key header, never a cookie, so there is
+no ambient credential for a cross-site request to ride on."""
+from __future__ import annotations
+
+import hashlib
+import logging
+import os
+import re
+import secrets
+import sqlite3
+from contextlib import closing
+from datetime import date, datetime, timezone
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException, Request
+
+NAME = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+SCOPES = ("read", "compile", "admin")
+router = APIRouter()
+
+
+def database_path() -> Path:
+    configured = os.getenv("NOTEBOOK_API_DASHBOARD_KEYS_DB", "").strip()
+    if configured:
+        return Path(configured)
+    audit = os.getenv("NOTEBOOK2API_GOVERNANCE_DATABASE_PATH") or "data/notebook2api.db"
+    return Path(audit).parent / "dashboard_keys.db"
+
+
+def _connect(create: bool = False):
+    path = database_path()
+    if not create and not path.exists():
+        return None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path, timeout=10)
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS dashboard_keys (name TEXT PRIMARY KEY, digest TEXT NOT NULL, scope TEXT NOT NULL,"
+        " expires TEXT, created_at TEXT NOT NULL, rotated_at TEXT, revoked_at TEXT)"
+    )
+    return conn
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _digest(secret: str) -> str:
+    return hashlib.sha256(secret.encode("utf-8")).hexdigest()
+
+
+def _new_secret() -> str:
+    return "n2a_" + secrets.token_urlsafe(32)
+
+
+def list_keys() -> list[dict]:
+    """Metadata of every managed key (never a secret or digest)."""
+    conn = _connect()
+    if conn is None:
+        return []
+    with closing(conn):
+        rows = conn.execute("SELECT * FROM dashboard_keys ORDER BY name").fetchall()
+    return [{k: row[k] for k in ("name", "scope", "expires", "created_at", "rotated_at", "revoked_at")} for row in rows]
+
+
+def active_credentials() -> list[tuple[str, bytes, str, date | None]]:
+    """(name, digest, scope, expiry) of every key that has not been revoked."""
+    conn = _connect()
+    if conn is None:
+        return []
+    with closing(conn):
+        rows = conn.execute("SELECT * FROM dashboard_keys WHERE revoked_at IS NULL").fetchall()
+    return [(r["name"], bytes.fromhex(r["digest"]), r["scope"], date.fromisoformat(r["expires"]) if r["expires"] else None)
+            for r in rows]
+
+
+def _audit(action: str, name: str, actor: str, **metadata) -> None:
+    try:
+        from backend.observability.deployment_governance_api import _build_audit_service
+
+        _build_audit_service().record(
+            action=action, actor=actor, resource=f"dashboard-key:{name}", outcome="success", metadata=metadata)
+    except Exception:  # noqa: BLE001 - the key change already happened; say that the record is missing
+        logging.getLogger("uvicorn.error").warning("could not audit %s", action)
+
+
+def _actor(request: Request) -> str:
+    return getattr(request.state, "dashboard_actor", None) or "dashboard"
+
+
+def _validate_name(name) -> str:
+    if not isinstance(name, str) or not NAME.match(name):
+        raise HTTPException(400, "name must be 1-64 characters of letters, digits and . _ -")
+    return name
+
+
+@router.get("/api/keys")
+def keys_index():
+    return {"keys": list_keys()}
+
+
+@router.post("/api/keys", status_code=201)
+def keys_create(data: dict, request: Request):
+    from backend import dashboard
+
+    name = _validate_name(data.get("name"))
+    scope = data.get("scope", "read")
+    if scope not in SCOPES:
+        raise HTTPException(400, f"scope must be one of: {', '.join(SCOPES)}")
+    expires = data.get("expires")
+    if expires is not None:
+        try:
+            expires = date.fromisoformat(str(expires))
+        except ValueError:
+            raise HTTPException(400, "expires must be a date, YYYY-MM-DD") from None
+        if expires < dashboard._utc_today():
+            raise HTTPException(400, "expires must not be in the past")
+        expires = expires.isoformat()
+    configured = {n for n, *_ in dashboard.configured_dashboard_keys()}
+    secret = _new_secret()
+    with closing(_connect(create=True)) as conn:
+        if name in configured:
+            raise HTTPException(409, "a key with this name is configured through the environment")
+        try:
+            with conn:
+                conn.execute("INSERT INTO dashboard_keys (name, digest, scope, expires, created_at) VALUES (?,?,?,?,?)",
+                             (name, _digest(secret), scope, expires, _now()))
+        except sqlite3.IntegrityError:
+            raise HTTPException(409, "a key with this name already exists") from None
+    _audit("dashboard.key_created", name, _actor(request), scope=scope, expires=expires)
+    return {"name": name, "scope": scope, "expires": expires, "key": secret,
+            "notice": "Store this key now; it cannot be shown again."}
+
+
+@router.post("/api/keys/{name}/rotate")
+def keys_rotate(name: str, request: Request):
+    secret = _new_secret()
+    with closing(_connect(create=True)) as conn:
+        with conn:
+            changed = conn.execute(
+                "UPDATE dashboard_keys SET digest=?, rotated_at=? WHERE name=? AND revoked_at IS NULL",
+                (_digest(secret), _now(), name)).rowcount
+    if not changed:
+        raise HTTPException(404, "no active managed key with this name")
+    _audit("dashboard.key_rotated", name, _actor(request))
+    return {"name": name, "key": secret, "notice": "The previous key no longer works. Store this one now."}
+
+
+@router.delete("/api/keys/{name}")
+def keys_revoke(name: str, request: Request):
+    with closing(_connect(create=True)) as conn:
+        with conn:
+            changed = conn.execute("UPDATE dashboard_keys SET revoked_at=? WHERE name=? AND revoked_at IS NULL",
+                                   (_now(), name)).rowcount
+    if not changed:
+        raise HTTPException(404, "no active managed key with this name")
+    _audit("dashboard.key_revoked", name, _actor(request))
+    return {"name": name, "revoked": True}
