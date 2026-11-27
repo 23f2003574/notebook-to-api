@@ -8,7 +8,7 @@ pytest==9.2.0
 python-multipart==0.0.32
 PyYAML==6.0.3
 uvicorn==0.54.0
-watchdog==7.1.0
+watchdog==7.1.1
 ruff==0.16.9
 pytest-timeout==2.4.0
 pytest-xdist==3.8.0
