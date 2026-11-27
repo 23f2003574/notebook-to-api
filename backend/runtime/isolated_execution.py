@@ -208,6 +208,116 @@ def restrict_process_inspection() -> bool:
     return True
 
 
+_LANDLOCK_DIR_RIGHTS = 0x1FFF  # every ABI-1 filesystem right (execute, read, write, remove, make-*)
+_LANDLOCK_FILE_RIGHTS = 0x7     # execute, write file, read file: all a file rule may carry
+_HIDDEN: list[str] | None = None  # set in a child once its Landlock ruleset is enforced
+_SIDECARS = ("", "-wal", "-shm", "-journal")
+
+
+def protected_paths(environ: Any = None) -> list[str]:
+    """Absolute, existing paths a notebook child must not reach: the governance audit database
+    (and its SQLite sidecars), every path in NOTEBOOK_API_ISOLATE_HIDE_PATHS (os.pathsep
+    separated) and, with NOTEBOOK_API_ISOLATE_HIDE_STORAGE=1, the dashboard's notebook storage
+    directories."""
+    env = os.environ if environ is None else environ
+    raw = [p for p in env.get("NOTEBOOK_API_ISOLATE_HIDE_PATHS", "").split(os.pathsep) if p.strip()]
+    database = env.get("NOTEBOOK2API_GOVERNANCE_DATABASE_PATH") or "data/notebook2api.db"
+    raw += [database + suffix for suffix in _SIDECARS]
+    if env.get("NOTEBOOK_API_ISOLATE_HIDE_STORAGE", "").strip().lower() in {"1", "true", "yes"}:
+        raw += [env[n] for n in ("NOTEBOOK_API_UPLOAD_DIR", "NOTEBOOK_API_GENERATED_DIR",
+                                 "NOTEBOOK_API_GENERATED_APPS_DIR") if env.get(n)]
+    found = []
+    for path in raw:
+        real = os.path.realpath(path)
+        if os.path.exists(real) and real not in found:
+            found.append(real)
+    return found
+
+
+def _landlock_rules(protected: Sequence[str]) -> list[tuple[str, int]]:
+    """(path, rights) rules that together allow the whole filesystem except `protected`: walk
+    down each protected path's ancestors, allowing every sibling that leads nowhere protected."""
+    rules: list[tuple[str, int]] = []
+
+    def walk(directory: str) -> None:
+        try:
+            entries = list(os.scandir(directory))
+        except OSError:
+            return
+        for entry in entries:
+            path = entry.path
+            if entry.is_symlink() or path in protected:
+                continue  # a symlink resolves to its target, which is judged on its own
+            if any(p.startswith(path + os.sep) for p in protected):
+                walk(path)
+            elif entry.is_dir(follow_symlinks=False):
+                rules.append((path, _LANDLOCK_DIR_RIGHTS))
+            else:
+                rules.append((path, _LANDLOCK_FILE_RIGHTS))
+
+    walk(os.sep)
+    return rules
+
+
+def hide_protected_paths(environ: Any = None) -> list[str]:
+    """Deny this process every access to the service's audit database (and other configured
+    paths) with a Landlock ruleset; irreversible for the process and its children. Returns the
+    paths hidden ([] when none exist). On Linux without Landlock it raises IsolatedExecutionError
+    -- isolation fails closed -- unless NOTEBOOK_API_ISOLATE_ALLOW_UNHIDDEN=1; elsewhere it logs
+    that nothing is hidden. Setting no-new-privileges is part of the contract."""
+    import ctypes
+    import struct
+    import sys
+
+    global _HIDDEN
+    env = os.environ if environ is None else environ
+    if _HIDDEN is not None and environ is None:
+        return _HIDDEN  # already enforced in this process; a second ruleset would see nothing to allow
+    protected = protected_paths(env)
+    if not protected:
+        return []
+    if env.get("NOTEBOOK_API_ISOLATE_ALLOW_UNHIDDEN", "").strip().lower() in {"1", "true", "yes"}:
+        _LOG.warning("isolated_execution storage_not_hidden reason=explicitly_allowed")
+        return []
+    if not sys.platform.startswith("linux"):
+        _LOG.warning("isolated_execution storage_not_hidden reason=unsupported_platform")
+        return []
+    libc = ctypes.CDLL(None, use_errno=True)
+    machine_syscalls = {"x86_64": (444, 445, 446), "aarch64": (444, 445, 446)}
+    import platform
+    numbers = machine_syscalls.get(platform.machine(), (444, 445, 446))
+
+    def fail(reason: str):
+        raise IsolatedExecutionError(
+            f"cannot hide the service storage from isolated code ({reason}); set "
+            "NOTEBOOK_API_ISOLATE_ALLOW_UNHIDDEN=1 to run without that protection")
+
+    if libc.syscall(numbers[0], None, 0, 1) < 1:  # LANDLOCK_CREATE_RULESET_VERSION
+        fail("Landlock is not available in this kernel")
+    attr = struct.pack("Q", _LANDLOCK_DIR_RIGHTS)
+    ruleset = libc.syscall(numbers[0], attr, len(attr), 0)
+    if ruleset < 0:
+        fail("Landlock ruleset could not be created")
+    try:
+        for path, rights in _landlock_rules(protected):
+            try:
+                fd = os.open(path, os.O_PATH | os.O_CLOEXEC | os.O_NOFOLLOW)
+            except OSError:
+                continue
+            try:
+                rule = struct.pack("=Qi", rights, fd)  # packed landlock_path_beneath_attr
+                libc.syscall(numbers[1], ruleset, 1, rule, 0)  # LANDLOCK_RULE_PATH_BENEATH
+            finally:
+                os.close(fd)
+        if libc.prctl(38, 1, 0, 0, 0) != 0 or libc.syscall(numbers[2], ruleset, 0) != 0:  # NO_NEW_PRIVS
+            fail("the ruleset could not be enforced")
+    finally:
+        os.close(ruleset)
+    if environ is None:
+        _HIDDEN = protected
+    return protected
+
+
 def _apply_memory_limit(limit_mb: float) -> None:
     """Cap the child's address space (RLIMIT_AS) before any notebook code runs.
 
@@ -395,6 +505,7 @@ def _child(
                 except OSError:
                     pass
             scrub_service_secrets()
+            hide_protected_paths()
             _close_inherited_descriptors([conn.fileno()])
             try:
                 _apply_file_limits()
@@ -565,6 +676,7 @@ def _worker_main(conn: Any, handler: Callable[[Any], Any], memory_limit_mb: floa
         except OSError:
             pass
     scrub_service_secrets()
+    hide_protected_paths()
     _close_inherited_descriptors([conn.fileno()])
     # Forked from the app: forget its children and any lock held at fork time.
     _ACTIVE_LOCK = threading.Lock()
