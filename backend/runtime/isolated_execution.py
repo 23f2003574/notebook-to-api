@@ -155,8 +155,9 @@ def hide_service_secrets_in_proc_environ() -> list[str]:
         with open("/proc/self/stat", "rb") as handle:
             fields = handle.read().rsplit(b")", 1)[1].split()
         env_start, env_end = int(fields[47]), int(fields[48])  # stat fields 50 and 51
-        with open("/proc/self/environ", "rb") as handle:
-            visible = handle.read()
+        # Read the block from our own memory: a non-dumpable process (see restrict_process_inspection)
+        # cannot open /proc/self/environ, which then belongs to root.
+        visible = ctypes.string_at(env_start, env_end - env_start) if env_end > env_start else b""
     except (OSError, ValueError, IndexError):
         return []
     if env_end <= env_start or env_end - env_start != len(visible):
@@ -172,8 +173,7 @@ def hide_service_secrets_in_proc_environ() -> list[str]:
             blanked.append(name.decode("utf-8", "replace"))
         offset += len(entry) + 1
     if blanked:
-        with open("/proc/self/environ", "rb") as handle:
-            remaining = handle.read()
+        remaining = ctypes.string_at(env_start, env_end - env_start)
         for entry in remaining.split(b"\0"):
             name, _, value = entry.partition(b"=")
             if value and _is_service_secret(name.decode("utf-8", "replace"), allowed):

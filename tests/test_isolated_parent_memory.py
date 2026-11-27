@@ -13,6 +13,15 @@ PR_SET_DUMPABLE = 4
 SECRET = b"service-secret-0123456789"
 
 
+def _yama_restricts_ptrace():
+    """Yama ptrace_scope >= 1 already stops a child reading its (ancestor) parent, so the 'before' half
+    of the scenario cannot be demonstrated there; the 'after' half still must hold."""
+    try:
+        return int(open("/proc/sys/kernel/yama/ptrace_scope").read()) >= 1
+    except (OSError, ValueError):
+        return False
+
+
 def _child_can_read(address):
     """Fork a child of this process and report whether it can read SECRET from our memory."""
     read, write = os.pipe()
@@ -66,7 +75,9 @@ def test_child_cannot_read_parent_memory_once_the_service_is_non_dumpable():
     os.waitpid(pid, 0)
     if result.startswith("E"):
         pytest.skip(f"cannot drop privileges here: {result[1:]}")
-    assert result == "10", "the child must read the secret before the fix and be refused after it"
+    assert result[1] == "0", "the child must be refused once the service is non-dumpable"
+    if not _yama_restricts_ptrace():
+        assert result[0] == "1", "the unprotected state must be readable, or this test proves nothing"
 
 
 def test_restrict_process_inspection_clears_the_flag_and_fails_closed(monkeypatch):
