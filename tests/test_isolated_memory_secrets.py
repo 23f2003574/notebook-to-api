@@ -77,7 +77,14 @@ def peek():
             if "TOPSECRET" in str(value) and not attribute.startswith("__"):
                 leaked = leaked or attribute in ("API_KEYS", "DEFAULT_API_KEY") or "KEY" in attribute
     return {"env": os.environ.get("NOTEBOOK_API_KEY"), "leaked_through_globals": leaked,
-            "proc_self": b"TOPSECRET" in open("/proc/self/environ", "rb").read() if os.path.exists("/proc/self/environ") else False}
+            "proc_self": _proc_self_has_secret()}
+def _proc_self_has_secret():
+    try:
+        return b"TOPSECRET" in open("/proc/self/environ", "rb").read() if os.path.exists("/proc/self/environ") else False
+    except PermissionError:  # non-dumpable service: unreadable, so not leaked
+        return False
+
+
 def train_peek():
     return peek()
 '''

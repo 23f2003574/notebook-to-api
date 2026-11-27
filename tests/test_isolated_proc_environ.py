@@ -24,10 +24,15 @@ def _run(script, **env):
 
 PEEK = """
 from backend.runtime.isolated_execution import run_isolated
+def _read(path):
+    try:
+        return open(path, "rb").read()
+    except PermissionError:  # the service is non-dumpable: /proc/<pid>/environ is root-owned, so nothing is readable
+        return b""
 def peek():
     seen = {}
     for label, path in (("self", "/proc/self/environ"), ("parent", f"/proc/{os.getppid()}/environ")):
-        raw = open(path, "rb").read()
+        raw = _read(path)
         seen[label] = [name.decode() for name in (b"SECRETKEY", b"HOOKSECRET", b"ALLOWED", b"PLAINVALUE", b"OPENAIVALUE") if name in raw]
     seen["env"] = {k: os.environ.get(k) for k in ("NOTEBOOK_API_KEY", "NOTEBOOK_API_WEBHOOK_SECRET", "NOTEBOOK_API_ALLOWED_TOKEN", "PLAIN", "OPENAI_API_KEY")}
     return seen
@@ -86,8 +91,13 @@ def test_cancellation_still_terminates_the_child():
 def test_worker_children_are_covered_too():
     out = _run("""
         from backend.runtime.isolated_execution import IsolatedWorker
+        def _read(path):
+            try:
+                return open(path, "rb").read()
+            except PermissionError:  # non-dumpable: not readable at all, which also hides the key
+                return b""
         def handler(_): 
-            return [b"SECRETKEY" in open("/proc/self/environ", "rb").read(), b"SECRETKEY" in open(f"/proc/{os.getppid()}/environ", "rb").read()]
+            return [b"SECRETKEY" in _read("/proc/self/environ"), b"SECRETKEY" in _read(f"/proc/{os.getppid()}/environ")]
         worker = IsolatedWorker(handler)
         print(json.dumps(worker.request(None, timeout=10)))
     """, **ENV)
