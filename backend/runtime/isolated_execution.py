@@ -263,8 +263,8 @@ def hide_protected_paths(environ: Any = None) -> list[str]:
     """Deny this process every access to the service's audit database (and other configured
     paths) with a Landlock ruleset; irreversible for the process and its children. Returns the
     paths hidden ([] when none exist). On Linux without Landlock it raises IsolatedExecutionError
-    -- isolation fails closed -- unless NOTEBOOK_API_ISOLATE_ALLOW_UNHIDDEN=1; elsewhere it logs
-    that nothing is hidden. Setting no-new-privileges is part of the contract."""
+    -- isolation fails closed -- when NOTEBOOK_API_ISOLATE_REQUIRE_HIDDEN=1; otherwise (and on other
+    platforms) it logs a warning that nothing is hidden and returns []. Setting no-new-privileges is part of the contract."""
     import ctypes
     import struct
     import sys
@@ -276,10 +276,10 @@ def hide_protected_paths(environ: Any = None) -> list[str]:
     protected = protected_paths(env)
     if not protected:
         return []
-    if env.get("NOTEBOOK_API_ISOLATE_ALLOW_UNHIDDEN", "").strip().lower() in {"1", "true", "yes"}:
-        _LOG.warning("isolated_execution storage_not_hidden reason=explicitly_allowed")
-        return []
+    required = env.get("NOTEBOOK_API_ISOLATE_REQUIRE_HIDDEN", "").strip().lower() in {"1", "true", "yes"}
     if not sys.platform.startswith("linux"):
+        if required:
+            raise IsolatedExecutionError("NOTEBOOK_API_ISOLATE_REQUIRE_HIDDEN is set but this platform cannot hide paths")
         _LOG.warning("isolated_execution storage_not_hidden reason=unsupported_platform")
         return []
     libc = ctypes.CDLL(None, use_errno=True)
@@ -288,16 +288,21 @@ def hide_protected_paths(environ: Any = None) -> list[str]:
     numbers = machine_syscalls.get(platform.machine(), (444, 445, 446))
 
     def fail(reason: str):
-        raise IsolatedExecutionError(
-            f"cannot hide the service storage from isolated code ({reason}); set "
-            "NOTEBOOK_API_ISOLATE_ALLOW_UNHIDDEN=1 to run without that protection")
+        if required:
+            raise IsolatedExecutionError(
+                f"cannot hide the service storage from isolated code ({reason}) and "
+                "NOTEBOOK_API_ISOLATE_REQUIRE_HIDDEN is set")
+        # Not enforceable here (old kernel, container runtime that blocks Landlock): keep running, but
+        # say so on every start so the mode is never mistaken for a protected one.
+        _LOG.warning("isolated_execution storage_not_hidden reason=%s", reason.replace(" ", "_"))
+        return []
 
     if libc.syscall(numbers[0], None, 0, 1) < 1:  # LANDLOCK_CREATE_RULESET_VERSION
-        fail("Landlock is not available in this kernel")
+        return fail("Landlock is not available in this kernel")
     attr = struct.pack("Q", _LANDLOCK_DIR_RIGHTS)
     ruleset = libc.syscall(numbers[0], attr, len(attr), 0)
     if ruleset < 0:
-        fail("Landlock ruleset could not be created")
+        return fail("Landlock ruleset could not be created")
     try:
         for path, rights in _landlock_rules(protected):
             try:
@@ -310,7 +315,7 @@ def hide_protected_paths(environ: Any = None) -> list[str]:
             finally:
                 os.close(fd)
         if libc.prctl(38, 1, 0, 0, 0) != 0 or libc.syscall(numbers[2], ruleset, 0) != 0:  # NO_NEW_PRIVS
-            fail("the ruleset could not be enforced")
+            return fail("the ruleset could not be enforced")
     finally:
         os.close(ruleset)
     if environ is None:

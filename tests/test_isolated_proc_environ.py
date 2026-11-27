@@ -28,12 +28,12 @@ def _read(path):
     try:
         return open(path, "rb").read()
     except PermissionError:  # the service is non-dumpable: /proc/<pid>/environ is root-owned, so nothing is readable
-        return b""
+        return None
 def peek():
     seen = {}
     for label, path in (("self", "/proc/self/environ"), ("parent", f"/proc/{os.getppid()}/environ")):
         raw = _read(path)
-        seen[label] = [name.decode() for name in (b"SECRETKEY", b"HOOKSECRET", b"ALLOWED", b"PLAINVALUE", b"OPENAIVALUE") if name in raw]
+        seen[label] = None if raw is None else [name.decode() for name in (b"SECRETKEY", b"HOOKSECRET", b"ALLOWED", b"PLAINVALUE", b"OPENAIVALUE") if name in raw]
     seen["env"] = {k: os.environ.get(k) for k in ("NOTEBOOK_API_KEY", "NOTEBOOK_API_WEBHOOK_SECRET", "NOTEBOOK_API_ALLOWED_TOKEN", "PLAIN", "OPENAI_API_KEY")}
     return seen
 result = run_isolated(peek, (), timeout=20)
@@ -48,8 +48,9 @@ ENV = {"NOTEBOOK_API_KEY": "SECRETKEY", "NOTEBOOK_API_WEBHOOK_SECRET": "HOOKSECR
 
 def test_credentials_are_hidden_from_self_and_parent_proc_environ_but_other_values_stay():
     seen = _run(PEEK, **ENV)
-    assert set(seen["self"]) == {"ALLOWED", "PLAINVALUE", "OPENAIVALUE"}
-    assert set(seen["parent"]) == {"ALLOWED", "PLAINVALUE", "OPENAIVALUE"}
+    # Readable (the blanked block shows only non-secret values) or, for a non-dumpable service, not readable.
+    for label in ("self", "parent"):
+        assert seen[label] is None or set(seen[label]) == {"ALLOWED", "PLAINVALUE", "OPENAIVALUE"}
     assert seen["env"]["NOTEBOOK_API_KEY"] is None and seen["env"]["NOTEBOOK_API_WEBHOOK_SECRET"] is None
     assert seen["env"]["NOTEBOOK_API_ALLOWED_TOKEN"] == "ALLOWED" and seen["env"]["PLAIN"] == "PLAINVALUE"
     assert seen["env"]["OPENAI_API_KEY"] == "OPENAIVALUE"

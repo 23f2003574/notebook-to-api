@@ -32,7 +32,7 @@ def layout(tmp_path, monkeypatch):
     (tmp_path / "sub").mkdir()
     (tmp_path / "sub" / "ok.txt").write_text("sibling")
     monkeypatch.setenv("NOTEBOOK2API_GOVERNANCE_DATABASE_PATH", str(data / "audit.db"))
-    for name in ("NOTEBOOK_API_ISOLATE_HIDE_PATHS", "NOTEBOOK_API_ISOLATE_ALLOW_UNHIDDEN", "NOTEBOOK_API_ISOLATE_HIDE_STORAGE"):
+    for name in ("NOTEBOOK_API_ISOLATE_HIDE_PATHS", "NOTEBOOK_API_ISOLATE_REQUIRE_HIDDEN", "NOTEBOOK_API_ISOLATE_HIDE_STORAGE"):
         monkeypatch.delenv(name, raising=False)
     return tmp_path
 
@@ -59,8 +59,9 @@ def test_hidden_storage_directories_and_cleanup_of_the_parent(layout, monkeypatc
     assert (layout / "sub" / "ok.txt").read_text() == "sibling"  # the service itself is unaffected
 
 
-def test_fails_closed_when_the_kernel_cannot_hide_the_paths(layout, monkeypatch):
+def _without_landlock(monkeypatch):
     import ctypes
+
     monkeypatch.setattr(sys, "platform", "linux")
     real = ctypes.CDLL(None)
 
@@ -70,10 +71,20 @@ def test_fails_closed_when_the_kernel_cannot_hide_the_paths(layout, monkeypatch)
         prctl = real.prctl
 
     monkeypatch.setattr(ctypes, "CDLL", lambda *a, **k: NoLandlock())
-    with pytest.raises(iso.IsolatedExecutionError, match="cannot hide"):
+
+
+def test_without_landlock_it_warns_and_runs_unless_hiding_is_required(layout, monkeypatch, caplog):
+    _without_landlock(monkeypatch)
+    with caplog.at_level("WARNING", logger="uvicorn.error"):
+        assert iso.hide_protected_paths() == []
+    assert "storage_not_hidden" in caplog.text
+
+
+def test_fails_closed_when_hiding_is_required_and_the_kernel_cannot_do_it(layout, monkeypatch):
+    _without_landlock(monkeypatch)
+    monkeypatch.setenv("NOTEBOOK_API_ISOLATE_REQUIRE_HIDDEN", "1")
+    with pytest.raises(iso.IsolatedExecutionError, match="REQUIRE_HIDDEN"):
         iso.hide_protected_paths()
-    monkeypatch.setenv("NOTEBOOK_API_ISOLATE_ALLOW_UNHIDDEN", "1")
-    assert iso.hide_protected_paths() == []
 
 
 def test_nothing_to_hide_is_not_an_error(tmp_path, monkeypatch):
