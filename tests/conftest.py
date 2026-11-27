@@ -106,3 +106,16 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if item.path.name in SERIAL_TEST_FILES:
             item.add_marker(pytest.mark.xdist_group("serial"))
+
+
+# Files whose tests depend on running in order in one process (a module-scoped dashboard they share and
+# tamper with). They are left out of a parallel run -- whatever options reach the xdist workers -- and
+# CI runs them afterwards with a plain `pytest tests/test_cli_remote_audit.py`.
+NON_PARALLEL_TEST_FILES = frozenset({"test_cli_remote_audit.py"})
+
+
+def pytest_ignore_collect(collection_path, config):
+    parallel = bool(os.environ.get("PYTEST_XDIST_WORKER")) or bool(getattr(config.option, "numprocesses", None))
+    if parallel and collection_path.name in NON_PARALLEL_TEST_FILES:
+        return True
+    return None
