@@ -28,6 +28,7 @@ This will generate:
 - `generated/requirements.txt` – Dependencies (including detected imports)
 - `generated/Dockerfile` – Dockerfile for container build
 - `generated/docker-compose.yml`, `generated/kubernetes.yaml`, `generated/.env.example` and `generated/.dockerignore` – deployment helpers
+  - Opt-in resources for `kubernetes.yaml`, chosen with environment variables when you compile: `NOTEBOOK_API_K8S_REPLICAS` (1-50), `NOTEBOOK_API_K8S_PDB=1` (a PodDisruptionBudget; needs 2+ replicas), `NOTEBOOK_API_K8S_INGRESS_HOST` plus `NOTEBOOK_API_K8S_INGRESS_TLS_SECRET` (a TLS-only Ingress; optional `NOTEBOOK_API_K8S_INGRESS_CLASS`), and `NOTEBOOK_API_K8S_PVC_SIZE` (a PersistentVolumeClaim for the task store, single replica only; optional `NOTEBOOK_API_K8S_STORAGE_CLASS`).
 - `generated/README.md` – docs for the generated service (endpoints, environment variables)
 
 Every generated endpoint needs an `X-API-Key` header. It defaults to `notebook-to-api-dev-key` for local development; set `NOTEBOOK_API_KEY` before exposing the service.

@@ -124,6 +124,80 @@ def _k8s_resource_name(package_name):
     return name[:63].strip("-") or "generated"
 
 
+_DNS_SUBDOMAIN_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$")
+
+
+def _k8s_replicas(environ=None):
+    """NOTEBOOK_API_K8S_REPLICAS (default 1, at most 50)."""
+    import os
+
+    raw = (os.environ if environ is None else environ).get("NOTEBOOK_API_K8S_REPLICAS", "").strip() or "1"
+    if not raw.isdigit() or not 1 <= int(raw) <= 50:
+        raise ValueError(f"NOTEBOOK_API_K8S_REPLICAS={raw!r} must be a whole number from 1 to 50")
+    return int(raw)
+
+
+def _k8s_dns_name(name, value, limit=253):
+    if len(value) > limit or not _DNS_SUBDOMAIN_RE.match(value):
+        raise ValueError(f"{name}={value!r} is not a valid Kubernetes DNS name")
+    return value
+
+
+def _k8s_optional_resources(resource_name, environ=None):
+    """The opt-in resources and the settings they imply, validated together:
+    (replicas, pvc_yaml or "", pvc_claim or None, extra_yaml). Nothing is generated unless asked for;
+    an Ingress is only produced with an explicit host AND a TLS secret, never as plain HTTP."""
+    import os
+
+    env = os.environ if environ is None else environ
+    replicas = _k8s_replicas(env)
+    extra = ""
+    pvc_size = env.get("NOTEBOOK_API_K8S_PVC_SIZE", "").strip()
+    pvc_yaml, claim = "", None
+    if pvc_size:
+        if not _QUANTITY_RE.match(pvc_size):
+            raise ValueError(f"NOTEBOOK_API_K8S_PVC_SIZE={pvc_size!r} is not a valid Kubernetes quantity (for example 1Gi)")
+        if replicas > 1:
+            raise ValueError("NOTEBOOK_API_K8S_PVC_SIZE needs NOTEBOOK_API_K8S_REPLICAS=1: the task store is a "
+                             "single-writer file on a ReadWriteOnce volume")
+        storage_class = env.get("NOTEBOOK_API_K8S_STORAGE_CLASS", "").strip()
+        class_line = f"  storageClassName: {_k8s_dns_name('NOTEBOOK_API_K8S_STORAGE_CLASS', storage_class)}\n" if storage_class else ""
+        claim = f"{resource_name}-data"
+        pvc_yaml = (
+            "---\napiVersion: v1\nkind: PersistentVolumeClaim\nmetadata:\n"
+            f"  name: {claim}\n  labels:\n    app: {resource_name}\nspec:\n"
+            f"  accessModes: [ReadWriteOnce]\n{class_line}  resources:\n    requests:\n      storage: {pvc_size}\n"
+        )
+        extra += pvc_yaml
+    if env.get("NOTEBOOK_API_K8S_PDB", "").strip().lower() in {"1", "true", "yes"}:
+        if replicas < 2:
+            raise ValueError("NOTEBOOK_API_K8S_PDB needs NOTEBOOK_API_K8S_REPLICAS of at least 2: with one replica "
+                             "a minAvailable budget would block every node drain")
+        extra += (
+            "---\napiVersion: policy/v1\nkind: PodDisruptionBudget\nmetadata:\n"
+            f"  name: {resource_name}\nspec:\n  minAvailable: 1\n  selector:\n    matchLabels:\n"
+            f"      app: {resource_name}\n"
+        )
+    host = env.get("NOTEBOOK_API_K8S_INGRESS_HOST", "").strip()
+    tls_secret = env.get("NOTEBOOK_API_K8S_INGRESS_TLS_SECRET", "").strip()
+    if host or tls_secret:
+        if not (host and tls_secret):
+            raise ValueError("an Ingress needs both NOTEBOOK_API_K8S_INGRESS_HOST and NOTEBOOK_API_K8S_INGRESS_TLS_SECRET; "
+                             "this generator never produces a plain-HTTP Ingress")
+        _k8s_dns_name("NOTEBOOK_API_K8S_INGRESS_HOST", host)
+        _k8s_dns_name("NOTEBOOK_API_K8S_INGRESS_TLS_SECRET", tls_secret)
+        ingress_class = env.get("NOTEBOOK_API_K8S_INGRESS_CLASS", "").strip()
+        class_line = f"  ingressClassName: {_k8s_dns_name('NOTEBOOK_API_K8S_INGRESS_CLASS', ingress_class)}\n" if ingress_class else ""
+        extra += (
+            "---\napiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n"
+            f"  name: {resource_name}\nspec:\n{class_line}  tls:\n    - hosts: [{host}]\n      secretName: {tls_secret}\n"
+            f"  rules:\n    - host: {host}\n      http:\n        paths:\n          - path: /\n            pathType: Prefix\n"
+            f"            backend:\n              service:\n                name: {resource_name}\n"
+            "                port:\n                  number: 80\n"
+        )
+    return replicas, claim, extra
+
+
 def kubernetes_manifest_content(
     package_name="generated", env_vars=None, image=None, notebook_env_vars=None,
 ):
@@ -270,6 +344,7 @@ def kubernetes_manifest_content(
 
     env_entries = [{"name": "PORT", "default": "8000"}] + list(env_vars)
     resource_name = _k8s_resource_name(package_name)
+    replicas, pvc_claim, optional_resources = _k8s_optional_resources(resource_name)
     secret_name = _yaml_scalar(f"{resource_name}-secrets")
 
     def env_block(entry):
@@ -379,6 +454,19 @@ spec:
             "        - name: task-data\n"
             f"          emptyDir: {{sizeLimit: {data_limit}}}\n"
         )
+        if pvc_claim:
+            volumes_lines = (
+                "      # task-data: a PersistentVolumeClaim, so tasks survive Pod replacement.\n"
+                "      volumes:\n"
+                "        - name: tmp\n"
+                f"          emptyDir: {{sizeLimit: {tmp_limit}}}\n"
+                "        - name: task-data\n"
+                "          persistentVolumeClaim:\n"
+                f"            claimName: {pvc_claim}\n"
+            )
+    elif pvc_claim:
+        raise ValueError("NOTEBOOK_API_K8S_PVC_SIZE has nothing to persist: this app does not use a task store")
+    pod_security = "      securityContext:\n        fsGroup: 1000  # makes the claim writable for the non-root user\n" if pvc_claim else ""
 
     # Variables the notebook itself reads (API keys, connection strings) come
     # from the same Secret. A required one (no fallback in the notebook) is
@@ -419,7 +507,7 @@ metadata:
   labels:
     app: {package_name_scalar}
 spec:
-  replicas: 1
+  replicas: {replicas}
   selector:
     matchLabels:
       app: {package_name_scalar}
@@ -436,7 +524,7 @@ spec:
       terminationGracePeriodSeconds: 45
       # The app never calls the Kubernetes API, so the pod gets no service-account token.
       automountServiceAccountToken: false
-      containers:
+{pod_security}      containers:
         - name: {package_name_scalar}
           image: {image_scalar}
           lifecycle:
@@ -507,7 +595,7 @@ spec:
     - port: 80
       targetPort: 8000
   type: ClusterIP
-{network_policy}"""
+{network_policy}{optional_resources}"""
 
 
 def generate_kubernetes_manifest(

@@ -218,6 +218,11 @@ jobs:
           echo "${KUBECONFORM_SHA256}  kubeconform.tar.gz" | sha256sum --check --strict -
           tar xzf kubeconform.tar.gz kubeconform
           ./kubeconform -strict -summary -kubernetes-version 1.30.0 dashboard-deployment/kubernetes.yaml
+          # A generated app's manifest with every opt-in resource: PodDisruptionBudget, TLS Ingress, claim.
+          NOTEBOOK_API_K8S_REPLICAS=2 NOTEBOOK_API_K8S_PDB=1 NOTEBOOK_API_K8S_INGRESS_HOST=api.example.com \
+            NOTEBOOK_API_K8S_INGRESS_TLS_SECRET=api-tls python -m backend.cli compile notebooks/sample.ipynb --output k8s_ha_app
+          NOTEBOOK_API_K8S_PVC_SIZE=1Gi python -m backend.cli compile notebooks/sample.ipynb --output k8s_pvc_app
+          ./kubeconform -strict -summary -kubernetes-version 1.30.0 k8s_ha_app/kubernetes.yaml k8s_pvc_app/kubernetes.yaml
 
       - name: Production start refuses non-durable audit storage
         env:
