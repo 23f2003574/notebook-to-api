@@ -80,7 +80,7 @@ class ArtifactIntegrityEngine:
         if algorithm == ChecksumAlgorithm.SHA512:
             return hashlib.sha512(data).hexdigest()
         if algorithm == ChecksumAlgorithm.MD5:
-            return hashlib.md5(data).hexdigest()
+            return hashlib.md5(data, usedforsecurity=False).hexdigest()
         if algorithm == ChecksumAlgorithm.CRC32:
             return format(zlib.crc32(data) & 0xFFFFFFFF, "08x")
         raise ValueError(f"unsupported algorithm '{algorithm}'")

@@ -143,7 +143,7 @@ class ModelRoutingEngine:
             by_weight_desc = [name for name, _ in sorted(weighted, key=lambda pair: pair[1], reverse=True)]
             if total_weight <= 0:
                 return by_weight_desc
-            pick = (random_value if random_value is not None else random.random()) * total_weight
+            pick = (random_value if random_value is not None else random.random()) * total_weight  # noqa: S311 - traffic weighting, not a secret
             cumulative = 0.0
             for name, weight in weighted:
                 cumulative += weight

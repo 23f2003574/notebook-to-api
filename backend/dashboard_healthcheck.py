@@ -30,8 +30,8 @@ def check(timeout: float = 4.0) -> bool:
     tls = bool(os.environ.get("NOTEBOOK_API_DASHBOARD_SSL_CERTFILE", "").strip())
     url = f"{'https' if tls else 'http'}://127.0.0.1:{port}/api/health"
     key = _key()
-    request = urllib.request.Request(url, headers={"X-API-Key": key} if key else {})
-    context = ssl._create_unverified_context() if tls else None  # loopback only; the cert names a host
+    request = urllib.request.Request(url, headers={"X-API-Key": key} if key else {})  # noqa: S310 - fixed http/https scheme, host 127.0.0.1
+    context = ssl._create_unverified_context() if tls else None  # noqa: S323 - 127.0.0.1 only; the cert names the public host
     try:
         with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
             return response.status == 200

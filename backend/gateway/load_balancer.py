@@ -89,7 +89,7 @@ class LoadBalancer:
         self._wrr_current_weight: dict = {}
         self._total_selections = 0
         self._lock = Lock()
-        self._random = random_source or random.Random()
+        self._random = random_source or random.Random()  # noqa: S311 - backend choice, not a secret
         self._policy_engine = policy_engine
 
     def register_backend(self, name: str, address: str, *, weight: int = 1) -> BackendNode:
