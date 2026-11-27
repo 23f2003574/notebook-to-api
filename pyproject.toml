@@ -45,6 +45,8 @@ fail_under = 90
 include = [
     "backend/dashboard.py",
     "backend/auth_metrics.py",
+    "backend/dashboard_keys.py",
+    "backend/dashboard_rate_limit.py",
     "backend/serve.py",
     "backend/runtime/isolated_execution.py",
     "backend/runtime/execution_limits.py",

@@ -15,7 +15,7 @@ def test_every_measured_module_exists_and_the_critical_ones_are_listed():
     assert all((ROOT / path).is_file() for path in listed)
     assert {
         "backend/dashboard.py", "backend/serve.py", "backend/runtime/isolated_execution.py",
-        "backend/generator/api_generator.py",
+        "backend/generator/api_generator.py", "backend/dashboard_keys.py", "backend/dashboard_rate_limit.py",
     } <= listed
 
 

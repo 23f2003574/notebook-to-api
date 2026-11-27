@@ -36,3 +36,10 @@ Thumbs.db
 # Dashboard test runs write here (compile history, scratch notebooks); only the sample is tracked.
 uploads/*
 !uploads/sample.ipynb
+
+# Coverage databases and reports (CI uploads coverage.xml as an artifact; none belongs in git)
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.ruff_cache/
