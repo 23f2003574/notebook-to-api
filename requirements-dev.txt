@@ -3,4 +3,5 @@ pytest
 PyYAML
 ruff
 pytest-timeout
+pytest-xdist
 pytest-cov

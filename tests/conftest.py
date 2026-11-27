@@ -67,3 +67,20 @@ def _environment_is_not_leaked():
         if current is not None:
             os.environ["PYTEST_CURRENT_TEST"] = current
         pytest.fail("test left os.environ modified (use monkeypatch): " + ", ".join(changed))
+
+
+# Files whose tests bind fixed ports, start servers or containers, or change the process-wide
+# working directory. Under `pytest -n auto --dist loadgroup` (the CI invocation) they all run
+# one after another on a single worker; every other test file is distributed freely.
+SERIAL_TEST_FILES = frozenset({
+    "test_cli.py", "test_cli_remote_audit.py", "test_compose_runtime_smoke.py", "test_serve.py",
+    "test_dashboard_container.py", "test_upload_routes.py", "test_load_balancer.py",
+})
+
+
+def pytest_collection_modifyitems(config, items):
+    import pytest
+
+    for item in items:
+        if item.path.name in SERIAL_TEST_FILES:
+            item.add_marker(pytest.mark.xdist_group("serial"))
