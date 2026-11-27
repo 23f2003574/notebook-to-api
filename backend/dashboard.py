@@ -32,7 +32,7 @@ import uvicorn
 
 from backend.compiler import NOTEBOOK_TO_API_VERSION
 from backend.routes.upload import router as upload_router
-from backend import auth_metrics
+from backend import auth_metrics, dashboard_rate_limit
 from backend.observability.deployment_governance_api import (
     register_governance_metrics_middleware,
     router as governance_metrics_router,
@@ -383,15 +383,28 @@ async def _enforce_dashboard_rate_limit(request: Request, call_next):
         key = request.client.host if request.client else "unknown"
         now = time.time()
 
-        _evict_stale_dashboard_rate_limit_windows(now)
+        shared = None
+        shared_path = dashboard_rate_limit.database_path()
+        if shared_path:
+            # Every worker counts in the same SQLite file (see backend/dashboard_rate_limit.py).
+            try:
+                shared = await asyncio.to_thread(
+                    dashboard_rate_limit.hit, shared_path, key, now, DASHBOARD_RATE_LIMIT_WINDOW_SECONDS)
+            except Exception:  # noqa: BLE001 - locked/unwritable store: keep limiting in this process
+                logging.getLogger("uvicorn.error").warning(
+                    "shared dashboard rate-limit store unavailable; limiting in this worker only")
+        if shared is not None:
+            window_start, count = shared
+        else:
+            _evict_stale_dashboard_rate_limit_windows(now)
 
-        window_start, count = _DASHBOARD_RATE_LIMIT_WINDOWS.get(key, (now, 0))
+            window_start, count = _DASHBOARD_RATE_LIMIT_WINDOWS.get(key, (now, 0))
 
-        if now - window_start >= DASHBOARD_RATE_LIMIT_WINDOW_SECONDS:
-            window_start, count = now, 0
+            if now - window_start >= DASHBOARD_RATE_LIMIT_WINDOW_SECONDS:
+                window_start, count = now, 0
 
-        count += 1
-        _DASHBOARD_RATE_LIMIT_WINDOWS[key] = (window_start, count)
+            count += 1
+            _DASHBOARD_RATE_LIMIT_WINDOWS[key] = (window_start, count)
 
         # Set on every rate-limited request, not just a 429 -- the same
         # X-RateLimit-Limit/-Remaining/-Reset contract (GitHub/Stripe/...)
