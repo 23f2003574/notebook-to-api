@@ -198,6 +198,58 @@ def _k8s_optional_resources(resource_name, environ=None):
     return replicas, claim, extra
 
 
+def _k8s_scaling(resource_name, replicas, pvc_claim, environ=None):
+    """(hpa_yaml, pod_spread_yaml): the optional HorizontalPodAutoscaler and topology spread constraints.
+
+    NOTEBOOK_API_K8S_HPA_MAX_REPLICAS turns the autoscaler on: it scales between NOTEBOOK_API_K8S_REPLICAS
+    (the minimum) and that maximum on CPU utilisation (NOTEBOOK_API_K8S_HPA_CPU_UTILIZATION, default 70)
+    against the container's CPU request, which the Deployment always sets. NOTEBOOK_API_K8S_TOPOLOGY_SPREAD
+    is node, zone or both; the spread is soft (ScheduleAnyway) unless NOTEBOOK_API_K8S_TOPOLOGY_SPREAD_STRICT
+    is set. Combinations that cannot work are refused: more than one replica with the single-writer volume,
+    a spread (or a PodDisruptionBudget) with a single replica."""
+    import os
+
+    env = os.environ if environ is None else environ
+    raw_max = env.get("NOTEBOOK_API_K8S_HPA_MAX_REPLICAS", "").strip()
+    hpa = ""
+    top = replicas
+    if raw_max:
+        if not raw_max.isdigit() or not 2 <= int(raw_max) <= 100:
+            raise ValueError(f"NOTEBOOK_API_K8S_HPA_MAX_REPLICAS={raw_max!r} must be a whole number from 2 to 100")
+        top = int(raw_max)
+        if top < replicas:
+            raise ValueError(f"NOTEBOOK_API_K8S_HPA_MAX_REPLICAS={top} is below NOTEBOOK_API_K8S_REPLICAS={replicas} (the minimum)")
+        if pvc_claim:
+            raise ValueError("NOTEBOOK_API_K8S_HPA_MAX_REPLICAS needs no NOTEBOOK_API_K8S_PVC_SIZE: the task store is a "
+                             "single-writer file, so the app cannot run more than one replica")
+        target = env.get("NOTEBOOK_API_K8S_HPA_CPU_UTILIZATION", "").strip() or "70"
+        if not target.isdigit() or not 1 <= int(target) <= 100:
+            raise ValueError(f"NOTEBOOK_API_K8S_HPA_CPU_UTILIZATION={target!r} must be a whole number from 1 to 100")
+        if env.get("NOTEBOOK_API_K8S_PDB", "").strip().lower() in {"1", "true", "yes"} and replicas < 2:
+            raise ValueError("a PodDisruptionBudget needs the autoscaler's minimum (NOTEBOOK_API_K8S_REPLICAS) to be at least 2")
+        hpa = (
+            "---\napiVersion: autoscaling/v2\nkind: HorizontalPodAutoscaler\nmetadata:\n"
+            f"  name: {resource_name}\nspec:\n  scaleTargetRef:\n    apiVersion: apps/v1\n    kind: Deployment\n"
+            f"    name: {resource_name}\n  minReplicas: {replicas}\n  maxReplicas: {top}\n  metrics:\n"
+            f"    - type: Resource\n      resource:\n        name: cpu\n        target:\n"
+            f"          type: Utilization\n          averageUtilization: {int(target)}\n"
+        )
+    mode = env.get("NOTEBOOK_API_K8S_TOPOLOGY_SPREAD", "").strip().lower()
+    spread = ""
+    if mode:
+        keys = {"node": ["kubernetes.io/hostname"], "zone": ["topology.kubernetes.io/zone"],
+                "both": ["topology.kubernetes.io/zone", "kubernetes.io/hostname"]}.get(mode)
+        if keys is None:
+            raise ValueError(f"NOTEBOOK_API_K8S_TOPOLOGY_SPREAD={mode!r} must be node, zone or both")
+        if top < 2:
+            raise ValueError("NOTEBOOK_API_K8S_TOPOLOGY_SPREAD needs at least 2 replicas (NOTEBOOK_API_K8S_REPLICAS or an autoscaler maximum)")
+        action = "DoNotSchedule" if env.get("NOTEBOOK_API_K8S_TOPOLOGY_SPREAD_STRICT", "").strip().lower() in {"1", "true", "yes"} else "ScheduleAnyway"
+        spread = "      topologySpreadConstraints:\n" + "".join(
+            f"        - maxSkew: 1\n          topologyKey: {key}\n          whenUnsatisfiable: {action}\n"
+            f"          labelSelector:\n            matchLabels:\n              app: {resource_name}\n" for key in keys)
+    return hpa, spread
+
+
 def kubernetes_manifest_content(
     package_name="generated", env_vars=None, image=None, notebook_env_vars=None,
 ):
@@ -345,6 +397,9 @@ def kubernetes_manifest_content(
     env_entries = [{"name": "PORT", "default": "8000"}] + list(env_vars)
     resource_name = _k8s_resource_name(package_name)
     replicas, pvc_claim, optional_resources = _k8s_optional_resources(resource_name)
+    hpa_yaml, spread_yaml = _k8s_scaling(resource_name, replicas, pvc_claim)
+    optional_resources += hpa_yaml
+    replicas_line = "" if hpa_yaml else f"  replicas: {replicas}\n"  # an autoscaler owns the count
     secret_name = _yaml_scalar(f"{resource_name}-secrets")
 
     def env_block(entry):
@@ -507,8 +562,7 @@ metadata:
   labels:
     app: {package_name_scalar}
 spec:
-  replicas: {replicas}
-  selector:
+{replicas_line}  selector:
     matchLabels:
       app: {package_name_scalar}
   template:
@@ -524,7 +578,7 @@ spec:
       terminationGracePeriodSeconds: 45
       # The app never calls the Kubernetes API, so the pod gets no service-account token.
       automountServiceAccountToken: false
-{pod_security}      containers:
+{pod_security}{spread_yaml}      containers:
         - name: {package_name_scalar}
           image: {image_scalar}
           lifecycle:
