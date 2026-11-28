@@ -853,6 +853,13 @@ def _auth_retry_after_if_blocked(client):
     if limit <= 0:
         return None
     now = time.time()
+    shared_path = dashboard_rate_limit.database_path()
+    if shared_path:  # every worker counts failures in the same store (see backend/dashboard_rate_limit.py)
+        try:
+            count = dashboard_rate_limit.peek(shared_path, client, now, _AUTH_FAILURE_WINDOW_SECONDS)
+            return max(1, int(_AUTH_FAILURE_WINDOW_SECONDS)) if count >= limit else None
+        except Exception:  # noqa: BLE001 - unusable store: throttle in this worker only
+            logging.getLogger("uvicorn.error").warning("shared auth-failure store unavailable; throttling in this worker only")
     with _AUTH_FAILURES_LOCK:
         started, count = _AUTH_FAILURES.get(client, (now, 0))
         if now - started >= _AUTH_FAILURE_WINDOW_SECONDS:
@@ -869,6 +876,12 @@ def _auth_record_failure(client):
     if dashboard_auth_failure_limit_per_minute() <= 0:
         return 0
     now = time.time()
+    shared_path = dashboard_rate_limit.database_path()
+    if shared_path:
+        try:
+            return dashboard_rate_limit.hit(shared_path, client, now, _AUTH_FAILURE_WINDOW_SECONDS, "auth_failures")[1]
+        except Exception:  # noqa: BLE001
+            logging.getLogger("uvicorn.error").warning("shared auth-failure store unavailable; throttling in this worker only")
     with _AUTH_FAILURES_LOCK:
         started, count = _AUTH_FAILURES.get(client, (now, 0))
         if now - started >= _AUTH_FAILURE_WINDOW_SECONDS:
@@ -956,7 +969,7 @@ async def _require_dashboard_api_key(request: Request, call_next):
         supplied = request.headers.get("X-API-Key", "")
         client = _auth_client(request)
 
-        retry_after = _auth_retry_after_if_blocked(client)
+        retry_after = await asyncio.to_thread(_auth_retry_after_if_blocked, client)
 
         if retry_after is not None:
             auth_metrics.record_throttled()
@@ -988,7 +1001,7 @@ async def _require_dashboard_api_key(request: Request, call_next):
                 })
 
         if key_name is None:
-            window_count = _auth_record_failure(client)
+            window_count = await asyncio.to_thread(_auth_record_failure, client)
             auth_metrics.record_failure(
                 client, "expired_key" if key_expired else "missing_key" if not supplied else "invalid_key",
                 window_count, dashboard_auth_failure_limit_per_minute(),
