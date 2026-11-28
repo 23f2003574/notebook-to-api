@@ -47,6 +47,7 @@ include = [
     "backend/auth_metrics.py",
     "backend/dashboard_keys.py",
     "backend/dashboard_rate_limit.py",
+    "backend/dashboard_compile_slots.py",
     "backend/serve.py",
     "backend/runtime/isolated_execution.py",
     "backend/runtime/execution_limits.py",

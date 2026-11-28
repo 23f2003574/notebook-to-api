@@ -17819,11 +17819,10 @@ def _unpinned_detail(summary):
 def compile_notebook_endpoint(data: dict, request: Request):
     """Compile an uploaded notebook; the outcome is recorded in the governance audit trail
     (once per Idempotency-Key and outcome, when that header is sent)."""
-    from backend import dashboard_compile_slots
-
-    idempotency_key = _idempotency_key(request)  # validated before a slot is taken
-    with dashboard_compile_slots.acquire():
-        return _audited("notebook.compile", data, lambda: _compile_with_lifecycle(data), idempotency_key, _request_actor(request))
+    idempotency_key = _idempotency_key(request)
+    # The dashboard's CompileSlotMiddleware (backend/dashboard_compile_slots.py) bounds how many of these
+    # run at once and stops queueing a request whose client has gone.
+    return _audited("notebook.compile", data, lambda: _compile_with_lifecycle(data), idempotency_key, _request_actor(request))
 
 
 def _compile_with_lifecycle(data: dict):

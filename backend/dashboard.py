@@ -33,6 +33,7 @@ import uvicorn
 from backend.compiler import NOTEBOOK_TO_API_VERSION
 from backend.routes.upload import router as upload_router
 from backend import auth_metrics, dashboard_rate_limit
+from backend.dashboard_compile_slots import CompileSlotMiddleware
 from backend.observability.deployment_governance_api import (
     register_governance_metrics_middleware,
     router as governance_metrics_router,
@@ -356,6 +357,10 @@ def _evict_stale_dashboard_rate_limit_windows(now):
 
     for key in stale_keys:
         _DASHBOARD_RATE_LIMIT_WINDOWS.pop(key, None)
+
+
+# Registered first, so innermost: only requests that passed authentication and the rate limit queue for a slot.
+app.add_middleware(CompileSlotMiddleware)
 
 
 @app.middleware("http")

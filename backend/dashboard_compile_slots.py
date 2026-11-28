@@ -7,7 +7,8 @@ NOTEBOOK_API_DASHBOARD_COMPILE_SLOT_DIR (default: a per-user directory under the
 holds across every worker process sharing that directory, and the kernel releases a slot when its
 holder dies -- a crashed or killed compile can never leak one. A request that finds all slots busy
 waits up to NOTEBOOK_API_DASHBOARD_COMPILE_QUEUE_SECONDS (default 10; 0 rejects at once) and then
-gets 503 with Retry-After. On platforms without fcntl the slots are in-process only."""
+gets 503 with Retry-After. CompileSlotMiddleware applies the limit to POST /api/compile; a request whose client disconnects while it
+waits gives up at once (the stats count it as abandoned). On platforms without fcntl the limit is enforced per process only."""
 from __future__ import annotations
 
 import contextlib
@@ -25,9 +26,15 @@ except ImportError:  # pragma: no cover - non-POSIX
     fcntl = None
 
 router = APIRouter()
-_STATS = {"completed": 0, "rejected": 0, "failed": 0}
+_STATS = {"completed": 0, "rejected": 0, "failed": 0, "abandoned": 0}
 _STATS_LOCK = threading.Lock()
-_FALLBACK = threading.BoundedSemaphore(1)  # replaced per limit on platforms without flock
+_FALLBACKS: dict = {}  # without flock: one semaphore per configured limit, shared by this process only
+_FALLBACK_LOCK = threading.Lock()
+
+
+def _fallback(limit: int) -> threading.BoundedSemaphore:
+    with _FALLBACK_LOCK:
+        return _FALLBACKS.setdefault(limit, threading.BoundedSemaphore(limit))
 
 
 def max_concurrent() -> int:
@@ -65,8 +72,10 @@ def _try_lock(limit: int):
 
 def in_use(limit: int | None = None) -> int:
     limit = max_concurrent() if limit is None else limit
-    if limit <= 0 or fcntl is None:
+    if limit <= 0:
         return 0
+    if fcntl is None:
+        return limit - getattr(_fallback(limit), "_value", limit)
     held = 0
     for index in range(limit):
         path = slot_dir() / f"slot-{index}.lock"
@@ -91,18 +100,21 @@ def acquire():
         yield
         return
     deadline = time.monotonic() + queue_seconds()
-    fd = None
+    semaphore = _fallback(limit) if fcntl is None else None
     while True:
-        fd = _try_lock(limit) if fcntl is not None else (object() if _FALLBACK.acquire(blocking=False) else None)
-        if fd is not None or time.monotonic() >= deadline:
+        if semaphore is None:
+            fd = _try_lock(limit)
+        else:
+            fd = object() if semaphore.acquire(blocking=False) else None
+        if fd is not None:
             break
+        if time.monotonic() >= deadline:
+            with _STATS_LOCK:
+                _STATS["rejected"] += 1
+            retry = max(1, int(queue_seconds()) or 5)
+            raise HTTPException(503, f"All {limit} compile slots are busy; try again shortly",
+                                headers={"Retry-After": str(retry)})
         time.sleep(0.05)
-    if fd is None:
-        with _STATS_LOCK:
-            _STATS["rejected"] += 1
-        retry = max(1, int(queue_seconds()) or 5)
-        raise HTTPException(503, f"All {limit} compile slots are busy; try again shortly",
-                            headers={"Retry-After": str(retry)})
     try:
         yield
     except BaseException:
@@ -113,10 +125,10 @@ def acquire():
         with _STATS_LOCK:
             _STATS["completed"] += 1
     finally:
-        if fcntl is not None:
+        if semaphore is None:
             os.close(fd)  # closing the descriptor releases the flock
         else:
-            _FALLBACK.release()
+            semaphore.release()
 
 
 def stats() -> dict:
@@ -129,3 +141,80 @@ def stats() -> dict:
 def compile_capacity():
     """Compile slots: the limit, how many are in use now (all workers), and this worker's totals."""
     return stats()
+
+
+class CompileSlotMiddleware:
+    """Pure ASGI middleware that admits at most `max_concurrent()` POST /api/compile requests at a time.
+
+    It sits inside the dashboard's authentication and rate-limit middleware (so only authorized requests
+    queue). It buffers the request body, then polls for a slot while listening for the client's
+    disconnect, which a plain endpoint behind BaseHTTPMiddleware cannot see: a client that gave up leaves
+    the queue at once, and no worker thread is held while a request waits. The slot is held until the
+    response has been sent."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        limit = max_concurrent()
+        if scope["type"] != "http" or scope["method"] != "POST" or scope["path"] != "/api/compile" or limit <= 0:
+            return await self.app(scope, receive, send)
+        import asyncio
+
+        from starlette.responses import JSONResponse
+
+        chunks = []
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return self._abandoned()
+            chunks.append(message)
+            if not message.get("more_body"):
+                break
+        semaphore = _fallback(limit) if fcntl is None else None
+        deadline = time.monotonic() + queue_seconds()
+        while True:
+            handle = _try_lock(limit) if semaphore is None else (object() if semaphore.acquire(blocking=False) else None)
+            if handle is not None:
+                break
+            if time.monotonic() >= deadline:
+                with _STATS_LOCK:
+                    _STATS["rejected"] += 1
+                retry = max(1, int(queue_seconds()) or 5)
+                return await JSONResponse({"detail": f"All {limit} compile slots are busy; try again shortly"}, status_code=503,
+                                          headers={"Retry-After": str(retry)})(scope, receive, send)
+            try:
+                message = await asyncio.wait_for(receive(), 0.05)
+            except asyncio.TimeoutError:
+                continue
+            if message["type"] == "http.disconnect":
+                return self._abandoned()
+        pending = list(chunks)
+        status = {"code": 200}
+
+        async def replay():
+            return pending.pop(0) if pending else await receive()
+
+        async def watch(message):
+            if message["type"] == "http.response.start":
+                status["code"] = message["status"]
+            await send(message)
+
+        try:
+            await self.app(scope, replay, watch)
+            outcome = "failed" if status["code"] >= 400 else "completed"
+        except BaseException:
+            outcome = "failed"
+            raise
+        finally:
+            if semaphore is None:
+                os.close(handle)
+            else:
+                semaphore.release()
+        with _STATS_LOCK:
+            _STATS[outcome] += 1
+
+    @staticmethod
+    def _abandoned():
+        with _STATS_LOCK:
+            _STATS["abandoned"] += 1

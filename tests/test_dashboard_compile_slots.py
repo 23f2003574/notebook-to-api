@@ -106,3 +106,74 @@ def test_the_compile_endpoint_answers_503_when_capacity_is_exhausted(monkeypatch
 
 def test_capacity_endpoint_needs_only_the_read_scope():
     assert dashboard.required_scope("GET", "/api/compile/capacity") == "read"
+
+
+def test_a_real_disconnect_abandons_the_queued_compile(monkeypatch, tmp_path):
+    import socket
+
+    import uvicorn
+
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_MAX_CONCURRENT_COMPILES", "1")
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_COMPILE_QUEUE_SECONDS", "30")
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(dashboard.app, log_level="warning"))
+    thread = threading.Thread(target=lambda: server.run(sockets=[sock]), daemon=True)
+    thread.start()
+    try:
+        deadline = time.monotonic() + 20
+        while not server.started and time.monotonic() < deadline:
+            time.sleep(0.05)
+        with slots.acquire():
+            body = b'{"notebook_path": "n.ipynb"}'
+            client = socket.create_connection(("127.0.0.1", port))
+            client.sendall(b"POST /api/compile HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+                           b"Content-Length: %d\r\n\r\n%s" % (len(body), body))
+            time.sleep(0.5)
+            client.close()  # the caller gives up while the only slot is busy
+            deadline = time.monotonic() + 10
+            while slots.stats()["abandoned"] == 0 and time.monotonic() < deadline:
+                time.sleep(0.05)
+        assert slots.stats()["abandoned"] == 1
+    finally:
+        server.should_exit = True
+        thread.join(10)
+
+
+def test_the_configured_limit_is_honoured_without_fcntl(monkeypatch):
+    monkeypatch.setattr(slots, "fcntl", None)
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_MAX_CONCURRENT_COMPILES", "3")
+    slots._FALLBACKS.clear()
+    with slots.acquire(), slots.acquire(), slots.acquire():
+        assert slots.in_use() == 3
+        with pytest.raises(HTTPException) as busy:
+            with slots.acquire():
+                pass
+        assert busy.value.status_code == 503
+    assert slots.in_use() == 0
+
+
+def test_a_crashed_holder_frees_its_slot():
+    holder = subprocess.Popen(
+        [sys.executable, "-c", "from backend import dashboard_compile_slots as s\nimport time\n"
+         "c = s.acquire(); c.__enter__(); print('held', flush=True); time.sleep(60)"],
+        cwd=ROOT, stdout=subprocess.PIPE, text=True)
+    try:
+        assert holder.stdout.readline().strip() == "held"
+        assert slots.in_use(2) == 1
+    finally:
+        holder.kill()
+        holder.wait()
+    assert slots.in_use(2) == 0
+
+
+def test_only_authorized_requests_queue_for_a_slot(monkeypatch):
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_KEY", "slot-test-key-0123456789")
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_MAX_CONCURRENT_COMPILES", "1")
+    monkeypatch.setenv("NOTEBOOK_API_DASHBOARD_COMPILE_QUEUE_SECONDS", "30")
+    client = TestClient(dashboard.app)
+    with slots.acquire():
+        started = time.monotonic()
+        assert client.post("/api/compile", json={"notebook_path": "n.ipynb"}).status_code == 401
+        assert time.monotonic() - started < 5  # refused by authentication, never queued behind the busy slot
