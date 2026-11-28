@@ -16,7 +16,7 @@ import os
 import re
 import secrets
 import sqlite3
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -40,7 +40,7 @@ def _connect(create: bool = False):
     if not create and not path.exists():
         return None
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, timeout=10)
+    conn = sqlite3.connect(path, timeout=10, isolation_level=None)  # transactions are explicit (see _audited_change)
     conn.row_factory = sqlite3.Row
     conn.execute(
         "CREATE TABLE IF NOT EXISTS dashboard_keys (name TEXT PRIMARY KEY, digest TEXT NOT NULL, scope TEXT NOT NULL,"
@@ -82,14 +82,44 @@ def active_credentials() -> list[tuple[str, bytes, str, date | None]]:
             for r in rows]
 
 
-def _audit(action: str, name: str, actor: str, **metadata) -> None:
-    try:
-        from backend.observability.deployment_governance_api import _build_audit_service
+def _record_audit(action: str, name: str, actor: str, **metadata) -> None:
+    from backend.observability.deployment_governance_api import _build_audit_service
 
-        _build_audit_service().record(
-            action=action, actor=actor, resource=f"dashboard-key:{name}", outcome="success", metadata=metadata)
-    except Exception:  # noqa: BLE001 - the key change already happened; say that the record is missing
-        logging.getLogger("uvicorn.error").warning("could not audit %s", action)
+    _build_audit_service().record(
+        action=action, actor=actor, resource=f"dashboard-key:{name}", outcome="success", metadata=metadata)
+
+
+@contextmanager
+def _audited_change(conn, action: str, name: str, actor: str, **metadata):
+    """Make a key change and its audit record succeed or fail together.
+
+    The key database and the audit database are separate SQLite files, so no single transaction spans
+    them. The key change is made inside an open (uncommitted) transaction, the audit record is
+    written next, and only then is the key change committed: if the audit record cannot be written the
+    key change is rolled back and the request fails with 503, so a change never exists without its
+    record. (If the final commit itself fails after the record was written, the audit trail holds an
+    extra entry for a change that did not happen, and an `.aborted` entry is attempted; the trail errs
+    towards over-reporting, never towards a missing record.)"""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield
+        _record_audit(action, name, actor, **metadata)
+    except (HTTPException, sqlite3.IntegrityError):
+        conn.rollback()
+        raise
+    except Exception as exc:  # noqa: BLE001 - audit or key store failure: undo the change
+        conn.rollback()
+        logging.getLogger("uvicorn.error").error("dashboard key change %s refused: %s", action, type(exc).__name__)
+        raise HTTPException(503, "The change was not made because its audit record could not be written") from None
+    try:
+        conn.commit()
+    except Exception:  # noqa: BLE001
+        conn.rollback()
+        try:
+            _record_audit(action + ".aborted", name, actor)
+        except Exception:  # noqa: BLE001
+            pass
+        raise HTTPException(503, "The change could not be committed") from None
 
 
 def _actor(request: Request) -> str:
@@ -130,12 +160,11 @@ def keys_create(data: dict, request: Request):
         if name in configured:
             raise HTTPException(409, "a key with this name is configured through the environment")
         try:
-            with conn:
+            with _audited_change(conn, "dashboard.key_created", name, _actor(request), scope=scope, expires=expires):
                 conn.execute("INSERT INTO dashboard_keys (name, digest, scope, expires, created_at) VALUES (?,?,?,?,?)",
                              (name, _digest(secret), scope, expires, _now()))
         except sqlite3.IntegrityError:
             raise HTTPException(409, "a key with this name already exists") from None
-    _audit("dashboard.key_created", name, _actor(request), scope=scope, expires=expires)
     return {"name": name, "scope": scope, "expires": expires, "key": secret,
             "notice": "Store this key now; it cannot be shown again."}
 
@@ -144,23 +173,21 @@ def keys_create(data: dict, request: Request):
 def keys_rotate(name: str, request: Request):
     secret = _new_secret()
     with closing(_connect(create=True)) as conn:
-        with conn:
+        with _audited_change(conn, "dashboard.key_rotated", name, _actor(request)):
             changed = conn.execute(
                 "UPDATE dashboard_keys SET digest=?, rotated_at=? WHERE name=? AND revoked_at IS NULL",
                 (_digest(secret), _now(), name)).rowcount
-    if not changed:
-        raise HTTPException(404, "no active managed key with this name")
-    _audit("dashboard.key_rotated", name, _actor(request))
+            if not changed:
+                raise HTTPException(404, "no active managed key with this name")
     return {"name": name, "key": secret, "notice": "The previous key no longer works. Store this one now."}
 
 
 @router.delete("/api/keys/{name}")
 def keys_revoke(name: str, request: Request):
     with closing(_connect(create=True)) as conn:
-        with conn:
+        with _audited_change(conn, "dashboard.key_revoked", name, _actor(request)):
             changed = conn.execute("UPDATE dashboard_keys SET revoked_at=? WHERE name=? AND revoked_at IS NULL",
                                    (_now(), name)).rowcount
-    if not changed:
-        raise HTTPException(404, "no active managed key with this name")
-    _audit("dashboard.key_revoked", name, _actor(request))
+            if not changed:
+                raise HTTPException(404, "no active managed key with this name")
     return {"name": name, "revoked": True}
