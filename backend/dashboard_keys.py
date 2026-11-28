@@ -35,18 +35,51 @@ def database_path() -> Path:
     return Path(audit).parent / "dashboard_keys.db"
 
 
+_READY: set = set()  # databases whose tables exist, so a request does not repeat the DDL
+LAST_USED_INTERVAL_SECONDS = 60.0
+_LAST_TOUCH: dict = {}
+
+
 def _connect(create: bool = False):
     path = database_path()
-    if not create and not path.exists():
-        return None
+    exists = path.exists()
+    if not exists:
+        _READY.discard(str(path))
+        if not create:
+            return None
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, timeout=10, isolation_level=None)  # transactions are explicit (see _audited_change)
     conn.row_factory = sqlite3.Row
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS dashboard_keys (name TEXT PRIMARY KEY, digest TEXT NOT NULL, scope TEXT NOT NULL,"
-        " expires TEXT, created_at TEXT NOT NULL, rotated_at TEXT, revoked_at TEXT)"
-    )
+    if str(path) not in _READY:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS dashboard_keys (name TEXT PRIMARY KEY, digest TEXT NOT NULL, scope TEXT NOT NULL,"
+            " expires TEXT, created_at TEXT NOT NULL, rotated_at TEXT, revoked_at TEXT, last_used_at TEXT)"
+        )
+        if "last_used_at" not in {r["name"] for r in conn.execute("PRAGMA table_info(dashboard_keys)")}:
+            conn.execute("ALTER TABLE dashboard_keys ADD COLUMN last_used_at TEXT")  # stores made before this column
+        _READY.add(str(path))
     return conn
+
+
+def touch_due(name: str) -> bool:
+    """Whether `name`'s last use should be written now (at most once per interval per process)."""
+    import time
+
+    return time.monotonic() - _LAST_TOUCH.get(name, -1e9) >= LAST_USED_INTERVAL_SECONDS
+
+
+def touch(name: str) -> None:
+    """Record that managed key `name` authenticated a request (no-op for keys from the environment)."""
+    import time
+
+    _LAST_TOUCH[name] = time.monotonic()
+    try:
+        conn = _connect()
+        if conn is not None:
+            with closing(conn):
+                conn.execute("UPDATE dashboard_keys SET last_used_at=? WHERE name=? AND revoked_at IS NULL", (_now(), name))
+    except sqlite3.Error:
+        logging.getLogger("uvicorn.error").warning("could not record the last use of a dashboard key")
 
 
 def _now() -> str:
@@ -68,7 +101,7 @@ def list_keys() -> list[dict]:
         return []
     with closing(conn):
         rows = conn.execute("SELECT * FROM dashboard_keys ORDER BY name").fetchall()
-    return [{k: row[k] for k in ("name", "scope", "expires", "created_at", "rotated_at", "revoked_at")} for row in rows]
+    return [{k: row[k] for k in ("name", "scope", "expires", "created_at", "rotated_at", "revoked_at", "last_used_at")} for row in rows]
 
 
 def active_credentials() -> list[tuple[str, bytes, str, date | None]]:
@@ -167,6 +200,40 @@ def keys_create(data: dict, request: Request):
             raise HTTPException(409, "a key with this name already exists") from None
     return {"name": name, "scope": scope, "expires": expires, "key": secret,
             "notice": "Store this key now; it cannot be shown again."}
+
+
+@router.patch("/api/keys/{name}")
+def keys_update(name: str, data: dict, request: Request):
+    """Change a managed key's scope and/or expiry (`expires: null` removes the expiry). Takes effect on
+    the next request; the secret is untouched and never returned."""
+    from backend import dashboard
+
+    changes = {}
+    if "scope" in data:
+        if data["scope"] not in SCOPES:
+            raise HTTPException(400, f"scope must be one of: {', '.join(SCOPES)}")
+        changes["scope"] = data["scope"]
+    if "expires" in data:
+        expires = data["expires"]
+        if expires is not None:
+            try:
+                expires = date.fromisoformat(str(expires))
+            except ValueError:
+                raise HTTPException(400, "expires must be a date, YYYY-MM-DD") from None
+            if expires < dashboard._utc_today():
+                raise HTTPException(400, "expires must not be in the past")
+            expires = expires.isoformat()
+        changes["expires"] = expires
+    if not changes:
+        raise HTTPException(400, "send scope and/or expires")
+    with closing(_connect(create=True)) as conn:
+        with _audited_change(conn, "dashboard.key_updated", name, _actor(request), **changes):
+            sets = ", ".join(f"{column}=?" for column in changes)
+            changed = conn.execute(f"UPDATE dashboard_keys SET {sets} WHERE name=? AND revoked_at IS NULL",
+                                   (*changes.values(), name)).rowcount
+            if not changed:
+                raise HTTPException(404, "no active managed key with this name")
+    return {"name": name, **changes}
 
 
 @router.post("/api/keys/{name}/rotate")

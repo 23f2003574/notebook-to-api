@@ -994,6 +994,10 @@ async def _require_dashboard_api_key(request: Request, call_next):
 
         if key_name is not None:
             request.state.dashboard_actor = key_name
+            from backend import dashboard_keys
+
+            if dashboard_keys.touch_due(key_name):
+                await asyncio.to_thread(dashboard_keys.touch, key_name)
             key_scope = key_scopes.get(key_name, "admin")
             request.state.dashboard_scope = key_scope
             if not scope_allows(key_scope, request.method, request.url.path, request.url.query):
