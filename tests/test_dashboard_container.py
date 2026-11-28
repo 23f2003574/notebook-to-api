@@ -52,7 +52,7 @@ def test_the_image_is_multi_stage_non_root_with_a_healthcheck_and_the_built_ui(o
     assert "USER appuser" in lines and lines.index("USER appuser") < lines.index('CMD ["python", "-m", "backend.dashboard"]')
     assert any(l.startswith("HEALTHCHECK") and "backend.dashboard_healthcheck" in l for l in lines) or \
         "backend.dashboard_healthcheck" in text
-    assert "-c constraints.txt" in text
+    assert "--require-hashes -r requirements.lock" in text
     assert "NOTEBOOK2API_ENVIRONMENT=production" in text and "VOLUME /data" in text
 
 

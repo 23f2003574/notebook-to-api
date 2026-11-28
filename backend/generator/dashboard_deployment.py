@@ -37,8 +37,9 @@ RUN npm run build
 FROM python:3.13-slim
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 WORKDIR /app
-COPY requirements.txt constraints.txt ./
-RUN pip install --no-cache-dir -c constraints.txt -r requirements.txt
+COPY requirements.lock ./
+# Every direct and transitive package is pinned with its hashes: pip refuses anything unlisted or altered.
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 COPY backend ./backend
 COPY --from=frontend /build/frontend/dist ./frontend/dist
 RUN useradd --create-home --uid 1000 appuser \\
@@ -340,7 +341,7 @@ def generate_dashboard_deployment(
                 "--python-image as name@sha256:<64 hex>"
             )
     root = Path(repo_root) if repo_root is not None else REPO_ROOT
-    missing = [name for name in ("backend", "requirements.txt", "constraints.txt", "frontend/package-lock.json")
+    missing = [name for name in ("backend", "requirements.txt", "requirements.lock", "frontend/package-lock.json")
                if not (root / name).exists()]
     if missing:
         raise ValueError(

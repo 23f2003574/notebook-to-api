@@ -62,7 +62,7 @@ def test_update_is_audited_without_any_secret(client):
     assert secret not in str(records)
 
 
-def test_last_use_is_recorded_throttled_and_survives_restart(client, env):
+def test_last_use_is_recorded_throttled_and_survives_restart(client, env):  # noqa: F811
     secret = create(client, name="ci", scope="read").json()["key"]
     assert [k for k in dashboard_keys.list_keys() if k["name"] == "ci"][0]["last_used_at"] is None
     client.get("/api/health", headers=H(secret))
@@ -77,7 +77,7 @@ def test_last_use_is_recorded_throttled_and_survives_restart(client, env):
     assert [k for k in dashboard_keys.list_keys() if k["name"] == "ci"][0]["last_used_at"] != "old"
 
 
-def test_a_store_made_before_the_column_existed_is_upgraded(client, env):
+def test_a_store_made_before_the_column_existed_is_upgraded(client, env):  # noqa: F811
     with sqlite3.connect(env / "keys.db") as db:
         db.execute("CREATE TABLE dashboard_keys (name TEXT PRIMARY KEY, digest TEXT NOT NULL, scope TEXT NOT NULL,"
                    " expires TEXT, created_at TEXT NOT NULL, rotated_at TEXT, revoked_at TEXT)")

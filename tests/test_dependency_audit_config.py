@@ -19,7 +19,7 @@ def test_the_audit_runs_on_pull_requests_and_pushes():
 
 def test_python_audit_covers_the_constrained_runtime_dependencies():
     script = _scripts()
-    assert "pip install -c constraints.txt -r requirements.txt" in script
+    assert "pip install --require-hashes -r requirements.lock" in script  # the audited set is the locked set
     assert "pip-audit==" in script and "pip-audit --path" in script
 
 
