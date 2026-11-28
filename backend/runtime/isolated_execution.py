@@ -271,6 +271,46 @@ def _landlock_rules(protected: Sequence[str]) -> list[tuple[str, int]]:
     return rules
 
 
+def _truthy(env: Any, name: str) -> bool:
+    return env.get(name, "").strip().lower() in {"1", "true", "yes"}
+
+
+def landlock_available() -> bool:
+    """True when this kernel and runtime accept the Landlock syscalls (a seccomp profile can block them)."""
+    import ctypes
+    import sys
+
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        return ctypes.CDLL(None, use_errno=True).syscall(444, None, 0, 1) >= 1
+    except (OSError, AttributeError):
+        return False
+
+
+def isolation_status(environ: Any = None) -> dict:
+    """What storage hiding this process can really enforce, for /api/health and startup checks.
+    state: "enforced" (configured and Landlock works), "unavailable" (configured but this host cannot
+    enforce it) or "disabled" (not configured)."""
+    env = os.environ if environ is None else environ
+    configured = _truthy(env, "NOTEBOOK_API_ISOLATE_HIDE_STORAGE")
+    available = landlock_available()
+    state = "disabled" if not configured else ("enforced" if available else "unavailable")
+    return {"state": state, "storage_hiding_configured": configured, "landlock_available": available,
+            "hiding_required": _truthy(env, "NOTEBOOK_API_ISOLATE_REQUIRE_HIDDEN")}
+
+
+def check_isolation_for_startup(environ: Any = None) -> dict:
+    """isolation_status(), raising IsolatedExecutionError when hiding is required but cannot be enforced."""
+    status = isolation_status(environ)
+    if status["hiding_required"] and status["state"] != "enforced":
+        raise IsolatedExecutionError(
+            f"NOTEBOOK_API_ISOLATE_REQUIRE_HIDDEN is set but storage hiding is {status['state']} on this host "
+            "(Landlock missing or blocked by the container's seccomp profile). Run on a kernel/runtime that allows it, "
+            "or set NOTEBOOK_API_ISOLATE_REQUIRE_HIDDEN=0 to accept running without the protection.")
+    return status
+
+
 def hide_protected_paths(environ: Any = None) -> list[str]:
     """Deny this process every access to the service's audit database (and other configured
     paths) with a Landlock ruleset; irreversible for the process and its children. Returns the

@@ -21222,6 +21222,9 @@ def health_check(check_writable: bool = False):
     }
 
     response["notebook_storage"] = _notebook_storage_status()
+    from backend.runtime.isolated_execution import isolation_status
+
+    response["isolation"] = isolation_status()
 
     if check_writable:
 

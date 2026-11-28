@@ -160,6 +160,14 @@ async def _dashboard_lifespan(_app):
     for issue in status["issues"]:
         logging.getLogger("uvicorn.error").warning("governance audit storage: %s", issue)
 
+    from backend.runtime.isolated_execution import IsolatedExecutionError, check_isolation_for_startup
+
+    try:
+        check_isolation_for_startup()
+    except IsolatedExecutionError as exc:
+        logging.getLogger("uvicorn.error").error("isolation: %s", exc)
+        raise
+
     from backend.routes.upload import _notebook_storage_status
 
     notebook_storage = _notebook_storage_status()
