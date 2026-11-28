@@ -35,4 +35,4 @@ def test_pytest_is_a_dev_only_requirement():
 
 def test_ci_installs_the_dev_requirements():
     workflow = REQUIREMENTS.parent / ".github" / "workflows" / "tests.yml"
-    assert "-r requirements-dev.txt" in workflow.read_text()
+    assert "-r requirements-dev.lock" in workflow.read_text()  # the lock is generated from requirements-dev.txt

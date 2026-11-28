@@ -82,6 +82,14 @@ jobs:
           pytest -n auto --dist loadgroup --durations=25 --ignore=tests/test_cli_remote_audit.py --cov --cov-report=term
           pytest tests/test_cli_remote_audit.py --cov --cov-append --cov-report=term --cov-report=xml:coverage.xml
 
+      # Each security-critical module must keep its own floor (coverage_floors.json): one number for the
+      # whole selection lets a well-tested module hide another's regression.
+      - name: Check the per-file coverage floors
+        if: matrix.python-version == '3.13'
+        run: |
+          coverage json -o coverage.json
+          python scripts/check_coverage_floors.py coverage.json
+
       - name: Upload the coverage report
         if: always() && matrix.python-version == '3.13'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

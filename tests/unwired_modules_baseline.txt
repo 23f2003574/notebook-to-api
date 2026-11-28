@@ -142,7 +142,6 @@ backend.project.project_security_compliance_engine
 backend.project.project_template_engine
 backend.project.project_testing_orchestrator
 backend.project.project_workspace_engine
-backend.runtime.isolated_execution
 backend.scheduling.job_queue
 backend.scheduling.job_registry
 backend.storage.artifact_integrity

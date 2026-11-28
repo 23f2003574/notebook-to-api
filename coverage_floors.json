@@ -1,0 +1,14 @@
+{
+  "backend/auth_metrics.py": 99,
+  "backend/dashboard.py": 92,
+  "backend/dashboard_compile_slots.py": 94,
+  "backend/dashboard_keys.py": 93,
+  "backend/dashboard_rate_limit.py": 79,
+  "backend/generator/api_generator.py": 97,
+  "backend/generator/docker_generator.py": 98,
+  "backend/generator/kubernetes_generator.py": 97,
+  "backend/generator/sbom_generator.py": 99,
+  "backend/runtime/execution_limits.py": 97,
+  "backend/runtime/isolated_execution.py": 68,
+  "backend/serve.py": 94
+}
