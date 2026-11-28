@@ -70,17 +70,17 @@ jobs:
       - name: Run tests
         if: matrix.python-version != '3.13'
         run: |
-          pytest -n auto --dist loadgroup --durations=25 --ignore=tests/test_cli_remote_audit.py
+          pytest -n auto --dist loadgroup --durations=25 --ignore=tests/test_cli_remote_audit.py --junitxml=junit-${{ matrix.python-version }}.xml
           # Needs a single, ordered process (its tests share one dashboard and tamper with its database).
-          pytest tests/test_cli_remote_audit.py
+          pytest tests/test_cli_remote_audit.py --junitxml=junit-${{ matrix.python-version }}-remote-audit.xml
 
       # One leg measures coverage of the security-critical modules (the list and the floor are in
       # pyproject.toml); a drop below the recorded floor fails the job.
       - name: Run tests with coverage
         if: matrix.python-version == '3.13'
         run: |
-          pytest -n auto --dist loadgroup --durations=25 --ignore=tests/test_cli_remote_audit.py --cov --cov-report=term
-          pytest tests/test_cli_remote_audit.py --cov --cov-append --cov-report=term --cov-report=xml:coverage.xml
+          pytest -n auto --dist loadgroup --durations=25 --ignore=tests/test_cli_remote_audit.py --junitxml=junit-${{ matrix.python-version }}.xml --cov --cov-report=term
+          pytest tests/test_cli_remote_audit.py --junitxml=junit-${{ matrix.python-version }}-remote-audit.xml --cov --cov-append --cov-report=term --cov-report=xml:coverage.xml
 
       # Each security-critical module must keep its own floor (coverage_floors.json): one number for the
       # whole selection lets a well-tested module hide another's regression.
@@ -89,6 +89,21 @@ jobs:
         run: |
           coverage json -o coverage.json
           python scripts/check_coverage_floors.py coverage.json
+
+      # A failing test, a test that passed only after a retry, or a missing report fails the job
+      # (scripts/check_test_results.py); the XML is kept for debugging whatever the outcome.
+      - name: Summarise the test results
+        if: always()
+        run: python scripts/check_test_results.py junit junit-${{ matrix.python-version }}.xml junit-${{ matrix.python-version }}-remote-audit.xml
+
+      - name: Upload the JUnit test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: junit-results-${{ matrix.python-version }}
+          path: junit-*.xml
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Upload the coverage report
         if: always() && matrix.python-version == '3.13'
@@ -334,6 +349,12 @@ jobs:
         working-directory: frontend
         run: npm run e2e
 
+      # A test that passed only on its retry fails the job too: the retry exists for the trace, not to hide flakes.
+      - name: Check the browser test results
+        if: always()
+        working-directory: frontend
+        run: python ../scripts/check_test_results.py playwright playwright-results.json
+
       # Traces and screenshots of a failed or retried test, plus the HTML report.
       - name: Upload the browser test report
         if: always()
@@ -343,6 +364,7 @@ jobs:
           path: |
             frontend/playwright-report
             frontend/test-results
+            frontend/playwright-results.json
           if-no-files-found: ignore
           retention-days: 14
 

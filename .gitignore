@@ -43,3 +43,7 @@ uploads/*
 coverage.xml
 htmlcov/
 .ruff_cache/
+
+junit-*.xml
+coverage.json
+frontend/playwright-results.json

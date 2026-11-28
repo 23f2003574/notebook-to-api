@@ -15,12 +15,13 @@ export default defineConfig({
   testDir: './e2e',
   workers: 1,
   timeout: 90_000,
-  // A failure is retried once in CI only: a pass on retry is reported as "flaky" (visible in the
-  // list output and the uploaded report) instead of failing the build, and the retry records a
-  // trace. Locally nothing is retried, so flakiness shows up while developing.
+  // A failure is retried once in CI only, and the retry records a trace. A pass on retry is "flaky":
+  // the run still fails (scripts/check_test_results.py reads playwright-results.json). Locally nothing is retried, so flakiness shows up while developing.
   retries: process.env.CI ? 1 : 0,
   forbidOnly: !!process.env.CI,
-  reporter: process.env.CI ? [['list'], ['html', { open: 'never', outputFolder: 'playwright-report' }]] : [['list']],
+  reporter: process.env.CI
+    ? [['list'], ['html', { open: 'never', outputFolder: 'playwright-report' }], ['json', { outputFile: 'playwright-results.json' }]]
+    : [['list']],
   outputDir: 'test-results',
   use: {
     baseURL: `http://127.0.0.1:${PORT}`,
