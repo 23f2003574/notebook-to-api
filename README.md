@@ -83,6 +83,14 @@ exact base image by digest: `compile notebook.ipynb --base-image python@sha256:<
 digest-pinned and every requirement is version-pinned.
 Visit `http://localhost:8000/docs` to explore the generated API.
 
+### Hash-locked builds and the SBOM
+
+`compile --resolve-versions --require-hashes` writes `requirements.txt` as a complete lock (every direct and
+transitive package with its SHA-256 hashes), makes the Dockerfile install it with `pip install --require-hashes`,
+and writes `sbom.cdx.json` beside it: a CycloneDX 1.5 SBOM of exactly those packages (name, version, purl,
+hashes). It is deterministic, so equal locks give equal bytes; feed it to any CycloneDX-aware scanner
+(for example `grype sbom:sbom.cdx.json`).
+
 ## Deployment Governance Persistence Diagnostics
 Inspect the active governance persistence backend:
 ```bash

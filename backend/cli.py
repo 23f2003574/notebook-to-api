@@ -2514,17 +2514,20 @@ def _dispatch_core_command(args):
 
         if args.require_hashes:
             from backend.compiler import VersionResolutionError, lock_requirements_with_hashes, require_hashes_in_dockerfile
+            from backend.generator.sbom_generator import SBOMError, write_sbom
 
             try:
                 locked = lock_requirements_with_hashes(os.path.join(str(output_dir), "requirements.txt"))
                 require_hashes_in_dockerfile(os.path.join(str(output_dir), "Dockerfile"))
-            except VersionResolutionError as exc:
+                write_sbom(str(output_dir))
+            except (VersionResolutionError, SBOMError) as exc:
                 if not args.json_output:
                     print(f"\n✗ --require-hashes: could not hash-pin requirements.txt ({exc}). "
                           "Pin every library (--resolve-versions) and check the network, then recompile.")
                 sys.exit(1)
             if not args.json_output:
                 print(f"\nrequirements.txt hash-locked ({locked} distributions); the image installs with --require-hashes")
+                print("CycloneDX SBOM written to sbom.cdx.json")
 
         if args.fail_on_startup_warnings:
             # A compile that produced no routes is a startup problem too.
