@@ -223,6 +223,18 @@ def protected_paths(environ: Any = None) -> list[str]:
     raw = [p for p in env.get("NOTEBOOK_API_ISOLATE_HIDE_PATHS", "").split(os.pathsep) if p.strip()]
     database = env.get("NOTEBOOK2API_GOVERNANCE_DATABASE_PATH") or "data/notebook2api.db"
     raw += [database + suffix for suffix in _SIDECARS]
+    # Other service-owned state: the dashboard key store (it may sit in any directory), the shared
+    # rate-limit database, the configured key file and the compile-slot directory. Only paths that
+    # exist when the child starts can be hidden.
+    keys_db = env.get("NOTEBOOK_API_DASHBOARD_KEYS_DB", "").strip() or os.path.join(
+        os.path.dirname(database) or ".", "dashboard_keys.db")
+    raw += [keys_db + suffix for suffix in _SIDECARS]
+    rate_db = env.get("NOTEBOOK_API_DASHBOARD_RATE_LIMIT_DB", "").strip()
+    if rate_db:
+        raw += [rate_db + suffix for suffix in _SIDECARS]
+    for name in ("NOTEBOOK_API_DASHBOARD_KEYS_FILE", "NOTEBOOK_API_DASHBOARD_COMPILE_SLOT_DIR"):
+        if env.get(name, "").strip():
+            raw.append(env[name].strip())
     if env.get("NOTEBOOK_API_ISOLATE_HIDE_STORAGE", "").strip().lower() in {"1", "true", "yes"}:
         raw += [env[n] for n in ("NOTEBOOK_API_UPLOAD_DIR", "NOTEBOOK_API_GENERATED_DIR",
                                  "NOTEBOOK_API_GENERATED_APPS_DIR") if env.get(n)]
@@ -509,8 +521,8 @@ def _child(
                     os.setsid()  # own process group so the parent can reap grandchildren
                 except OSError:
                     pass
+            hide_protected_paths()  # before scrubbing: the paths come from credential-named variables
             scrub_service_secrets()
-            hide_protected_paths()
             _close_inherited_descriptors([conn.fileno()])
             try:
                 _apply_file_limits()
@@ -680,8 +692,8 @@ def _worker_main(conn: Any, handler: Callable[[Any], Any], memory_limit_mb: floa
             os.setsid()
         except OSError:
             pass
+    hide_protected_paths()  # before scrubbing: the paths come from credential-named variables
     scrub_service_secrets()
-    hide_protected_paths()
     _close_inherited_descriptors([conn.fileno()])
     # Forked from the app: forget its children and any lock held at fork time.
     _ACTIVE_LOCK = threading.Lock()
