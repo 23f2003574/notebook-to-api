@@ -355,21 +355,45 @@ def hide_protected_paths(environ: Any = None) -> list[str]:
     ruleset = libc.syscall(numbers[0], attr, len(attr), 0)
     if ruleset < 0:
         return fail("Landlock ruleset could not be created")
+    failed = []
+    installed = 0
     try:
         for path, rights in _landlock_rules(protected):
             try:
                 fd = os.open(path, os.O_PATH | os.O_CLOEXEC | os.O_NOFOLLOW)
-            except OSError:
+            except OSError as exc:
+                failed.append(f"{path}: {exc.strerror}")
                 continue
             try:
                 rule = struct.pack("=Qi", rights, fd)  # packed landlock_path_beneath_attr
-                libc.syscall(numbers[1], ruleset, 1, rule, 0)  # LANDLOCK_RULE_PATH_BENEATH
+                if libc.syscall(numbers[1], ruleset, 1, rule, 0) != 0:  # LANDLOCK_RULE_PATH_BENEATH
+                    failed.append(f"{path}: {os.strerror(ctypes.get_errno())}")
+                else:
+                    installed += 1
             finally:
                 os.close(fd)
+        if failed:
+            # Nothing is enforced yet, so a partial ruleset is never applied: either refuse to go on
+            # (required) or run, loudly, with nothing hidden.
+            return fail(f"{len(failed)} of {len(failed) + installed} Landlock rules could not be installed, first: {failed[0]}")
         if libc.prctl(38, 1, 0, 0, 0) != 0 or libc.syscall(numbers[2], ruleset, 0) != 0:  # NO_NEW_PRIVS
             return fail("the ruleset could not be enforced")
     finally:
         os.close(ruleset)
+    # Trust the kernel's answer, not the return codes: every protected path must now refuse to open.
+    leaked = []
+    for path in protected:
+        try:
+            os.close(os.open(path, os.O_RDONLY))
+            leaked.append(path)
+        except OSError:
+            pass
+    if leaked:
+        # The ruleset is already enforced and cannot be undone: the process must not run notebook code.
+        if required:
+            raise IsolatedExecutionError(f"Landlock is enforced but {leaked[0]} is still readable; refusing to run isolated code")
+        _LOG.warning("isolated_execution storage_not_hidden reason=still_readable path_count=%d", len(leaked))
+        protected = [p for p in protected if p not in leaked]
     if environ is None:
         _HIDDEN = protected
     return protected
