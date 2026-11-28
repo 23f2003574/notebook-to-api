@@ -388,7 +388,7 @@ async def _enforce_dashboard_rate_limit(request: Request, call_next):
 
     if limit > 0:
 
-        key = request.client.host if request.client else "unknown"
+        key = _auth_client(request)  # the peer, or the real client behind a trusted proxy only
         now = time.time()
 
         shared = None
@@ -398,7 +398,11 @@ async def _enforce_dashboard_rate_limit(request: Request, call_next):
             try:
                 shared = await asyncio.to_thread(
                     dashboard_rate_limit.hit, shared_path, key, now, DASHBOARD_RATE_LIMIT_WINDOW_SECONDS)
-            except Exception:  # noqa: BLE001 - locked/unwritable store: keep limiting in this process
+            except Exception:  # noqa: BLE001 - locked/unwritable store
+                if dashboard_rate_limit.fail_closed():
+                    logging.getLogger("uvicorn.error").error("shared dashboard rate-limit store unavailable; refusing the request")
+                    return JSONResponse(status_code=503, content={"detail": "Rate-limit store unavailable"},
+                                        headers={"Retry-After": "5"})
                 logging.getLogger("uvicorn.error").warning(
                     "shared dashboard rate-limit store unavailable; limiting in this worker only")
         if shared is not None:
