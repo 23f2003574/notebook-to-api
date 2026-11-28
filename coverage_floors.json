@@ -9,6 +9,6 @@
   "backend/generator/kubernetes_generator.py": 97,
   "backend/generator/sbom_generator.py": 99,
   "backend/runtime/execution_limits.py": 97,
-  "backend/runtime/isolated_execution.py": 68,
+  "backend/runtime/isolated_execution.py": 66,
   "backend/serve.py": 94
 }
